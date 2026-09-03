@@ -69,7 +69,7 @@ internal sealed record GitHubCommit(string Oid, string TreeOid, ImmutableArray<s
 internal sealed record GitHubPullRequestHead(GitHubRepositoryIdentity? Repository, string? Ref, string? Oid) : GitHubValue;
 internal sealed record GitHubPullRequest(long Id, string NodeId, int Number, bool Open, bool Draft,
     bool? Merged, DateTimeOffset? MergedAt, DateTimeOffset? ClosedAt, DateTimeOffset CreatedAt,
-    string Title, string? Body, GitHubActor Author, GitHubPullRequestHead Head,
+    string Title, string? Body, GitHubActor? Author, GitHubPullRequestHead Head,
     GitHubRepositoryIdentity BaseRepository, string BaseRef, string BaseOid, bool? MaintainerCanModify) : GitHubValue;
 internal sealed record GitHubPullRequestSet(ImmutableArray<GitHubPullRequest> Items,
     int Pages, int ObservedItems, long BodyBytes, bool Exhausted) : GitHubValue;

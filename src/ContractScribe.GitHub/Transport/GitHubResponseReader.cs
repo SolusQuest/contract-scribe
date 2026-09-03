@@ -193,9 +193,13 @@ internal static class GitHubResponseReader
         Require(headRef is null || RefName("refs/heads/" + headRef));
         Require(headOid is null || IsOid(headOid));
         var maintainer = detail ? Boolean(value, "maintainer_can_modify") : OptionalBoolean(value, "maintainer_can_modify");
+        // The list schema permits explicit null, but not an absent property or malformed actor.
+        // Detail/create responses and all principal/owner positions still require an actor.
+        var user = Property(value, "user");
+        var author = !detail && user.ValueKind == JsonValueKind.Null ? null : Actor(user);
         return new(Positive(value, "id"), Node(value, "node_id"), number, state == "open", Boolean(value, "draft"),
             merged, mergedAt, closedAt, Date(value, "created_at"), String(value, "title", 256),
-            NullableString(value, "body", 65536), Actor(Property(value, "user")), new(headRepository, headRef, headOid),
+            NullableString(value, "body", 65536), author, new(headRepository, headRef, headOid),
             baseRepository, baseRef, Oid(basis, "sha"), maintainer);
     }
 

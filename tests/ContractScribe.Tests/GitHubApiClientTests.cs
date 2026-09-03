@@ -466,6 +466,148 @@ public sealed class GitHubApiClientTests
         Assert.All(harness.Handler.Requests, request => Assert.StartsWith("/repos/Owner/repo/pulls?", request.Path));
     }
 
+    [Theory]
+    [InlineData("open")]
+    [InlineData("closed")]
+    [InlineData("merged")]
+    public async Task Null_list_authors_remain_absent_through_pagination_and_deduplication(string state)
+    {
+        using var harness = await Harness.Create();
+        var absent = Pull();
+        absent["user"] = null;
+        if (state != "open")
+        {
+            absent["state"] = "closed";
+            absent["closed_at"] = "2026-09-03T09:00:00Z";
+        }
+        if (state == "merged")
+        {
+            absent["merged"] = true;
+            absent["merged_at"] = "2026-09-03T09:00:00Z";
+        }
+        var bot = Pull(2);
+        bot["user"]!["type"] = "Bot";
+        var laterAbsent = Pull(3);
+        laterAbsent["user"] = null;
+        harness.Handler.Reply = (request, _) =>
+        {
+            var first = request.RequestUri!.Query.EndsWith("page=1", StringComparison.Ordinal);
+            var response = Json(first ? new JsonArray(absent.DeepClone())
+                : new JsonArray(absent.DeepClone(), bot.DeepClone(), laterAbsent.DeepClone()));
+            if (first) response.Headers.Add("Link", Link("/repos/Owner/repo/pulls", 2, "next"));
+            return Task.FromResult(response);
+        };
+        var result = await harness.Client.ListPullRequestsAsync();
+        Assert.Null(result.Failure);
+        Assert.True(result.Value!.Exhausted);
+        Assert.Equal(2, result.Value.Pages);
+        Assert.Equal(4, result.Value.ObservedItems);
+        Assert.Equal(3, result.Value.Items.Length);
+        Assert.Null(result.Value.Items[0].Author);
+        Assert.Equal(state == "open", result.Value.Items[0].Open);
+        Assert.Equal(state == "merged", result.Value.Items[0].Merged);
+        Assert.Equal(GitHubActorKind.Bot, Assert.IsType<GitHubActor>(result.Value.Items[1].Author).Kind);
+        Assert.Null(result.Value.Items[2].Author);
+        Assert.Equal(GitHubDelivery.Read, result.Delivery);
+        Assert.Null(result.Context);
+        Assert.Equal(2, harness.Handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Null_and_present_authors_on_duplicate_ids_fail_in_either_order(bool firstAbsent)
+    {
+        using var harness = await Harness.Create();
+        harness.Handler.Reply = (request, _) =>
+        {
+            var first = request.RequestUri!.Query.EndsWith("page=1", StringComparison.Ordinal);
+            var pull = Pull();
+            if (first == firstAbsent) pull["user"] = null;
+            var response = Json(new JsonArray(pull));
+            if (first) response.Headers.Add("Link", Link("/repos/Owner/repo/pulls", 2, "next"));
+            return Task.FromResult(response);
+        };
+        var result = await harness.Client.ListPullRequestsAsync();
+        Assert.Equal(GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+        Assert.Null(result.Value);
+        Assert.Equal(2, harness.Handler.Requests.Count);
+    }
+
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("empty-object")]
+    [InlineData("string")]
+    [InlineData("array")]
+    [InlineData("null-id")]
+    public async Task Malformed_authors_are_not_absence_in_any_pr_response(string shape)
+    {
+        using var harness = await Harness.Create();
+        var invalid = Pull(2);
+        if (shape == "missing") invalid.Remove("user");
+        if (shape == "empty-object") invalid["user"] = new JsonObject();
+        if (shape == "string") invalid["user"] = "ghost";
+        if (shape == "array") invalid["user"] = new JsonArray();
+        if (shape == "null-id") invalid["user"]!["id"] = null;
+        harness.Handler.Reply = (request, _) =>
+        {
+            var first = request.RequestUri!.Query.EndsWith("page=1", StringComparison.Ordinal);
+            var response = Json(new JsonArray(first ? Pull() : invalid.DeepClone()));
+            if (first) response.Headers.Add("Link", Link("/repos/Owner/repo/pulls", 2, "next"));
+            return Task.FromResult(response);
+        };
+        var list = await harness.Client.ListPullRequestsAsync();
+        Assert.Equal(GitHubFailureCode.InvalidResponse, list.Failure!.Code);
+        Assert.Null(list.Value);
+        Assert.Equal(2, harness.Handler.Requests.Count);
+
+        harness.Handler.Requests.Clear();
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(invalid));
+        var detail = await harness.Client.GetPullRequestAsync(2);
+        Assert.Equal(GitHubFailureCode.InvalidResponse, detail.Failure!.Code);
+        Assert.Null(detail.Value);
+        Assert.Single(harness.Handler.Requests);
+
+        harness.Handler.Requests.Clear();
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json(invalid, 201));
+        var creation = await harness.Client.CreatePullRequestAsync(PullRequestInput(harness.Authority));
+        Assert.Equal(GitHubFailureCode.InvalidResponse, creation.Failure!.Code);
+        Assert.Null(creation.Value);
+        Assert.Equal(GitHubDelivery.Ambiguous, creation.Delivery);
+        Assert.IsType<GitHubPullRequestContext>(creation.Context);
+        Assert.Single(harness.Handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("authenticated")]
+    [InlineData("repository")]
+    [InlineData("base")]
+    [InlineData("head")]
+    [InlineData("detail")]
+    [InlineData("creation")]
+    public async Task Null_actors_remain_invalid_outside_nullable_list_authors(string surface)
+    {
+        using var harness = await Harness.Create();
+        var pull = Pull();
+        var repository = Repository();
+        repository["owner"] = null;
+        if (surface is "base" or "head") pull[surface]!["repo"] = repository.DeepClone();
+        else pull["user"] = null;
+        harness.Handler.Reply = (_, _) => Task.FromResult(surface == "authenticated" ? Json("null")
+            : surface == "repository" ? Json(repository) : Json(pull, surface == "creation" ? 201 : 200));
+        var result = surface switch
+        {
+            "authenticated" => Observe(await harness.Client.GetAuthenticatedUserAsync()),
+            "repository" => Observe(await harness.Client.GetRepositoryAsync()),
+            "creation" => Observe(await harness.Client.CreatePullRequestAsync(PullRequestInput(harness.Authority))),
+            _ => Observe(await harness.Client.GetPullRequestAsync(1)),
+        };
+        Assert.Equal(GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+        Assert.Equal(surface == "creation" ? GitHubDelivery.Ambiguous : GitHubDelivery.Read, result.Delivery);
+        if (surface == "creation") Assert.IsType<GitHubPullRequestContext>(result.Context);
+        Assert.Single(harness.Handler.Requests);
+    }
+
     [Fact]
     public async Task Mannequin_authors_remain_typed_through_detail_and_paginated_deduplication()
     {
@@ -475,7 +617,7 @@ public sealed class GitHubApiClientTests
         harness.Handler.Reply = (_, _) => Task.FromResult(Json(migrated));
         var detail = await harness.Client.GetPullRequestAsync(1);
         Assert.Null(detail.Failure);
-        var author = detail.Value!.Author;
+        var author = Assert.IsType<GitHubActor>(detail.Value!.Author);
         Assert.Equal(77, author.Id);
         Assert.Equal("M_synthetic_77", author.NodeId);
         Assert.Equal("11111111-2222-3333-4444-555555555555", author.Login);
@@ -500,7 +642,7 @@ public sealed class GitHubApiClientTests
         Assert.Equal(3, list.Value.ObservedItems);
         Assert.Equal(2, list.Value.Items.Length);
         Assert.Equal(author, list.Value.Items[0].Author);
-        Assert.Equal(GitHubActorKind.Bot, list.Value.Items[1].Author.Kind);
+        Assert.Equal(GitHubActorKind.Bot, Assert.IsType<GitHubActor>(list.Value.Items[1].Author).Kind);
         Assert.Equal(2, harness.Handler.Requests.Count);
 
         harness.Handler.Requests.Clear();
