@@ -90,6 +90,26 @@ public sealed class GitHubArchitectureTests
             Assert.True(implementation.IsSealed);
             Assert.Empty(implementation.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
         });
+        var snapshotProperties = typeof(IGitHubCoordinationStateCapability)
+            .GetProperties().Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
+        var requiredSnapshotProperties = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Repository", "TargetRef", "TargetCommitOid", "SnapshotCommitmentSha256",
+            "AuthorityCommitmentSha256", "PolicyCommitmentSha256", "OperationId",
+            "OperationCommitmentSha256", "CurrentCandidateCommitmentSha256",
+            "PrecedingOperationId", "PrecedingAuthorityCommitmentSha256",
+            "PrecedingCandidateCommitmentSha256", "GenerationId", "Transition", "Stage",
+            "HeadOid", "CoordinationPredecessorOid", "ContentCommitOid", "ProposalRefOid",
+            "ProposalCommitOid", "ProposalTreeOid",
+            "PullRequestCreationOperationCommitmentSha256", "PullRequestNumber",
+            "ExpectedBaseOid", "ObservedBaseOid", "OwnershipMarkerSha256",
+            "CumulativeDocumentationBlocks", "CumulativePatchBytes", "CumulativeChangedFiles",
+        };
+        Assert.Subset(requiredSnapshotProperties, snapshotProperties);
+        var guardValidator = typeof(GitHubCoordinationStore).GetMethod(
+            "ValidateGuard", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(typeof(IGitHubCoordinationGuardCapability),
+            Assert.Single(guardValidator.GetParameters()).ParameterType);
         Assert.True(GitHubCoordinationCodec.MaximumStateBytes < GitHubResponseReader.MaximumBlobBytes);
     }
 

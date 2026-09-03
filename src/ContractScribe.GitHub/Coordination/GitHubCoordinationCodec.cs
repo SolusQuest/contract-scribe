@@ -240,10 +240,14 @@ internal static class GitHubCoordinationCodec
             && Opaque(state.GenerationId)
             && Transition(state.Transition)
             && IsOid(state.CoordinationPredecessorOid, zero: true)
-            && state.CumulativeDocumentationBlocks > 0
-            && state.CumulativePatchBytes is > 0 and <= CampaignStateContract.MaximumObservation
+            && state.CumulativeDocumentationBlocks is > 0
+                and <= CampaignStateContract.MaximumActivePatchBlocks
+            && state.CumulativePatchBytes is > 0
+                and <= CampaignStateContract.MaximumPatchBytes
             && !state.CumulativeChangedFiles.IsDefaultOrEmpty
-            && state.CumulativeChangedFiles.Length <= GitHubPublicationContract.MaximumChangedFiles);
+            && state.CumulativeChangedFiles.Length <= GitHubPublicationContract.MaximumChangedFiles
+            && state.CumulativeChangedFiles.Length <= state.CumulativeDocumentationBlocks
+            && state.CumulativeChangedFiles.Length <= state.CumulativePatchBytes);
         var append = state.Transition == "same-snapshot-append";
         Require(append == (state.PrecedingOperationId is not null)
             && append == (state.PrecedingAuthorityCommitmentSha256 is not null)
