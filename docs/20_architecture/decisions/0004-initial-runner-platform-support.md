@@ -25,7 +25,7 @@ The initial runner matrix is:
 | Native GitHub-hosted Windows | Unsupported and non-gating; it may happen to run but carries no CI, maintenance, compatibility, or support obligation |
 | macOS, ARM64, other Linux environments, containers, and self-hosted runners | Unvalidated and outside the initial matrix |
 
-M1 through M5 use GitHub-hosted Ubuntu x64 as the sole required repository CI and pre-release production-validation platform. `ubuntu-latest` is a moving GitHub-hosted runner label; changes to its resolved image, SDK, runtime, MSBuild, or other relevant toolchain facts can require fresh evidence for the claim that consumes them.
+M1 through M5 use GitHub-hosted Ubuntu x64 as the sole required repository CI and pre-release production-validation platform. `ubuntu-latest` is a moving GitHub-hosted runner label. Record its resolved image and relevant toolchain facts when interpreting performance or platform evidence, but do not require exact image-build equality for ordinary pre-release comparisons. Refresh evidence when a demonstrated relevant environment change invalidates its claim, not automatically for every hosted-image rollout.
 
 M6 may claim released Ubuntu support only after one exact release candidate passes the selected payload acquisition and integrity path, Action-host and wrapper/payload composition, a supported target-repository consumer smoke, release controls, and maintainer approval. Ordinary source or candidate CI cannot substitute for those gates.
 
@@ -37,8 +37,10 @@ Repositories that require native-Windows-only workloads, MSBuild targets, toolin
 
 ## Implementation boundary
 
-- Ordinary required CI has one Ubuntu `validate` job. It keeps separate complete fast and integration suites, separate TRX artifacts, and final outcome aggregation.
-- The integration step has a 35-minute hard timeout and no automatic retry. The existing 25-minute execution observation threshold remains diagnostic guidance; the additional margin covers hosted testhost teardown and TRX finalization. A timeout remains an integration failure, and already-produced TRX remains eligible for the ordinary `always()` upload.
+- Ordinary required CI keeps `validate` as its stable aggregate status, backed by three independent Ubuntu jobs: complete fast/static validation, the campaign crash-boundary integration partition, and the complementary integration partition. Each job performs its own exact-head checkout, restore, and Release build; no build output, mutable fixture, process, environment, or test result is shared between runners.
+- The integration split is an execution-topology decision, not reduced coverage or increased in-process parallelism. The two filters are an exact equality and its exact complement, each has a zero-test guard, and their TRX full-name multiset must equal an applicable unfiltered integration run when the partition changes. Reuse an existing unfiltered run with unchanged production/test/build inputs; the dispatch-only unfiltered evidence job supplies missing evidence without becoming an extra gate for every PR.
+- Each integration partition has a 35-minute hard timeout and no automatic retry. The existing 25-minute execution observation threshold remains diagnostic guidance; the additional margin covers hosted testhost teardown and TRX finalization. A timeout remains an integration failure, and already-produced TRX remains eligible for the ordinary `always()` upload.
+- Pull-request runs share a PR-scoped concurrency group and cancel superseded heads. Push and manual-dispatch runs use their unique run ID, so independent evidence samples cannot cancel or serialize one another. A cancelled obsolete head cannot produce a successful `validate` result for the replacement head.
 - The Windows-only thirty-iteration causal-topology qualification guard is retired. Linux lifecycle, cleanup, cancellation, timeout, process-observation, and pipe-closure coverage remains.
 - The retained three-worker integration schedule and named process lanes are observed Ubuntu scheduling, not proof that every subprocess launch is globally bounded. New process tests still identify their real filesystem, MSBuild, environment, process-inventory, signal, and other shared boundaries.
 - Low-cost production OS branches and platform-specific signal or process handling remain when they express product behavior. Their presence does not establish support.
@@ -79,3 +81,4 @@ This choice is reversible before the first consumable release, but expansion is 
 - [Test validation](../../50_ai/skills/test-validation.md)
 - [ADR 0001](0001-loader-and-distribution-boundary.md)
 - [ADR 0002](0002-process-topology.md)
+- [Issue #168](https://github.com/SolusQuest/contract-scribe/issues/168)
