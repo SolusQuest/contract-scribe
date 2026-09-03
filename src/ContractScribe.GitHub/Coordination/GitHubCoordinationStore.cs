@@ -243,11 +243,10 @@ internal sealed class GitHubCoordinationStore
                 return new(GitHubCoordinationOutcome.Replayed, state: observedCurrent);
             }
 
-            if (!AllowsNewOperation(observedCurrent))
-                return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
-
             var predecessor = observedCurrent?.HeadOid ?? ZeroOid;
             var claim = GitHubCoordinationCodec.CreateClaim(authority, predecessor);
+            if (!ValidAuthorityRoot(claim, observedCurrent?.State))
+                return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
             var prepared = GitHubCoordinationObjects.Prepare(claim);
             var orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
             if (orphan.Value is not null)
@@ -705,7 +704,6 @@ internal sealed class GitHubCoordinationStore
                 SameRepositoryAndRef(predecessor, current),
             (GitHubCoordinationStage.Stale, "initial") =>
                 current.GenerationId != predecessor.GenerationId
-                && current.TargetCommitOid == predecessor.ObservedBaseOid
                 && SameRepositoryAndRef(predecessor, current),
             _ => false,
         };
@@ -715,7 +713,10 @@ internal sealed class GitHubCoordinationStore
         GitHubCoordinationState root,
         GitHubCoordinationState? predecessor)
     {
-        if (!MatchesAuthority(root)) return false;
+        if (!MatchesAuthority(root)
+            || predecessor is null && root.CoordinationPredecessorOid != ZeroOid
+            || predecessor is not null && !ValidEdge(predecessor, root))
+            return false;
         return (authority.Transition, predecessor?.Stage) switch
         {
             (GitHubPublicationTransitionKind.Initial, null) => true,
@@ -828,26 +829,6 @@ internal sealed class GitHubCoordinationStore
                     current.PullRequestCreationOperationCommitmentSha256, current.PullRequestNumber,
                     current.ExpectedBaseOid, current.ObservedBaseOid, current.OwnershipMarkerSha256),
             _ => throw new GitHubCoordinationException(),
-        };
-    }
-
-    private bool AllowsNewOperation(StateCapability? current)
-    {
-        if (current is null)
-            return authority.Transition == GitHubPublicationTransitionKind.Initial;
-        var state = current.State;
-        return (state.Stage, authority.Transition) switch
-        {
-            (GitHubCoordinationStage.Published, GitHubPublicationTransitionKind.SameSnapshotAppend) =>
-                MatchesAppendPredecessor(state),
-            (GitHubCoordinationStage.Merged, GitHubPublicationTransitionKind.SuccessorAfterMerge) =>
-                MatchesTerminalPredecessor(state),
-            (GitHubCoordinationStage.ClosedUnmerged, GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged) =>
-                MatchesTerminalPredecessor(state),
-            (GitHubCoordinationStage.Stale, GitHubPublicationTransitionKind.Initial) =>
-                state.OperationId != authority.OperationId && state.GenerationId != authority.GenerationId
-                && authority.PrecedingOperationId is null,
-            _ => false,
         };
     }
 

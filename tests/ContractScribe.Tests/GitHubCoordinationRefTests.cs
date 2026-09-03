@@ -540,16 +540,74 @@ public sealed partial class GitHubCoordinationRefTests
             Assert.Equal(GitHubCoordinationOutcome.Stale, stale.Outcome);
         }
         var staleHead = remote.CoordinationHead;
-        using var freshClient = Client(
-            InitialAuthority("operation-stale-fresh", '6', "generation-2", '9'), remote);
-        var fresh = GitHubCoordinationStore.Create(freshClient);
-        var current = await fresh.ReadCurrentAsync();
+        remote.TargetHead = Oid('8');
+        var freshAuthority = InitialAuthority(
+            "operation-stale-fresh", '6', "generation-2", '8');
+        string freshHead;
+        using (var freshClient = Client(freshAuthority, remote))
+        {
+            var fresh = GitHubCoordinationStore.Create(freshClient);
+            var current = await fresh.ReadCurrentAsync();
 
-        var result = await fresh.ClaimAsync(current.Read!);
+            var result = await fresh.ClaimAsync(current.Read!);
 
-        Assert.Equal(GitHubCoordinationOutcome.Admitted, result.Outcome);
-        Assert.Equal(staleHead, result.State!.CoordinationPredecessorOid);
-        Assert.Equal("operation-stale-fresh", result.State.OperationId);
+            Assert.Equal(GitHubCoordinationOutcome.Admitted, result.Outcome);
+            Assert.Equal(staleHead, result.State!.CoordinationPredecessorOid);
+            Assert.Equal("operation-stale-fresh", result.State.OperationId);
+            Assert.Equal(Oid('8'), result.State.TargetCommitOid);
+            var persisted = remote.State(result.State.HeadOid);
+            Assert.Null(persisted.ContentCommitOid);
+            Assert.Null(persisted.ProposalRefOid);
+            freshHead = result.State.HeadOid;
+        }
+        using var restartClient = Client(freshAuthority, remote);
+
+        var restarted = await GitHubCoordinationStore.Create(restartClient).ReadCurrentAsync();
+
+        Assert.Equal(GitHubCoordinationOutcome.Current, restarted.Outcome);
+        Assert.Equal(freshHead, restarted.State!.HeadOid);
+    }
+
+    [Fact]
+    public async Task Renewed_initial_claim_uses_ordinary_stale_terminalization_if_target_moves_again()
+    {
+        var remote = new CoordinationRemote();
+        using (var firstClient = Client(InitialAuthority("operation-stale-twice-old", '5'), remote))
+        {
+            var first = GitHubCoordinationStore.Create(firstClient);
+            var absence = await first.ReadCurrentAsync();
+            var claim = await first.ClaimAsync(absence.Read!);
+            remote.TargetHead = Oid('9');
+            var stale = await first.AdvanceAsync(claim.State!,
+                GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+            Assert.Equal(GitHubCoordinationOutcome.Stale, stale.Outcome);
+        }
+        remote.TargetHead = Oid('8');
+        var freshAuthority = InitialAuthority(
+            "operation-stale-twice-fresh", '6', "generation-2", '8');
+        string terminalHead;
+        using (var freshClient = Client(freshAuthority, remote))
+        {
+            var fresh = GitHubCoordinationStore.Create(freshClient);
+            var current = await fresh.ReadCurrentAsync();
+            remote.TargetAfterSuccessfulRef = Oid('7');
+
+            var result = await fresh.ClaimAsync(current.Read!);
+
+            Assert.Equal(GitHubCoordinationOutcome.Stale, result.Outcome);
+            Assert.Equal(Oid('8'), result.State!.ExpectedBaseOid);
+            Assert.Equal(Oid('7'), result.State.ObservedBaseOid);
+            var persisted = remote.State(result.State.HeadOid);
+            Assert.Null(persisted.ContentCommitOid);
+            Assert.Null(persisted.ProposalRefOid);
+            terminalHead = result.State.HeadOid;
+        }
+        using var restartClient = Client(freshAuthority, remote);
+
+        var restarted = await GitHubCoordinationStore.Create(restartClient).ReadCurrentAsync();
+
+        Assert.Equal(GitHubCoordinationOutcome.Current, restarted.Outcome);
+        Assert.Equal(terminalHead, restarted.State!.HeadOid);
     }
 
     [Fact]
