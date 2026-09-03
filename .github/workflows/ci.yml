@@ -5,12 +5,22 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+    inputs:
+      include_unfiltered_evidence:
+        description: Run the complete integration suite as additional partition-equivalence evidence
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
-  validate:
+  fast_and_static:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -30,13 +40,18 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: global.json
-      - name: Record runner and toolchain facts
+      - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: ${{ github.event_name == 'pull_request' }}
         run: |
           Write-Output "runner.os=$env:RUNNER_OS"
           Write-Output "runner.arch=$env:RUNNER_ARCH"
           Write-Output "runner.image.os=$env:ImageOS"
           Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
           dotnet --info
           dotnet msbuild -version
       - name: Restore
@@ -46,29 +61,48 @@ jobs:
         run: dotnet build ContractScribe.slnx --configuration Release --no-restore
       - name: Fast suite
         id: fast_tests
+        if: always() && steps.build.outcome == 'success'
         continue-on-error: true
         run: >-
           dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj
           --configuration Release --no-build --no-restore
           --logger "trx;LogFilePrefix=fast-${{ runner.os }}"
           --results-directory TestResults/ci/fast
-      - name: Integration suite
-        id: integration_tests
+      - name: Require discovered fast tests
+        id: fast_test_count
+        if: always() && steps.build.outcome == 'success'
         continue-on-error: true
-        # Keep the 25-minute observation threshold plus bounded testhost/TRX teardown margin.
-        timeout-minutes: 35
-        run: >-
-          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
-          --configuration Release --no-build --no-restore
-          --logger "trx;LogFilePrefix=integration-${{ runner.os }}"
-          --results-directory TestResults/ci/integration
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path TestResults/ci/fast -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -eq 0) {
+            throw "The fast-suite command produced no TRX file."
+          }
+          [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
+          $total = [int] $trx.TestRun.ResultSummary.Counters.total
+          if ($total -le 0) {
+            throw "The fast-suite filter discovered zero tests."
+          }
+          Write-Output "fast.tests.total=$total"
       - name: Verify formatting
+        id: formatting
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
         run: dotnet format ContractScribe.slnx --verify-no-changes --no-restore
       - name: CLI help smoke
+        id: cli_help
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
         run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --help
       - name: CLI version smoke
+        id: cli_version
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
         run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- --version
       - name: CLI doctor smoke
+        id: cli_doctor
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
         run: dotnet run --project src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-build -- doctor
       - name: Upload fast-suite TRX
         if: always()
@@ -77,31 +111,308 @@ jobs:
           name: fast-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: TestResults/ci/fast/*.trx
           if-no-files-found: error
-      - name: Upload integration-suite TRX
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        with:
-          name: integration-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
-          path: TestResults/ci/integration/*.trx
-          if-no-files-found: error
-      - name: Aggregate suite outcomes
+      - name: Aggregate fast and static outcomes
         if: always()
         shell: pwsh
         env:
           BUILD_OUTCOME: ${{ steps.build.outcome }}
           FAST_OUTCOME: ${{ steps.fast_tests.outcome }}
-          INTEGRATION_OUTCOME: ${{ steps.integration_tests.outcome }}
+          FAST_COUNT_OUTCOME: ${{ steps.fast_test_count.outcome }}
+          FORMATTING_OUTCOME: ${{ steps.formatting.outcome }}
+          CLI_HELP_OUTCOME: ${{ steps.cli_help.outcome }}
+          CLI_VERSION_OUTCOME: ${{ steps.cli_version.outcome }}
+          CLI_DOCTOR_OUTCOME: ${{ steps.cli_doctor.outcome }}
         run: |
-          if ($env:BUILD_OUTCOME -ne 'success') {
-            throw "Build did not succeed; suite aggregation cannot pass."
+          $outcomes = @{
+            build = $env:BUILD_OUTCOME
+            fast = $env:FAST_OUTCOME
+            fast_count = $env:FAST_COUNT_OUTCOME
+            formatting = $env:FORMATTING_OUTCOME
+            cli_help = $env:CLI_HELP_OUTCOME
+            cli_version = $env:CLI_VERSION_OUTCOME
+            cli_doctor = $env:CLI_DOCTOR_OUTCOME
           }
-          $failures = @()
-          if ($env:FAST_OUTCOME -ne 'success') {
-            $failures += "fast=$env:FAST_OUTCOME"
-          }
-          if ($env:INTEGRATION_OUTCOME -ne 'success') {
-            $failures += "integration=$env:INTEGRATION_OUTCOME"
-          }
+          $failures = @($outcomes.GetEnumerator() | Where-Object Value -ne 'success' | ForEach-Object { "$($_.Key)=$($_.Value)" })
           if ($failures.Count -gt 0) {
-            throw "Test suite failure: $($failures -join ', ')."
+            throw "Fast/static validation failure: $($failures -join ', ')."
+          }
+
+  integration_campaign_crash:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact workflow head
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Expected workflow head $env:EXPECTED_SHA but checked out $actual."
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Record runner, toolchain, and concurrency facts
+        shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: ${{ github.event_name == 'pull_request' }}
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
+          dotnet --info
+          dotnet msbuild -version
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Campaign crash-boundary partition
+        id: integration_tests
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 35
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --filter "FullyQualifiedName=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint"
+          --logger "trx;LogFilePrefix=integration-campaign-crash-${{ runner.os }}"
+          --results-directory TestResults/ci/integration-campaign-crash
+      - name: Require discovered campaign crash-boundary tests
+        id: integration_test_count
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path TestResults/ci/integration-campaign-crash -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -eq 0) {
+            throw "The campaign crash-boundary command produced no TRX file."
+          }
+          [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
+          $total = [int] $trx.TestRun.ResultSummary.Counters.total
+          if ($total -le 0) {
+            throw "The campaign crash-boundary filter discovered zero tests."
+          }
+          Write-Output "integration.campaign-crash.tests.total=$total"
+      - name: Upload campaign crash-boundary TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-campaign-crash-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration-campaign-crash/*.trx
+          if-no-files-found: error
+      - name: Aggregate campaign crash-boundary outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.integration_tests.outcome }}
+          TEST_COUNT_OUTCOME: ${{ steps.integration_test_count.outcome }}
+        run: |
+          if ($env:BUILD_OUTCOME -ne 'success' -or $env:TEST_OUTCOME -ne 'success' -or $env:TEST_COUNT_OUTCOME -ne 'success') {
+            throw "Campaign crash-boundary validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
+          }
+
+  integration_remaining:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact workflow head
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Expected workflow head $env:EXPECTED_SHA but checked out $actual."
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Record runner, toolchain, and concurrency facts
+        shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: ${{ github.event_name == 'pull_request' }}
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
+          dotnet --info
+          dotnet msbuild -version
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Remaining integration partition
+        id: integration_tests
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 35
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint"
+          --logger "trx;LogFilePrefix=integration-remaining-${{ runner.os }}"
+          --results-directory TestResults/ci/integration-remaining
+      - name: Require discovered remaining integration tests
+        id: integration_test_count
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path TestResults/ci/integration-remaining -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -eq 0) {
+            throw "The remaining-integration command produced no TRX file."
+          }
+          [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
+          $total = [int] $trx.TestRun.ResultSummary.Counters.total
+          if ($total -le 0) {
+            throw "The remaining-integration filter discovered zero tests."
+          }
+          Write-Output "integration.remaining.tests.total=$total"
+      - name: Upload remaining-integration TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-remaining-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration-remaining/*.trx
+          if-no-files-found: error
+      - name: Aggregate remaining-integration outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.integration_tests.outcome }}
+          TEST_COUNT_OUTCOME: ${{ steps.integration_test_count.outcome }}
+        run: |
+          if ($env:BUILD_OUTCOME -ne 'success' -or $env:TEST_OUTCOME -ne 'success' -or $env:TEST_COUNT_OUTCOME -ne 'success') {
+            throw "Remaining-integration validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
+          }
+
+  integration_unfiltered_evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.include_unfiltered_evidence
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Assert exact workflow head
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Expected workflow head $env:EXPECTED_SHA but checked out $actual."
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Record runner, toolchain, and concurrency facts
+        shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: 'false'
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
+          dotnet --info
+          dotnet msbuild -version
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Unfiltered integration evidence
+        id: integration_tests
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 35
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --logger "trx;LogFilePrefix=integration-unfiltered-${{ runner.os }}"
+          --results-directory TestResults/ci/integration-unfiltered
+      - name: Require discovered unfiltered integration tests
+        id: integration_test_count
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path TestResults/ci/integration-unfiltered -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -eq 0) {
+            throw "The unfiltered integration command produced no TRX file."
+          }
+          [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
+          $total = [int] $trx.TestRun.ResultSummary.Counters.total
+          if ($total -le 0) {
+            throw "The unfiltered integration command discovered zero tests."
+          }
+          Write-Output "integration.unfiltered.tests.total=$total"
+      - name: Upload unfiltered-integration TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-unfiltered-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration-unfiltered/*.trx
+          if-no-files-found: error
+      - name: Aggregate unfiltered-integration outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.integration_tests.outcome }}
+          TEST_COUNT_OUTCOME: ${{ steps.integration_test_count.outcome }}
+        run: |
+          if ($env:BUILD_OUTCOME -ne 'success' -or $env:TEST_OUTCOME -ne 'success' -or $env:TEST_COUNT_OUTCOME -ne 'success') {
+            throw "Unfiltered-integration evidence failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
+          }
+
+  validate:
+    if: always()
+    needs:
+      - fast_and_static
+      - integration_campaign_crash
+      - integration_remaining
+    runs-on: ubuntu-latest
+    steps:
+      - name: Aggregate required CI jobs
+        shell: pwsh
+        env:
+          FAST_AND_STATIC_RESULT: ${{ needs.fast_and_static.result }}
+          CAMPAIGN_CRASH_RESULT: ${{ needs.integration_campaign_crash.result }}
+          REMAINING_INTEGRATION_RESULT: ${{ needs.integration_remaining.result }}
+        run: |
+          $results = @{
+            fast_and_static = $env:FAST_AND_STATIC_RESULT
+            integration_campaign_crash = $env:CAMPAIGN_CRASH_RESULT
+            integration_remaining = $env:REMAINING_INTEGRATION_RESULT
+          }
+          $failures = @($results.GetEnumerator() | Where-Object Value -ne 'success' | ForEach-Object { "$($_.Key)=$($_.Value)" })
+          if ($failures.Count -gt 0) {
+            throw "Required CI job failure: $($failures -join ', ')."
           }
