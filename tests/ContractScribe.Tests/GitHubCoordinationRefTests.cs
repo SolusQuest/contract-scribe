@@ -960,6 +960,146 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Later_partial_cannot_hide_an_append_claim_with_a_zero_predecessor(
+        bool includeProposal)
+    {
+        var predecessorAuthority = InitialAuthority("operation-hidden-root-a", '5');
+        var authority = AppendAuthority(predecessorAuthority, "operation-hidden-root-b", '6');
+        var invalidRoot = GitHubCoordinationCodec.CreateClaim(authority, Oid('0'));
+        var content = GitHubCoordinationCodec.WithStage(invalidRoot,
+            GitHubCoordinationStage.ContentCreated,
+            GitHubCoordinationObjects.Prepare(invalidRoot).CommitOid, Oid('2'));
+        var proposal = GitHubCoordinationCodec.WithStage(content,
+            GitHubCoordinationStage.ProposalRefAdvanced,
+            GitHubCoordinationObjects.Prepare(content).CommitOid,
+            Oid('2'), Oid('2'), Oid('2'), Oid('3'));
+        var remote = new CoordinationRemote();
+        remote.SeedChain(includeProposal
+            ? [invalidRoot, content, proposal]
+            : [invalidRoot, content]);
+        using var client = Client(authority, remote);
+
+        var result = await GitHubCoordinationStore.Create(client).ReadCurrentAsync();
+
+        Assert.Null(result.State);
+        Assert.Null(result.Read);
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Failure!.Kind);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+        Assert.Equal(0, remote.RefMutationAttempts);
+        var maximum = typeof(GitHubCoordinationStore).GetField(
+            "MaximumSameOperationTransitions", BindingFlags.Static | BindingFlags.NonPublic)!;
+        Assert.Equal(6, maximum.GetRawConstantValue());
+    }
+
+    [Fact]
+    public async Task Restarted_append_replay_authenticates_the_complete_preceding_path_map()
+    {
+        var predecessorAuthority = InitialAuthority("operation-map-a", '5');
+        var predecessor = PublishedChain(predecessorAuthority);
+        var authority = AppendAuthority(predecessorAuthority, "operation-map-b", '6',
+            precedingFileCandidate: '9');
+        var root = GitHubCoordinationCodec.CreateClaim(authority,
+            GitHubCoordinationObjects.Prepare(predecessor[^1]).CommitOid);
+        var remote = new CoordinationRemote();
+        remote.SeedChain([.. predecessor, root]);
+        using var client = Client(authority, remote);
+
+        var result = await GitHubCoordinationStore.Create(client).ReadCurrentAsync();
+
+        Assert.Null(result.State);
+        Assert.Null(result.Read);
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Failure!.Kind);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+        Assert.Equal(0, remote.RefMutationAttempts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Restarted_successor_replay_authenticates_the_terminal_parent(
+        bool closedUnmerged)
+    {
+        var terminalStage = closedUnmerged
+            ? GitHubCoordinationStage.ClosedUnmerged
+            : GitHubCoordinationStage.Merged;
+        var predecessorAuthority = InitialAuthority("operation-terminal-a", '5');
+        var chain = PublishedChain(predecessorAuthority);
+        var published = chain[^1];
+        var terminal = GitHubCoordinationCodec.WithStage(published, terminalStage,
+            GitHubCoordinationObjects.Prepare(published).CommitOid,
+            published.ContentCommitOid, published.ProposalRefOid,
+            published.ProposalCommitOid, published.ProposalTreeOid,
+            published.PullRequestCreationOperationCommitmentSha256,
+            published.PullRequestNumber, published.ExpectedBaseOid,
+            published.ObservedBaseOid, published.OwnershipMarkerSha256);
+        var authority = SuccessorAuthority(predecessorAuthority, terminal, terminalStage);
+        var substitutedParent = GitHubCoordinationCodec.WithStage(published, terminalStage,
+            GitHubCoordinationObjects.Prepare(published).CommitOid,
+            published.ContentCommitOid, published.ProposalRefOid,
+            published.ProposalCommitOid, published.ProposalTreeOid,
+            published.PullRequestCreationOperationCommitmentSha256,
+            published.PullRequestNumber!.Value + 1, published.ExpectedBaseOid,
+            published.ObservedBaseOid, published.OwnershipMarkerSha256);
+        var root = GitHubCoordinationCodec.CreateClaim(authority,
+            GitHubCoordinationObjects.Prepare(substitutedParent).CommitOid);
+        var remote = new CoordinationRemote { TargetHead = Oid('9') };
+        remote.SeedChain([.. chain, substitutedParent, root]);
+        using var client = Client(authority, remote);
+
+        var result = await GitHubCoordinationStore.Create(client).ReadCurrentAsync();
+
+        Assert.Null(result.State);
+        Assert.Null(result.Read);
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Failure!.Kind);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+        Assert.Equal(0, remote.RefMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Same_operation_edges_authenticate_stale_source_shape_and_PR_base()
+    {
+        var staleAuthority = InitialAuthority("operation-stale-edge", '5');
+        var claim = GitHubCoordinationCodec.CreateClaim(staleAuthority, Oid('0'));
+        var proposalShapedStale = GitHubCoordinationCodec.WithStage(claim,
+            GitHubCoordinationStage.Stale,
+            GitHubCoordinationObjects.Prepare(claim).CommitOid,
+            Oid('2'), Oid('2'), Oid('2'), Oid('3'),
+            expectedBaseOid: Oid('1'), observedBaseOid: Oid('9'));
+        var staleRemote = new CoordinationRemote { TargetHead = Oid('9') };
+        staleRemote.SeedChain([claim, proposalShapedStale]);
+        using var staleClient = Client(staleAuthority, staleRemote);
+
+        var staleResult = await GitHubCoordinationStore.Create(staleClient).ReadCurrentAsync();
+
+        Assert.Null(staleResult.State);
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, staleResult.Failure!.Kind);
+
+        var prAuthority = InitialAuthority("operation-pr-base-edge", '5');
+        var published = PublishedChain(prAuthority);
+        var proposal = published[2];
+        var wrongBase = GitHubCoordinationCodec.WithStage(proposal,
+            GitHubCoordinationStage.Published,
+            GitHubCoordinationObjects.Prepare(proposal).CommitOid,
+            published[3].ContentCommitOid, published[3].ProposalRefOid,
+            published[3].ProposalCommitOid, published[3].ProposalTreeOid,
+            published[3].PullRequestCreationOperationCommitmentSha256,
+            published[3].PullRequestNumber, Oid('9'), Oid('9'),
+            published[3].OwnershipMarkerSha256);
+        var prRemote = new CoordinationRemote();
+        prRemote.SeedChain([.. published[..3], wrongBase]);
+        using var prClient = Client(prAuthority, prRemote);
+
+        var prResult = await GitHubCoordinationStore.Create(prClient).ReadCurrentAsync();
+
+        Assert.Null(prResult.State);
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, prResult.Failure!.Kind);
+        Assert.Equal(0, staleRemote.ObjectMutationAttempts + prRemote.ObjectMutationAttempts);
+        Assert.Equal(0, staleRemote.RefMutationAttempts + prRemote.RefMutationAttempts);
+    }
+
+    [Theory]
     [InlineData("\"cumulativeDocumentationBlocks\":1", "\"cumulativeDocumentationBlocks\":513")]
     [InlineData("\"cumulativePatchBytes\":12", "\"cumulativePatchBytes\":1099511627777")]
     public async Task Impossible_canonical_remote_bounds_never_produce_a_state_capability(
@@ -1166,7 +1306,8 @@ public sealed partial class GitHubCoordinationRefTests
         string operation,
         char candidate,
         char? target = null,
-        bool alternateRepositoryCase = false) => GitHubPublicationFactory.CreateAuthority(new(
+        bool alternateRepositoryCase = false,
+        char precedingFileCandidate = '5') => GitHubPublicationFactory.CreateAuthority(new(
             alternateRepositoryCase ? predecessor.RepositoryOwner.ToLowerInvariant() : predecessor.RepositoryOwner,
             alternateRepositoryCase ? predecessor.RepositoryName.ToUpperInvariant() : predecessor.RepositoryName,
             predecessor.TargetRef,
@@ -1180,11 +1321,27 @@ public sealed partial class GitHubCoordinationRefTests
             GitHubPublicationTransitionKind.SameSnapshotAppend,
             predecessor.AcceptedM4Ceilings, predecessor.Policy,
             [new("docs/readme.md", Hash('5'), Hash(candidate), 1, 12, 14, 1, 1)],
-            [new("docs/readme.md", Hash('5'))]));
+            [new("docs/readme.md", Hash(precedingFileCandidate))]));
+
+    private static ValidatedGitHubPublicationAuthority SuccessorAuthority(
+        ValidatedGitHubPublicationAuthority predecessor,
+        GitHubCoordinationState terminal,
+        GitHubCoordinationStage stage) => SuccessorAuthority(
+            predecessor, terminal.PullRequestNumber!.Value, terminal.GenerationId,
+            terminal.ProposalCommitOid!, stage);
 
     private static ValidatedGitHubPublicationAuthority SuccessorAuthority(
         ValidatedGitHubPublicationAuthority predecessor,
         IGitHubCoordinationStateCapability terminal,
+        GitHubCoordinationStage stage) => SuccessorAuthority(
+            predecessor, terminal.PullRequestNumber!.Value, terminal.GenerationId,
+            terminal.ProposalCommitOid!, stage);
+
+    private static ValidatedGitHubPublicationAuthority SuccessorAuthority(
+        ValidatedGitHubPublicationAuthority predecessor,
+        long pullRequestNumber,
+        string generationId,
+        string headOid,
         GitHubCoordinationStage stage)
     {
         var disposition = stage == GitHubCoordinationStage.Merged
@@ -1195,8 +1352,7 @@ public sealed partial class GitHubCoordinationRefTests
             : GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged;
         var operation = "operation-successor-" + stage;
         var terminalPredecessor = new GitHubPublicationPredecessorAuthority(
-            "logical-predecessor", terminal.PullRequestNumber!.Value,
-            terminal.GenerationId, terminal.ProposalCommitOid!, disposition);
+            "logical-predecessor", pullRequestNumber, generationId, headOid, disposition);
         var closedAuthorization = stage == GitHubCoordinationStage.ClosedUnmerged
             ? new GitHubClosedUnmergedSuccessorAuthorization(
                 "authorization-1", terminalPredecessor.LogicalPredecessorId,

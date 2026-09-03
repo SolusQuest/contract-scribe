@@ -130,6 +130,7 @@ internal sealed class GitHubCoordinationStore
 {
     private static readonly string ZeroOid = GitHubPublicationContract.MissingGitObjectId;
     private static readonly TimeSpan RecoveryTimeout = TimeSpan.FromSeconds(30);
+    private const int MaximumSameOperationTransitions = 6;
     private readonly GitHubApiClient client;
     private readonly ValidatedGitHubPublicationAuthority authority;
     private readonly string coordinationRef;
@@ -569,20 +570,44 @@ internal sealed class GitHubCoordinationStore
             cancellationToken).ConfigureAwait(false);
         if (current.State is null) return current;
         var currentState = (StateCapability)current.State;
-        if (currentState.State.CoordinationPredecessorOid == ZeroOid)
+        var operationId = currentState.State.OperationId;
+        var cursor = currentState;
+        var sameOperationTransitions = 0;
+        var visited = new HashSet<string>(StringComparer.Ordinal) { headOid };
+        while (true)
         {
-            if (currentState.Stage != GitHubCoordinationStage.Claimed
-                || currentState.State.Transition != "initial")
+            var predecessorOid = cursor.State.CoordinationPredecessorOid;
+            if (predecessorOid == ZeroOid)
+            {
+                if (cursor.Stage != GitHubCoordinationStage.Claimed
+                    || cursor.State.Transition != "initial"
+                    || operationId == authority.OperationId
+                        && !ValidAuthorityRoot(cursor.State, null))
+                    return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+                return current;
+            }
+            if (!visited.Add(predecessorOid))
                 return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-            return current;
-        }
 
-        var predecessor = await ReadStateObjectAsync(repository, target,
-            currentState.State.CoordinationPredecessorOid, cancellationToken).ConfigureAwait(false);
-        if (predecessor.State is null) return predecessor;
-        if (!ValidEdge(((StateCapability)predecessor.State).State, currentState.State))
-            return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-        return current;
+            var predecessor = await ReadStateObjectAsync(repository, target,
+                predecessorOid, cancellationToken).ConfigureAwait(false);
+            if (predecessor.State is null) return predecessor;
+            var predecessorState = (StateCapability)predecessor.State;
+            if (!ValidEdge(predecessorState.State, cursor.State))
+                return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+
+            if (predecessorState.State.OperationId != operationId)
+            {
+                if (cursor.Stage != GitHubCoordinationStage.Claimed
+                    || operationId == authority.OperationId
+                        && !ValidAuthorityRoot(cursor.State, predecessorState.State))
+                    return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+                return current;
+            }
+            if (++sameOperationTransitions > MaximumSameOperationTransitions)
+                return DomainFailure(GitHubCoordinationFailureKind.Bounds);
+            cursor = predecessorState;
+        }
     }
 
     private async ValueTask<GitHubCoordinationResult> ReadStateObjectAsync(
@@ -640,18 +665,7 @@ internal sealed class GitHubCoordinationStore
         GitHubCoordinationState current,
         GitHubCoordinationState next)
     {
-        if (!Retains(current.ContentCommitOid, next.ContentCommitOid)
-            || !Retains(current.ProposalRefOid, next.ProposalRefOid)
-            || !Retains(current.ProposalCommitOid, next.ProposalCommitOid)
-            || !Retains(current.ProposalTreeOid, next.ProposalTreeOid)
-            || !Retains(current.PullRequestCreationOperationCommitmentSha256,
-                next.PullRequestCreationOperationCommitmentSha256)
-            || current.PullRequestNumber is { } number && next.PullRequestNumber != number
-            || !Retains(current.ExpectedBaseOid, next.ExpectedBaseOid)
-            || !Retains(current.ObservedBaseOid, next.ObservedBaseOid)
-            || !Retains(current.OwnershipMarkerSha256, next.OwnershipMarkerSha256)
-            || next.PullRequestCreationOperationCommitmentSha256 is not null
-                && next.ExpectedBaseOid != current.TargetCommitOid)
+        if (!ValidEdge(current, next))
             throw new GitHubCoordinationException();
     }
 
@@ -668,7 +682,8 @@ internal sealed class GitHubCoordinationStore
         if (predecessor.OperationId == current.OperationId)
             return SameOperation(predecessor, current)
                 && AllowsStage(predecessor, current.Stage)
-                && RetainsEdge(predecessor, current);
+                && RetainsEdge(predecessor, current)
+                && ValidStageEdge(predecessor, current);
         if (current.Stage != GitHubCoordinationStage.Claimed)
             return false;
         return (predecessor.Stage, current.Transition) switch
@@ -684,13 +699,42 @@ internal sealed class GitHubCoordinationStore
                 && current.RepositoryId.Equals(predecessor.RepositoryId,
                     StringComparison.OrdinalIgnoreCase)
                 && current.TargetRef == predecessor.TargetRef,
-            (GitHubCoordinationStage.Merged, "successor-after-merge") => true,
-            (GitHubCoordinationStage.ClosedUnmerged, "successor-after-closed-unmerged") => true,
+            (GitHubCoordinationStage.Merged, "successor-after-merge") =>
+                SameRepositoryAndRef(predecessor, current),
+            (GitHubCoordinationStage.ClosedUnmerged, "successor-after-closed-unmerged") =>
+                SameRepositoryAndRef(predecessor, current),
             (GitHubCoordinationStage.Stale, "initial") =>
-                current.GenerationId != predecessor.GenerationId,
+                current.GenerationId != predecessor.GenerationId
+                && current.TargetCommitOid == predecessor.ObservedBaseOid
+                && SameRepositoryAndRef(predecessor, current),
             _ => false,
         };
     }
+
+    private bool ValidAuthorityRoot(
+        GitHubCoordinationState root,
+        GitHubCoordinationState? predecessor)
+    {
+        if (!MatchesAuthority(root)) return false;
+        return (authority.Transition, predecessor?.Stage) switch
+        {
+            (GitHubPublicationTransitionKind.Initial, null) => true,
+            (GitHubPublicationTransitionKind.Initial, GitHubCoordinationStage.Stale) => true,
+            (GitHubPublicationTransitionKind.SameSnapshotAppend, GitHubCoordinationStage.Published) =>
+                MatchesAppendPredecessor(predecessor),
+            (GitHubPublicationTransitionKind.SuccessorAfterMerge, GitHubCoordinationStage.Merged) =>
+                MatchesTerminalPredecessor(predecessor),
+            (GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged,
+                GitHubCoordinationStage.ClosedUnmerged) => MatchesTerminalPredecessor(predecessor),
+            _ => false,
+        };
+    }
+
+    private static bool SameRepositoryAndRef(
+        GitHubCoordinationState predecessor,
+        GitHubCoordinationState current) =>
+        current.RepositoryId.Equals(predecessor.RepositoryId, StringComparison.OrdinalIgnoreCase)
+        && current.TargetRef == predecessor.TargetRef;
 
     private static bool SameOperation(
         GitHubCoordinationState first,
@@ -726,6 +770,34 @@ internal sealed class GitHubCoordinationStore
         && Retains(predecessor.ExpectedBaseOid, current.ExpectedBaseOid)
         && Retains(predecessor.ObservedBaseOid, current.ObservedBaseOid)
         && Retains(predecessor.OwnershipMarkerSha256, current.OwnershipMarkerSha256);
+
+    private static bool ValidStageEdge(
+        GitHubCoordinationState predecessor,
+        GitHubCoordinationState current)
+    {
+        if (current.PullRequestCreationOperationCommitmentSha256 is not null
+            && current.ExpectedBaseOid != current.TargetCommitOid)
+            return false;
+        if (current.Stage != GitHubCoordinationStage.Stale) return true;
+        return predecessor.Stage switch
+        {
+            GitHubCoordinationStage.Claimed => current.ProposalRefOid is null
+                && current.ProposalCommitOid is null && current.ProposalTreeOid is null,
+            GitHubCoordinationStage.ContentCreated =>
+                current.ContentCommitOid == predecessor.ContentCommitOid
+                && (current.ProposalRefOid is null && current.ProposalCommitOid is null
+                    && current.ProposalTreeOid is null
+                    || current.ProposalRefOid == current.ContentCommitOid
+                    && current.ProposalCommitOid == current.ContentCommitOid
+                    && current.ProposalTreeOid is not null),
+            GitHubCoordinationStage.ProposalRefAdvanced =>
+                current.ContentCommitOid == predecessor.ContentCommitOid
+                && current.ProposalRefOid == predecessor.ProposalRefOid
+                && current.ProposalCommitOid == predecessor.ProposalCommitOid
+                && current.ProposalTreeOid == predecessor.ProposalTreeOid,
+            _ => false,
+        };
+    }
 
     private GitHubCoordinationState Apply(
         GitHubCoordinationState current,
@@ -797,7 +869,10 @@ internal sealed class GitHubCoordinationStore
         var predecessor = authority.TerminalPredecessor;
         return predecessor is not null && predecessor.PullRequestNumber == state.PullRequestNumber
             && predecessor.GenerationId == state.GenerationId
-            && predecessor.HeadOid == state.ProposalCommitOid;
+            && predecessor.HeadOid == state.ProposalCommitOid
+            && predecessor.Disposition == (state.Stage == GitHubCoordinationStage.Merged
+                ? GitHubPublicationPredecessorDisposition.Merged
+                : GitHubPublicationPredecessorDisposition.ClosedUnmerged);
     }
 
     private bool MatchesAuthority(GitHubCoordinationState state) =>
