@@ -392,6 +392,131 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Fact]
+    public async Task Initial_target_drift_with_an_absent_coordination_ref_is_not_a_missing_predecessor()
+    {
+        var remote = new CoordinationRemote { TargetHead = Oid('9') };
+        using var client = Client(InitialAuthority("operation-initial-drift", '5'), remote);
+
+        var result = await GitHubCoordinationStore.Create(client).ReadCurrentAsync();
+
+        Assert.Equal(GitHubCoordinationOutcome.Failed, result.Outcome);
+        Assert.Equal(GitHubCoordinationFailureKind.TargetMoved, result.Failure!.Kind);
+        Assert.Null(result.Read);
+        Assert.Null(result.State);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+        Assert.Equal(0, remote.RefMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Initial_claim_recovers_an_identical_successor_that_wins_before_the_orphan_gate()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-orphan-replay", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var prepared = GitHubCoordinationObjects.Prepare(
+            GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
+        remote.SeedObjects(prepared);
+        remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
+
+        var result = await store.ClaimAsync(absence.Read!);
+
+        Assert.Equal(GitHubCoordinationOutcome.Replayed, result.Outcome);
+        Assert.Equal(prepared.CommitOid, result.State!.HeadOid);
+        Assert.Equal(0, remote.RefMutationAttempts);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Append_claim_recovers_an_identical_successor_that_wins_before_the_orphan_gate()
+    {
+        var predecessorAuthority = InitialAuthority("operation-append-predecessor", '5');
+        var remote = new CoordinationRemote();
+        remote.SeedChain(PublishedChain(predecessorAuthority));
+        var authority = AppendAuthority(predecessorAuthority, "operation-append-replay", '6');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var current = await store.ReadCurrentAsync();
+        var prepared = GitHubCoordinationObjects.Prepare(
+            GitHubCoordinationCodec.CreateClaim(authority, current.State!.HeadOid));
+        remote.SeedObjects(prepared);
+        remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
+
+        var result = await store.ClaimAsync(current.Read!);
+
+        Assert.Equal(GitHubCoordinationOutcome.Replayed, result.Outcome);
+        Assert.Equal(prepared.CommitOid, result.State!.HeadOid);
+        Assert.Equal(0, remote.RefMutationAttempts);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Initial_claim_recovers_an_identical_successor_that_wins_before_the_final_gate()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-final-replay", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var prepared = GitHubCoordinationObjects.Prepare(
+            GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
+        remote.MoveCoordinationHeadBeforeRefRead = prepared.CommitOid;
+        remote.MoveCoordinationHeadAfterObjectMutationCount = 4;
+
+        var result = await store.ClaimAsync(absence.Read!);
+
+        Assert.Equal(GitHubCoordinationOutcome.Replayed, result.Outcome);
+        Assert.Equal(prepared.CommitOid, result.State!.HeadOid);
+        Assert.Equal(0, remote.RefMutationAttempts);
+        Assert.Equal(4, remote.ObjectMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Recovered_claim_uses_ordinary_stale_terminalization_when_the_target_has_moved()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-recovered-stale", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var prepared = GitHubCoordinationObjects.Prepare(
+            GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
+        remote.SeedObjects(prepared);
+        remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
+        remote.TargetHead = Oid('9');
+
+        var result = await store.ClaimAsync(absence.Read!);
+
+        Assert.Equal(GitHubCoordinationOutcome.Stale, result.Outcome);
+        Assert.Equal(GitHubCoordinationStage.Stale, result.State!.Stage);
+        Assert.Equal(Oid('1'), result.State.ExpectedBaseOid);
+        Assert.Equal(Oid('9'), result.State.ObservedBaseOid);
+        Assert.Equal(1, remote.SuccessfulRefMutations);
+    }
+
+    [Fact]
+    public async Task Final_gate_claim_recovery_precedes_ordinary_target_drift_terminalization()
+    {
+        var remote = new CoordinationRemote { TargetAfterCommitMutation = Oid('9') };
+        var authority = InitialAuthority("operation-final-recovered-stale", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var prepared = GitHubCoordinationObjects.Prepare(
+            GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
+        remote.MoveCoordinationHeadBeforeRefRead = prepared.CommitOid;
+        remote.MoveCoordinationHeadAfterObjectMutationCount = 4;
+
+        var result = await store.ClaimAsync(absence.Read!);
+
+        Assert.Equal(GitHubCoordinationOutcome.Stale, result.Outcome);
+        Assert.Equal(Oid('1'), result.State!.ExpectedBaseOid);
+        Assert.Equal(Oid('9'), result.State.ObservedBaseOid);
+        Assert.Equal(1, remote.SuccessfulRefMutations);
+    }
+
+    [Fact]
     public async Task Competing_append_claims_use_the_same_nonzero_predecessor_and_only_one_wins()
     {
         var remote = new CoordinationRemote();
@@ -502,6 +627,129 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCoordinationFailureKind.Unresolved, result.Failure!.Kind);
         Assert.Equal(0, remote.RefMutationAttempts);
         Assert.Equal(0, remote.ObjectMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Identical_stage_advance_already_current_at_the_initial_gate_is_a_zero_write_replay()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-stage-initial-replay", '5');
+        using var firstClient = Client(authority, remote);
+        using var secondClient = Client(authority, remote);
+        var first = GitHubCoordinationStore.Create(firstClient);
+        var second = GitHubCoordinationStore.Create(secondClient);
+        var absence = await first.ReadCurrentAsync();
+        await first.ClaimAsync(absence.Read!);
+        var firstCurrent = await first.ReadCurrentAsync();
+        var secondCurrent = await second.ReadCurrentAsync();
+        var winner = await first.AdvanceAsync(firstCurrent.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+        var refMutations = remote.RefMutationAttempts;
+        var objectMutations = remote.ObjectMutationAttempts;
+
+        var replay = await second.AdvanceAsync(secondCurrent.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+
+        Assert.Equal(GitHubCoordinationOutcome.Advanced, winner.Outcome);
+        Assert.Equal(GitHubCoordinationOutcome.Advanced, replay.Outcome);
+        Assert.Equal(winner.State!.HeadOid, replay.State!.HeadOid);
+        Assert.Equal(refMutations, remote.RefMutationAttempts);
+        Assert.Equal(objectMutations, remote.ObjectMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Identical_stage_advance_that_wins_before_the_orphan_gate_is_a_zero_write_replay()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-stage-orphan-replay", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var claim = await store.ClaimAsync(absence.Read!);
+        var prepared = await PrepareContentSuccessorAsync(authority, remote.State(claim.State!.HeadOid));
+        remote.SeedObjects(prepared);
+        remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
+        var refMutations = remote.RefMutationAttempts;
+        var objectMutations = remote.ObjectMutationAttempts;
+
+        var replay = await store.AdvanceAsync(claim.State,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+
+        Assert.Equal(GitHubCoordinationOutcome.Advanced, replay.Outcome);
+        Assert.Equal(prepared.CommitOid, replay.State!.HeadOid);
+        Assert.Equal(refMutations, remote.RefMutationAttempts);
+        Assert.Equal(objectMutations, remote.ObjectMutationAttempts);
+    }
+
+    [Fact]
+    public async Task Identical_stage_advance_that_wins_before_the_final_gate_is_a_zero_write_replay()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-stage-final-replay", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var claim = await store.ClaimAsync(absence.Read!);
+        var prepared = await PrepareContentSuccessorAsync(authority, remote.State(claim.State!.HeadOid));
+        remote.MoveCoordinationHeadBeforeRefRead = prepared.CommitOid;
+        remote.MoveCoordinationHeadAfterObjectMutationCount = remote.ObjectMutationAttempts + 4;
+        var refMutations = remote.RefMutationAttempts;
+
+        var replay = await store.AdvanceAsync(claim.State,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+
+        Assert.Equal(GitHubCoordinationOutcome.Advanced, replay.Outcome);
+        Assert.Equal(prepared.CommitOid, replay.State!.HeadOid);
+        Assert.Equal(refMutations, remote.RefMutationAttempts);
+    }
+
+    [Fact]
+    public async Task A_genuinely_different_stage_successor_remains_a_conflict()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-stage-conflict", '5');
+        using var firstClient = Client(authority, remote);
+        using var secondClient = Client(authority, remote);
+        var first = GitHubCoordinationStore.Create(firstClient);
+        var second = GitHubCoordinationStore.Create(secondClient);
+        var absence = await first.ReadCurrentAsync();
+        await first.ClaimAsync(absence.Read!);
+        var firstCurrent = await first.ReadCurrentAsync();
+        var secondCurrent = await second.ReadCurrentAsync();
+        await first.AdvanceAsync(firstCurrent.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+
+        var conflict = await second.AdvanceAsync(secondCurrent.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('3')));
+
+        Assert.Equal(GitHubCoordinationOutcome.Conflict, conflict.Outcome);
+        Assert.Equal(GitHubCoordinationFailureKind.Conflict, conflict.Failure!.Kind);
+    }
+
+    [Fact]
+    public async Task Recovered_stage_successor_uses_ordinary_stale_terminalization_after_target_drift()
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority("operation-stage-recovered-stale", '5');
+        using var firstClient = Client(authority, remote);
+        using var secondClient = Client(authority, remote);
+        var first = GitHubCoordinationStore.Create(firstClient);
+        var second = GitHubCoordinationStore.Create(secondClient);
+        var absence = await first.ReadCurrentAsync();
+        await first.ClaimAsync(absence.Read!);
+        var firstCurrent = await first.ReadCurrentAsync();
+        var secondCurrent = await second.ReadCurrentAsync();
+        await first.AdvanceAsync(firstCurrent.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+        remote.TargetHead = Oid('9');
+
+        var result = await second.AdvanceAsync(secondCurrent.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+
+        Assert.Equal(GitHubCoordinationOutcome.Stale, result.Outcome);
+        Assert.Equal(Oid('1'), result.State!.ExpectedBaseOid);
+        Assert.Equal(Oid('9'), result.State.ObservedBaseOid);
+        Assert.Equal(3, remote.SuccessfulRefMutations);
     }
 
     [Fact]
@@ -1467,6 +1715,20 @@ public sealed partial class GitHubCoordinationRefTests
         return GitHubApiClient.Create(authority, GitHubTransportTestHook.Placeholder);
     }
 
+    private static async Task<GitHubPreparedCoordination> PrepareContentSuccessorAsync(
+        ValidatedGitHubPublicationAuthority authority,
+        GitHubCoordinationState claim)
+    {
+        var template = new CoordinationRemote();
+        template.Seed(claim);
+        using var client = Client(authority, template);
+        var store = GitHubCoordinationStore.Create(client);
+        var current = await store.ReadCurrentAsync();
+        var advanced = await store.AdvanceAsync(current.State!,
+            GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+        return GitHubCoordinationObjects.Prepare(template.State(advanced.State!.HeadOid));
+    }
+
     public enum LostMutation { None, Blob, LeafTree, RootTree, Commit, Ref }
     public enum LostReadback { Exact, Missing, Mismatch }
     public enum ObjectTamper { Blob, LeafTree, RootTree, Parent, Tree, Actor, Time, Message }
@@ -1508,6 +1770,9 @@ public sealed partial class GitHubCoordinationRefTests
         internal int SuccessfulRefMutations { get; private set; }
         internal int ObjectMutationAttempts { get; private set; }
         internal int BlobReadAttempts { get; private set; }
+        internal string? MoveCoordinationHeadBeforeCommitRead { get; set; }
+        internal string? MoveCoordinationHeadBeforeRefRead { get; set; }
+        internal int MoveCoordinationHeadAfterObjectMutationCount { get; set; } = int.MaxValue;
         internal List<(string Before, string After)> RefUpdates { get; } = [];
 
         internal void RequireConcurrentRefMutations(int count)
@@ -1670,9 +1935,17 @@ public sealed partial class GitHubCoordinationRefTests
                 if (path.EndsWith("/git/ref/heads/main", StringComparison.Ordinal))
                     return Ref("refs/heads/main", TargetHead);
                 if (path.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal))
+                {
+                    if (MoveCoordinationHeadBeforeRefRead is { } moved
+                        && ObjectMutationAttempts >= MoveCoordinationHeadAfterObjectMutationCount)
+                    {
+                        CoordinationHead = moved;
+                        MoveCoordinationHeadBeforeRefRead = null;
+                    }
                     return CoordinationHead is null
                         ? Json(HttpStatusCode.NotFound, new { message = "Not Found" })
                         : Ref(RefName(path), CoordinationHead);
+                }
                 var oid = path[(path.LastIndexOf('/') + 1)..];
                 if (path.Contains("/git/blobs/", StringComparison.Ordinal) && blobs.TryGetValue(oid, out var bytes))
                 {
@@ -1687,8 +1960,15 @@ public sealed partial class GitHubCoordinationRefTests
                 }
                 if (path.Contains("/git/trees/", StringComparison.Ordinal) && trees.TryGetValue(oid, out var tree))
                     return Tree(tree);
-                if (path.Contains("/git/commits/", StringComparison.Ordinal) && commits.TryGetValue(oid, out var commit))
-                    return Commit(commit);
+                if (path.Contains("/git/commits/", StringComparison.Ordinal))
+                {
+                    if (MoveCoordinationHeadBeforeCommitRead == oid)
+                    {
+                        CoordinationHead = oid;
+                        MoveCoordinationHeadBeforeCommitRead = null;
+                    }
+                    if (commits.TryGetValue(oid, out var commit)) return Commit(commit);
+                }
                 return Json(HttpStatusCode.NotFound, new { message = "Not Found" });
             }
         }
