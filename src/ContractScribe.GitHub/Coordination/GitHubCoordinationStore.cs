@@ -776,7 +776,7 @@ internal sealed class GitHubCoordinationStore
         GitHubCoordinationState predecessor,
         GitHubCoordinationState current)
     {
-        if (current.PullRequestCreationOperationCommitmentSha256 is not null
+        if (current.ExpectedBaseOid is not null
             && current.ExpectedBaseOid != current.TargetCommitOid)
             return false;
         if (current.Stage != GitHubCoordinationStage.Stale) return true;

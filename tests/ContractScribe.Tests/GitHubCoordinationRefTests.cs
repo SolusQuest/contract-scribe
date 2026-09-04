@@ -1116,6 +1116,34 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Fact]
+    public async Task Stale_state_binds_expected_base_to_operation_target()
+    {
+        var authority = InitialAuthority("operation-stale-base", '5');
+        var claim = GitHubCoordinationCodec.CreateClaim(authority, Oid('0'));
+        var claimHead = GitHubCoordinationObjects.Prepare(claim).CommitOid;
+        var stale = GitHubCoordinationCodec.WithStage(claim,
+            GitHubCoordinationStage.Stale, claimHead,
+            expectedBaseOid: Oid('1'), observedBaseOid: Oid('9'));
+        var canonical = Encoding.UTF8.GetString(GitHubCoordinationCodec.Encode(stale));
+        var tampered = Encoding.UTF8.GetBytes(canonical.Replace(
+            $"\"expectedBaseOid\":\"{Oid('1')}\"",
+            $"\"expectedBaseOid\":\"{Oid('2')}\"", StringComparison.Ordinal));
+        Assert.Throws<GitHubCoordinationException>(() => GitHubCoordinationCodec.Decode(tampered));
+        var remote = new CoordinationRemote { TargetHead = Oid('9') };
+        remote.Seed(claim);
+        remote.SeedRaw(tampered, stale.OperationCommitmentSha256, "stale", claimHead);
+        using var client = Client(authority, remote);
+
+        var result = await GitHubCoordinationStore.Create(client).ReadCurrentAsync();
+
+        Assert.Null(result.State);
+        Assert.Null(result.Read);
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Failure!.Kind);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+        Assert.Equal(0, remote.RefMutationAttempts);
+    }
+
+    [Fact]
     public async Task Same_operation_edges_authenticate_stale_source_shape_and_PR_base()
     {
         var staleAuthority = InitialAuthority("operation-stale-edge", '5');
@@ -1137,16 +1165,17 @@ public sealed partial class GitHubCoordinationRefTests
         var prAuthority = InitialAuthority("operation-pr-base-edge", '5');
         var published = PublishedChain(prAuthority);
         var proposal = published[2];
-        var wrongBase = GitHubCoordinationCodec.WithStage(proposal,
-            GitHubCoordinationStage.Published,
-            GitHubCoordinationObjects.Prepare(proposal).CommitOid,
-            published[3].ContentCommitOid, published[3].ProposalRefOid,
-            published[3].ProposalCommitOid, published[3].ProposalTreeOid,
-            published[3].PullRequestCreationOperationCommitmentSha256,
-            published[3].PullRequestNumber, Oid('9'), Oid('9'),
-            published[3].OwnershipMarkerSha256);
+        var canonicalPublished = Encoding.UTF8.GetString(
+            GitHubCoordinationCodec.Encode(published[3]));
+        var wrongBase = Encoding.UTF8.GetBytes(canonicalPublished
+            .Replace($"\"expectedBaseOid\":\"{Oid('1')}\"",
+                $"\"expectedBaseOid\":\"{Oid('9')}\"", StringComparison.Ordinal)
+            .Replace($"\"observedBaseOid\":\"{Oid('1')}\"",
+                $"\"observedBaseOid\":\"{Oid('9')}\"", StringComparison.Ordinal));
         var prRemote = new CoordinationRemote();
-        prRemote.SeedChain([.. published[..3], wrongBase]);
+        prRemote.SeedChain(published[..3]);
+        prRemote.SeedRaw(wrongBase, published[3].OperationCommitmentSha256,
+            "published", GitHubCoordinationObjects.Prepare(proposal).CommitOid);
         using var prClient = Client(prAuthority, prRemote);
 
         var prResult = await GitHubCoordinationStore.Create(prClient).ReadCurrentAsync();

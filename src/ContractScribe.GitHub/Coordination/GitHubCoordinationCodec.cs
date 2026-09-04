@@ -323,7 +323,8 @@ internal static class GitHubCoordinationCodec
         }
         else Require(state.PullRequestCreationOperationCommitmentSha256 is null
             && state.PullRequestNumber is null && state.OwnershipMarkerSha256 is null);
-        if (bases) Require(IsOid(state.ExpectedBaseOid) && IsOid(state.ObservedBaseOid));
+        if (bases) Require(IsOid(state.ExpectedBaseOid) && IsOid(state.ObservedBaseOid)
+            && state.ExpectedBaseOid == state.TargetCommitOid);
         else Require(state.ExpectedBaseOid is null && state.ObservedBaseOid is null);
 
         switch (state.Stage)
