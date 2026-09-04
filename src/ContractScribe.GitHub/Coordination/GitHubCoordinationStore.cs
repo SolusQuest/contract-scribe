@@ -448,6 +448,11 @@ internal sealed class GitHubCoordinationStore
                     checkTarget, cancellationToken).ConfigureAwait(false);
             }
             var orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
+            if (orphan.Value is null
+                && orphan.Failure?.Code == GitHubFailureCode.NotFound
+                && next != intended)
+                orphan = await client.GetCommitAsync(preparedIntended.CommitOid, cancellationToken)
+                    .ConfigureAwait(false);
             if (orphan.Value is not null)
             {
                 var recoveredRef = await client.GetRefAsync(coordinationRef, cancellationToken)

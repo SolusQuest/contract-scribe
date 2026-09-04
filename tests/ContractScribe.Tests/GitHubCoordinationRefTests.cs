@@ -787,21 +787,23 @@ public sealed partial class GitHubCoordinationRefTests
             : GitHubCoordinationStageUpdate.ContentCreated(Oid('2'));
         var intended = await PrepareSuccessorAsync(authority, operationStates, update, '1');
         var stale = await PrepareSuccessorAsync(authority, operationStates, update, '9');
-        remote.TargetHead = Oid('9');
-        remote.SeedObjects(intended);
         switch (window)
         {
             case SuccessorObservationWindow.Orphan:
+                remote.TargetHead = Oid('9');
+                remote.SeedObjects(intended);
                 remote.SeedObjects(stale);
                 remote.MoveCoordinationHeadBeforeCommitRead = stale.CommitOid;
                 remote.MoveCoordinationHeadBeforeCommitReadTo = intended.CommitOid;
                 break;
             case SuccessorObservationWindow.FinalRef:
+                remote.TargetAfterCommitMutation = Oid('9');
                 remote.MoveCoordinationHeadBeforeRefRead = intended.CommitOid;
                 remote.MoveCoordinationHeadAfterObjectMutationCount =
                     remote.ObjectMutationAttempts + 4;
                 break;
             case SuccessorObservationWindow.CasReadback:
+                remote.TargetAfterCommitMutation = Oid('9');
                 remote.MoveCoordinationHeadBeforeRefMutation = intended.CommitOid;
                 break;
         }
@@ -817,6 +819,50 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(proposal ? Oid('2') : null, result.State.ProposalCommitOid);
         Assert.Equal(proposal ? Oid('3') : null, result.State.ProposalTreeOid);
         Assert.Equal(result.State.HeadOid, remote.CoordinationHead);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Target_drift_with_only_the_intended_orphan_fails_closed_without_writes(
+        bool proposal)
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority($"operation-alternate-orphan-{proposal}", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var claim = await store.ClaimAsync(absence.Read!);
+        var predecessor = claim.State!;
+        var operationStates = new List<GitHubCoordinationState>
+        {
+            remote.State(predecessor.HeadOid),
+        };
+        if (proposal)
+        {
+            var content = await store.AdvanceAsync(predecessor,
+                GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+            predecessor = content.State!;
+            operationStates.Add(remote.State(predecessor.HeadOid));
+        }
+        var update = proposal
+            ? GitHubCoordinationStageUpdate.ProposalRefAdvanced(Oid('2'), Oid('3'))
+            : GitHubCoordinationStageUpdate.ContentCreated(Oid('2'));
+        var intended = await PrepareSuccessorAsync(authority, operationStates, update, '1');
+        remote.SeedObjects(intended);
+        remote.TargetHead = Oid('9');
+        var objectMutations = remote.ObjectMutationAttempts;
+        var refMutations = remote.RefMutationAttempts;
+
+        var result = await store.AdvanceAsync(predecessor, update);
+
+        Assert.Equal(GitHubCoordinationOutcome.Failed, result.Outcome);
+        Assert.Equal(GitHubCoordinationFailureKind.Unresolved, result.Failure!.Kind);
+        Assert.Null(result.State);
+        Assert.Null(result.Guard);
+        Assert.Equal(objectMutations, remote.ObjectMutationAttempts);
+        Assert.Equal(refMutations, remote.RefMutationAttempts);
+        Assert.Equal(predecessor.HeadOid, remote.CoordinationHead);
     }
 
     [Fact]
