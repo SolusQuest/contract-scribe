@@ -2,6 +2,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using ContractScribe.Core;
+using ContractScribe.GitHub.Coordination;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.Tests;
@@ -42,14 +43,94 @@ public sealed class GitHubArchitectureTests
         var factory = client.GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
-            .Where(method => method.IsAssembly).Select(method => method.Name).Order(StringComparer.Ordinal);
+            .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
         Assert.Equal(new[] { "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateTreeAsync",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
             "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
+        var authority = Assert.Single(client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance));
+        Assert.Equal("Authority", authority.Name);
+        Assert.Equal(typeof(ValidatedGitHubPublicationAuthority), authority.PropertyType);
+        Assert.False(authority.CanWrite);
         var hook = typeof(GitHubTransportTestHook).GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.True(hook.IsPrivate);
         Assert.False(hook.DeclaringType!.IsPublic);
+    }
+
+    [Fact]
+    public void Coordination_authority_is_closed_unforgeable_and_not_publicly_exported()
+    {
+        var assembly = typeof(GitHubCoordinationStore).Assembly;
+        Assert.Empty(assembly.GetExportedTypes());
+        Assert.All(typeof(GitHubCoordinationStore).GetConstructors(
+            BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
+            constructor => Assert.True(constructor.IsPrivate));
+        Assert.Equal(typeof(GitHubApiClient), Assert.Single(typeof(GitHubCoordinationStore)
+            .GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static)!.GetParameters()).ParameterType);
+
+        foreach (var capability in new[]
+        {
+            typeof(IGitHubCoordinationReadCapability),
+            typeof(IGitHubCoordinationStateCapability),
+            typeof(IGitHubCoordinationGuardCapability),
+        })
+        {
+            Assert.True(capability.IsInterface);
+            Assert.False(capability.IsPublic);
+            Assert.Empty(capability.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance));
+        }
+
+        var implementations = typeof(GitHubCoordinationStore).GetNestedTypes(BindingFlags.NonPublic)
+            .Where(type => type.GetInterfaces().Any(capability => capability.Namespace == typeof(GitHubCoordinationStore).Namespace))
+            .ToArray();
+        Assert.Equal(3, implementations.Length);
+        Assert.All(implementations, implementation =>
+        {
+            Assert.True(implementation.IsNestedPrivate);
+            Assert.True(implementation.IsSealed);
+            Assert.Empty(implementation.GetConstructors(BindingFlags.Public | BindingFlags.Instance));
+        });
+        var snapshotProperties = typeof(IGitHubCoordinationStateCapability)
+            .GetProperties().Select(property => property.Name).ToHashSet(StringComparer.Ordinal);
+        var requiredSnapshotProperties = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "Repository", "TargetRef", "TargetCommitOid", "SnapshotCommitmentSha256",
+            "AuthorityCommitmentSha256", "PolicyCommitmentSha256", "OperationId",
+            "OperationCommitmentSha256", "CurrentCandidateCommitmentSha256",
+            "PrecedingOperationId", "PrecedingAuthorityCommitmentSha256",
+            "PrecedingCandidateCommitmentSha256", "GenerationId", "Transition", "Stage",
+            "HeadOid", "CoordinationPredecessorOid", "ContentCommitOid", "ProposalRefOid",
+            "ProposalCommitOid", "ProposalTreeOid",
+            "PullRequestCreationOperationCommitmentSha256", "PullRequestNumber",
+            "ExpectedBaseOid", "ObservedBaseOid", "OwnershipMarkerSha256",
+            "CumulativeDocumentationBlocks", "CumulativePatchBytes", "CumulativeChangedFiles",
+        };
+        Assert.Subset(requiredSnapshotProperties, snapshotProperties);
+        var guardValidator = typeof(GitHubCoordinationStore).GetMethod(
+            "ValidateGuard", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(typeof(IGitHubCoordinationGuardCapability),
+            Assert.Single(guardValidator.GetParameters()).ParameterType);
+        Assert.True(GitHubCoordinationCodec.MaximumStateBytes < GitHubResponseReader.MaximumBlobBytes);
+    }
+
+    [Fact]
+    public void Coordination_sources_have_one_GraphQL_ref_mutation_seam_and_no_issue_or_REST_ref_mutation()
+    {
+        var root = Root();
+        var directory = Path.Join(root, "src/ContractScribe.GitHub/Coordination");
+        var sources = Directory.GetFiles(directory, "*.cs").Select(File.ReadAllText).ToArray();
+        foreach (var forbidden in new[]
+        {
+            "/issues", "HttpMethod.", "HttpRequestMessage", "Environment.", "File.",
+            "Directory.", "Process.", "Console.", "ILogger", "IServiceProvider", "Octokit",
+        })
+            Assert.DoesNotContain(sources, source => source.Contains(forbidden, StringComparison.Ordinal));
+        Assert.Equal(1, sources.Sum(source => Count(source, "client.UpdateRefAsync(")));
+        Assert.Equal(0, sources.Sum(source => Count(source, "CreatePullRequestAsync(")));
+        Assert.Equal(nameof(GitHubCoordinationFailure), new GitHubCoordinationFailure(
+            GitHubCoordinationFailureKind.Transport, new(GitHubFailureCode.ResponseLost)).ToString());
+        Assert.Equal(nameof(GitHubCoordinationResult), new GitHubCoordinationResult(
+            GitHubCoordinationOutcome.Failed).ToString());
     }
 
     [Fact]
@@ -115,5 +196,14 @@ public sealed class GitHubArchitectureTests
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx"))) directory = directory.Parent;
         return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
+    }
+
+    private static int Count(string source, string value)
+    {
+        var count = 0;
+        for (var index = 0; (index = source.IndexOf(value, index, StringComparison.Ordinal)) >= 0;
+            index += value.Length)
+            count++;
+        return count;
     }
 }

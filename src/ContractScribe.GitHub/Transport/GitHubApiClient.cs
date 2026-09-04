@@ -27,6 +27,8 @@ internal sealed class GitHubApiClient : IDisposable
     private string? credential;
     private int disposed;
 
+    internal ValidatedGitHubPublicationAuthority Authority => authority;
+
     private GitHubApiClient(ValidatedGitHubPublicationAuthority authority, string credential,
         Uri origin, HttpMessageHandler handler, int timeoutMilliseconds)
     {
