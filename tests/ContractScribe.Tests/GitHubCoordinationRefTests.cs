@@ -822,10 +822,16 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Target_drift_with_only_the_intended_orphan_fails_closed_without_writes(
-        bool proposal)
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public async Task Target_drift_with_any_preexisting_exact_candidate_fails_closed_at_the_predecessor_ref(
+        bool proposal,
+        bool seedIntended,
+        bool seedStale)
     {
         var remote = new CoordinationRemote();
         var authority = InitialAuthority($"operation-alternate-orphan-{proposal}", '5');
@@ -849,7 +855,9 @@ public sealed partial class GitHubCoordinationRefTests
             ? GitHubCoordinationStageUpdate.ProposalRefAdvanced(Oid('2'), Oid('3'))
             : GitHubCoordinationStageUpdate.ContentCreated(Oid('2'));
         var intended = await PrepareSuccessorAsync(authority, operationStates, update, '1');
-        remote.SeedObjects(intended);
+        var stale = await PrepareSuccessorAsync(authority, operationStates, update, '9');
+        if (seedIntended) remote.SeedObjects(intended);
+        if (seedStale) remote.SeedObjects(stale);
         remote.TargetHead = Oid('9');
         var objectMutations = remote.ObjectMutationAttempts;
         var refMutations = remote.RefMutationAttempts;
@@ -863,6 +871,49 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(objectMutations, remote.ObjectMutationAttempts);
         Assert.Equal(refMutations, remote.RefMutationAttempts);
         Assert.Equal(predecessor.HeadOid, remote.CoordinationHead);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Target_drift_replays_the_exact_stale_successor_at_the_initial_gate_without_writes(
+        bool proposal)
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority($"operation-stale-replay-{proposal}", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var claim = await store.ClaimAsync(absence.Read!);
+        var predecessor = claim.State!;
+        var operationStates = new List<GitHubCoordinationState>
+        {
+            remote.State(predecessor.HeadOid),
+        };
+        if (proposal)
+        {
+            var content = await store.AdvanceAsync(predecessor,
+                GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+            predecessor = content.State!;
+            operationStates.Add(remote.State(predecessor.HeadOid));
+        }
+        var update = proposal
+            ? GitHubCoordinationStageUpdate.ProposalRefAdvanced(Oid('2'), Oid('3'))
+            : GitHubCoordinationStageUpdate.ContentCreated(Oid('2'));
+        var stale = await PrepareSuccessorAsync(authority, operationStates, update, '9');
+        remote.SeedObjects(stale);
+        remote.TargetHead = Oid('9');
+        remote.ForceCoordinationHead(stale.CommitOid);
+        var objectMutations = remote.ObjectMutationAttempts;
+        var refMutations = remote.RefMutationAttempts;
+
+        var result = await store.AdvanceAsync(predecessor, update);
+
+        Assert.Equal(GitHubCoordinationOutcome.Stale, result.Outcome);
+        Assert.Equal(stale.CommitOid, result.State!.HeadOid);
+        Assert.Equal(objectMutations, remote.ObjectMutationAttempts);
+        Assert.Equal(refMutations, remote.RefMutationAttempts);
+        Assert.Equal(stale.CommitOid, remote.CoordinationHead);
     }
 
     [Fact]
@@ -884,6 +935,46 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(2, remote.SuccessfulRefMutations);
         Assert.Equal(Oid('0'), remote.RefUpdates[0].Before);
         Assert.Equal(remote.RefUpdates[0].After, remote.RefUpdates[1].Before);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Target_movement_immediately_after_a_stage_CAS_preserves_the_residual_and_terminalizes(
+        bool proposal)
+    {
+        var remote = new CoordinationRemote();
+        var authority = InitialAuthority($"operation-stage-post-cas-{proposal}", '5');
+        using var client = Client(authority, remote);
+        var store = GitHubCoordinationStore.Create(client);
+        var absence = await store.ReadCurrentAsync();
+        var claim = await store.ClaimAsync(absence.Read!);
+        var predecessor = claim.State!;
+        if (proposal)
+        {
+            var content = await store.AdvanceAsync(predecessor,
+                GitHubCoordinationStageUpdate.ContentCreated(Oid('2')));
+            predecessor = content.State!;
+        }
+        var update = proposal
+            ? GitHubCoordinationStageUpdate.ProposalRefAdvanced(Oid('2'), Oid('3'))
+            : GitHubCoordinationStageUpdate.ContentCreated(Oid('2'));
+        var successfulRefMutations = remote.SuccessfulRefMutations;
+        remote.TargetAfterSuccessfulRef = Oid('9');
+
+        var result = await store.AdvanceAsync(predecessor, update);
+
+        Assert.Equal(GitHubCoordinationOutcome.Stale, result.Outcome);
+        Assert.Equal(GitHubCoordinationStage.Stale, result.State!.Stage);
+        Assert.Equal(Oid('1'), result.State.ExpectedBaseOid);
+        Assert.Equal(Oid('9'), result.State.ObservedBaseOid);
+        Assert.Equal(Oid('2'), result.State.ContentCommitOid);
+        Assert.Equal(proposal ? Oid('2') : null, result.State.ProposalRefOid);
+        Assert.Equal(proposal ? Oid('2') : null, result.State.ProposalCommitOid);
+        Assert.Equal(proposal ? Oid('3') : null, result.State.ProposalTreeOid);
+        Assert.Equal(successfulRefMutations + 2, remote.SuccessfulRefMutations);
+        Assert.Equal(remote.RefUpdates[^2].After, remote.RefUpdates[^1].Before);
+        Assert.Equal(result.State.HeadOid, remote.CoordinationHead);
     }
 
     [Fact]
