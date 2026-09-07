@@ -107,7 +107,12 @@ internal sealed class GitHubProposalPullRequestStore
         if (created.Value is { } receipt && result.Observation is { } proof
             && (receipt.Id != proof.PullRequest.Id || receipt.NodeId != proof.PullRequest.NodeId
                 || receipt.Number != proof.PullRequest.Number)) return Conflict();
-        return result with { Delivery = created.Delivery };
+        // Empty recovery cannot establish success or erase the dispatched request's failure.
+        return result with
+        {
+            Delivery = created.Delivery,
+            Failure = result.Outcome == GitHubProposalOutcome.Unresolved ? created.Failure : result.Failure,
+        };
     }
 
     private async ValueTask<GitHubProposalResult> ObserveCoreAsync(IGitHubCoordinationStateCapability state,

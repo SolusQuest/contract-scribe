@@ -18,6 +18,58 @@ public sealed class GitHubProposalPullRequestTests
     private static readonly GitHubActor Publisher = new(99, "BOT_99", "github-actions[bot]", GitHubActorKind.Bot);
 
     [Theory]
+    [InlineData(401, (int)GitHubFailureCode.Authentication)]
+    [InlineData(403, (int)GitHubFailureCode.Permission)]
+    [InlineData(429, (int)GitHubFailureCode.RateLimit)]
+    [InlineData(422, (int)GitHubFailureCode.Validation)]
+    [InlineData(503, (int)GitHubFailureCode.HostFailure)]
+    public async Task Empty_recovery_preserves_dispatched_creation_failure(int status, int failure)
+    {
+        using var h = await Harness.Create();
+        h.Remote.PostError = (HttpStatusCode)status;
+        var result = await h.Store.CreateAsync(h.State, h.Head);
+        Assert.Equal(GitHubProposalOutcome.Unresolved, result.Outcome);
+        Assert.Equal((GitHubFailureCode)failure, result.Failure!.Code);
+        Assert.Equal(status, result.Failure.HttpStatus);
+        Assert.Equal(GitHubDelivery.Ambiguous, result.Delivery);
+        Assert.Null(result.Observation);
+        Assert.Empty(h.Remote.Prs);
+        Assert.Equal(1, h.Remote.Posts);
+        Assert.DoesNotContain("synthetic", result.ToString());
+        // An explicit read-only retry still cannot create; transient failure is not invented after restart.
+        using var restart = await Harness.Create(h.Remote, h.Authority, seed: false);
+        Assert.Equal(GitHubProposalOutcome.Unresolved, (await restart.Store.RecoverAsync(restart.State, restart.Head)).Outcome);
+        Assert.Equal(1, h.Remote.Posts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Recovery_evidence_is_not_replaced_by_creation_error(bool recoveryFails)
+    {
+        using var h = await Harness.Create();
+        h.Remote.PostError = HttpStatusCode.Forbidden;
+        h.Remote.CreateBeforePostError = true;
+        if (recoveryFails) h.Remote.RecoveryReadError = HttpStatusCode.ServiceUnavailable;
+        var result = await h.Store.CreateAsync(h.State, h.Head);
+        Assert.Equal(recoveryFails ? GitHubProposalOutcome.Failed : GitHubProposalOutcome.Appendable, result.Outcome);
+        if (recoveryFails)
+        {
+            Assert.Equal(GitHubFailureCode.HostFailure, result.Failure!.Code);
+            Assert.Equal(503, result.Failure.HttpStatus);
+            Assert.Null(result.Observation);
+        }
+        else
+        {
+            Assert.Null(result.Failure);
+            Assert.NotNull(result.Observation);
+        }
+        Assert.Equal(GitHubDelivery.Ambiguous, result.Delivery);
+        Assert.Single(h.Remote.Prs);
+        Assert.Equal(1, h.Remote.Posts);
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Retained_stale_base_blocks_equality_and_allows_exact_terminal(bool persist)
@@ -99,15 +151,19 @@ public sealed class GitHubProposalPullRequestTests
         Assert.Equal(1, h.Remote.Posts);
     }
 
-    [Fact]
-    public async Task Caller_cancellation_after_dispatch_preserves_independent_recovery()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Caller_cancellation_after_dispatch_preserves_independent_recovery(bool hide)
     {
         using var h = await Harness.Create();
         using var caller = new CancellationTokenSource();
+        h.Remote.HideCreated = hide;
         h.Remote.AfterPost = caller.Cancel;
         var result = await h.Store.CreateAsync(h.State, h.Head, caller.Token);
         Assert.True(caller.IsCancellationRequested);
-        Assert.Equal(GitHubProposalOutcome.Appendable, result.Outcome);
+        Assert.Equal(hide ? GitHubProposalOutcome.Unresolved : GitHubProposalOutcome.Appendable, result.Outcome);
+        Assert.Equal(hide ? GitHubFailureCode.Cancelled : (GitHubFailureCode?)null, result.Failure?.Code);
         Assert.Equal(GitHubDelivery.Ambiguous, result.Delivery);
         Assert.Equal(1, h.Remote.Posts);
     }
@@ -180,6 +236,7 @@ public sealed class GitHubProposalPullRequestTests
         h.Remote.HideCreated = hide;
         var result = await h.Store.CreateAsync(h.State, h.Head);
         Assert.Equal(hide ? GitHubProposalOutcome.Unresolved : GitHubProposalOutcome.Appendable, result.Outcome);
+        Assert.Equal(hide ? GitHubFailureCode.ResponseLost : (GitHubFailureCode?)null, result.Failure?.Code);
         using var restart = await Harness.Create(h.Remote, h.Authority, seed: false);
         for (var i = 0; i < 2; i++)
             Assert.Equal(result.Outcome, (await restart.Store.RecoverAsync(restart.State, restart.Head)).Outcome);
@@ -456,12 +513,16 @@ public sealed class GitHubProposalPullRequestTests
         internal string Tree = Oid('3');
         internal bool LoseResponse, HideCreated, Paginate, Duplicate, FailLastPage;
         internal bool DelayRecovery;
+        internal HttpStatusCode? PostError, RecoveryReadError;
+        internal bool CreateBeforePostError;
         internal Action? BeforePost, AfterPost, AfterDetail;
         internal TaskCompletionSource? ConcurrentPosts;
         private readonly object gate = new();
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (DelayRecovery && Posts > 0) await Task.Delay(Timeout.Infinite, cancellationToken);
+            if (Posts > 0 && request.Method == HttpMethod.Get && RecoveryReadError is { } readError)
+                return Json(readError, new { message = "synthetic recovery error" });
             var path = request.RequestUri!.AbsolutePath;
             lock (gate) Requests.Add(request.Method + " " + path);
             if (path == "/repos/Owner/repo/pulls" && request.Method == HttpMethod.Post)
@@ -474,11 +535,14 @@ public sealed class GitHubProposalPullRequestTests
                 lock (gate)
                 {
                     BeforePost?.Invoke(); BeforePost = null;
+                    if (PostError is { } rejected && !CreateBeforePostError)
+                        return Json(rejected, new { message = "synthetic creation error" });
                     if (Prs.Any(p => p["state"]!.GetValue<string>() == "open")) return Json(HttpStatusCode.UnprocessableEntity, new { message = "duplicate" });
                     var pr = MakePr(payload);
                     if (!HideCreated) Prs.Add(pr);
                     AfterPost?.Invoke(); AfterPost = null;
                     cancellationToken.ThrowIfCancellationRequested();
+                    if (PostError is { } postError) return Json(postError, new { message = "synthetic creation error" });
                     if (LoseResponse) { LoseResponse = false; throw new IOException("synthetic private response"); }
                     return Json(HttpStatusCode.Created, pr);
                 }
