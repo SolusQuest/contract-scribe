@@ -360,14 +360,34 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         GitHubCoordinationFailureKind.HumanChange or GitHubCoordinationFailureKind.ObjectMismatch => GitHubPublicationRemoteFailureKind.HumanChange,
         _ => GitHubPublicationRemoteFailureKind.Conflict,
     });
-    private static GitHubPublicationResult Project(GitHubCoordinationResult result) =>
-        (result.Failure?.ReadbackFailure ?? result.Failure?.TransportFailure) is { } error
-            ? Transport(error) : Domain(result.Failure?.Kind);
+    // An empty lookup is recovery evidence, not a replacement diagnosis. A failed recovery
+    // read wins; a verified domain rejection wins over a reconciled mutation response loss.
+    private static GitHubFailure? RecoveryError(GitHubFailure? recovery, GitHubFailure? mutation) =>
+        recovery?.Code == GitHubFailureCode.NotFound ? mutation ?? recovery : recovery ?? mutation;
+    private static GitHubPublicationResult Project(GitHubCoordinationResult result)
+    {
+        var failure = result.Failure;
+        if (failure?.ReadbackFailure is { Code: not GitHubFailureCode.NotFound } read)
+            return Transport(read);
+        if (failure is { ReadbackFailure: null, Kind: not (GitHubCoordinationFailureKind.Transport or GitHubCoordinationFailureKind.Unresolved) })
+            return Domain(failure.Kind);
+        return RecoveryError(failure?.ReadbackFailure, failure?.TransportFailure) is { } error
+            ? Transport(error) : Domain(failure?.Kind);
+    }
     private static GitHubPublicationResult Project(PrResult result) =>
         result.Failure is { } error ? Transport(error) : Domain(result.Cause);
-    private static GitHubPublicationResult Project(GitResult result) =>
-        (result.Failure?.Readback ?? result.Failure?.Transport) is { } error ? Transport(error)
-            : result.Failure?.CoordinationCause is { } cause ? Domain(cause)
-            : Failure(result.Failure?.Kind == GitHubProposalFailureKind.Integrity
-                ? GitHubPublicationRemoteFailureKind.HumanChange : GitHubPublicationRemoteFailureKind.Conflict);
+    private static GitHubPublicationResult Project(GitResult result)
+    {
+        var failure = result.Failure;
+        if (failure?.Readback is { Code: not GitHubFailureCode.NotFound } read
+            && !(failure.Kind == GitHubProposalFailureKind.Integrity && read.Code == GitHubFailureCode.InvalidResponse))
+            return Transport(read);
+        if (failure?.CoordinationCause is { } cause
+            && cause is not (GitHubCoordinationFailureKind.Transport or GitHubCoordinationFailureKind.Unresolved)
+            && failure.Readback is null) return Domain(cause);
+        if (failure?.Kind == GitHubProposalFailureKind.Integrity)
+            return Failure(GitHubPublicationRemoteFailureKind.HumanChange);
+        return RecoveryError(failure?.Readback, failure?.Transport) is { } error ? Transport(error)
+            : Domain(failure?.CoordinationCause);
+    }
 }

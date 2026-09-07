@@ -151,7 +151,7 @@ internal sealed class GitHubProposalStore
         Require(parent is not null && ExactCommit(commit, Commit(graph.RootOid, parent!,
             source.OperationCommitmentSha256, reference[(reference.LastIndexOf('/') + 1)..])));
         Require(source.ProposalTreeOid is null || source.ProposalTreeOid == graph.RootOid);
-        Require(source.ProposalCommitOid is null || observed == oid);
+        Require(source.ProposalCommitOid is null ? observed == Zero || observed == oid : observed == oid);
         fresh = await coordination.InspectStateAsync(current, token);
         if (fresh.State is null) CoordinationFailure(fresh);
         return new(GitHubProposalOutcome.RecordedVerified,

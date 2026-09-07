@@ -621,6 +621,152 @@ public sealed class GitHubPublicationReconcilerTests
         Assert.Equal(1, remote.Posts);
     }
 
+    [Theory]
+    [InlineData("absent")]
+    [InlineData("exact")]
+    [InlineData("foreign")]
+    public async Task Fresh_initial_requires_the_complete_stale_content_and_ref_residual(string residual)
+    {
+        var remote = new Remote();
+        var first = Branch.Authority(remote.Git);
+        using var original = new Session(remote, first);
+        var owner = GitHubCoordinationStore.Create(original.Client);
+        var read = await owner.ReadCurrentAsync();
+        var claim = (await owner.ClaimAsync(read.Read!)).State!;
+        var git = GitHubProposalStore.Create(original.Client, owner);
+        var prepared = await git.PrepareAsync(claim, Branch.Payload(first));
+        var content = (await git.CreateContentAsync(prepared.Prepared!, claim)).Content!;
+        remote.Git.MergedBase();
+        var stale = await owner.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(content.CommitOid));
+        Assert.Equal(GitHubCoordinationStage.Stale, stale.State!.Stage);
+        Assert.Null(stale.State.ProposalCommitOid);
+        if (residual != "absent") remote.Git.Refs[GitHubPublicationFactory.CreateProposalRef(first)] =
+            residual == "exact" ? content.CommitOid : first.ExpectedBaseCommitOid;
+        byte[] bytes = [8, 9];
+        var next = GitHubPublicationFactory.CreateAuthority(Input(first) with
+        {
+            ExpectedBaseCommitOid = remote.Git.BaseOid,
+            SnapshotCommitmentSha256 = new string('a', 64),
+            OperationId = "fresh-replacement",
+            GenerationId = "fresh-generation",
+            CandidateCommitmentSha256 = Hash(bytes),
+            ChangedFiles = [first.ChangedFiles[0] with { OriginalFileSha256 = Hash(Branch.Candidate), CandidateFileSha256 = Hash(bytes) }],
+        });
+        var writes = remote.Writes;
+        using var replacement = new Session(remote, next, Branch.Payload(next, bytes));
+        var result = await replacement.Publish();
+        if (residual == "foreign")
+        {
+            Assert.Equal(GitHubPublicationResultKind.HumanChange, result.Kind);
+            Assert.Equal(writes, remote.Writes);
+            Assert.Equal(first.OperationCommitmentSha256, remote.State(first).OperationCommitmentSha256);
+        }
+        else
+        {
+            Assert.Equal(GitHubPublicationResultKind.RecoveredRefPartial, result.Kind);
+            Assert.Equal(GitHubPublicationResultKind.Published, (await replacement.Publish()).Kind);
+        }
+    }
+
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    public async Task Nonterminal_result_recording_rejects_drift_at_both_target_gates(int driftRead, bool ready)
+    {
+        var remote = new Remote();
+        var authority = Branch.Authority(remote.Git);
+        using var session = new Session(remote, authority);
+        await session.Publish();
+        var previousHead = remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)];
+        var details = 0;
+        var recording = false;
+        var targets = 0;
+        remote.AfterMutation = (_, body) =>
+        {
+            if (ready && JsonNode.Parse(body!)?["draft"] is not null) remote.Lifecycle("ready");
+        };
+        remote.AfterRead = path =>
+        {
+            if (path == "/repos/Owner/repo/pulls/1" && ++details == 2) recording = true;
+        };
+        remote.BeforeRead = path =>
+        {
+            if (recording && path.EndsWith("/git/ref/heads/main", StringComparison.Ordinal) && ++targets == driftRead)
+                remote.Git.MergedBase();
+        };
+        Assert.Equal(GitHubPublicationResultKind.Stale, (await session.Publish()).Kind);
+        Assert.True(recording);
+        Assert.True(targets >= driftRead);
+        Assert.Equal(previousHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)]);
+        Assert.Equal(GitHubCoordinationStage.ProposalRefAdvanced, remote.State(authority).Stage);
+        remote.BeforeRead = null; remote.AfterRead = null; remote.AfterMutation = null;
+        var writes = remote.Writes;
+        await session.Publish();
+        Assert.Equal(writes, remote.Writes);
+    }
+
+    [Theory]
+    [InlineData(false, 401, false)]
+    [InlineData(false, 403, false)]
+    [InlineData(false, 429, false)]
+    [InlineData(true, 401, false)]
+    [InlineData(true, 403, false)]
+    [InlineData(true, 429, false)]
+    [InlineData(false, 403, true)]
+    [InlineData(true, 403, true)]
+    public async Task Object_recovery_distinguishes_empty_lookup_from_failed_read(bool proposal, int status, bool failedRecovery)
+    {
+        var remote = new Remote();
+        var authority = Branch.Authority(remote.Git);
+        using var session = new Session(remote, authority);
+        if (proposal)
+        {
+            var owner = GitHubCoordinationStore.Create(session.Client);
+            var read = await owner.ReadCurrentAsync();
+            Assert.NotNull((await owner.ClaimAsync(read.Read!)).State);
+        }
+        var rejected = false;
+        remote.RejectMutation = path =>
+        {
+            if (!path.EndsWith("/git/blobs", StringComparison.Ordinal)) return null;
+            rejected = true;
+            return (HttpStatusCode)status;
+        };
+        remote.RejectRead = path => rejected && failedRecovery && path.Contains("/git/blobs/", StringComparison.Ordinal)
+            ? HttpStatusCode.ServiceUnavailable : null;
+        var writes = remote.Writes;
+        var expected = failedRecovery ? GitHubPublicationResultKind.HostFailure
+            : status == 429 ? GitHubPublicationResultKind.RateLimit : GitHubPublicationResultKind.Permission;
+        Assert.Equal(expected, (await session.Publish()).Kind);
+        Assert.True(rejected);
+        Assert.Equal(writes, remote.Writes);
+        Assert.Equal(0, remote.PrAttempts);
+    }
+
+    [Fact]
+    public async Task Authenticated_content_recovery_preserves_late_target_drift_over_response_loss()
+    {
+        var remote = new Remote();
+        var authority = Branch.Authority(remote.Git);
+        remote.AfterMutation = (_, body) =>
+        {
+            if (JsonNode.Parse(body!)?["message"]?.GetValue<string>().StartsWith("ContractScribe proposal", StringComparison.Ordinal) != true) return;
+            remote.Git.MergedBase();
+            throw new IOException("synthetic response loss after committed content");
+        };
+        using var session = new Session(remote, authority);
+        Assert.Equal(GitHubPublicationResultKind.Stale, (await session.Publish()).Kind);
+        Assert.Equal(0, remote.Git.ProposalWrites);
+        Assert.Equal(0, remote.PrAttempts);
+        remote.AfterMutation = null;
+        Assert.Equal(GitHubPublicationResultKind.Stale, (await session.Publish()).Kind);
+        var writes = remote.Writes;
+        Assert.Equal(GitHubPublicationResultKind.Stale, (await session.Publish()).Kind);
+        Assert.Equal(writes, remote.Writes);
+    }
+
     private sealed class CounterfeitRight : IGitHubPullRequestEntitlement;
     private sealed class CounterfeitObservation(IGitHubProposalObservation source) : IGitHubProposalObservation
     {
@@ -690,6 +836,8 @@ public sealed class GitHubPublicationReconcilerTests
         internal Action<int, string?>? AfterMutation;
         internal Action<int, string?>? BeforeMutation;
         internal Func<string, HttpStatusCode?>? RejectRead;
+        internal Func<string, HttpStatusCode?>? RejectMutation;
+        internal Action<string>? BeforeRead, AfterRead;
         internal bool Paginate, FailLastPage, DelayPrReads;
         internal GitHubCoordinationState State(ValidatedGitHubPublicationAuthority authority) =>
             Git.CoordinationState(Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)]);
@@ -705,6 +853,7 @@ public sealed class GitHubPublicationReconcilerTests
         }
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request, CancellationToken token)
         {
+            if (request.Method == HttpMethod.Get) BeforeRead?.Invoke(request.RequestUri!.AbsolutePath);
             if (DelayPrReads && Posts > 0 && request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/pulls", StringComparison.Ordinal))
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             if (request.Method == HttpMethod.Get && RejectRead?.Invoke(request.RequestUri!.AbsolutePath) is { } rejected)
@@ -714,8 +863,11 @@ public sealed class GitHubPublicationReconcilerTests
             var body = mutation ? await request.Content!.ReadAsStringAsync(token) : null;
             if (mutation && request.RequestUri!.AbsolutePath == "/repos/Owner/repo/pulls") Interlocked.Increment(ref PrAttempts);
             if (mutation) BeforeMutation?.Invoke(index, body);
+            if (mutation && RejectMutation?.Invoke(request.RequestUri!.AbsolutePath) is { } rejection)
+                return Json(rejection, new { message = "synthetic mutation rejection" });
             if (index == LoseAt && !LoseAfter) throw new IOException("synthetic pre-application loss");
             var response = await ReplyCore(request, token);
+            if (!mutation) AfterRead?.Invoke(request.RequestUri!.AbsolutePath);
             if (mutation) AfterMutation?.Invoke(index, body);
             if (index == LoseAt && LoseAfter) throw new IOException("synthetic response loss");
             return response;

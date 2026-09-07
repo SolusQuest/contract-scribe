@@ -461,7 +461,8 @@ internal sealed class GitHubCoordinationStore
         var update = GitHubCoordinationStageUpdate.PullRequestResult(stage,
             pr.Head.Oid, current.ProposalTreeOid!, observation.Metadata.CreationCommitment,
             pr.Number, current.TargetCommitOid, pr.BaseOid, observation.Metadata.MarkerHash);
-        return AdvanceCoreAsync(current, update, token, checkTarget: false, observedPredecessor: !same);
+        return AdvanceCoreAsync(current, update, token, checkTarget: false, observedPredecessor: !same,
+            requireExpectedTarget: stage is GitHubCoordinationStage.Published or GitHubCoordinationStage.AwaitingReview);
     }
 
     private bool MatchesTerminalObservation(GitHubCoordinationState state, IGitHubProposalObservation observation)
@@ -559,7 +560,8 @@ internal sealed class GitHubCoordinationStore
         GitHubCoordinationStageUpdate update,
         CancellationToken cancellationToken,
         bool checkTarget,
-        bool observedPredecessor = false)
+        bool observedPredecessor = false,
+        bool requireExpectedTarget = false)
     {
         try
         {
@@ -581,6 +583,8 @@ internal sealed class GitHubCoordinationStore
 
             var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
             if (target.Value is null) return Failed(target);
+            if (requireExpectedTarget && target.Value.Oid != current.State.TargetCommitOid)
+                return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
             var intended = Apply(current.State, update, current.HeadOid);
             var effective = update;
             if (update.Stage == GitHubCoordinationStage.Stale)
@@ -657,6 +661,8 @@ internal sealed class GitHubCoordinationStore
             }
             var finalTarget = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
             if (finalTarget.Value is null) return Failed(finalTarget);
+            if (requireExpectedTarget && finalTarget.Value.Oid != current.State.TargetCommitOid)
+                return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
             if ((effective.Stage is GitHubCoordinationStage.ContentCreated
                     or GitHubCoordinationStage.ProposalRefAdvanced)
                 && finalTarget.Value.Oid != current.State.TargetCommitOid)
