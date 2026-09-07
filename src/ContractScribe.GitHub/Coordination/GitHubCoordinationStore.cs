@@ -866,7 +866,8 @@ internal sealed class GitHubCoordinationStore
                 update.RequiredPermissions, readbackFailure);
         var candidate = PreparedAt(read.Value.Oid, prepared, alternatePrepared);
         if (candidate is null)
-            return DomainFailure(GitHubCoordinationFailureKind.Conflict,
+            return DomainFailure(read.Value.Oid == beforeOid
+                    ? GitHubCoordinationFailureKind.Unresolved : GitHubCoordinationFailureKind.Conflict,
                 update.Failure, update.Delivery, update.Context,
                 update.RequiredPermissions, readbackFailure);
         var state = await ReadPreparedAsync(repository, target, candidate,

@@ -767,6 +767,66 @@ public sealed class GitHubPublicationReconcilerTests
         Assert.Equal(writes, remote.Writes);
     }
 
+    [Theory]
+    [InlineData("401", (int)GitHubPublicationResultKind.Permission)]
+    [InlineData("403", (int)GitHubPublicationResultKind.Permission)]
+    [InlineData("429", (int)GitHubPublicationResultKind.RateLimit)]
+    [InlineData("cancel", (int)GitHubPublicationResultKind.Cancelled)]
+    [InlineData("timeout", (int)GitHubPublicationResultKind.Timeout)]
+    [InlineData("failed-recovery", (int)GitHubPublicationResultKind.HostFailure)]
+    [InlineData("divergent", (int)GitHubPublicationResultKind.Conflict)]
+    [InlineData("exact", (int)GitHubPublicationResultKind.RecoveredContentPartial)]
+    public async Task Coordination_cas_recovery_distinguishes_unchanged_divergent_and_exact_heads(string scenario, int expected)
+    {
+        var remote = new Remote();
+        var authority = Branch.Authority(remote.Git);
+        using var session = new Session(remote, authority, timeoutMs: scenario == "timeout" ? 1000 : 30_000);
+        var owner = GitHubCoordinationStore.Create(session.Client);
+        var read = await owner.ReadCurrentAsync();
+        var claim = (await owner.ClaimAsync(read.Read!)).State!;
+        var reference = GitHubPublicationFactory.CreateCoordinationRef(authority);
+        var refPath = "/repos/Owner/repo/git/ref/" + reference[5..];
+        using var cancel = new CancellationTokenSource();
+        var attempts = 0;
+        remote.BeforeMutation = (_, body) =>
+        {
+            var update = JsonNode.Parse(body!)?["variables"]?["input"]?["refUpdates"]?[0];
+            if (update is null) return;
+            Assert.Equal(reference, update["name"]!.GetValue<string>());
+            Assert.Equal(claim.HeadOid, update["beforeOid"]!.GetValue<string>());
+            attempts++;
+            if (scenario == "divergent") remote.Git.Refs[reference] = authority.ExpectedBaseCommitOid;
+        };
+        remote.BeforeCas = async token =>
+        {
+            if (scenario == "cancel") cancel.Cancel();
+            if (scenario is "cancel" or "timeout") await Task.Delay(Timeout.InfiniteTimeSpan, token);
+        };
+        remote.RejectMutation = path => path != "/graphql" || scenario is "cancel" or "timeout" or "exact" ? null
+            : (HttpStatusCode)(int.TryParse(scenario, out var status) ? status : 403);
+        remote.RejectRead = path => scenario == "failed-recovery" && attempts > 0 && path == refPath
+            ? HttpStatusCode.ServiceUnavailable : null;
+        remote.AfterMutation = (_, body) =>
+        {
+            if (scenario == "exact" && JsonNode.Parse(body!)?["variables"] is not null)
+                throw new IOException("synthetic acknowledged-state response loss");
+        };
+        Assert.Equal((GitHubPublicationResultKind)expected, (await session.Publish(cancel.Token)).Kind);
+        Assert.Equal(1, attempts);
+        Assert.Equal(0, remote.Git.ProposalWrites);
+        Assert.Equal(0, remote.PrAttempts);
+        if (scenario == "exact") Assert.Equal(GitHubCoordinationStage.ContentCreated, remote.State(authority).Stage);
+        else Assert.Equal(scenario == "divergent" ? authority.ExpectedBaseCommitOid : claim.HeadOid, remote.Git.Refs[reference]);
+        remote.BeforeMutation = null; remote.BeforeCas = null; remote.AfterMutation = null;
+        remote.RejectMutation = null; remote.RejectRead = null;
+        var writes = remote.Writes;
+        using var restart = new Session(remote, authority);
+        await restart.Publish();
+        Assert.Equal(writes, remote.Writes);
+        Assert.Equal(0, remote.Git.ProposalWrites);
+        Assert.Equal(0, remote.PrAttempts);
+    }
+
     private sealed class CounterfeitRight : IGitHubPullRequestEntitlement;
     private sealed class CounterfeitObservation(IGitHubProposalObservation source) : IGitHubProposalObservation
     {
@@ -802,12 +862,13 @@ public sealed class GitHubPublicationReconcilerTests
         internal readonly GitHubPublicationReconciler Reconciler;
         internal readonly ValidatedGitHubPublicationAuthority Authority;
         internal readonly ValidatedGitHubChangedFilePayload Payload;
-        internal Session(Remote remote, ValidatedGitHubPublicationAuthority authority, ValidatedGitHubChangedFilePayload? payload = null)
+        internal Session(Remote remote, ValidatedGitHubPublicationAuthority authority, ValidatedGitHubChangedFilePayload? payload = null,
+            int timeoutMs = 30_000)
         {
             Authority = authority;
             Payload = payload ?? Branch.Payload(authority);
             using var hook = (IDisposable)typeof(GitHubTransportTestHook).GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
-                .Invoke(null, [new Uri("http://127.0.0.1:43219/"), new Handler(remote), 30_000])!;
+                .Invoke(null, [new Uri("http://127.0.0.1:43219/"), new Handler(remote), timeoutMs])!;
             client = GitHubApiClient.Create(authority, GitHubTransportTestHook.Placeholder);
             Reconciler = GitHubPublicationReconciler.Create(client, Publisher);
         }
@@ -837,6 +898,7 @@ public sealed class GitHubPublicationReconcilerTests
         internal Action<int, string?>? BeforeMutation;
         internal Func<string, HttpStatusCode?>? RejectRead;
         internal Func<string, HttpStatusCode?>? RejectMutation;
+        internal Func<CancellationToken, Task>? BeforeCas;
         internal Action<string>? BeforeRead, AfterRead;
         internal bool Paginate, FailLastPage, DelayPrReads;
         internal GitHubCoordinationState State(ValidatedGitHubPublicationAuthority authority) =>
@@ -863,6 +925,7 @@ public sealed class GitHubPublicationReconcilerTests
             var body = mutation ? await request.Content!.ReadAsStringAsync(token) : null;
             if (mutation && request.RequestUri!.AbsolutePath == "/repos/Owner/repo/pulls") Interlocked.Increment(ref PrAttempts);
             if (mutation) BeforeMutation?.Invoke(index, body);
+            if (mutation && request.RequestUri!.AbsolutePath == "/graphql" && BeforeCas is not null) await BeforeCas(token);
             if (mutation && RejectMutation?.Invoke(request.RequestUri!.AbsolutePath) is { } rejection)
                 return Json(rejection, new { message = "synthetic mutation rejection" });
             if (index == LoseAt && !LoseAfter) throw new IOException("synthetic pre-application loss");
