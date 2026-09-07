@@ -171,6 +171,9 @@ internal sealed class GitHubProposalStore
         foreach (var tree in plan.Graph.Trees.OrderByDescending(p => Depth(p.Key)))
         {
             var oid = TreeOid(tree.Value);
+            // Preparation authenticated inherited objects; only prospective trees need materialization.
+            // Final content verification still rereads the complete graph before success.
+            if (plan.BaseTreeOids.Contains(oid)) continue;
             var observed = await client.GetTreeAsync(oid, cancellationToken);
             if (observed.Value is not null)
             {
@@ -178,7 +181,6 @@ internal sealed class GitHubProposalStore
                 continue;
             }
             if (observed.Failure?.Code != GitHubFailureCode.NotFound) Throw(observed);
-            Require(!plan.BaseTreeOids.Contains(oid));
             await CheckGate(plan, state, allowSuccessor: false, cancellationToken);
             var mutation = await client.CreateTreeAsync(oid, tree.Value, cancellationToken);
             await Readback(mutation, token => client.GetTreeAsync(oid, token), value => ExactTree(value, oid, tree.Value));

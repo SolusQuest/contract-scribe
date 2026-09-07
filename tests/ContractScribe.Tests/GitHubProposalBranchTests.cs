@@ -20,6 +20,54 @@ public sealed class GitHubProposalBranchTests
     private static string Hash(char c) => new(c, 64);
     private static string Oid(char c) => new(c, 40);
 
+    [Theory]
+    [InlineData("missing")]
+    [InlineData("corrupt")]
+    [InlineData("truncated")]
+    public async Task Inherited_tree_damage_after_preparation_is_not_repaired_or_reported_as_verified(string damage)
+    {
+        var remote = new Remote();
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
+        var inherited = remote.BaseRoot.Single(e => e.Path == "keep").Oid;
+        if (damage == "missing") remote.Trees.Remove(inherited);
+        if (damage == "corrupt") remote.Trees[inherited] = [];
+        if (damage == "truncated") remote.TruncatedOid = inherited;
+        var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        Assert.Equal(GitHubProposalOutcome.Failed, result.Outcome);
+        Assert.Null(result.Content);
+        Assert.Equal(GitHubDelivery.NeedsReadback, result.Failure!.Delivery);
+        Assert.NotNull(result.Failure.Context);
+        Assert.Equal(0, remote.ProposalAttempts);
+        if (damage == "missing") Assert.False(remote.Trees.ContainsKey(inherited));
+        if (damage == "corrupt") Assert.Empty(remote.Trees[inherited]);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(12)]
+    public async Task Content_creation_only_rereads_unchanged_trees_in_final_verification(int depth)
+    {
+        var remote = new Remote();
+        remote.DeepBase(depth);
+        var baseTrees = remote.Trees.Keys.ToArray();
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
+        var unchanged = baseTrees.Where(oid => oid != remote.BaseTreeOid
+            && remote.Requests.Any(r => r.Method == "GET" && r.Path.EndsWith("/git/trees/" + oid, StringComparison.Ordinal))).ToArray();
+        var start = remote.Requests.Count;
+        var created = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        Assert.Equal(GitHubProposalOutcome.ContentVerified, created.Outcome);
+        Assert.NotEmpty(unchanged);
+        foreach (var oid in unchanged)
+            Assert.Single(remote.Requests.Skip(start), r => r.Method == "GET"
+                && r.Path.EndsWith("/git/trees/" + oid, StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task A_third_operation_appends_to_the_authenticated_second_proposal()
     {
