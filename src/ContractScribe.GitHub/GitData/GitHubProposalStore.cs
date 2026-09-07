@@ -14,15 +14,18 @@ internal interface IGitHubProposalContent
     string Ref { get; }
 }
 
-internal enum GitHubProposalOutcome { Prepared, ContentVerified, RefVerified, Failed }
+internal enum GitHubProposalOutcome { Prepared, ContentVerified, RefVerified, RecordedVerified, Failed }
 internal enum GitHubProposalFailureKind { InvalidInput, Integrity, Bounds, Conflict, Unresolved, Transport }
 internal sealed record GitHubProposalFailure(GitHubProposalFailureKind Kind,
     GitHubFailure? Transport = null, GitHubDelivery Delivery = GitHubDelivery.NotDispatched,
     GitHubMutationContext? Context = null, GitHubPermissionAlternatives? Permissions = null,
-    GitHubFailure? Readback = null) : GitHubValue;
+    GitHubFailure? Readback = null, GitHubCoordinationFailureKind? CoordinationCause = null) : GitHubValue;
+internal sealed record GitHubProposalObservation(GitHubRepositoryIdentity Repository, string OperationCommitment,
+    string ExpectedBaseOid, string ObservedBaseOid, string CommitOid, string TreeOid,
+    string Ref, string ObservedRefOid) : GitHubValue;
 internal sealed record GitHubProposalResult(GitHubProposalOutcome Outcome,
     IGitHubPreparedProposal? Prepared = null, IGitHubProposalContent? Content = null,
-    GitHubProposalFailure? Failure = null) : GitHubValue;
+    GitHubProposalFailure? Failure = null, GitHubProposalObservation? Observation = null) : GitHubValue;
 
 internal sealed class GitHubProposalStore
 {
@@ -45,7 +48,11 @@ internal sealed class GitHubProposalStore
     internal static GitHubProposalStore Create(GitHubApiClient client, GitHubCoordinationStore coordination) => new(client, coordination);
 
     internal ValueTask<GitHubProposalResult> PrepareAsync(IGitHubCoordinationStateCapability state,
-        ValidatedGitHubChangedFilePayload payload, CancellationToken cancellationToken = default) => Run(async () =>
+        ValidatedGitHubChangedFilePayload payload, CancellationToken cancellationToken = default) =>
+        Run(() => PrepareCore(state, payload, readOnly: false, cancellationToken));
+
+    private async ValueTask<GitHubProposalResult> PrepareCore(IGitHubCoordinationStateCapability state,
+        ValidatedGitHubChangedFilePayload payload, bool readOnly, CancellationToken cancellationToken)
     {
         Require(payload is not null && payload.AuthorityCommitmentSha256 == authority.AuthorityCommitmentSha256
             && payload.Files.Length == authority.ChangedFiles.Length);
@@ -60,7 +67,7 @@ internal sealed class GitHubProposalStore
         foreach (var file in authority.ChangedFiles)
             Require(bytes.TryGetValue(file.Path, out var value) && Sha256(value.AsSpan()) == file.CandidateFileSha256);
 
-        var guarded = await Guard(state, cancellationToken);
+        var guarded = await Guard(state, cancellationToken, readOnly);
         var baseCommit = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, cancellationToken));
         var basis = await ReadGraph(baseCommit.TreeOid, cancellationToken);
         foreach (var file in authority.ChangedFiles)
@@ -81,7 +88,17 @@ internal sealed class GitHubProposalStore
             before = preceding!.ProposalCommitOid!;
             var previousCommit = Value(await client.GetCommitAsync(before, cancellationToken));
             Require(previousCommit.Parents.Length == 1 && previousCommit.TreeOid == preceding.ProposalTreeOid);
-            Require(ExactCommit(previousCommit, Commit(previousCommit.TreeOid, previousCommit.Parents[0],
+            var expectedParent = preceding.TargetCommitOid;
+            if (preceding.Transition == "same-snapshot-append")
+            {
+                var parentSource = coordination.AdmissionSource(preceding);
+                Require(parentSource is not null && parentSource.Stage == GitHubCoordinationStage.Published
+                    && parentSource.OperationId == preceding.PrecedingOperationId
+                    && parentSource.GenerationId == preceding.GenerationId
+                    && parentSource.TargetCommitOid == preceding.TargetCommitOid);
+                expectedParent = parentSource!.ProposalCommitOid!;
+            }
+            Require(ExactCommit(previousCommit, Commit(previousCommit.TreeOid, expectedParent,
                 preceding.OperationCommitmentSha256, generationKey)));
             var previous = await ReadGraph(previousCommit.TreeOid, cancellationToken);
             var replacement = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -102,15 +119,29 @@ internal sealed class GitHubProposalStore
             authority.OperationCommitmentSha256, generationKey);
         Require(state.ContentCommitOid is null || state.ContentCommitOid == commit.ExpectedOid);
         var prepared = new PreparedCapability(this, guarded.Repository, basis.RootOid, before, commit, overlay, bytes, blobOids,
-            basis.Trees.Values.Select(TreeOid).ToHashSet(StringComparer.Ordinal));
+            basis.Trees.Values.Select(TreeOid).ToHashSet(StringComparer.Ordinal), readOnly);
         await CheckGate(prepared, state, allowSuccessor: true, cancellationToken);
         return new(GitHubProposalOutcome.Prepared, Prepared: prepared);
+    }
+
+    internal ValueTask<GitHubProposalResult> VerifyRecordedAsync(IGitHubCoordinationStateCapability state,
+        ValidatedGitHubChangedFilePayload payload, CancellationToken cancellationToken = default) => Run(async () =>
+    {
+        Require(state is not null && state.ContentCommitOid is not null);
+        var prepared = await PrepareCore(state!, payload, readOnly: true, cancellationToken);
+        var plan = (PreparedCapability)prepared.Prepared!;
+        await VerifyContent(plan, Value(await client.GetCommitAsync(plan.Commit.ExpectedOid, cancellationToken)), cancellationToken);
+        var current = await Guard(state!, cancellationToken, readOnly: true);
+        var observedRef = await ReadRef(cancellationToken);
+        return new(GitHubProposalOutcome.RecordedVerified, Observation: new(plan.Repository,
+            authority.OperationCommitmentSha256, authority.ExpectedBaseCommitOid, coordination.ObservedTargetOid(current)!,
+            plan.Commit.ExpectedOid, plan.Commit.TreeOid, proposalRef, observedRef));
     });
 
     internal ValueTask<GitHubProposalResult> CreateContentAsync(IGitHubPreparedProposal prepared,
         IGitHubCoordinationStateCapability state, CancellationToken cancellationToken = default) => Run(async () =>
     {
-        Require(prepared is PreparedCapability owned && ReferenceEquals(owned.Owner, this));
+        Require(prepared is PreparedCapability owned && ReferenceEquals(owned.Owner, this) && !owned.ReadOnly);
         var plan = (PreparedCapability)prepared;
         await CheckGate(plan, state, allowSuccessor: true, cancellationToken);
         var existing = await client.GetCommitAsync(plan.Commit.ExpectedOid, cancellationToken);
@@ -155,9 +186,13 @@ internal sealed class GitHubProposalStore
         await CheckGate(plan, state, allowSuccessor: false, cancellationToken);
         var created = await client.CreateCommitAsync(plan.Commit, cancellationToken);
         await Readback(created, token => client.GetCommitAsync(plan.Commit.ExpectedOid, token), value => ExactCommit(value, plan.Commit));
-        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        await VerifyContent(plan, Value(await client.GetCommitAsync(plan.Commit.ExpectedOid, recovery.Token)), recovery.Token);
-        await CheckGate(plan, state, allowSuccessor: true, recovery.Token);
+        IGitHubProposalContent? verified = null;
+        await FinalVerification(created, async token =>
+        {
+            await VerifyContent(plan, Value(await client.GetCommitAsync(plan.Commit.ExpectedOid, token)), token);
+            verified = new ContentCapability(plan);
+            await CheckGate(plan, state, allowSuccessor: true, token);
+        }, () => verified);
         return new(GitHubProposalOutcome.ContentVerified, Content: new ContentCapability(plan));
     });
 
@@ -186,55 +221,58 @@ internal sealed class GitHubProposalStore
             plan.Commit.ExpectedOid, plan.BeforeOid == Zero), cancellationToken);
         await Readback(mutation, token => client.GetRefAsync(proposalRef, token),
             value => value.Oid == plan.Commit.ExpectedOid && value.Name == proposalRef);
-        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        try
+        IGitHubProposalContent? verified = null;
+        await FinalVerification(mutation, async token =>
         {
-            await VerifyContent(plan, Value(await client.GetCommitAsync(plan.Commit.ExpectedOid, recovery.Token)), recovery.Token);
-            Require(await CheckGate(plan, state, allowSuccessor: true, recovery.Token) == plan.Commit.ExpectedOid);
-        }
-        catch (FailureException failure)
-        {
-            throw new FailureException(new(failure.Failure.Kind, mutation.Failure, mutation.Delivery,
-                mutation.Context, mutation.RequiredPermissions, failure.Failure.Transport));
-        }
+            await VerifyContent(plan, Value(await client.GetCommitAsync(plan.Commit.ExpectedOid, token)), token);
+            verified = new ContentCapability(plan);
+            Require(await CheckGate(plan, state, allowSuccessor: true, token) == plan.Commit.ExpectedOid);
+        }, () => verified);
         return new(GitHubProposalOutcome.RefVerified, Content: content);
     });
 
-    private async ValueTask<IGitHubCoordinationStateCapability> Guard(IGitHubCoordinationStateCapability state, CancellationToken token)
+    private async ValueTask<IGitHubCoordinationStateCapability> Guard(IGitHubCoordinationStateCapability state,
+        CancellationToken token, bool readOnly = false)
     {
         Require(state is not null && state.AuthorityCommitmentSha256 == authority.AuthorityCommitmentSha256
             && state.OperationCommitmentSha256 == authority.OperationCommitmentSha256);
-        var result = await coordination.ReadClaimAsync(state!, token);
-        if (result.Guard is null)
+        var repository = Value(await client.GetRepositoryAsync(token));
+        var result = readOnly ? await coordination.ReadResourceAsync(state!, token)
+            : await coordination.ReadClaimAsync(state!, token);
+        if (result.State is null || !readOnly && result.Guard is null)
             throw new FailureException(new(GitHubProposalFailureKind.Conflict, result.Failure?.TransportFailure,
                 result.Failure?.Delivery ?? GitHubDelivery.NotDispatched, result.Failure?.Context,
-                result.Failure?.Permissions, result.Failure?.ReadbackFailure));
-        Require(coordination.ValidateGuard(result.Guard) is not null);
-        return result.Guard.State;
+                result.Failure?.Permissions, result.Failure?.ReadbackFailure, result.Failure?.Kind));
+        Require(repository.Identity == result.State.Repository);
+        if (!readOnly) Require(coordination.ValidateGuard(result.Guard!) is not null);
+        return result.State;
     }
 
     private async ValueTask<string> CheckGate(PreparedCapability plan, IGitHubCoordinationStateCapability state,
         bool allowSuccessor, CancellationToken token)
     {
-        var guarded = await Guard(state, token);
+        var guarded = await Guard(state, token, plan.ReadOnly);
         Require(guarded.Repository == plan.Repository
             && (guarded.ContentCommitOid is null || guarded.ContentCommitOid == plan.Commit.ExpectedOid)
             && (guarded.ProposalCommitOid is null || guarded.ProposalCommitOid == plan.Commit.ExpectedOid)
             && (guarded.ProposalTreeOid is null || guarded.ProposalTreeOid == plan.Commit.TreeOid));
         var basis = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, token));
         Require(basis.TreeOid == plan.BaseTreeOid);
-        var head = await client.GetRefAsync(proposalRef, token);
-        var oid = head.Value?.Oid;
-        if (oid is null)
-        {
-            if (head.Failure?.Code != GitHubFailureCode.NotFound) Throw(head);
-            oid = Zero;
-        }
+        var oid = await ReadRef(token);
+        if (plan.ReadOnly) return oid;
         if (oid != plan.BeforeOid && !(allowSuccessor && oid == plan.Commit.ExpectedOid))
             throw new FailureException(new(GitHubProposalFailureKind.Conflict));
         if (guarded.Stage == GitHubCoordinationStage.ProposalRefAdvanced && oid != plan.Commit.ExpectedOid)
             throw new FailureException(new(GitHubProposalFailureKind.Conflict));
         return oid;
+    }
+
+    private async ValueTask<string> ReadRef(CancellationToken token)
+    {
+        var head = await client.GetRefAsync(proposalRef, token);
+        if (head.Value is not null) return head.Value.Oid;
+        if (head.Failure?.Code != GitHubFailureCode.NotFound) Throw(head);
+        return Zero;
     }
 
     private async ValueTask VerifyContent(PreparedCapability plan, GitHubCommit commit, CancellationToken token)
@@ -344,25 +382,49 @@ internal sealed class GitHubProposalStore
                 recovery.IsCancellationRequested ? new(GitHubFailureCode.Timeout) : observed.Failure));
     }
 
+    private static async ValueTask FinalVerification<T>(GitHubApiResult<T> mutation,
+        Func<CancellationToken, ValueTask> verify, Func<IGitHubProposalContent?> residual) where T : class
+    {
+        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try { await verify(recovery.Token); }
+        catch (FailureException failure)
+        {
+            throw new FailureException(new(failure.Failure.Kind, mutation.Failure, mutation.Delivery,
+                mutation.Context, mutation.RequiredPermissions,
+                recovery.IsCancellationRequested ? new(GitHubFailureCode.Timeout)
+                    : failure.Failure.Readback ?? failure.Failure.Transport,
+                failure.Failure.CoordinationCause), residual());
+        }
+        catch (Exception failure)
+        {
+            var integrity = failure is GitHubProposalException or ArgumentException;
+            throw new FailureException(new(integrity ? GitHubProposalFailureKind.Integrity : GitHubProposalFailureKind.Transport,
+                mutation.Failure, mutation.Delivery, mutation.Context, mutation.RequiredPermissions,
+                new(recovery.IsCancellationRequested ? GitHubFailureCode.Timeout
+                    : integrity ? GitHubFailureCode.InvalidResponse : GitHubFailureCode.HostFailure)), residual());
+        }
+    }
+
     private static async ValueTask<GitHubProposalResult> Run(Func<ValueTask<GitHubProposalResult>> action)
     {
         try { return await action(); }
-        catch (FailureException failure) { return new(GitHubProposalOutcome.Failed, Failure: failure.Failure); }
+        catch (FailureException failure) { return new(GitHubProposalOutcome.Failed, Content: failure.Content, Failure: failure.Failure); }
         catch (OperationCanceledException) { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.Transport, new(GitHubFailureCode.Cancelled))); }
         catch (GitHubProposalException) { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.Integrity)); }
         catch { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.InvalidInput)); }
     }
 
-    private sealed class FailureException(GitHubProposalFailure failure) : Exception("Proposal publication failed.")
+    private sealed class FailureException(GitHubProposalFailure failure, IGitHubProposalContent? content = null) : Exception("Proposal publication failed.")
     {
         internal GitHubProposalFailure Failure { get; } = failure;
+        internal IGitHubProposalContent? Content { get; } = content;
     }
     private sealed record Graph(string RootOid, Dictionary<string, ImmutableArray<GitHubTreeEntry>> Trees,
         Dictionary<string, GitHubTreeEntry> Files);
     private sealed class PreparedCapability(GitHubProposalStore owner, GitHubRepositoryIdentity repository,
         string baseTreeOid, string beforeOid, GitHubCreateCommit commit, Graph graph,
         Dictionary<string, ImmutableArray<byte>> bytes, Dictionary<string, string> blobOids,
-        HashSet<string> baseTreeOids) : IGitHubPreparedProposal
+        HashSet<string> baseTreeOids, bool readOnly) : IGitHubPreparedProposal
     {
         internal GitHubProposalStore Owner { get; } = owner;
         internal GitHubRepositoryIdentity Repository { get; } = repository;
@@ -373,6 +435,7 @@ internal sealed class GitHubProposalStore
         internal Dictionary<string, ImmutableArray<byte>> Bytes { get; } = bytes;
         internal Dictionary<string, string> BlobOids { get; } = blobOids;
         internal HashSet<string> BaseTreeOids { get; } = baseTreeOids;
+        internal bool ReadOnly { get; } = readOnly;
         public override string ToString() => nameof(PreparedCapability);
     }
     private sealed class ContentCapability(PreparedCapability plan) : IGitHubProposalContent

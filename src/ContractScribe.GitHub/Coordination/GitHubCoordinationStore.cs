@@ -376,7 +376,7 @@ internal sealed class GitHubCoordinationStore
         if (current.Value is null) return Failed(current);
         if (current.Value.Oid != owned.HeadOid)
             return DomainFailure(GitHubCoordinationFailureKind.Conflict);
-        var reread = await ReadStateAsync(repository.Value.Identity, target.Value,
+        var reread = await ReadResourceStateAsync(repository.Value.Identity, target.Value,
             current.Value.Oid, cancellationToken).ConfigureAwait(false);
         if (reread.State is null) return reread;
         var rereadState = (StateCapability)reread.State;
@@ -396,6 +396,52 @@ internal sealed class GitHubCoordinationStore
         IGitHubCoordinationStateCapability state) =>
         state is StateCapability owned && ReferenceEquals(owned.Owner, this)
             ? owned.AdmissionSource : null;
+
+    internal string? ObservedTargetOid(IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this) ? owned.Target.Oid : null;
+
+    // A current-state read is not permission to create. Completed/stale states
+    // and a moved live target still have immutable resources that R4 must verify.
+    internal async ValueTask<GitHubCoordinationResult> ReadResourceAsync(
+        IGitHubCoordinationStateCapability capability, CancellationToken cancellationToken = default)
+    {
+        if (capability is not StateCapability owned || !ReferenceEquals(owned.Owner, this))
+            return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
+        if (!MatchesAuthority(owned.State))
+            return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
+        var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
+        if (repository.Value is null) return Failed(repository);
+        if (repository.Value.Identity != owned.Repository)
+            return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+        var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
+        if (target.Value is null) return Failed(target);
+        var current = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
+        if (current.Value is null) return Failed(current);
+        if (current.Value.Oid != owned.HeadOid)
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        var read = await ReadResourceStateAsync(repository.Value.Identity, target.Value, current.Value.Oid,
+            cancellationToken).ConfigureAwait(false);
+        if (read.State is null) return read;
+        return SameState(owned, (StateCapability)read.State) ? read
+            : DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+    }
+
+    private async ValueTask<GitHubCoordinationResult> ReadResourceStateAsync(
+        GitHubRepositoryIdentity repository, GitHubRef target, string head, CancellationToken cancellationToken)
+    {
+        var read = await ReadStateAsync(repository, target, head, cancellationToken).ConfigureAwait(false);
+        if (read.State is not StateCapability current) return read;
+        // One additional bounded operation traversal supplies the parent authority
+        // of an immediately preceding append. This is not a general history API.
+        if (current.AdmissionSource is { Transition: "same-snapshot-append" } source)
+        {
+            var previous = await ReadStateAsync(repository, target, source.HeadOid, cancellationToken).ConfigureAwait(false);
+            if (previous.State is not StateCapability authenticated) return previous;
+            if (!SameState(source, authenticated)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            current.AdmissionSource = authenticated;
+        }
+        return read;
+    }
 
     internal bool ConsumeProposalRefEntitlement(IGitHubProposalRefEntitlement entitlement,
         IGitHubCoordinationStateCapability state, string contentOid, string beforeOid) =>

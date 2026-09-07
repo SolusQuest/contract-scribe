@@ -21,6 +21,209 @@ public sealed class GitHubProposalBranchTests
     private static string Oid(char c) => new(c, 40);
 
     [Fact]
+    public async Task A_third_operation_appends_to_the_authenticated_second_proposal()
+    {
+        var remote = new Remote();
+        var initial = Authority(remote);
+        using var first = new Session(initial, remote);
+        await RecordPublication(first, remote, Candidate, false);
+        var secondAuthority = Authority(remote, "second", initial, [6]);
+        using var second = new Session(secondAuthority, remote);
+        var preceding = await RecordPublication(second, remote, [6], false);
+        var thirdAuthority = Authority(remote, "third", secondAuthority, [7]);
+        using var third = new Session(thirdAuthority, remote);
+        var content = await RecordPublication(third, remote, [7], false);
+        Assert.Equal(preceding.CommitOid, Assert.Single(remote.Commits[content.CommitOid].Parents));
+    }
+
+    [Fact]
+    public async Task Final_recovery_budget_expiry_keeps_delivery_and_reports_timeout()
+    {
+        var remote = new Remote();
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        remote.LateFailure = "timeout";
+        var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        Assert.Equal(GitHubProposalOutcome.Failed, result.Outcome);
+        Assert.Equal(GitHubDelivery.NeedsReadback, result.Failure!.Delivery);
+        Assert.NotNull(result.Failure.Context);
+        Assert.Equal(GitHubFailureCode.Timeout, result.Failure.Readback!.Code);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Rehashed_predecessor_with_an_unauthorized_parent_is_rejected(bool precedingAppend)
+    {
+        var remote = new Remote();
+        var initial = Authority(remote);
+        using var first = new Session(initial, remote);
+        await RecordPublication(first, remote, Candidate, badParent: !precedingAppend);
+        var previous = initial;
+        if (precedingAppend)
+        {
+            previous = Authority(remote, "previous-append", initial, [6]);
+            using var append = new Session(previous, remote);
+            await RecordPublication(append, remote, [6], badParent: true);
+        }
+        var current = Authority(remote, "current-append", previous, [7]);
+        using var session = new Session(current, remote);
+        var claim = await Claim(session);
+        var writes = remote.Writes;
+        var result = await session.Proposal.PrepareAsync(claim, Payload(current, [7]));
+        Assert.Equal(GitHubProposalOutcome.Failed, result.Outcome);
+        Assert.Equal(writes, remote.Writes);
+    }
+
+    [Theory]
+    [InlineData("content")]
+    [InlineData("content-target")]
+    [InlineData("ref")]
+    public async Task Late_verification_failure_retains_the_already_dispatched_mutation(string phase)
+    {
+        var remote = new Remote();
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        remote.LateFailure = phase;
+        var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        if (phase == "ref")
+        {
+            var stage = await session.Coordination.AdvanceAsync(claim,
+                GitHubCoordinationStageUpdate.ContentCreated(result.Content!.CommitOid));
+            result = await session.Proposal.AdvanceRefAsync(result.Content, stage.State!, stage.ProposalRefEntitlement);
+        }
+        Assert.Equal(GitHubProposalOutcome.Failed, result.Outcome);
+        Assert.Equal(GitHubDelivery.NeedsReadback, result.Failure!.Delivery);
+        Assert.NotNull(result.Failure.Context);
+        if (phase == "content-target")
+        {
+            Assert.NotNull(result.Content);
+            Assert.Equal(GitHubCoordinationFailureKind.TargetMoved, result.Failure.CoordinationCause);
+            Assert.Equal(result.Content!.CommitOid, Assert.IsType<GitHubObjectContext>(result.Failure.Context).ExpectedOid);
+        }
+    }
+
+    [Theory]
+    [InlineData("content")]
+    [InlineData("proposal")]
+    [InlineData("pr-created")]
+    [InlineData("published")]
+    [InlineData("awaiting")]
+    [InlineData("merged")]
+    [InlineData("closed")]
+    [InlineData("stale-content")]
+    [InlineData("stale-proposal")]
+    [InlineData("stale-draft")]
+    [InlineData("changed-ref")]
+    [InlineData("published-current")]
+    public async Task Recorded_resources_remain_readable_after_completion_or_target_movement_without_granting_writes(string stageName)
+    {
+        var remote = new Remote();
+        var authority = Authority(remote);
+        using var first = new Session(authority, remote);
+        var (claim, content) = await CreateContent(first);
+        var stage = await first.Coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(content.CommitOid));
+        Assert.Equal(GitHubProposalOutcome.RefVerified,
+            (await first.Proposal.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement)).Outcome);
+        if (stageName != "content" && stageName != "stale-content")
+            stage = await first.Coordination.AdvanceAsync(stage.State!, GitHubCoordinationStageUpdate.ProposalRefAdvanced(content.CommitOid, content.TreeOid));
+        if (stageName.StartsWith("stale-", StringComparison.Ordinal))
+        {
+            remote.Refs["refs/heads/main"] = Oid('9');
+            if (stageName == "stale-draft") await Publish(first, remote, stage.State!, content, GitHubCoordinationStage.StaleDraft);
+            else stage = await first.Coordination.AdvanceAsync(stage.State!, GitHubCoordinationStageUpdate.Stale(remote.BaseOid, Oid('9')));
+        }
+        else if (stageName is not ("content" or "proposal"))
+        {
+            await Publish(first, remote, stage.State!, content, stageName == "pr-created"
+                ? GitHubCoordinationStage.PullRequestCreated : GitHubCoordinationStage.Published);
+            stage = await first.Coordination.ReadCurrentAsync();
+            if (stageName == "awaiting") await first.Coordination.AdvanceAsync(stage.State!, GitHubCoordinationStageUpdate.AwaitingReview());
+            if (stageName is "merged" or "closed") await first.Coordination.AdvanceAsync(stage.State!, GitHubCoordinationStageUpdate.Terminal(
+                stageName == "merged" ? GitHubCoordinationStage.Merged : GitHubCoordinationStage.ClosedUnmerged));
+        }
+        if (stageName != "published-current") remote.Refs["refs/heads/main"] = Oid('9');
+        if (stageName == "changed-ref") remote.Refs[content.Ref] = Oid('8');
+        using var restart = new Session(authority, remote);
+        var state = (await restart.Coordination.ReadCurrentAsync()).State!;
+        var writes = remote.Writes;
+        var result = await restart.Proposal.VerifyRecordedAsync(state, Payload(authority));
+        Assert.Equal(GitHubProposalOutcome.RecordedVerified, result.Outcome);
+        Assert.Null(result.Content);
+        Assert.Null(result.Prepared);
+        Assert.Equal(remote.BaseOid, result.Observation!.ExpectedBaseOid);
+        Assert.Equal(stageName == "published-current" ? remote.BaseOid : Oid('9'), result.Observation.ObservedBaseOid);
+        Assert.Equal(stageName == "changed-ref" ? Oid('8') : content.CommitOid, result.Observation.ObservedRefOid);
+        Assert.Equal(content.CommitOid, result.Observation.CommitOid);
+        Assert.Null((await restart.Coordination.ReadResourceAsync(state)).ProposalRefEntitlement);
+        Assert.Null((await restart.Coordination.ReadClaimAsync(state)).Guard);
+        Assert.Equal(writes, remote.Writes);
+    }
+
+    [Fact]
+    public async Task Malformed_coordination_keeps_its_domain_cause_in_the_R4_failure()
+    {
+        var remote = new Remote();
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var root = remote.Trees[remote.Commits[claim.HeadOid].TreeOid];
+        var leaf = remote.Trees[root[0].Oid];
+        remote.Blobs[leaf[0].Oid] = [0];
+        var result = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Failure!.CoordinationCause);
+        Assert.Equal(0, remote.ProposalAttempts);
+    }
+
+    [Fact]
+    public async Task A_misbound_R4_client_cannot_use_another_repositorys_R3_guard()
+    {
+        var left = new Remote();
+        var right = new Remote { RepositoryId = 2 };
+        var authority = Authority(left);
+        using var a = new Session(authority, left);
+        using var b = new Session(authority, right);
+        Assert.NotNull((await a.Client.GetRepositoryAsync()).Value);
+        var claim = await Claim(b);
+        var misbound = GitHubProposalStore.Create(a.Client, b.Coordination);
+        var leftWrites = left.Writes;
+        var rightWrites = right.Writes;
+        Assert.Equal(GitHubProposalOutcome.Failed, (await misbound.PrepareAsync(claim, Payload(authority))).Outcome);
+        Assert.Equal(leftWrites, left.Writes);
+        Assert.Equal(rightWrites, right.Writes);
+    }
+
+    private static async Task<IGitHubProposalContent> RecordPublication(Session session, Remote remote, byte[] bytes, bool badParent)
+    {
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority, bytes));
+        Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
+        var created = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        Assert.Equal(GitHubProposalOutcome.ContentVerified, created.Outcome);
+        var content = created.Content!;
+        if (badParent)
+        {
+            var forged = Commit(content.TreeOid, Oid('8'), session.Authority.OperationCommitmentSha256,
+                content.Ref[(content.Ref.LastIndexOf('/') + 1)..]);
+            remote.Commits[forged.ExpectedOid] = new(forged.ExpectedOid, forged.TreeOid, [forged.ParentOid], forged.Message, forged.Author, forged.Committer);
+            content = new RecordedContent(forged.ExpectedOid, forged.TreeOid, content.Ref);
+        }
+        var stage = await session.Coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(content.CommitOid));
+        Assert.NotNull(stage.State);
+        if (badParent) remote.Refs[content.Ref] = content.CommitOid;
+        else Assert.Equal(GitHubProposalOutcome.RefVerified,
+            (await session.Proposal.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement)).Outcome);
+        var proposal = await session.Coordination.AdvanceAsync(stage.State!,
+            GitHubCoordinationStageUpdate.ProposalRefAdvanced(content.CommitOid, content.TreeOid));
+        Assert.NotNull(proposal.State);
+        await Publish(session, remote, proposal.State!, content);
+        return content;
+    }
+
+    private sealed record RecordedContent(string CommitOid, string TreeOid, string Ref) : IGitHubProposalContent;
+
+    [Fact]
     public void Independent_Git_known_answers_pin_binary_Unicode_tree_order_and_all_commit_shapes()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -552,14 +755,15 @@ public sealed class GitHubProposalBranchTests
         Assert.Equal(new byte[] { 7 }, remote.Blobs[nested.Single().Oid]);
     }
 
-    private static async Task Publish(Session session, Remote remote, IGitHubCoordinationStateCapability state, IGitHubProposalContent content)
+    private static async Task Publish(Session session, Remote remote, IGitHubCoordinationStateCapability state, IGitHubProposalContent content,
+        GitHubCoordinationStage stage = GitHubCoordinationStage.Published)
     {
         var stored = remote.CoordinationState(state.HeadOid);
         var creation = (string)typeof(GitHubCoordinationCodec).GetMethod("PullRequestCreationCommitment",
             BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [stored, content.Ref])!;
         var marker = Sha256(Encoding.UTF8.GetBytes("<!-- contract-scribe-publication-v1 ownership=sha256:" + creation + " -->\n"));
         var result = await session.Coordination.AdvanceAsync(state, GitHubCoordinationStageUpdate.PullRequestResult(
-            GitHubCoordinationStage.Published, content.CommitOid, content.TreeOid, creation, 1, remote.BaseOid, remote.BaseOid, marker));
+            stage, content.CommitOid, content.TreeOid, creation, 1, remote.BaseOid, remote.Refs["refs/heads/main"], marker));
         Assert.Equal(GitHubCoordinationOutcome.Advanced, result.Outcome);
     }
 
@@ -583,7 +787,7 @@ public sealed class GitHubProposalBranchTests
     private static ValidatedGitHubPublicationAuthority Authority(Remote remote, string operation = "initial",
         ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false) => GitHubPublicationFactory.CreateAuthority(new(
             "Owner", "repo", "refs/heads/main", remote.BaseOid, "campaign", Hash('1'), Hash('2'), Hash('3'), previous is null ? 1 : 2,
-            Hash('4'), previous is null ? Hash('5') : Hash('9'), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
+            Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
             previous?.OperationId, previous?.AuthorityCommitmentSha256, previous?.CandidateCommitmentSha256,
             previous?.GenerationId, previous?.SnapshotCommitmentSha256, previous?.PolicyCommitmentSha256, null,
             previous is null ? GitHubPublicationTransitionKind.Initial : GitHubPublicationTransitionKind.SameSnapshotAppend,
@@ -591,7 +795,7 @@ public sealed class GitHubProposalBranchTests
             includeNew ? [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1),
                 new("keep/nested.txt", Sha256(Unchanged), Sha256([7]), 1, 1, 2, 1, 1)]
                 : [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1)],
-            previous is null ? [] : [new("file.bin", Sha256(Candidate))]));
+            previous is null ? [] : [new("file.bin", previous.ChangedFiles[0].CandidateFileSha256)]));
     private static ValidatedGitHubChangedFilePayload Payload(ValidatedGitHubPublicationAuthority authority, byte[]? bytes = null, bool includeNew = false) =>
         GitHubPublicationFactory.CreatePayload(authority, includeNew
             ? [new("file.bin", bytes ?? Candidate), new("keep/nested.txt", new byte[] { 7 })]
@@ -641,6 +845,9 @@ public sealed class GitHubProposalBranchTests
         internal string? LoseBefore;
         internal string? CancelAfter;
         internal string? CorruptAfter;
+        internal string? LateFailure;
+        private string? lateCommit;
+        private int lateReads;
         internal string? ProposalBeforeCas;
         internal CancellationTokenSource? CancelSource;
         internal int Writes;
@@ -733,6 +940,9 @@ public sealed class GitHubProposalBranchTests
                 }
             }
             if (wait is not null) { await wait.WaitAsync(TimeSpan.FromSeconds(10), token); return early!; }
+            if (method == "GET" && LateFailure == "timeout" && lateReads == 1
+                && path.EndsWith("/git/commits/" + lateCommit, StringComparison.Ordinal))
+                await Task.Delay(Timeout.InfiniteTimeSpan, token);
             lock (gate)
             {
                 if (method == "GET") return Get(path);
@@ -768,6 +978,8 @@ public sealed class GitHubProposalBranchTests
                         body.GetProperty("message").GetString()!, ReadActor(body.GetProperty("author")), ReadActor(body.GetProperty("committer")));
                     value = value with { ExpectedOid = ObjectOid("commit", CommitBytes(value)) };
                     AddCommit(value); response = CommitResponse(Commits[value.ExpectedOid]); kind = "commit";
+                    if (value.Message.StartsWith("ContractScribe proposal", StringComparison.Ordinal)
+                        && LateFailure is "content" or "content-target" or "timeout") { lateCommit = value.ExpectedOid; lateReads = 2; }
                 }
                 else
                 {
@@ -789,6 +1001,7 @@ public sealed class GitHubProposalBranchTests
                         return Json(HttpStatusCode.OK, new { data = (object?)null, errors = new[] { new { message = "conflict", type = "CONFLICT" } } });
                     Refs[name] = after;
                     if (kind == "proposal-ref") ProposalWrites++;
+                    if (kind == "proposal-ref" && LateFailure == "ref") { lateCommit = after; lateReads = 1; }
                     response = new { data = new { updateRefs = new { clientMutationId = input.GetProperty("clientMutationId").GetString() } } };
                     status = HttpStatusCode.OK;
                 }
@@ -836,7 +1049,16 @@ public sealed class GitHubProposalBranchTests
             if (path.Contains("/git/blobs/", StringComparison.Ordinal) && Blobs.TryGetValue(oid, out var bytes))
                 return Json(HttpStatusCode.OK, new { sha = oid, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
             if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid)) return Json(HttpStatusCode.OK, TreeResponse(oid));
-            if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(oid, out var commit)) return Json(HttpStatusCode.OK, CommitResponse(commit));
+            if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(oid, out var commit))
+            {
+                if (oid == lateCommit && --lateReads == 0)
+                {
+                    lateCommit = null;
+                    if (LateFailure == "content-target") Refs["refs/heads/main"] = Oid('9');
+                    else commit = commit with { Message = "late verification corruption" };
+                }
+                return Json(HttpStatusCode.OK, CommitResponse(commit));
+            }
             return Missing();
         }
         private object TreeResponse(string oid) => new

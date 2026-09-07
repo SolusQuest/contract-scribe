@@ -336,6 +336,25 @@ generation=<generation-key-from-proposal-ref>
 The existing R3 authenticated traversal retains the preceding operation's
 admission state for R4 append reconstruction. A fresh claim reread remains
 required; a locally genuine capability alone does not establish current state.
+The preceding proposal's parent is derived from authenticated lineage, never
+from the proposal commit being verified. An initial or fresh-generation
+proposal uses its recorded target base; a preceding append uses its own
+authenticated predecessor's recorded proposal OID. R3 retains that additional
+bounded predecessor handoff without accepting an arbitrary history walk.
+
+Recorded-resource verification uses a separate read-only current-state check
+that remains available after publication, terminal transitions, or target
+movement. It authenticates the recorded content graph and returns the observed
+target and proposal-ref OIDs for R6 classification, including drift. It returns
+no preparation, content-write capability, guard, or ref entitlement, and does
+not broaden the stages permitted to create resources. R4 also authenticates
+its own client's numeric repository identity against the R3 state before Git
+object access. Failures retain the closed R3 domain cause for R6 classification.
+After dispatch, the complete immediate and final verification phases preserve
+the mutation's delivery, context, and permissions. Independently verified
+content may accompany a later gate failure; expiration of the independent
+recovery budget is reported as timeout rather than caller cancellation.
+
 Only an unambiguously acknowledged winning `claimed` to `content-created` CAS,
 followed by exact readback, issues a private one-use proposal-ref entitlement.
 It binds the owning store, repository, operation, content-stage head, content
