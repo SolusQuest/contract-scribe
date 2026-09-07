@@ -320,6 +320,57 @@ Unicode names (including U+10000 versus U+E000), nested directories, modes,
 binary blobs, initial, append and merged-successor trees. Commits have exactly
 one nonzero parent and deterministic message/actor/time frozen by R4 fixtures.
 
+`GitHubProposalStore` implements separate preparation, content verification and
+proposal-ref publication steps. R6 owns the intervening R3 stage mutations.
+`tests/fixtures/github/git-data/known-answers.json` freezes synthetic Git-generated
+blob/tree/commit identities. Proposal commits use author and committer
+`ContractScribe <contract-scribe@users.noreply.github.com>` at Unix second
+`946684800`, offset `+0000`, and this exact LF-terminated message:
+
+```text
+ContractScribe proposal v1
+operation=<operation-commitment-sha256>
+generation=<generation-key-from-proposal-ref>
+```
+
+The existing R3 authenticated traversal retains the preceding operation's
+admission state for R4 append reconstruction. A fresh claim reread remains
+required; a locally genuine capability alone does not establish current state.
+The preceding proposal's parent is derived from authenticated lineage, never
+from the proposal commit being verified. An initial or fresh-generation
+proposal uses its recorded target base; a preceding append uses its own
+authenticated predecessor's recorded proposal OID. R3 retains that additional
+bounded predecessor handoff without accepting an arbitrary history walk.
+
+Recorded-resource verification uses a separate read-only current-state check
+that remains available after publication, terminal transitions, or target
+movement. It authenticates the recorded content graph and returns the observed
+target and proposal-ref OIDs for R6 classification, including drift. It returns
+no preparation, content-write capability, guard, or ref entitlement, and does
+not broaden the stages permitted to create resources. R4 also authenticates
+its own client's numeric repository identity against the R3 state before Git
+object access. Failures retain the closed R3 domain cause for R6 classification.
+After dispatch, the complete immediate and final verification phases preserve
+the mutation's delivery, context, and permissions. Independently verified
+content may accompany a later gate failure; expiration of the independent
+recovery budget is reported as timeout rather than caller cancellation.
+
+Only an unambiguously acknowledged winning `claimed` to `content-created` CAS,
+followed by exact readback, issues a private one-use proposal-ref entitlement.
+It binds the owning store, repository, operation, content-stage head, content
+commit and exact proposal predecessor. R4 atomically consumes it before replay
+or mutation handling. Stage replay, ambiguous CAS recovery and process restart
+can authenticate state but cannot manufacture this entitlement. This prevents
+identical contenders from retaining separate write rights after a proposal-ref
+update and intervening human rewind while coordination remains unchanged.
+
+Without that entitlement, only exact successor discovery is recoverable:
+existing content with an absent/preceding proposal ref remains unresolved.
+Missing recorded content at `content-created` or later is not repaired. This
+conservative boundary provides safe recovery, not universal crash-resume
+liveness; it adds no persisted stage or attempt ledger. A proposal-ref OID CAS
+does not provide a transaction across independently modified refs.
+
 ## Normative R5 PR representation and terminal capability
 
 R5 owns PR creation, exhaustive discovery, immutable metadata, human-change

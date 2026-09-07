@@ -1,0 +1,171 @@
+{
+  "generator": "Git hash-object with explicit raw Git preimages; synthetic development-only inputs",
+  "objects": [
+    {
+      "type": "blob",
+      "oid": "f1404ea1ab959d7b25387646c7eeac78d994dcdc",
+      "hex": "00ff010d0a"
+    },
+    {
+      "type": "blob",
+      "oid": "d3b8b21bc32de30b283e4fd69bb9810d02856c4d",
+      "hex": "efbbbf646f630d0a"
+    },
+    {
+      "type": "blob",
+      "oid": "a2bed02b53c5fcdd6601124dcefca368944fdbea",
+      "hex": "fffe64006f0063000d000a00"
+    },
+    {
+      "type": "blob",
+      "oid": "803dcae7dd24170f237bbb40b991f91b9e781b1e",
+      "hex": "00fe020d0a"
+    },
+    {
+      "type": "blob",
+      "oid": "5c25fc78022c02e480b396055861e0bcad10cfa5",
+      "hex": "00fd030d0a"
+    },
+    {
+      "type": "tree",
+      "oid": "b183ca9708be4f84d62bfd42629abf06bb298c17",
+      "entries": [
+        {
+          "mode": "100755",
+          "name": "run.bin",
+          "oid": "f1404ea1ab959d7b25387646c7eeac78d994dcdc"
+        }
+      ],
+      "preimageBase64": "MTAwNzU1IHJ1bi5iaW4A8UBOoauVnXslOHZGx+6seNmU3Nw="
+    },
+    {
+      "type": "tree",
+      "oid": "0c6d6584f2c261ed77ba77d951c8b683dfe9faf9",
+      "entries": [
+        {
+          "mode": "100644",
+          "name": "𐀀.txt",
+          "oid": "a2bed02b53c5fcdd6601124dcefca368944fdbea"
+        },
+        {
+          "mode": "100644",
+          "name": ".txt",
+          "oid": "d3b8b21bc32de30b283e4fd69bb9810d02856c4d"
+        },
+        {
+          "mode": "40000",
+          "name": "a",
+          "oid": "b183ca9708be4f84d62bfd42629abf06bb298c17"
+        },
+        {
+          "mode": "100644",
+          "name": "a.c",
+          "oid": "f1404ea1ab959d7b25387646c7eeac78d994dcdc"
+        },
+        {
+          "mode": "100644",
+          "name": "file.bin",
+          "oid": "803dcae7dd24170f237bbb40b991f91b9e781b1e"
+        }
+      ],
+      "preimageBase64": "MTAwNjQ0IGEuYwDxQE6hq5WdeyU4dkbH7qx42ZTc3DQwMDAwIGEAsYPKlwi+T4TWK/1CYpq/BrspjBcxMDA2NDQgZmlsZS5iaW4AgD3K590kFw8je7tAuZH5G554Gx4xMDA2NDQg7oCALnR4dADTuLIbwy3jCyg+T9abuYENAoVsTTEwMDY0NCDwkICALnR4dACivtArU8X83WYBEk3O/KNolE/b6g=="
+    },
+    {
+      "type": "tree",
+      "oid": "0e9f3c54034227ec8c192a1af60e328dd8722b0c",
+      "entries": [
+        {
+          "mode": "100644",
+          "name": "𐀀.txt",
+          "oid": "a2bed02b53c5fcdd6601124dcefca368944fdbea"
+        },
+        {
+          "mode": "100644",
+          "name": ".txt",
+          "oid": "d3b8b21bc32de30b283e4fd69bb9810d02856c4d"
+        },
+        {
+          "mode": "40000",
+          "name": "a",
+          "oid": "b183ca9708be4f84d62bfd42629abf06bb298c17"
+        },
+        {
+          "mode": "100644",
+          "name": "a.c",
+          "oid": "f1404ea1ab959d7b25387646c7eeac78d994dcdc"
+        },
+        {
+          "mode": "100644",
+          "name": "file.bin",
+          "oid": "5c25fc78022c02e480b396055861e0bcad10cfa5"
+        }
+      ],
+      "preimageBase64": "MTAwNjQ0IGEuYwDxQE6hq5WdeyU4dkbH7qx42ZTc3DQwMDAwIGEAsYPKlwi+T4TWK/1CYpq/BrspjBcxMDA2NDQgZmlsZS5iaW4AXCX8eAIsAuSAs5YFWGHgvK0Qz6UxMDA2NDQg7oCALnR4dADTuLIbwy3jCyg+T9abuYENAoVsTTEwMDY0NCDwkICALnR4dACivtArU8X83WYBEk3O/KNolE/b6g=="
+    },
+    {
+      "type": "tree",
+      "oid": "befbd505fda10d7d5a56004f808a8203c9bc01e7",
+      "entries": [
+        {
+          "mode": "100644",
+          "name": "𐀀.txt",
+          "oid": "a2bed02b53c5fcdd6601124dcefca368944fdbea"
+        },
+        {
+          "mode": "100644",
+          "name": ".txt",
+          "oid": "d3b8b21bc32de30b283e4fd69bb9810d02856c4d"
+        },
+        {
+          "mode": "40000",
+          "name": "a",
+          "oid": "b183ca9708be4f84d62bfd42629abf06bb298c17"
+        },
+        {
+          "mode": "100644",
+          "name": "a.c",
+          "oid": "f1404ea1ab959d7b25387646c7eeac78d994dcdc"
+        },
+        {
+          "mode": "100644",
+          "name": "file.bin",
+          "oid": "f1404ea1ab959d7b25387646c7eeac78d994dcdc"
+        }
+      ],
+      "preimageBase64": "MTAwNjQ0IGEuYwDxQE6hq5WdeyU4dkbH7qx42ZTc3DQwMDAwIGEAsYPKlwi+T4TWK/1CYpq/BrspjBcxMDA2NDQgZmlsZS5iaW4A8UBOoauVnXslOHZGx+6seNmU3NwxMDA2NDQg7oCALnR4dADTuLIbwy3jCyg+T9abuYENAoVsTTEwMDY0NCDwkICALnR4dACivtArU8X83WYBEk3O/KNolE/b6g=="
+    },
+    {
+      "type": "commit",
+      "name": "initial",
+      "oid": "7b88970c9d9dd6b0320f2d31fea37e3cfb7061d3",
+      "tree": "0c6d6584f2c261ed77ba77d951c8b683dfe9faf9",
+      "parent": "1111111111111111111111111111111111111111",
+      "operation": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "generation": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "message": "ContractScribe proposal v1\noperation=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ngeneration=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+      "preimageBase64": "dHJlZSAwYzZkNjU4NGYyYzI2MWVkNzdiYTc3ZDk1MWM4YjY4M2RmZTlmYWY5CnBhcmVudCAxMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTExCmF1dGhvciBDb250cmFjdFNjcmliZSA8Y29udHJhY3Qtc2NyaWJlQHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gOTQ2Njg0ODAwICswMDAwCmNvbW1pdHRlciBDb250cmFjdFNjcmliZSA8Y29udHJhY3Qtc2NyaWJlQHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gOTQ2Njg0ODAwICswMDAwCgpDb250cmFjdFNjcmliZSBwcm9wb3NhbCB2MQpvcGVyYXRpb249YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYQpnZW5lcmF0aW9uPWJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIK"
+    },
+    {
+      "type": "commit",
+      "name": "append",
+      "oid": "255abf0b8406b10fd1fdd015a7a97e8b0357804f",
+      "tree": "0e9f3c54034227ec8c192a1af60e328dd8722b0c",
+      "parent": "7b88970c9d9dd6b0320f2d31fea37e3cfb7061d3",
+      "operation": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "generation": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "message": "ContractScribe proposal v1\noperation=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc\ngeneration=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+      "preimageBase64": "dHJlZSAwZTlmM2M1NDAzNDIyN2VjOGMxOTJhMWFmNjBlMzI4ZGQ4NzIyYjBjCnBhcmVudCA3Yjg4OTcwYzlkOWRkNmIwMzIwZjJkMzFmZWEzN2UzY2ZiNzA2MWQzCmF1dGhvciBDb250cmFjdFNjcmliZSA8Y29udHJhY3Qtc2NyaWJlQHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gOTQ2Njg0ODAwICswMDAwCmNvbW1pdHRlciBDb250cmFjdFNjcmliZSA8Y29udHJhY3Qtc2NyaWJlQHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gOTQ2Njg0ODAwICswMDAwCgpDb250cmFjdFNjcmliZSBwcm9wb3NhbCB2MQpvcGVyYXRpb249Y2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjY2NjYwpnZW5lcmF0aW9uPWJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmJiYmIK"
+    },
+    {
+      "type": "commit",
+      "name": "merged-successor",
+      "oid": "1c987811abb82477132ee5d4a6a40ff1c4c30818",
+      "tree": "befbd505fda10d7d5a56004f808a8203c9bc01e7",
+      "parent": "2222222222222222222222222222222222222222",
+      "operation": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+      "generation": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "message": "ContractScribe proposal v1\noperation=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\ngeneration=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\n",
+      "preimageBase64": "dHJlZSBiZWZiZDUwNWZkYTEwZDdkNWE1NjAwNGY4MDhhODIwM2M5YmMwMWU3CnBhcmVudCAyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyCmF1dGhvciBDb250cmFjdFNjcmliZSA8Y29udHJhY3Qtc2NyaWJlQHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gOTQ2Njg0ODAwICswMDAwCmNvbW1pdHRlciBDb250cmFjdFNjcmliZSA8Y29udHJhY3Qtc2NyaWJlQHVzZXJzLm5vcmVwbHkuZ2l0aHViLmNvbT4gOTQ2Njg0ODAwICswMDAwCgpDb250cmFjdFNjcmliZSBwcm9wb3NhbCB2MQpvcGVyYXRpb249ZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZGRkZApnZW5lcmF0aW9uPWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWVlZWUK"
+    }
+  ]
+}
