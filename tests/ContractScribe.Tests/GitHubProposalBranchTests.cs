@@ -806,9 +806,8 @@ public sealed class GitHubProposalBranchTests
     private static async Task Publish(Session session, Remote remote, IGitHubCoordinationStateCapability state, IGitHubProposalContent content,
         GitHubCoordinationStage stage = GitHubCoordinationStage.Published)
     {
-        var stored = remote.CoordinationState(state.HeadOid);
-        var creation = (string)typeof(GitHubCoordinationCodec).GetMethod("PullRequestCreationCommitment",
-            BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [stored, content.Ref])!;
+        var creation = session.Coordination.CreationCommitment(state);
+        Assert.NotNull(creation);
         var marker = Sha256(Encoding.UTF8.GetBytes("<!-- contract-scribe-publication-v1 ownership=sha256:" + creation + " -->\n"));
         var result = await session.Coordination.AdvanceAsync(state, GitHubCoordinationStageUpdate.PullRequestResult(
             stage, content.CommitOid, content.TreeOid, creation, 1, remote.BaseOid, remote.Refs["refs/heads/main"], marker));

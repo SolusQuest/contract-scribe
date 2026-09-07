@@ -361,16 +361,24 @@ internal static class GitHubCoordinationCodec
 
     internal static void ValidatePullRequestOwnership(
         GitHubCoordinationState state,
-        string proposalRef)
+        string proposalRef,
+        GitHubCoordinationState? creation = null)
     {
         if (state.PullRequestCreationOperationCommitmentSha256 is null) return;
         Require(RefName(proposalRef));
-        var commitment = PullRequestCreationCommitment(state, proposalRef);
+        creation ??= state;
+        Require(state.RepositoryId.Equals(creation.RepositoryId, StringComparison.OrdinalIgnoreCase)
+            && state.TargetRef == creation.TargetRef && state.TargetCommitOid == creation.TargetCommitOid
+            && state.GenerationId == creation.GenerationId
+            && state.SnapshotCommitmentSha256 == creation.SnapshotCommitmentSha256
+            && state.PolicyCommitmentSha256 == creation.PolicyCommitmentSha256
+            && (creation.PullRequestNumber is null || state.PullRequestNumber == creation.PullRequestNumber));
+        var commitment = PullRequestCreationCommitment(creation, proposalRef);
         Require(commitment == state.PullRequestCreationOperationCommitmentSha256
             && MarkerHash(commitment) == state.OwnershipMarkerSha256);
     }
 
-    private static string PullRequestCreationCommitment(
+    internal static string PullRequestCreationCommitment(
         GitHubCoordinationState state,
         string proposalRef)
     {
@@ -389,7 +397,7 @@ internal static class GitHubCoordinationCodec
         return Convert.ToHexStringLower(hash.GetHashAndReset());
     }
 
-    private static string MarkerHash(string commitment) => Convert.ToHexStringLower(
+    internal static string MarkerHash(string commitment) => Convert.ToHexStringLower(
         SHA256.HashData(StrictUtf8.GetBytes(
             "<!-- contract-scribe-publication-v1 ownership=sha256:" + commitment + " -->\n")));
 

@@ -384,10 +384,7 @@ labels and lowercase commitment keys. Discovery readback must bind the observed
 base OID and the complete immutable creation metadata, author/bot ownership and
 creation operation. Human edits fail closed.
 
-Base movement after the final read but during create may leave one exact
-marker-owned draft whose observed base differs from expected. Only that mismatch
-produces `stale-base-after-create`; it records no completed transition and blocks
-append/update/adoption/automatic close/second create while active.
+An otherwise exact marker-owned draft with a mismatched base OID during creation recovery is `stale-base-after-create` when no retained authenticated expected-base success exists. This is an observation-based residual and does not establish the hidden time of base movement. Retained expected-base success followed by a mismatch is later drift. Both record no completed transition and block append/update/adoption/automatic close/second create while active.
 
 ## R6 authenticated state matrix and step gates
 
@@ -447,3 +444,23 @@ ValueTask<GitHubPublicationResult> PublishAsync(
 R2 owns credential/HTTP boundaries, R3 coordination, R4 proposal Git data, R5
 PR behavior, and R6 orchestration. CLI composition, live proof, automatic
 ready/merge/close/delete and release compatibility remain later work.
+
+### Creation provenance across appends
+
+The R3 serialized state and creation-marker framing remain unchanged. A PR-bearing append retains the original generation's creation commitment, marker hash and PR number while its operation, proposal commit/tree and cumulative facts advance. R3 authenticates creation provenance through the existing immutable coordination predecessor chain, including older appended terminal generations used by successor admission. It validates every needed state/object and edge before issuing a capability; original creation facts are reconstructed from the non-append creation operation and carried only in the store-owned in-process capability. They are not inferred from PR prose. Intended PR-bearing results are checked against that original source before object preparation and again on readback.
+
+The expanded read is bounded to 1,024 states and 90 seconds, retaining the per-operation transition bound. Missing, substituted, cyclic, over-bound or incomplete provenance yields no partial authority. This is a bounded read with an availability limit, not arbitrary-history scalability. It introduces no second persisted descriptor or old-shape reader.
+
+### Implemented R5 observations
+
+The default host publisher is Actions using its built-in `GITHUB_TOKEN` (`github-actions[bot]`). R5 receives an explicit trusted expected principal independently of the inspected PR and compares its immutable IDs, kind and login. Neither a Bot type nor a matching suffix grants ownership. R5 does not acquire credentials or require `/user`; authenticated principal composition and live credential/permission/trigger proof remain R6/H2/H3 responsibilities.
+
+The immutable title is `ContractScribe proposal <proposal-generation-key>`. The exact LF body consists of the existing ownership marker followed, in order, by `campaign`, `generation`, `snapshot`, `policy`, `headRef`, `baseRef`, and `creationOperationId` lines, each using `=sha256:<lowercase-key>`. Campaign uses the R1 coordination-ref identity key, generation uses the proposal-generation key, snapshot/policy use their commitments, ref keys hash the exact UTF-8 full refs, and creationOperationId uses the original operation commitment. No current-head/cumulative prose or optional summary is emitted. The literal fixture is `tests/fixtures/github/pull-requests/creation-metadata.json`.
+
+Fresh creation is explicit and performs at most one draft POST. Recovery is a separate read-only operation; uncertain absence never grants a blind resend. Every authenticated result requires exhaustive campaign discovery, exact owned metadata and generic proposal observations, direct PR readback, and unchanged coordination/proposal authority. Exact duplicate list observations deduplicate; contradictory duplicates, competing active generations and removed ownership on known refs fail closed. Terminal PR recognition does not by itself authorize a successor.
+
+During unresolved creation recovery, an otherwise exact owned draft with a mismatched base OID and no retained expected-base success is `stale-base-after-create`. This describes the observed residual, not the unobserved time of base movement. Retained authenticated expected-base success distinguishes later drift. Both prohibit append, completion and replacement. Base-ref edits or additional ownership mismatches are not this residual.
+
+Retained base evidence includes the authenticated original creation source during append partials, the current PR-bearing R3 state, and a supplied store-owned prior R5 observation. A recorded stale generation does not regain active eligibility when base equality returns. Terminal recognition validates the exact retained observed base, so human closure or merge of that same stale PR can be observed without allowing an unexplained base substitution or authorizing a successor. An R5-owned recovery deadline expires as `timeout`, preserving possible POST delivery and no success capability; it is not caller cancellation. Cancellation after possible dispatch still permits the existing bounded independent readback.
+
+Lifecycle guarantees use recorded authenticated observations only. A retained actual `Draft=false` observation can prove a later ready-to-draft contradiction; R3 `awaiting-review` is only a publication hold and does not prove ready promotion. An unchanged draft with a budget hold remains a held draft. Authenticated terminal-to-open contradictions fail closed; wholly unobserved lifecycle cycles are not detected. Ready/terminal state encountered during recovery is returned as observed without mutating human review state or inventing a draft success.
