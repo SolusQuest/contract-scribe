@@ -36,6 +36,7 @@ internal enum GitHubCoordinationFailureKind
 }
 
 internal interface IGitHubCoordinationReadCapability;
+internal interface IGitHubProposalRefEntitlement;
 
 internal interface IGitHubCoordinationStateCapability
 {
@@ -109,13 +110,15 @@ internal sealed class GitHubCoordinationResult
         IGitHubCoordinationReadCapability? read = null,
         IGitHubCoordinationStateCapability? state = null,
         IGitHubCoordinationGuardCapability? guard = null,
-        GitHubCoordinationFailure? failure = null)
+        GitHubCoordinationFailure? failure = null,
+        IGitHubProposalRefEntitlement? proposalRefEntitlement = null)
     {
         Outcome = outcome;
         Read = read;
         State = state;
         Guard = guard;
         Failure = failure;
+        ProposalRefEntitlement = proposalRefEntitlement;
     }
 
     internal GitHubCoordinationOutcome Outcome { get; }
@@ -123,6 +126,7 @@ internal sealed class GitHubCoordinationResult
     internal IGitHubCoordinationStateCapability? State { get; }
     internal IGitHubCoordinationGuardCapability? Guard { get; }
     internal GitHubCoordinationFailure? Failure { get; }
+    internal IGitHubProposalRefEntitlement? ProposalRefEntitlement { get; }
     public override string ToString() => nameof(GitHubCoordinationResult);
 }
 
@@ -373,7 +377,7 @@ internal sealed class GitHubCoordinationStore
         if (current.Value is null) return Failed(current);
         if (current.Value.Oid != owned.HeadOid)
             return DomainFailure(GitHubCoordinationFailureKind.Conflict);
-        var reread = await ReadStateAsync(repository.Value.Identity, target.Value,
+        var reread = await ReadResourceStateAsync(repository.Value.Identity, target.Value,
             current.Value.Oid, cancellationToken).ConfigureAwait(false);
         if (reread.State is null) return reread;
         var rereadState = (StateCapability)reread.State;
@@ -405,6 +409,65 @@ internal sealed class GitHubCoordinationStore
         guard is GuardCapability owned && ReferenceEquals(owned.Owner, this)
             ? owned.State
             : null;
+
+    internal IGitHubCoordinationStateCapability? AdmissionSource(
+        IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this)
+            ? owned.AdmissionSource : null;
+
+    internal string? ObservedTargetOid(IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this) ? owned.Target.Oid : null;
+
+    // A current-state read is not permission to create. Completed/stale states
+    // and a moved live target still have immutable resources that R4 must verify.
+    internal async ValueTask<GitHubCoordinationResult> ReadResourceAsync(
+        IGitHubCoordinationStateCapability capability, CancellationToken cancellationToken = default)
+    {
+        if (capability is not StateCapability owned || !ReferenceEquals(owned.Owner, this))
+            return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
+        if (!MatchesAuthority(owned.State))
+            return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
+        var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
+        if (repository.Value is null) return Failed(repository);
+        if (repository.Value.Identity != owned.Repository)
+            return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+        var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
+        if (target.Value is null) return Failed(target);
+        var current = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
+        if (current.Value is null) return Failed(current);
+        if (current.Value.Oid != owned.HeadOid)
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        var read = await ReadResourceStateAsync(repository.Value.Identity, target.Value, current.Value.Oid,
+            cancellationToken).ConfigureAwait(false);
+        if (read.State is null) return read;
+        return SameState(owned, (StateCapability)read.State) ? read
+            : DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+    }
+
+    private async ValueTask<GitHubCoordinationResult> ReadResourceStateAsync(
+        GitHubRepositoryIdentity repository, GitHubRef target, string head, CancellationToken cancellationToken)
+    {
+        var read = await ReadStateAsync(repository, target, head, cancellationToken).ConfigureAwait(false);
+        if (read.State is not StateCapability current) return read;
+        // An immediately preceding append needs its own authenticated admission context.
+        // Revalidate through the bounded ancestry reader; this is not a general history API.
+        if (current.AdmissionSource is { Transition: "same-snapshot-append" } source)
+        {
+            var previous = await ReadStateAsync(repository, target, source.HeadOid, cancellationToken).ConfigureAwait(false);
+            if (previous.State is not StateCapability authenticated) return previous;
+            if (!SameState(source, authenticated)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            current.AdmissionSource = authenticated;
+        }
+        return read;
+    }
+
+    internal bool ConsumeProposalRefEntitlement(IGitHubProposalRefEntitlement entitlement,
+        IGitHubCoordinationStateCapability state, string contentOid, string beforeOid) =>
+        entitlement is ProposalRefEntitlement owned && ReferenceEquals(owned.Owner, this)
+        && state is StateCapability current && ReferenceEquals(current.Owner, this)
+        && current.Stage == GitHubCoordinationStage.ContentCreated
+        && SameState(owned.State, current) && current.ContentCommitOid == contentOid
+        && owned.BeforeOid == beforeOid && Interlocked.Exchange(ref owned.Consumed, 1) == 0;
 
     private async ValueTask<GitHubCoordinationResult> AdvanceCoreAsync(
         StateCapability current,
@@ -544,8 +607,13 @@ internal sealed class GitHubCoordinationStore
             var result = await UpdateAndReadAsync(repository.Value.Identity, finalTarget.Value,
                 prepared, current.HeadOid, preparedIntended, cancellationToken).ConfigureAwait(false);
             if (result.State is null) return result;
-            return await CompleteAdvanceReplayAsync((StateCapability)result.State,
+            var completed = await CompleteAdvanceReplayAsync((StateCapability)result.State,
                 checkTarget, cancellationToken).ConfigureAwait(false);
+            return completed.Outcome == GitHubCoordinationOutcome.Advanced
+                && completed.State?.HeadOid == result.State.HeadOid
+                ? new(completed.Outcome, state: completed.State,
+                    proposalRefEntitlement: result.ProposalRefEntitlement)
+                : completed;
         }
         catch (GitHubCoordinationException)
         {
@@ -718,7 +786,16 @@ internal sealed class GitHubCoordinationStore
                 update.Failure, update.Delivery, update.Context,
                 update.RequiredPermissions,
                 RecoveryFailure(state.Failure?.TransportFailure, recovery));
-        return new(GitHubCoordinationOutcome.Advanced, state: state.State);
+        // Only the acknowledged winner owns the next non-idempotent write.
+        // Exact replay and ambiguous delivery authenticate state, never ownership.
+        var entitlement = update.Value is not null && update.Failure is null
+            && update.Delivery == GitHubDelivery.NeedsReadback
+            && candidate.CommitOid == prepared.CommitOid
+            && prepared.State.Stage == GitHubCoordinationStage.ContentCreated
+            ? new ProposalRefEntitlement(this, (StateCapability)state.State)
+            : null;
+        return new(GitHubCoordinationOutcome.Advanced, state: state.State,
+            proposalRefEntitlement: entitlement);
     }
 
     private async ValueTask<GitHubCoordinationResult> ReadPreparedAsync(
@@ -749,6 +826,7 @@ internal sealed class GitHubCoordinationStore
         if (current.State is null) return Normalize(current);
         var currentState = (StateCapability)current.State;
         var cursor = currentState;
+        var operationState = currentState;
         StateCapability? creation = null;
         StateCapability? generationMarker = null;
         var sourceFound = false;
@@ -787,7 +865,8 @@ internal sealed class GitHubCoordinationStore
                     || cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, null))
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
                 return new(GitHubCoordinationOutcome.Current, state: new StateCapability(this, repository, target,
-                    headOid, currentState.State, currentState.CanonicalBytes, creation));
+                    headOid, currentState.State, currentState.CanonicalBytes, creation)
+                { AdmissionSource = currentState.AdmissionSource });
             }
             if (!visited.Add(predecessorOid)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             if (visited.Count > MaximumHistoryStates) return DomainFailure(GitHubCoordinationFailureKind.Bounds);
@@ -801,6 +880,9 @@ internal sealed class GitHubCoordinationStore
                 if (cursor.Stage != GitHubCoordinationStage.Claimed
                     || cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, previous.State))
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+                // Preserve R4's immediate admission predecessor while continuing R5's complete proof.
+                operationState.AdmissionSource = previous;
+                operationState = previous;
                 sameOperationTransitions = 0;
                 if (cursor.Transition != "same-snapshot-append")
                 {
@@ -1242,6 +1324,7 @@ internal sealed class GitHubCoordinationStore
         { Creation = creation; this.owner = owner; this.repository = repository; this.target = target; this.headOid = headOid; this.state = state; this.canonicalBytes = canonicalBytes; }
         internal GitHubCoordinationStore Owner => owner;
         public GitHubRepositoryIdentity Repository => repository;
+        internal StateCapability? AdmissionSource { get; set; }
         internal GitHubRef Target => target;
         public string HeadOid => headOid;
         public GitHubCoordinationStage Stage => state.Stage;
@@ -1277,6 +1360,22 @@ internal sealed class GitHubCoordinationStore
         internal GitHubCoordinationState State => state;
         internal ImmutableArray<byte> CanonicalBytes => canonicalBytes;
         public override string ToString() => nameof(StateCapability);
+    }
+
+    private sealed class ProposalRefEntitlement : IGitHubProposalRefEntitlement
+    {
+        internal ProposalRefEntitlement(GitHubCoordinationStore owner, StateCapability state)
+        {
+            Owner = owner;
+            State = state;
+            BeforeOid = state.Transition == "same-snapshot-append"
+                ? state.AdmissionSource!.ProposalCommitOid! : ZeroOid;
+        }
+        internal GitHubCoordinationStore Owner { get; }
+        internal StateCapability State { get; }
+        internal string BeforeOid { get; }
+        internal int Consumed;
+        public override string ToString() => nameof(ProposalRefEntitlement);
     }
 
     private sealed class GuardCapability : IGitHubCoordinationGuardCapability

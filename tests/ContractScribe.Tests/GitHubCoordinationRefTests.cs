@@ -1872,6 +1872,7 @@ public sealed partial class GitHubCoordinationRefTests
         var marker = initial[^1].PullRequestCreationOperationCommitmentSha256!;
         for (var index = 0; index < 2; index++)
         {
+            var previousOperation = authority.OperationId;
             authority = AppendAuthority(authority, "append-" + index, (char)('6' + index),
                 precedingFileCandidate: (char)('5' + index));
             using var client = Client(authority, remote);
@@ -1907,6 +1908,10 @@ public sealed partial class GitHubCoordinationRefTests
             Assert.Equal(proposal, recovered.State!.ProposalCommitOid);
             Assert.Equal(authority.OperationId, recovered.State.OperationId);
             Assert.Equal("creation-operation", restarted.CreationSource(recovered.State)!.OperationId);
+            var admission = restarted.AdmissionSource(recovered.State);
+            Assert.Equal(previousOperation, admission!.OperationId);
+            if (index == 1)
+                Assert.Equal("creation-operation", restarted.AdmissionSource(admission)!.OperationId);
             Assert.Equal(marker, restarted.CreationCommitment(recovered.State));
             if (index == 1)
             {
@@ -1958,6 +1963,7 @@ public sealed partial class GitHubCoordinationRefTests
                 var admitted = await successor.ClaimAsync(successorRead.Read!);
                 Assert.Equal(GitHubCoordinationOutcome.Admitted, admitted.Outcome);
                 Assert.Equal(next.OperationId, admitted.State!.OperationId);
+                Assert.Equal(authority.OperationId, successor.AdmissionSource(admitted.State)!.OperationId);
                 Assert.NotNull((await successor.ReadCurrentAsync()).State);
                 remote.ForceCoordinationHead(terminal.State.HeadOid);
                 var beforeMissing = remote.ObjectMutationAttempts;
