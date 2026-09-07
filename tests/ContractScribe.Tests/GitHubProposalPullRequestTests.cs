@@ -17,6 +17,101 @@ public sealed class GitHubProposalPullRequestTests
     private static string Oid(char c) => new(c, 40);
     private static readonly GitHubActor Publisher = new(99, "BOT_99", "github-actions[bot]", GitHubActorKind.Bot);
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Retained_stale_base_blocks_equality_and_allows_exact_terminal(bool persist)
+    {
+        using var h = await Harness.Create();
+        h.Remote.BeforePost = () => h.Remote.Coordination.TargetHead = Oid('9');
+        var stale = await h.Store.CreateAsync(h.State, h.Head);
+        Assert.Equal(GitHubProposalOutcome.StaleDraft, stale.Outcome);
+        if (persist) await h.PublishStale(stale);
+        using var restart = await Harness.Create(h.Remote, h.Authority, seed: false);
+        var store = persist ? restart.Store : h.Store;
+        var state = persist ? restart.State : h.State;
+        var previous = persist ? null : stale.Observation;
+        h.Remote.Prs[0]["base"]!["sha"] = Oid('1');
+        h.Remote.Coordination.TargetHead = Oid('1');
+        Assert.Equal(GitHubProposalOutcome.Conflict, (await store.ObserveAsync(state, h.Head, previous)).Outcome);
+        h.Remote.Prs[0]["base"]!["sha"] = Oid('9');
+        h.Remote.Coordination.TargetHead = Oid('9');
+        foreach (var terminal in new[] { "closed", "merged" })
+        {
+            Lifecycle(h.Remote.Prs[0], terminal);
+            var result = await store.ObserveAsync(state, h.Head, previous);
+            Assert.Equal(terminal == "closed" ? GitHubProposalOutcome.ClosedUnmerged : GitHubProposalOutcome.Merged, result.Outcome);
+            h.Remote.Prs[0]["base"]!["sha"] = Oid('8');
+            Assert.Equal(GitHubProposalOutcome.Conflict, (await store.ObserveAsync(state, h.Head, previous)).Outcome);
+            h.Remote.Prs[0]["base"]!["sha"] = Oid('9');
+            Lifecycle(h.Remote.Prs[0], "draft");
+            Assert.Equal(GitHubProposalOutcome.Conflict, (await store.ObserveAsync(state, h.Head, result.Observation)).Outcome);
+        }
+        if (persist)
+        {
+            Lifecycle(h.Remote.Prs[0], "closed");
+            var terminal = await restart.Coordination.AdvanceAsync(restart.State,
+                GitHubCoordinationStageUpdate.Terminal(GitHubCoordinationStage.ClosedUnmerged));
+            Assert.Null(terminal.Failure);
+            using var final = await Harness.Create(h.Remote, h.Authority, seed: false);
+            Assert.Equal(GitHubProposalOutcome.ClosedUnmerged, (await final.Store.ObserveAsync(final.State, final.Head)).Outcome);
+            Lifecycle(h.Remote.Prs[0], "draft");
+            Assert.Equal(GitHubProposalOutcome.Conflict, (await final.Store.ObserveAsync(final.State, final.Head)).Outcome);
+        }
+        Assert.Equal(1, h.Remote.Posts);
+    }
+
+    [Theory]
+    [InlineData("base-ref")]
+    [InlineData("marker")]
+    [InlineData("author")]
+    [InlineData("head")]
+    public async Task Retained_stale_terminal_does_not_excuse_other_edits(string kind)
+    {
+        using var h = await Harness.Create();
+        h.Remote.BeforePost = () => h.Remote.Coordination.TargetHead = Oid('9');
+        var stale = await h.Store.CreateAsync(h.State, h.Head);
+        await h.PublishStale(stale);
+        Lifecycle(h.Remote.Prs[0], "closed");
+        switch (kind)
+        {
+            case "base-ref": h.Remote.Prs[0]["base"]!["ref"] = "other"; break;
+            case "marker": h.Remote.Prs[0]["body"] = "removed"; break;
+            case "author": h.Remote.Prs[0]["user"]!["id"] = 100; break;
+            case "head": h.Remote.Prs[0]["head"]!["sha"] = Oid('8'); break;
+        }
+        Assert.Equal(GitHubProposalOutcome.Conflict, (await h.Store.ObserveAsync(h.State, h.Head)).Outcome);
+        Assert.Equal(1, h.Remote.Posts);
+    }
+
+    [Fact]
+    public async Task Independent_recovery_deadline_is_timeout_with_possible_delivery()
+    {
+        using var h = await Harness.Create();
+        typeof(GitHubProposalPullRequestStore).GetField("recoveryTimeout", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(h.Store, TimeSpan.FromMilliseconds(50));
+        h.Remote.DelayRecovery = true;
+        var result = await h.Store.CreateAsync(h.State, h.Head);
+        Assert.Equal(GitHubProposalOutcome.Failed, result.Outcome);
+        Assert.Equal(GitHubFailureCode.Timeout, result.Failure!.Code);
+        Assert.Equal(GitHubDelivery.NeedsReadback, result.Delivery);
+        Assert.Null(result.Observation);
+        Assert.Equal(1, h.Remote.Posts);
+    }
+
+    [Fact]
+    public async Task Caller_cancellation_after_dispatch_preserves_independent_recovery()
+    {
+        using var h = await Harness.Create();
+        using var caller = new CancellationTokenSource();
+        h.Remote.AfterPost = caller.Cancel;
+        var result = await h.Store.CreateAsync(h.State, h.Head, caller.Token);
+        Assert.True(caller.IsCancellationRequested);
+        Assert.Equal(GitHubProposalOutcome.Appendable, result.Outcome);
+        Assert.Equal(GitHubDelivery.Ambiguous, result.Delivery);
+        Assert.Equal(1, h.Remote.Posts);
+    }
+
     [Fact]
     public async Task Metadata_matches_independently_framed_literal_fixture()
     {
@@ -252,6 +347,14 @@ public sealed class GitHubProposalPullRequestTests
             Assert.Equal(body, observed.Observation!.Metadata.Body);
             Assert.Equal(authority.OperationId, observed.Observation.Coordination.OperationId);
             Assert.Equal(authority.CumulativePatchBytes, observed.Observation.Coordination.CumulativePatchBytes);
+            using (var partialRestart = await Harness.Create(initial.Remote, authority, seed: false))
+            {
+                h.Remote.Prs[0]["base"]!["sha"] = Oid('9');
+                Assert.Equal(GitHubProposalOutcome.Conflict,
+                    (await partialRestart.Store.RecoverAsync(partialRestart.State, partialRestart.Head)).Outcome);
+                Assert.Equal(1, h.Remote.Posts);
+                h.Remote.Prs[0]["base"]!["sha"] = Oid('1');
+            }
             await h.Publish(observed);
             using var restarted = await Harness.Create(initial.Remote, authority, seed: false);
             Assert.Equal(body, (await restarted.Store.ObserveAsync(restarted.State, restarted.Head)).Observation!.Metadata.Body);
@@ -327,11 +430,19 @@ public sealed class GitHubProposalPullRequestTests
             Assert.Null(published.Failure); State = published.State!;
         }
         public void Dispose() => Client.Dispose();
+        internal async Task PublishStale(GitHubProposalResult observation)
+        {
+            var metadata = observation.Observation!.Metadata;
+            var stale = await Coordination.AdvanceAsync(State, GitHubCoordinationStageUpdate.PullRequestResult(
+                GitHubCoordinationStage.StaleDraft, Head.CommitOid, Head.TreeOid, metadata.CreationCommitment,
+                17, State.TargetCommitOid, observation.Observation.PullRequest.BaseOid, metadata.MarkerHash));
+            Assert.Null(stale.Failure); State = stale.State!;
+        }
     }
 
     private sealed class Handler(Remote remote) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => remote.Reply(request);
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => remote.Reply(request, cancellationToken);
     }
 
     private sealed class Remote
@@ -344,11 +455,13 @@ public sealed class GitHubProposalPullRequestTests
         internal string Head = Oid('2');
         internal string Tree = Oid('3');
         internal bool LoseResponse, HideCreated, Paginate, Duplicate, FailLastPage;
+        internal bool DelayRecovery;
         internal Action? BeforePost, AfterPost, AfterDetail;
         internal TaskCompletionSource? ConcurrentPosts;
         private readonly object gate = new();
-        internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request)
+        internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (DelayRecovery && Posts > 0) await Task.Delay(Timeout.Infinite, cancellationToken);
             var path = request.RequestUri!.AbsolutePath;
             lock (gate) Requests.Add(request.Method + " " + path);
             if (path == "/repos/Owner/repo/pulls" && request.Method == HttpMethod.Post)
@@ -365,6 +478,7 @@ public sealed class GitHubProposalPullRequestTests
                     var pr = MakePr(payload);
                     if (!HideCreated) Prs.Add(pr);
                     AfterPost?.Invoke(); AfterPost = null;
+                    cancellationToken.ThrowIfCancellationRequested();
                     if (LoseResponse) { LoseResponse = false; throw new IOException("synthetic private response"); }
                     return Json(HttpStatusCode.Created, pr);
                 }

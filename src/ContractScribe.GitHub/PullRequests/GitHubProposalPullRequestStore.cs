@@ -34,6 +34,7 @@ internal sealed class GitHubProposalPullRequestStore
     private readonly GitHubApiClient client;
     private readonly GitHubCoordinationStore coordination;
     private readonly GitHubActor publisher;
+    private readonly TimeSpan recoveryTimeout = TimeSpan.FromSeconds(90);
 
     private GitHubProposalPullRequestStore(GitHubApiClient client,
         GitHubCoordinationStore coordination, GitHubActor publisher)
@@ -99,8 +100,10 @@ internal sealed class GitHubProposalPullRequestStore
             expected.CommitOid, state.TargetRef, state.TargetCommitOid, metadata.Title, metadata.Body), cancellationToken).ConfigureAwait(false);
         if (created.Delivery == GitHubDelivery.NotDispatched) return Failed(created);
         // An uncertain POST is never retried. Recovery has its own bounded cancellation scope.
-        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(90));
+        using var recovery = new CancellationTokenSource(recoveryTimeout);
         var result = await ObserveCoreAsync(state, expected, null, true, recovery.Token).ConfigureAwait(false);
+        if (recovery.IsCancellationRequested)
+            return new(GitHubProposalOutcome.Failed, Failure: new(GitHubFailureCode.Timeout), Delivery: created.Delivery);
         if (created.Value is { } receipt && result.Observation is { } proof
             && (receipt.Id != proof.PullRequest.Id || receipt.NodeId != proof.PullRequest.NodeId
                 || receipt.Number != proof.PullRequest.Number)) return Conflict();
@@ -193,21 +196,38 @@ internal sealed class GitHubProposalPullRequestStore
             || !previous.PullRequest.Draft && pr.Draft)) return Conflict();
         if (state.Stage is GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged
             && (pr.Open || (state.Stage == GitHubCoordinationStage.Merged) != pr.Merged.Value)) return Conflict();
+        var retainedStaleBase = StaleBase(state) ?? StaleBase(source)
+            ?? (previous?.PullRequest.BaseOid is { } priorBase && priorBase != state.TargetCommitOid ? priorBase : null);
+        if (!pr.Open)
+        {
+            // Terminal ownership follows the authenticated base observation, including a stale draft's base.
+            if (pr.BaseOid != (retainedStaleBase ?? state.TargetCommitOid)) return Conflict();
+            return Observed(pr.Merged.Value ? GitHubProposalOutcome.Merged : GitHubProposalOutcome.ClosedUnmerged);
+        }
+        if (retainedStaleBase is not null)
+        {
+            if (pr.BaseOid != retainedStaleBase || !pr.Draft) return Conflict();
+            return Observed(GitHubProposalOutcome.StaleDraft);
+        }
         if (pr.BaseOid != state.TargetCommitOid)
         {
             var retainedSuccess = previous?.PullRequest.BaseOid == state.TargetCommitOid
-                || state.Stage is GitHubCoordinationStage.PullRequestCreated or GitHubCoordinationStage.Published
-                    or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged;
-            if (!pr.Open || !pr.Draft || retainedSuccess) return Conflict();
+                || SuccessfulBase(state) || SuccessfulBase(source);
+            if (!pr.Draft || retainedSuccess) return Conflict();
             return Observed(GitHubProposalOutcome.StaleDraft);
         }
-        if (!pr.Open) return Observed(pr.Merged.Value ? GitHubProposalOutcome.Merged : GitHubProposalOutcome.ClosedUnmerged);
         if (!pr.Draft) return Observed(GitHubProposalOutcome.Ready);
         return Observed(state.Stage == GitHubCoordinationStage.AwaitingReview
             ? GitHubProposalOutcome.HeldDraft : GitHubProposalOutcome.Appendable);
 
         GitHubProposalResult Observed(GitHubProposalOutcome outcome) =>
             new(outcome, new Observation(this, outcome, pr, metadata, state));
+        string? StaleBase(IGitHubCoordinationStateCapability evidence) =>
+            evidence.PullRequestNumber is not null && evidence.ExpectedBaseOid == state.TargetCommitOid
+                && evidence.ObservedBaseOid != state.TargetCommitOid ? evidence.ObservedBaseOid : null;
+        bool SuccessfulBase(IGitHubCoordinationStateCapability evidence) =>
+            evidence.PullRequestNumber is not null && evidence.ExpectedBaseOid == state.TargetCommitOid
+                && evidence.ObservedBaseOid == state.TargetCommitOid;
     }
 
     private bool Input(IGitHubCoordinationStateCapability? state, GitHubProposalHead? expected) =>

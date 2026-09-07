@@ -1885,6 +1885,19 @@ public sealed partial class GitHubCoordinationRefTests
             Assert.NotNull(content.State);
             var advanced = await store.AdvanceAsync(content.State!, GitHubCoordinationStageUpdate.ProposalRefAdvanced(proposal, Oid('9')));
             Assert.NotNull(advanced.State);
+            var beforeInvalid = remote.ObjectMutationAttempts;
+            var foreign = PublishedChain(InitialAuthority("other-creation", '8', "other-generation"))[^1];
+            foreach (var wrongNumber in new[] { false, true })
+            {
+                var rejected = await store.AdvanceAsync(advanced.State!, GitHubCoordinationStageUpdate.PullRequestResult(
+                    GitHubCoordinationStage.Published, proposal, Oid('9'),
+                    wrongNumber ? marker : foreign.PullRequestCreationOperationCommitmentSha256!,
+                    wrongNumber ? 18 : 17, Oid('1'), Oid('1'),
+                    wrongNumber ? initial[^1].OwnershipMarkerSha256! : foreign.OwnershipMarkerSha256!));
+                Assert.Null(rejected.State);
+                Assert.NotNull(rejected.Failure);
+                Assert.Equal(beforeInvalid, remote.ObjectMutationAttempts);
+            }
             var published = await store.AdvanceAsync(advanced.State!, GitHubCoordinationStageUpdate.PullRequestResult(
                 GitHubCoordinationStage.Published, proposal, Oid('9'), marker, 17, Oid('1'), Oid('1'), initial[^1].OwnershipMarkerSha256!));
             Assert.Null(published.Failure);
@@ -1901,11 +1914,57 @@ public sealed partial class GitHubCoordinationRefTests
                     GitHubCoordinationStageUpdate.Terminal(GitHubCoordinationStage.Merged));
                 Assert.Null(terminal.Failure);
                 var next = SuccessorAuthority(authority, remote.State(terminal.State!.HeadOid), GitHubCoordinationStage.Merged);
+                var history = new List<GitHubCoordinationState>();
+                var cursor = terminal.State.HeadOid;
+                while (cursor != Oid('0'))
+                {
+                    var entry = remote.State(cursor); history.Add(entry); cursor = entry.CoordinationPredecessorOid;
+                }
+                history.Reverse();
+                foreach (var differentGeneration in new[] { false, true })
+                {
+                    var substituted = new CoordinationRemote { TargetHead = Oid('9') };
+                    substituted.SeedChain(history);
+                    using var badClient = Client(next, substituted);
+                    var badStore = GitHubCoordinationStore.Create(badClient);
+                    var originalRead = await badStore.ReadCurrentAsync();
+                    Assert.NotNull(originalRead.Read);
+                    var otherCreation = PublishedChain(InitialAuthority("substituted-operation", '5',
+                        differentGeneration ? "foreign-generation" : "generation-1"))[^1];
+                    var parent = Oid('0');
+                    foreach (var entry in history)
+                    {
+                        // Recompute canonical bytes and every Git OID; this is valid-shaped semantic substitution.
+                        var hasPr = entry.PullRequestNumber is not null;
+                        var changed = GitHubCoordinationCodec.WithStage(entry, entry.Stage, parent,
+                            entry.ContentCommitOid, entry.ProposalRefOid, entry.ProposalCommitOid, entry.ProposalTreeOid,
+                            hasPr ? otherCreation.PullRequestCreationOperationCommitmentSha256 : null,
+                            entry.PullRequestNumber, entry.ExpectedBaseOid, entry.ObservedBaseOid,
+                            hasPr ? otherCreation.OwnershipMarkerSha256 : null);
+                        substituted.Seed(changed);
+                        parent = GitHubCoordinationObjects.Prepare(changed).CommitOid;
+                    }
+                    var rejected = await badStore.ReadCurrentAsync();
+                    Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, rejected.Failure!.Kind);
+                    Assert.Null(rejected.State); Assert.Null(rejected.Read);
+                    Assert.Null((await badStore.ClaimAsync(originalRead.Read!)).State);
+                    Assert.Equal(0, substituted.ObjectMutationAttempts);
+                }
+                remote.TargetHead = Oid('9');
                 using var successorClient = Client(next, remote);
                 var successor = GitHubCoordinationStore.Create(successorClient);
+                var successorRead = await successor.ReadCurrentAsync();
+                Assert.NotNull(successorRead.State);
+                var admitted = await successor.ClaimAsync(successorRead.Read!);
+                Assert.Equal(GitHubCoordinationOutcome.Admitted, admitted.Outcome);
+                Assert.Equal(next.OperationId, admitted.State!.OperationId);
                 Assert.NotNull((await successor.ReadCurrentAsync()).State);
+                remote.ForceCoordinationHead(terminal.State.HeadOid);
+                var beforeMissing = remote.ObjectMutationAttempts;
                 remote.RemoveCommit(initial[1]);
                 Assert.Null((await successor.ReadCurrentAsync()).State);
+                Assert.Null((await successor.ClaimAsync(successorRead.Read!)).State);
+                Assert.Equal(beforeMissing, remote.ObjectMutationAttempts);
             }
         }
     }
