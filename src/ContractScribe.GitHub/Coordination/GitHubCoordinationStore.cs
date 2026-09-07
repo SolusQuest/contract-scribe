@@ -3,6 +3,7 @@ using System.Collections.Immutable;
 using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
+using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.GitHub.Coordination;
@@ -37,6 +38,10 @@ internal enum GitHubCoordinationFailureKind
 
 internal interface IGitHubCoordinationReadCapability;
 internal interface IGitHubProposalRefEntitlement;
+internal interface IGitHubPullRequestEntitlement;
+
+internal sealed record GitHubCoordinationInspection(GitHubRepositoryIdentity Repository,
+    string TargetOid, IGitHubCoordinationStateCapability? State) : GitHubValue;
 
 internal interface IGitHubCoordinationStateCapability
 {
@@ -111,7 +116,8 @@ internal sealed class GitHubCoordinationResult
         IGitHubCoordinationStateCapability? state = null,
         IGitHubCoordinationGuardCapability? guard = null,
         GitHubCoordinationFailure? failure = null,
-        IGitHubProposalRefEntitlement? proposalRefEntitlement = null)
+        IGitHubProposalRefEntitlement? proposalRefEntitlement = null,
+        IGitHubPullRequestEntitlement? pullRequestEntitlement = null)
     {
         Outcome = outcome;
         Read = read;
@@ -119,6 +125,7 @@ internal sealed class GitHubCoordinationResult
         Guard = guard;
         Failure = failure;
         ProposalRefEntitlement = proposalRefEntitlement;
+        PullRequestEntitlement = pullRequestEntitlement;
     }
 
     internal GitHubCoordinationOutcome Outcome { get; }
@@ -127,6 +134,7 @@ internal sealed class GitHubCoordinationResult
     internal IGitHubCoordinationGuardCapability? Guard { get; }
     internal GitHubCoordinationFailure? Failure { get; }
     internal IGitHubProposalRefEntitlement? ProposalRefEntitlement { get; }
+    internal IGitHubPullRequestEntitlement? PullRequestEntitlement { get; }
     public override string ToString() => nameof(GitHubCoordinationResult);
 }
 
@@ -392,6 +400,83 @@ internal sealed class GitHubCoordinationStore
     internal bool Owns(IGitHubCoordinationStateCapability? capability) =>
         capability is StateCapability owned && ReferenceEquals(owned.Owner, this);
 
+    internal GitHubCoordinationInspection? Inspect(IGitHubCoordinationReadCapability capability) =>
+        capability is ReadCapability owned && ReferenceEquals(owned.Owner, this)
+            ? new(owned.Repository, owned.Target.Oid, owned.Current) : null;
+
+    internal async ValueTask<GitHubCoordinationResult> RecheckAsync(
+        IGitHubCoordinationReadCapability capability, CancellationToken token = default)
+    {
+        var expected = Inspect(capability);
+        if (expected is null) return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
+        var current = await ReadCurrentAsync(token).ConfigureAwait(false);
+        if (current.Read is null) return current;
+        var actual = Inspect(current.Read)!;
+        if (expected.Repository != actual.Repository) return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+        if (expected.State?.HeadOid != actual.State?.HeadOid) return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        return expected.TargetOid == actual.TargetOid ? current : DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
+    }
+
+    // Read-only verification of a current operation or its retained append source.
+    // This does not relax the authority predicate on ReadClaimAsync.
+    internal async ValueTask<GitHubCoordinationResult> InspectStateAsync(
+        IGitHubCoordinationStateCapability state, CancellationToken token = default)
+    {
+        if (!Owns(state)) return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
+        var current = await ReadCurrentAsync(token).ConfigureAwait(false);
+        if (current.State is not StateCapability owned) return current;
+        if (owned.HeadOid != state.HeadOid)
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        return await ReadResourceStateAsync(owned.Repository, owned.Target, owned.HeadOid, token).ConfigureAwait(false);
+    }
+
+    internal bool ConsumePullRequestEntitlement(IGitHubPullRequestEntitlement entitlement,
+        IGitHubCoordinationStateCapability state) =>
+        entitlement is PullRequestEntitlement owned && ReferenceEquals(owned.Owner, this)
+        && state is StateCapability current && ReferenceEquals(current.Owner, this)
+        && current.Stage == GitHubCoordinationStage.ProposalRefAdvanced
+        && SameState(owned.State, current) && Interlocked.Exchange(ref owned.Consumed, 1) == 0;
+
+    internal ValueTask<GitHubCoordinationResult> RecordObservationAsync(
+        IGitHubProposalObservation observation, CancellationToken token = default)
+    {
+        if (!GitHubProposalPullRequestStore.Authenticates(observation, this)
+            || observation.Coordination is not StateCapability current || !Owns(current))
+            return ValueTask.FromResult(DomainFailure(GitHubCoordinationFailureKind.InvalidInput));
+        var same = MatchesAuthority(current.State);
+        var terminal = observation.Outcome is GitHubProposalOutcome.Merged or GitHubProposalOutcome.ClosedUnmerged;
+        if (!same && (!terminal || !MatchesTerminalObservation(current.State, observation)))
+            return ValueTask.FromResult(DomainFailure(GitHubCoordinationFailureKind.DifferentOperation));
+        var stage = observation.Outcome switch
+        {
+            GitHubProposalOutcome.Merged => GitHubCoordinationStage.Merged,
+            GitHubProposalOutcome.ClosedUnmerged => GitHubCoordinationStage.ClosedUnmerged,
+            GitHubProposalOutcome.Ready or GitHubProposalOutcome.HeldDraft => GitHubCoordinationStage.AwaitingReview,
+            GitHubProposalOutcome.StaleDraft => GitHubCoordinationStage.StaleDraft,
+            _ => GitHubCoordinationStage.Published,
+        };
+        var pr = observation.PullRequest;
+        if (pr.Head.Oid is null || current.ProposalCommitOid != pr.Head.Oid || current.ProposalTreeOid is null)
+            return ValueTask.FromResult(DomainFailure(GitHubCoordinationFailureKind.InvalidInput));
+        var update = GitHubCoordinationStageUpdate.PullRequestResult(stage,
+            pr.Head.Oid, current.ProposalTreeOid!, observation.Metadata.CreationCommitment,
+            pr.Number, current.TargetCommitOid, pr.BaseOid, observation.Metadata.MarkerHash);
+        return AdvanceCoreAsync(current, update, token, checkTarget: false, observedPredecessor: !same);
+    }
+
+    private bool MatchesTerminalObservation(GitHubCoordinationState state, IGitHubProposalObservation observation)
+    {
+        var expected = authority.TerminalPredecessor;
+        return expected is not null && expected.PullRequestNumber == observation.PullRequest.Number
+            && expected.GenerationId == state.GenerationId && expected.HeadOid == observation.PullRequest.Head.Oid
+            && authority.GenerationId != state.GenerationId && authority.SnapshotCommitmentSha256 != state.SnapshotCommitmentSha256
+            && ((authority.Transition == GitHubPublicationTransitionKind.SuccessorAfterMerge
+                    && observation.Outcome == GitHubProposalOutcome.Merged)
+                || (authority.Transition == GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged
+                    && observation.Outcome == GitHubProposalOutcome.ClosedUnmerged
+                    && authority.ClosedUnmergedSuccessorAuthorization is not null));
+    }
+
     internal IGitHubCoordinationStateCapability? CreationSource(IGitHubCoordinationStateCapability capability) =>
         capability is StateCapability owned && ReferenceEquals(owned.Owner, this)
             ? owned.Creation ?? (owned.State.Transition != "same-snapshot-append" ? owned : null)
@@ -473,11 +558,12 @@ internal sealed class GitHubCoordinationStore
         StateCapability current,
         GitHubCoordinationStageUpdate update,
         CancellationToken cancellationToken,
-        bool checkTarget)
+        bool checkTarget,
+        bool observedPredecessor = false)
     {
         try
         {
-            if (!MatchesAuthority(current.State))
+            if (!observedPredecessor && !MatchesAuthority(current.State))
                 return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
             if (!AllowsStage(current.State, update.Stage))
                 return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
@@ -612,7 +698,8 @@ internal sealed class GitHubCoordinationStore
             return completed.Outcome == GitHubCoordinationOutcome.Advanced
                 && completed.State?.HeadOid == result.State.HeadOid
                 ? new(completed.Outcome, state: completed.State,
-                    proposalRefEntitlement: result.ProposalRefEntitlement)
+                    proposalRefEntitlement: result.ProposalRefEntitlement,
+                    pullRequestEntitlement: result.PullRequestEntitlement)
                 : completed;
         }
         catch (GitHubCoordinationException)
@@ -795,7 +882,12 @@ internal sealed class GitHubCoordinationStore
             ? new ProposalRefEntitlement(this, (StateCapability)state.State)
             : null;
         return new(GitHubCoordinationOutcome.Advanced, state: state.State,
-            proposalRefEntitlement: entitlement);
+            proposalRefEntitlement: entitlement,
+            pullRequestEntitlement: update.Value is not null && update.Failure is null
+                && update.Delivery == GitHubDelivery.NeedsReadback && candidate.CommitOid == prepared.CommitOid
+                && prepared.State.Stage == GitHubCoordinationStage.ProposalRefAdvanced
+                && prepared.State.Transition != "same-snapshot-append"
+                ? new PullRequestEntitlement(this, (StateCapability)state.State) : null);
     }
 
     private async ValueTask<GitHubCoordinationResult> ReadPreparedAsync(
@@ -1105,7 +1197,9 @@ internal sealed class GitHubCoordinationStore
                 current, update.Stage, predecessor, update.ContentCommitOid,
                 update.ProposalRefOid, update.ProposalCommitOid, update.ProposalTreeOid),
             GitHubCoordinationStage.PullRequestCreated or GitHubCoordinationStage.Published
-                or GitHubCoordinationStage.StaleDraft => GitHubCoordinationCodec.WithStage(
+                or GitHubCoordinationStage.StaleDraft
+                or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged
+                or GitHubCoordinationStage.ClosedUnmerged when update.PullRequestNumber is not null => GitHubCoordinationCodec.WithStage(
                     current, update.Stage, predecessor, update.ContentCommitOid,
                     update.ProposalRefOid, update.ProposalCommitOid, update.ProposalTreeOid,
                     update.PullRequestCreationOperationCommitmentSha256, update.PullRequestNumber,
@@ -1177,8 +1271,10 @@ internal sealed class GitHubCoordinationStore
             (GitHubCoordinationStage.ContentCreated, GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.Stale) => true,
             (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.PullRequestCreated
                 or GitHubCoordinationStage.Published or GitHubCoordinationStage.StaleDraft
+                or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged
                 or GitHubCoordinationStage.Stale) => true,
-            (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.Published) => true,
+            (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.Published
+                or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged) => true,
             (GitHubCoordinationStage.Published, GitHubCoordinationStage.AwaitingReview
                 or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged) => true,
             (GitHubCoordinationStage.AwaitingReview, GitHubCoordinationStage.Merged
@@ -1376,6 +1472,16 @@ internal sealed class GitHubCoordinationStore
         internal string BeforeOid { get; }
         internal int Consumed;
         public override string ToString() => nameof(ProposalRefEntitlement);
+    }
+
+    private sealed class PullRequestEntitlement : IGitHubPullRequestEntitlement
+    {
+        internal PullRequestEntitlement(GitHubCoordinationStore owner, StateCapability state)
+        { Owner = owner; State = state; }
+        internal GitHubCoordinationStore Owner { get; }
+        internal StateCapability State { get; }
+        internal int Consumed;
+        public override string ToString() => nameof(PullRequestEntitlement);
     }
 
     private sealed class GuardCapability : IGitHubCoordinationGuardCapability

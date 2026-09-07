@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
 using ContractScribe.GitHub.Coordination;
+using ContractScribe.GitHub.GitData;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.GitHub.PullRequests;
@@ -26,7 +27,8 @@ internal interface IGitHubProposalObservation
 
 internal sealed record GitHubProposalResult(GitHubProposalOutcome Outcome,
     IGitHubProposalObservation? Observation = null, GitHubFailure? Failure = null,
-    GitHubDelivery Delivery = GitHubDelivery.Read) : GitHubValue;
+    GitHubDelivery Delivery = GitHubDelivery.Read,
+    GitHubCoordinationFailureKind? Cause = null) : GitHubValue;
 
 // R6 chooses an explicit operation. Recovery is deliberately incapable of creating a PR.
 internal sealed class GitHubProposalPullRequestStore
@@ -73,6 +75,53 @@ internal sealed class GitHubProposalPullRequestStore
             GitHubCoordinationCodec.MarkerHash(commitment), campaign);
     }
 
+    internal static bool Authenticates(IGitHubProposalObservation observation, GitHubCoordinationStore coordination) =>
+        observation is Observation owned && ReferenceEquals(owned.Owner.coordination, coordination)
+        && coordination.Owns(owned.Coordination);
+
+    internal ValueTask<GitHubProposalResult> CreateAuthorizedAsync(IGitHubCoordinationStateCapability state,
+        GitHubProposalHead expected, IGitHubPullRequestEntitlement entitlement, CancellationToken token = default) =>
+        coordination.ConsumePullRequestEntitlement(entitlement, state)
+            ? CreateAsync(state, expected, token) : ValueTask.FromResult(Conflict());
+
+    internal ValueTask<GitHubProposalResult> ObserveVerifiedAsync(IGitHubCoordinationStateCapability state,
+        IGitHubInspectedProposal proof, IGitHubProposalObservation? previous = null, bool recovering = false,
+        CancellationToken token = default)
+    {
+        if (!GitHubProposalStore.Authenticates(proof, coordination, state)) return ValueTask.FromResult(Conflict());
+        GitHubProposalHead? head = null;
+        if (proof.ContentExists && proof.ObservedRefOid == proof.CommitOid)
+            head = new(proof.Ref, proof.CommitOid, proof.TreeOid);
+        else if (state.Transition == "same-snapshot-append"
+            && coordination.AdmissionSource(state) is { } source
+            && proof.ObservedRefOid == source.ProposalCommitOid && proof.BeforeOid == source.ProposalCommitOid)
+            head = new(proof.Ref, source.ProposalCommitOid!, source.ProposalTreeOid!);
+        return head is null ? ValueTask.FromResult(Conflict())
+            : ObserveCoreAsync(state, head, previous, recovering, token, verifiedPartial: true);
+    }
+
+    internal async ValueTask<GitHubProposalResult> PreflightAsync(IGitHubCoordinationReadCapability read,
+        CancellationToken token = default)
+    {
+        var context = coordination.Inspect(read);
+        if (context is null) return Conflict();
+        var fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
+        if (fresh.Read is null) return ClaimFailure(fresh);
+        var reference = GitHubPublicationFactory.CreateProposalRef(client.Authority);
+        var unrecordedPredecessorRef = context.State is { Stage: GitHubCoordinationStage.Stale, ProposalCommitOid: null } old
+            ? coordination.ProposalRefFor(old) : null;
+        var campaign = GitHubPublicationFactory.CreateCoordinationRef(client.Authority).Split('/')[^1];
+        var collection = await ReadCampaign(reference, campaign, null, [], token).ConfigureAwait(false);
+        if (collection.Failure is not null) return collection.Failure;
+        foreach (var item in collection.Items)
+        {
+            var head = "refs/heads/" + item.Head.Ref;
+            if (item.Open || head == reference || head == unrecordedPredecessorRef) return Conflict();
+        }
+        fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
+        return fresh.Read is null ? ClaimFailure(fresh) : new(GitHubProposalOutcome.Absent);
+    }
+
     internal ValueTask<GitHubProposalResult> ObserveAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubProposalObservation? previous = null,
         CancellationToken cancellationToken = default) => ObserveCoreAsync(state, expected, previous, false, cancellationToken);
@@ -95,7 +144,8 @@ internal sealed class GitHubProposalPullRequestStore
         if (claim.Guard is null) return ClaimFailure(claim);
         var target = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (target.Value is null) return Failed(target);
-        if (target.Value.Oid != state.TargetCommitOid) return Conflict();
+        if (target.Value.Oid != state.TargetCommitOid) return new(GitHubProposalOutcome.Conflict,
+            Cause: GitHubCoordinationFailureKind.TargetMoved);
         var created = await client.CreatePullRequestAsync(new(metadata.CreationCommitment, expected.Ref,
             expected.CommitOid, state.TargetRef, state.TargetCommitOid, metadata.Title, metadata.Body), cancellationToken).ConfigureAwait(false);
         if (created.Delivery == GitHubDelivery.NotDispatched) return Failed(created);
@@ -117,9 +167,9 @@ internal sealed class GitHubProposalPullRequestStore
 
     private async ValueTask<GitHubProposalResult> ObserveCoreAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubProposalObservation? previous, bool recovering,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool verifiedPartial = false)
     {
-        if (!Input(state, expected) || previous is not null
+        if ((!verifiedPartial && !Input(state, expected)) || previous is not null
             && (previous is not Observation prior || !ReferenceEquals(prior.Owner, this))) return Conflict();
         var current = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (current.State is null) return ClaimFailure(current);
@@ -129,25 +179,15 @@ internal sealed class GitHubProposalPullRequestStore
         if (metadata is null) return Conflict();
         var proposal = await VerifyProposalAsync(state, expected, cancellationToken).ConfigureAwait(false);
         if (proposal is not null) return proposal;
-        var collection = await client.ListPullRequestsAsync(cancellationToken).ConfigureAwait(false);
-        if (collection.Value is not { Exhausted: true } set) return Failed(collection);
-        var prefix = expected.Ref[..(expected.Ref.LastIndexOf('/') + 1)];
+        var collection = await ReadCampaign(expected.Ref, metadata.CampaignKey, metadata.CreationCommitment,
+            [state.PullRequestNumber, coordination.CreationSource(state)?.PullRequestNumber, previous?.PullRequest.Number],
+            cancellationToken).ConfigureAwait(false);
+        if (collection.Failure is not null) return collection.Failure;
         var candidates = new List<GitHubPullRequest>();
         var active = 0;
-        foreach (var item in set.Items)
+        foreach (var pr in collection.Items)
         {
-            var head = "refs/heads/" + item.Head.Ref;
-            var relevant = head.StartsWith(prefix, StringComparison.Ordinal)
-                || item.Body?.Contains("campaign=sha256:" + metadata.CampaignKey, StringComparison.Ordinal) == true
-                || item.Body?.Contains(metadata.CreationCommitment, StringComparison.Ordinal) == true
-                || item.Number == state.PullRequestNumber
-                || item.Number == coordination.CreationSource(state)?.PullRequestNumber
-                || item.Number == previous?.PullRequest.Number;
-            if (!relevant) continue;
-            var detail = await client.GetPullRequestAsync(item.Number, cancellationToken).ConfigureAwait(false);
-            if (detail.Value is null) return Failed(detail);
-            var pr = detail.Value;
-            if (!Stable(item, pr)) return Conflict();
+            var head = "refs/heads/" + pr.Head.Ref;
             if (pr.Open && ++active > 1) return Conflict();
             if (head != expected.Ref)
             {
@@ -179,11 +219,35 @@ internal sealed class GitHubProposalPullRequestStore
         var finalTarget = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (finalTarget.Value is null) return Failed(finalTarget);
         if (candidate.Open && finalTarget.Value.Oid != state.TargetCommitOid
-            && classified.Outcome != GitHubProposalOutcome.StaleDraft) return Conflict();
+            && classified.Outcome != GitHubProposalOutcome.StaleDraft) return new(GitHubProposalOutcome.Conflict,
+                Cause: GitHubCoordinationFailureKind.TargetMoved);
         var confirmed = await client.GetPullRequestAsync(candidate.Number, cancellationToken).ConfigureAwait(false);
         if (confirmed.Value is null) return Failed(confirmed);
         if (confirmed.Value != candidate) return Conflict();
         return classified;
+    }
+
+    private async ValueTask<(List<GitHubPullRequest> Items, GitHubProposalResult? Failure)> ReadCampaign(
+        string reference, string campaign, string? creation, int?[] known, CancellationToken token)
+    {
+        var collection = await client.ListPullRequestsAsync(token).ConfigureAwait(false);
+        if (collection.Value is not { Exhausted: true } set) return ([], Failed(collection));
+        var prefix = reference[..(reference.LastIndexOf('/') + 1)];
+        var items = new List<GitHubPullRequest>();
+        // Complete detail acquisition has a stable order before lifecycle/uniqueness selection.
+        foreach (var item in set.Items.OrderBy(item => item.Number))
+        {
+            var head = "refs/heads/" + item.Head.Ref;
+            if (!head.StartsWith(prefix, StringComparison.Ordinal)
+                && item.Body?.Contains("campaign=sha256:" + campaign, StringComparison.Ordinal) != true
+                && !(creation is not null && item.Body?.Contains(creation, StringComparison.Ordinal) == true)
+                && !known.Contains(item.Number)) continue;
+            var detail = await client.GetPullRequestAsync(item.Number, token).ConfigureAwait(false);
+            if (detail.Value is null) return ([], Failed(detail));
+            if (!Stable(item, detail.Value)) return ([], Conflict());
+            items.Add(detail.Value);
+        }
+        return (items, null);
     }
 
     private GitHubProposalResult Classify(IGitHubCoordinationStateCapability state, GitHubProposalHead expected,
@@ -196,11 +260,11 @@ internal sealed class GitHubProposalPullRequestStore
             || pr.MaintainerCanModify != false || pr.Merged is null
             || source.PullRequestNumber is { } number && pr.Number != number
             || previous is not null && (pr.Id != previous.PullRequest.Id || pr.NodeId != previous.PullRequest.NodeId
-                || pr.Number != previous.PullRequest.Number || pr.CreatedAt != previous.PullRequest.CreatedAt)) return Conflict();
+                || pr.Number != previous.PullRequest.Number || pr.CreatedAt != previous.PullRequest.CreatedAt)) return HumanChange();
         if (previous is not null && ((!previous.PullRequest.Open && pr.Open)
-            || !previous.PullRequest.Draft && pr.Draft)) return Conflict();
+            || !previous.PullRequest.Draft && pr.Draft)) return HumanChange();
         if (state.Stage is GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged
-            && (pr.Open || (state.Stage == GitHubCoordinationStage.Merged) != pr.Merged.Value)) return Conflict();
+            && (pr.Open || (state.Stage == GitHubCoordinationStage.Merged) != pr.Merged.Value)) return HumanChange();
         var retainedStaleBase = StaleBase(state) ?? StaleBase(source)
             ?? (previous?.PullRequest.BaseOid is { } priorBase && priorBase != state.TargetCommitOid ? priorBase : null);
         if (!pr.Open)
@@ -246,7 +310,7 @@ internal sealed class GitHubProposalPullRequestStore
     {
         var reference = await client.GetRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
         if (reference.Value is null) return Failed(reference);
-        if (reference.Value.Oid != expected.CommitOid) return Conflict();
+        if (reference.Value.Oid != expected.CommitOid) return HumanChange();
         var commit = await client.GetCommitAsync(expected.CommitOid, cancellationToken).ConfigureAwait(false);
         if (commit.Value is null) return Failed(commit);
         if (commit.Value.TreeOid != expected.TreeOid) return Conflict();
@@ -270,9 +334,12 @@ internal sealed class GitHubProposalPullRequestStore
 
     private static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
     private static GitHubProposalResult Conflict() => new(GitHubProposalOutcome.Conflict);
+    private static GitHubProposalResult HumanChange() => new(GitHubProposalOutcome.Conflict,
+        Cause: GitHubCoordinationFailureKind.HumanChange);
     private static GitHubProposalResult ClaimFailure(GitHubCoordinationResult result) =>
         new(result.Failure?.Kind == GitHubCoordinationFailureKind.Transport ? GitHubProposalOutcome.Failed : GitHubProposalOutcome.Conflict,
-            Failure: result.Failure?.TransportFailure);
+            Failure: result.Failure?.ReadbackFailure ?? result.Failure?.TransportFailure,
+            Delivery: result.Failure?.Delivery ?? GitHubDelivery.Read, Cause: result.Failure?.Kind);
     private static GitHubProposalResult Failed<T>(GitHubApiResult<T> result) where T : class =>
         new(GitHubProposalOutcome.Failed, Failure: result.Failure, Delivery: result.Delivery);
 

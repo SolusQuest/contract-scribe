@@ -109,7 +109,13 @@ public sealed partial class GitHubCoordinationRefTests
             (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.Published),
             (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.StaleDraft),
             (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.Stale),
+            (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.AwaitingReview),
+            (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.Merged),
+            (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.ClosedUnmerged),
             (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.Published),
+            (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.AwaitingReview),
+            (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.Merged),
+            (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.ClosedUnmerged),
             (GitHubCoordinationStage.Published, GitHubCoordinationStage.AwaitingReview),
             (GitHubCoordinationStage.Published, GitHubCoordinationStage.Merged),
             (GitHubCoordinationStage.Published, GitHubCoordinationStage.ClosedUnmerged),
@@ -1449,9 +1455,9 @@ public sealed partial class GitHubCoordinationRefTests
             published.ProposalRefOid, published.ProposalCommitOid, published.ProposalTreeOid,
             published.PullRequestCreationOperationCommitmentSha256, published.PullRequestNumber,
             published.ExpectedBaseOid, published.ObservedBaseOid, published.OwnershipMarkerSha256);
-        var skipped = GitHubCoordinationCodec.WithStage(chain[2],
+        var skipped = GitHubCoordinationCodec.WithStage(chain[1],
             GitHubCoordinationStage.AwaitingReview,
-            GitHubCoordinationObjects.Prepare(chain[2]).CommitOid, published.ContentCommitOid,
+            GitHubCoordinationObjects.Prepare(chain[1]).CommitOid, published.ContentCommitOid,
             published.ProposalRefOid, published.ProposalCommitOid, published.ProposalTreeOid,
             published.PullRequestCreationOperationCommitmentSha256, published.PullRequestNumber,
             published.ExpectedBaseOid, published.ObservedBaseOid, published.OwnershipMarkerSha256);
@@ -1463,7 +1469,7 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, initialRead.Failure!.Kind);
 
         var skippedRemote = new CoordinationRemote();
-        skippedRemote.SeedChain([.. chain[..3], skipped]);
+        skippedRemote.SeedChain([.. chain[..2], skipped]);
         using var skippedClient = Client(authority, skippedRemote);
         var skippedRead = await GitHubCoordinationStore.Create(skippedClient).ReadCurrentAsync();
         Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, skippedRead.Failure!.Kind);

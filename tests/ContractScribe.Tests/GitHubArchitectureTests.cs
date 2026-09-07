@@ -74,6 +74,7 @@ public sealed class GitHubArchitectureTests
             typeof(IGitHubCoordinationStateCapability),
             typeof(IGitHubCoordinationGuardCapability),
             typeof(IGitHubProposalRefEntitlement),
+            typeof(IGitHubPullRequestEntitlement),
         })
         {
             Assert.True(capability.IsInterface);
@@ -84,7 +85,7 @@ public sealed class GitHubArchitectureTests
         var implementations = typeof(GitHubCoordinationStore).GetNestedTypes(BindingFlags.NonPublic)
             .Where(type => type.GetInterfaces().Any(capability => capability.Namespace == typeof(GitHubCoordinationStore).Namespace))
             .ToArray();
-        Assert.Equal(4, implementations.Length);
+        Assert.Equal(5, implementations.Length);
         Assert.All(implementations, implementation =>
         {
             Assert.True(implementation.IsNestedPrivate);
