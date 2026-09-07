@@ -1741,7 +1741,7 @@ public sealed partial class GitHubCoordinationRefTests
     private static GitHubCoordinationState Published(ValidatedGitHubPublicationAuthority authority)
         => PublishedChain(authority)[^1];
 
-    private static ImmutableArray<GitHubCoordinationState> PublishedChain(
+    internal static ImmutableArray<GitHubCoordinationState> PublishedChain(
         ValidatedGitHubPublicationAuthority authority)
     {
         var claim = GitHubCoordinationCodec.CreateClaim(authority, Oid('0'));
@@ -1828,7 +1828,7 @@ public sealed partial class GitHubCoordinationRefTests
         hash.AppendData(value);
     }
 
-    private static ValidatedGitHubPublicationAuthority InitialAuthority(
+    internal static ValidatedGitHubPublicationAuthority InitialAuthority(
         string operation,
         char candidate,
         string generation = "generation-1",
@@ -1840,7 +1840,7 @@ public sealed partial class GitHubCoordinationRefTests
             new(10, 10, 1000), new(10, 10, 1000),
             [new("docs/readme.md", Hash('a'), Hash(candidate), 1, 10, 12, 1, 1)], []));
 
-    private static ValidatedGitHubPublicationAuthority AppendAuthority(
+    internal static ValidatedGitHubPublicationAuthority AppendAuthority(
         ValidatedGitHubPublicationAuthority predecessor,
         string operation,
         char candidate,
@@ -1859,8 +1859,86 @@ public sealed partial class GitHubCoordinationRefTests
             predecessor.SnapshotCommitmentSha256, predecessor.PolicyCommitmentSha256, null,
             GitHubPublicationTransitionKind.SameSnapshotAppend,
             predecessor.AcceptedM4Ceilings, predecessor.Policy,
-            [new("docs/readme.md", Hash('5'), Hash(candidate), 1, 12, 14, 1, 1)],
+            [new("docs/readme.md", Hash(precedingFileCandidate), Hash(candidate), 1, 12, 14, 1, 1)],
             [new("docs/readme.md", Hash(precedingFileCandidate))]));
+
+    [Fact]
+    public async Task Successive_appends_and_successor_authenticate_original_creation_provenance()
+    {
+        var authority = InitialAuthority("creation-operation", '5');
+        var initial = PublishedChain(authority);
+        var remote = new CoordinationRemote();
+        remote.SeedChain(initial);
+        var marker = initial[^1].PullRequestCreationOperationCommitmentSha256!;
+        for (var index = 0; index < 2; index++)
+        {
+            authority = AppendAuthority(authority, "append-" + index, (char)('6' + index),
+                precedingFileCandidate: (char)('5' + index));
+            using var client = Client(authority, remote);
+            var store = GitHubCoordinationStore.Create(client);
+            var read = await store.ReadCurrentAsync();
+            Assert.NotNull(read.State);
+            var claim = await store.ClaimAsync(read.Read!);
+            Assert.NotNull(claim.State);
+            var proposal = Oid((char)('4' + index));
+            var content = await store.AdvanceAsync(claim.State!, GitHubCoordinationStageUpdate.ContentCreated(proposal));
+            Assert.NotNull(content.State);
+            var advanced = await store.AdvanceAsync(content.State!, GitHubCoordinationStageUpdate.ProposalRefAdvanced(proposal, Oid('9')));
+            Assert.NotNull(advanced.State);
+            var published = await store.AdvanceAsync(advanced.State!, GitHubCoordinationStageUpdate.PullRequestResult(
+                GitHubCoordinationStage.Published, proposal, Oid('9'), marker, 17, Oid('1'), Oid('1'), initial[^1].OwnershipMarkerSha256!));
+            Assert.Null(published.Failure);
+            var restarted = GitHubCoordinationStore.Create(client);
+            var recovered = await restarted.ReadCurrentAsync();
+            Assert.Null(recovered.Failure);
+            Assert.Equal(proposal, recovered.State!.ProposalCommitOid);
+            Assert.Equal(authority.OperationId, recovered.State.OperationId);
+            Assert.Equal("creation-operation", restarted.CreationSource(recovered.State)!.OperationId);
+            Assert.Equal(marker, restarted.CreationCommitment(recovered.State));
+            if (index == 1)
+            {
+                var terminal = await restarted.AdvanceAsync(recovered.State,
+                    GitHubCoordinationStageUpdate.Terminal(GitHubCoordinationStage.Merged));
+                Assert.Null(terminal.Failure);
+                var next = SuccessorAuthority(authority, remote.State(terminal.State!.HeadOid), GitHubCoordinationStage.Merged);
+                using var successorClient = Client(next, remote);
+                var successor = GitHubCoordinationStore.Create(successorClient);
+                Assert.NotNull((await successor.ReadCurrentAsync()).State);
+                remote.RemoveCommit(initial[1]);
+                Assert.Null((await successor.ReadCurrentAsync()).State);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Creation_history_bound_returns_no_partial_authority()
+    {
+        var authority = InitialAuthority("history-origin", '5');
+        var chain = PublishedChain(authority).ToList();
+        var creation = chain[^1].PullRequestCreationOperationCommitmentSha256!;
+        var marker = chain[^1].OwnershipMarkerSha256!;
+        for (var index = 0; chain.Count <= GitHubCoordinationStore.MaximumHistoryStates; index++)
+        {
+            authority = AppendAuthority(authority, "history-" + index, index % 2 == 0 ? '6' : '7',
+                precedingFileCandidate: index == 0 ? '5' : index % 2 == 0 ? '7' : '6');
+            var claim = GitHubCoordinationCodec.CreateClaim(authority, GitHubCoordinationObjects.Prepare(chain[^1]).CommitOid);
+            var content = GitHubCoordinationCodec.WithStage(claim, GitHubCoordinationStage.ContentCreated,
+                GitHubCoordinationObjects.Prepare(claim).CommitOid, Oid('2'));
+            var proposal = GitHubCoordinationCodec.WithStage(content, GitHubCoordinationStage.ProposalRefAdvanced,
+                GitHubCoordinationObjects.Prepare(content).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'));
+            var published = GitHubCoordinationCodec.WithStage(proposal, GitHubCoordinationStage.Published,
+                GitHubCoordinationObjects.Prepare(proposal).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'),
+                creation, 17, Oid('1'), Oid('1'), marker);
+            chain.AddRange([claim, content, proposal, published]);
+        }
+        var remote = new CoordinationRemote(); remote.SeedChain(chain);
+        using var client = Client(authority, remote);
+        var result = await GitHubCoordinationStore.Create(client).ReadCurrentAsync();
+        Assert.Equal(GitHubCoordinationFailureKind.Bounds, result.Failure!.Kind);
+        Assert.Null(result.State);
+        Assert.Null(result.Read);
+        Assert.Equal(0, remote.ObjectMutationAttempts);
+    }
 
     private static ValidatedGitHubPublicationAuthority SuccessorAuthority(
         ValidatedGitHubPublicationAuthority predecessor,
@@ -1909,7 +1987,7 @@ public sealed partial class GitHubCoordinationRefTests
             closedAuthorization));
     }
 
-    private static GitHubApiClient Client(
+    internal static GitHubApiClient Client(
         ValidatedGitHubPublicationAuthority authority,
         CoordinationRemote remote)
     {
@@ -1965,7 +2043,7 @@ public sealed partial class GitHubCoordinationRefTests
         public IGitHubCoordinationStateCapability State { get; } = state;
     }
 
-    private sealed class CoordinationRemote
+    internal sealed class CoordinationRemote
     {
         private readonly object gate = new();
         private readonly Dictionary<string, byte[]> blobs = new(StringComparer.Ordinal);
@@ -2129,6 +2207,9 @@ public sealed partial class GitHubCoordinationRefTests
                 }
             }
         }
+
+        internal void RemoveCommit(GitHubCoordinationState state)
+        { lock (gate) commits.Remove(GitHubCoordinationObjects.Prepare(state).CommitOid); }
 
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request)
         {
