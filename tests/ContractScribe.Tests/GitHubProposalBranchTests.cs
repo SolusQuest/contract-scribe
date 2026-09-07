@@ -14,9 +14,9 @@ namespace ContractScribe.Tests;
 [Collection("GitHub transport hook")]
 public sealed class GitHubProposalBranchTests
 {
-    private static readonly byte[] Original = [0, 255, 1, 13, 10];
-    private static readonly byte[] Candidate = [0, 254, 2, 13, 10];
-    private static readonly byte[] Unchanged = Encoding.UTF8.GetBytes("untouched synthetic bytes\n");
+    internal static readonly byte[] Original = [0, 255, 1, 13, 10];
+    internal static readonly byte[] Candidate = [0, 254, 2, 13, 10];
+    internal static readonly byte[] Unchanged = Encoding.UTF8.GetBytes("untouched synthetic bytes\n");
     private static string Hash(char c) => new(c, 64);
     private static string Oid(char c) => new(c, 40);
 
@@ -233,11 +233,10 @@ public sealed class GitHubProposalBranchTests
         using var a = new Session(authority, left);
         using var b = new Session(authority, right);
         Assert.NotNull((await a.Client.GetRepositoryAsync()).Value);
-        var claim = await Claim(b);
-        var misbound = GitHubProposalStore.Create(a.Client, b.Coordination);
+        await Claim(b);
         var leftWrites = left.Writes;
         var rightWrites = right.Writes;
-        Assert.Equal(GitHubProposalOutcome.Failed, (await misbound.PrepareAsync(claim, Payload(authority))).Outcome);
+        Assert.Throws<ArgumentException>(() => GitHubProposalStore.Create(a.Client, b.Coordination));
         Assert.Equal(leftWrites, left.Writes);
         Assert.Equal(rightWrites, right.Writes);
     }
@@ -831,7 +830,7 @@ public sealed class GitHubProposalBranchTests
         Assert.Equal(GitHubProposalOutcome.ContentVerified, content.Outcome);
         return (claim, content.Content!);
     }
-    private static ValidatedGitHubPublicationAuthority Authority(Remote remote, string operation = "initial",
+    internal static ValidatedGitHubPublicationAuthority Authority(Remote remote, string operation = "initial",
         ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false) => GitHubPublicationFactory.CreateAuthority(new(
             "Owner", "repo", "refs/heads/main", remote.BaseOid, "campaign", Hash('1'), Hash('2'), Hash('3'), previous is null ? 1 : 2,
             Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
@@ -843,7 +842,7 @@ public sealed class GitHubProposalBranchTests
                 new("keep/nested.txt", Sha256(Unchanged), Sha256([7]), 1, 1, 2, 1, 1)]
                 : [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1)],
             previous is null ? [] : [new("file.bin", previous.ChangedFiles[0].CandidateFileSha256)]));
-    private static ValidatedGitHubChangedFilePayload Payload(ValidatedGitHubPublicationAuthority authority, byte[]? bytes = null, bool includeNew = false) =>
+    internal static ValidatedGitHubChangedFilePayload Payload(ValidatedGitHubPublicationAuthority authority, byte[]? bytes = null, bool includeNew = false) =>
         GitHubPublicationFactory.CreatePayload(authority, includeNew
             ? [new("file.bin", bytes ?? Candidate), new("keep/nested.txt", new byte[] { 7 })]
             : [new("file.bin", bytes ?? Candidate)]);
@@ -874,7 +873,7 @@ public sealed class GitHubProposalBranchTests
             remote.Reply(request, cancellationToken);
     }
 
-    private sealed class Remote
+    internal sealed class Remote
     {
         internal readonly Dictionary<string, byte[]> Blobs = new(StringComparer.Ordinal);
         internal readonly Dictionary<string, ImmutableArray<GitHubTreeEntry>> Trees = new(StringComparer.Ordinal);
@@ -882,6 +881,7 @@ public sealed class GitHubProposalBranchTests
         internal readonly Dictionary<string, string> Refs = new(StringComparer.Ordinal);
         internal readonly List<(string Method, string Path)> Requests = [];
         private readonly object gate = new();
+        internal object SyncRoot => gate;
         internal string FileOid { get; }
         internal string BaseOid { get; private set; } = "";
         internal string BaseTreeOid { get; private set; } = "";

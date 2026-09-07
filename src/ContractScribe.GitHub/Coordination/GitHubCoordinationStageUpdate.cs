@@ -66,7 +66,8 @@ internal sealed class GitHubCoordinationStageUpdate
     {
         Require((stage is GitHubCoordinationStage.PullRequestCreated
                 or GitHubCoordinationStage.Published
-                or GitHubCoordinationStage.StaleDraft)
+                or GitHubCoordinationStage.StaleDraft or GitHubCoordinationStage.AwaitingReview
+                or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged)
             && IsOid(proposalCommitOid) && IsOid(proposalTreeOid)
             && Hex(creationCommitmentSha256, 64) && pullRequestNumber > 0
             && IsOid(expectedBaseOid) && IsOid(observedBaseOid)

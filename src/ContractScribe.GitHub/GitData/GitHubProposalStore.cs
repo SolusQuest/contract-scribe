@@ -7,6 +7,15 @@ using static ContractScribe.GitHub.GitData.GitHubProposalObjects;
 namespace ContractScribe.GitHub.GitData;
 
 internal interface IGitHubPreparedProposal;
+internal interface IGitHubInspectedProposal
+{
+    string Ref { get; }
+    string CommitOid { get; }
+    string TreeOid { get; }
+    string BeforeOid { get; }
+    string ObservedRefOid { get; }
+    bool ContentExists { get; }
+}
 internal interface IGitHubProposalContent
 {
     string CommitOid { get; }
@@ -25,7 +34,8 @@ internal sealed record GitHubProposalObservation(GitHubRepositoryIdentity Reposi
     string Ref, string ObservedRefOid) : GitHubValue;
 internal sealed record GitHubProposalResult(GitHubProposalOutcome Outcome,
     IGitHubPreparedProposal? Prepared = null, IGitHubProposalContent? Content = null,
-    GitHubProposalFailure? Failure = null, GitHubProposalObservation? Observation = null) : GitHubValue;
+    GitHubProposalFailure? Failure = null, GitHubProposalObservation? Observation = null,
+    IGitHubInspectedProposal? Inspection = null) : GitHubValue;
 
 internal sealed class GitHubProposalStore
 {
@@ -45,7 +55,143 @@ internal sealed class GitHubProposalStore
         generationKey = proposalRef[(proposalRef.LastIndexOf('/') + 1)..];
     }
 
-    internal static GitHubProposalStore Create(GitHubApiClient client, GitHubCoordinationStore coordination) => new(client, coordination);
+    internal static GitHubProposalStore Create(GitHubApiClient client, GitHubCoordinationStore coordination)
+    {
+        ArgumentNullException.ThrowIfNull(client);
+        ArgumentNullException.ThrowIfNull(coordination);
+        if (!coordination.UsesClient(client)) throw new ArgumentException("Invalid publication store binding.");
+        return new(client, coordination);
+    }
+
+    internal static bool Authenticates(IGitHubInspectedProposal proof, GitHubCoordinationStore coordination,
+        IGitHubCoordinationStateCapability state) => proof is Inspection owned
+        && ReferenceEquals(owned.Owner.coordination, coordination) && coordination.Owns(state)
+        && owned.ContextHead == state.HeadOid;
+
+    internal ValueTask<GitHubProposalResult> InspectAsync(IGitHubCoordinationReadCapability read,
+        ValidatedGitHubChangedFilePayload payload, CancellationToken token = default) => Run(async () =>
+    {
+        var context = coordination.Inspect(read);
+        Require(context is not null);
+        var fresh = await coordination.RecheckAsync(read, token);
+        if (fresh.Read is null) CoordinationFailure(fresh);
+        var state = fresh.State;
+        if (state is not null && state.OperationCommitmentSha256 == authority.OperationCommitmentSha256)
+        {
+            var prepared = await PrepareCore(state, payload, readOnly: true, token);
+            var currentResult = await InspectPlan((PreparedCapability)prepared.Prepared!, state.HeadOid, state.ContentCommitOid is not null, token);
+            Require(state.ProposalCommitOid is null || currentResult.Inspection!.ObservedRefOid == state.ProposalCommitOid);
+            fresh = await coordination.RecheckAsync(read, token);
+            if (fresh.Read is null) CoordinationFailure(fresh);
+            return currentResult;
+        }
+        // Prospective local candidate validation precedes admission, but grants no write capability.
+        var bytes = PayloadBytes(payload);
+        var baseCommit = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, token));
+        var basis = await ReadGraph(baseCommit.TreeOid, token);
+        foreach (var file in authority.ChangedFiles)
+        {
+            Require(basis.Files.TryGetValue(file.Path, out var entry) && Regular(entry.Mode));
+            await CheckBlob(entry!, file.OriginalFileSha256, token);
+        }
+        var before = authority.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend
+            ? state?.ProposalCommitOid : Zero;
+        Require(before is not null);
+        var oids = bytes.ToDictionary(p => p.Key, p => ObjectOid("blob", p.Value.AsSpan()), StringComparer.Ordinal);
+        var graph = Overlay(basis, oids);
+        var commit = Commit(graph.RootOid, before == Zero ? authority.ExpectedBaseCommitOid : before!,
+            authority.OperationCommitmentSha256, generationKey);
+        var plan = new PreparedCapability(this, context!.Repository, basis.RootOid, before!, commit, graph, bytes,
+            oids, basis.Trees.Values.Select(TreeOid).ToHashSet(StringComparer.Ordinal), true);
+        var result = await InspectPlan(plan, state?.HeadOid, recorded: false, token);
+        fresh = await coordination.RecheckAsync(read, token);
+        if (fresh.Read is null) CoordinationFailure(fresh);
+        return result;
+    });
+
+    internal ValueTask<GitHubProposalResult> InspectPredecessorAsync(IGitHubCoordinationStateCapability current,
+        CancellationToken token = default) => Run(async () =>
+    {
+        var fresh = await coordination.InspectStateAsync(current, token);
+        if (fresh.State is null) CoordinationFailure(fresh);
+        current = fresh.State!;
+        var source = current.OperationCommitmentSha256 == authority.OperationCommitmentSha256
+            && current.Transition == "same-snapshot-append" && current.ProposalCommitOid is null
+            ? coordination.AdmissionSource(current) : current;
+        Require(source is not null && coordination.Owns(source));
+        var reference = coordination.ProposalRefFor(source!)!;
+        var head = await client.GetRefAsync(reference, token);
+        var observed = head.Value?.Oid;
+        if (observed is null && head.Failure?.Code != GitHubFailureCode.NotFound) Throw(head);
+        observed ??= Zero;
+        var oid = source!.ProposalCommitOid ?? source.ContentCommitOid;
+        if (oid is null && observed == Zero)
+        {
+            Require(source.Stage is GitHubCoordinationStage.Stale or GitHubCoordinationStage.Claimed);
+            return new(GitHubProposalOutcome.RecordedVerified,
+                Inspection: new Inspection(this, current.HeadOid, reference, Zero, Zero, Zero, observed, false));
+        }
+        oid ??= observed;
+        var commit = Value(await client.GetCommitAsync(oid, token));
+        var basisCommit = Value(await client.GetCommitAsync(source.TargetCommitOid, token));
+        var basis = await ReadGraph(basisCommit.TreeOid, token);
+        var graph = await ReadGraph(commit.TreeOid, token);
+        var replacements = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var file in source.CumulativeChangedFiles)
+        {
+            Require(basis.Files.TryGetValue(file.Path, out var original) && Regular(original.Mode)
+                && graph.Files.TryGetValue(file.Path, out var published) && published.Mode == original.Mode);
+            var entry = graph.Files[file.Path];
+            await CheckBlob(entry, file.CandidateSha256, token);
+            replacements.Add(file.Path, entry.Oid);
+        }
+        Require(Overlay(basis, replacements).RootOid == graph.RootOid);
+        var parent = source.Transition == "same-snapshot-append"
+            ? coordination.AdmissionSource(source)?.ProposalCommitOid : source.TargetCommitOid;
+        Require(parent is not null && ExactCommit(commit, Commit(graph.RootOid, parent!,
+            source.OperationCommitmentSha256, reference[(reference.LastIndexOf('/') + 1)..])));
+        Require(source.ProposalTreeOid is null || source.ProposalTreeOid == graph.RootOid);
+        Require(source.ProposalCommitOid is null ? observed == Zero || observed == oid : observed == oid);
+        fresh = await coordination.InspectStateAsync(current, token);
+        if (fresh.State is null) CoordinationFailure(fresh);
+        return new(GitHubProposalOutcome.RecordedVerified,
+            Inspection: new Inspection(this, current.HeadOid, reference, oid, graph.RootOid, parent!, observed, true));
+    });
+
+    private Dictionary<string, ImmutableArray<byte>> PayloadBytes(ValidatedGitHubChangedFilePayload payload)
+    {
+        Require(payload is not null && payload.AuthorityCommitmentSha256 == authority.AuthorityCommitmentSha256
+            && payload.Files.Length == authority.ChangedFiles.Length);
+        var result = new Dictionary<string, ImmutableArray<byte>>(StringComparer.Ordinal);
+        long total = 0;
+        foreach (var file in payload!.Files)
+        {
+            Require(!file.CandidateBytes.IsDefault && file.CandidateBytes.Length <= GitHubPublicationContract.MaximumPayloadBytesPerFile);
+            total = checked(total + file.CandidateBytes.Length);
+            Require(total <= GitHubPublicationContract.MaximumAggregatePayloadBytes && result.TryAdd(file.Path, file.CandidateBytes));
+        }
+        foreach (var file in authority.ChangedFiles)
+            Require(result.TryGetValue(file.Path, out var bytes) && Sha256(bytes.AsSpan()) == file.CandidateFileSha256);
+        return result;
+    }
+
+    private async ValueTask<GitHubProposalResult> InspectPlan(PreparedCapability plan, string? contextHead,
+        bool recorded, CancellationToken token)
+    {
+        var commit = await client.GetCommitAsync(plan.Commit.ExpectedOid, token);
+        if (commit.Value is not null) await VerifyContent(plan, commit.Value, token);
+        else if (recorded || commit.Failure?.Code != GitHubFailureCode.NotFound) Throw(commit);
+        var reference = await ReadRef(token);
+        Require(reference == plan.BeforeOid || reference == plan.Commit.ExpectedOid);
+        Require(reference != plan.Commit.ExpectedOid || commit.Value is not null);
+        return new(GitHubProposalOutcome.RecordedVerified, Inspection: new Inspection(this, contextHead, proposalRef,
+            plan.Commit.ExpectedOid, plan.Commit.TreeOid, plan.BeforeOid, reference, commit.Value is not null));
+    }
+
+    private static void CoordinationFailure(GitHubCoordinationResult result) =>
+        throw new FailureException(new(GitHubProposalFailureKind.Conflict, result.Failure?.TransportFailure,
+            result.Failure?.Delivery ?? GitHubDelivery.NotDispatched, result.Failure?.Context,
+            result.Failure?.Permissions, result.Failure?.ReadbackFailure, result.Failure?.Kind));
 
     internal ValueTask<GitHubProposalResult> PrepareAsync(IGitHubCoordinationStateCapability state,
         ValidatedGitHubChangedFilePayload payload, CancellationToken cancellationToken = default) =>
@@ -54,18 +200,7 @@ internal sealed class GitHubProposalStore
     private async ValueTask<GitHubProposalResult> PrepareCore(IGitHubCoordinationStateCapability state,
         ValidatedGitHubChangedFilePayload payload, bool readOnly, CancellationToken cancellationToken)
     {
-        Require(payload is not null && payload.AuthorityCommitmentSha256 == authority.AuthorityCommitmentSha256
-            && payload.Files.Length == authority.ChangedFiles.Length);
-        long total = 0;
-        var bytes = new Dictionary<string, ImmutableArray<byte>>(StringComparer.Ordinal);
-        foreach (var file in payload!.Files)
-        {
-            Require(!file.CandidateBytes.IsDefault && file.CandidateBytes.Length <= GitHubPublicationContract.MaximumPayloadBytesPerFile);
-            total = checked(total + file.CandidateBytes.Length);
-            Require(total <= GitHubPublicationContract.MaximumAggregatePayloadBytes && bytes.TryAdd(file.Path, file.CandidateBytes));
-        }
-        foreach (var file in authority.ChangedFiles)
-            Require(bytes.TryGetValue(file.Path, out var value) && Sha256(value.AsSpan()) == file.CandidateFileSha256);
+        var bytes = PayloadBytes(payload);
 
         var guarded = await Guard(state, cancellationToken, readOnly);
         var baseCommit = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, cancellationToken));
@@ -447,5 +582,19 @@ internal sealed class GitHubProposalStore
         public string TreeOid => Plan.Commit.TreeOid;
         public string Ref => Plan.Owner.proposalRef;
         public override string ToString() => nameof(ContentCapability);
+    }
+
+    private sealed class Inspection(GitHubProposalStore owner, string? contextHead, string reference,
+        string commit, string tree, string before, string observed, bool exists) : IGitHubInspectedProposal
+    {
+        internal GitHubProposalStore Owner { get; } = owner;
+        internal string? ContextHead { get; } = contextHead;
+        public string Ref { get; } = reference;
+        public string CommitOid { get; } = commit;
+        public string TreeOid { get; } = tree;
+        public string BeforeOid { get; } = before;
+        public string ObservedRefOid { get; } = observed;
+        public bool ContentExists { get; } = exists;
+        public override string ToString() => nameof(Inspection);
     }
 }
