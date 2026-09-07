@@ -36,6 +36,7 @@ internal enum GitHubCoordinationFailureKind
 }
 
 internal interface IGitHubCoordinationReadCapability;
+internal interface IGitHubProposalRefEntitlement;
 
 internal interface IGitHubCoordinationStateCapability
 {
@@ -109,13 +110,15 @@ internal sealed class GitHubCoordinationResult
         IGitHubCoordinationReadCapability? read = null,
         IGitHubCoordinationStateCapability? state = null,
         IGitHubCoordinationGuardCapability? guard = null,
-        GitHubCoordinationFailure? failure = null)
+        GitHubCoordinationFailure? failure = null,
+        IGitHubProposalRefEntitlement? proposalRefEntitlement = null)
     {
         Outcome = outcome;
         Read = read;
         State = state;
         Guard = guard;
         Failure = failure;
+        ProposalRefEntitlement = proposalRefEntitlement;
     }
 
     internal GitHubCoordinationOutcome Outcome { get; }
@@ -123,6 +126,7 @@ internal sealed class GitHubCoordinationResult
     internal IGitHubCoordinationStateCapability? State { get; }
     internal IGitHubCoordinationGuardCapability? Guard { get; }
     internal GitHubCoordinationFailure? Failure { get; }
+    internal IGitHubProposalRefEntitlement? ProposalRefEntitlement { get; }
     public override string ToString() => nameof(GitHubCoordinationResult);
 }
 
@@ -388,6 +392,19 @@ internal sealed class GitHubCoordinationStore
             ? owned.State
             : null;
 
+    internal IGitHubCoordinationStateCapability? AdmissionSource(
+        IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this)
+            ? owned.AdmissionSource : null;
+
+    internal bool ConsumeProposalRefEntitlement(IGitHubProposalRefEntitlement entitlement,
+        IGitHubCoordinationStateCapability state, string contentOid, string beforeOid) =>
+        entitlement is ProposalRefEntitlement owned && ReferenceEquals(owned.Owner, this)
+        && state is StateCapability current && ReferenceEquals(current.Owner, this)
+        && current.Stage == GitHubCoordinationStage.ContentCreated
+        && SameState(owned.State, current) && current.ContentCommitOid == contentOid
+        && owned.BeforeOid == beforeOid && Interlocked.Exchange(ref owned.Consumed, 1) == 0;
+
     private async ValueTask<GitHubCoordinationResult> AdvanceCoreAsync(
         StateCapability current,
         GitHubCoordinationStageUpdate update,
@@ -526,8 +543,13 @@ internal sealed class GitHubCoordinationStore
             var result = await UpdateAndReadAsync(repository.Value.Identity, finalTarget.Value,
                 prepared, current.HeadOid, preparedIntended, cancellationToken).ConfigureAwait(false);
             if (result.State is null) return result;
-            return await CompleteAdvanceReplayAsync((StateCapability)result.State,
+            var completed = await CompleteAdvanceReplayAsync((StateCapability)result.State,
                 checkTarget, cancellationToken).ConfigureAwait(false);
+            return completed.Outcome == GitHubCoordinationOutcome.Advanced
+                && completed.State?.HeadOid == result.State.HeadOid
+                ? new(completed.Outcome, state: completed.State,
+                    proposalRefEntitlement: result.ProposalRefEntitlement)
+                : completed;
         }
         catch (GitHubCoordinationException)
         {
@@ -700,7 +722,16 @@ internal sealed class GitHubCoordinationStore
                 update.Failure, update.Delivery, update.Context,
                 update.RequiredPermissions,
                 RecoveryFailure(state.Failure?.TransportFailure, recovery));
-        return new(GitHubCoordinationOutcome.Advanced, state: state.State);
+        // Only the acknowledged winner owns the next non-idempotent write.
+        // Exact replay and ambiguous delivery authenticate state, never ownership.
+        var entitlement = update.Value is not null && update.Failure is null
+            && update.Delivery == GitHubDelivery.NeedsReadback
+            && candidate.CommitOid == prepared.CommitOid
+            && prepared.State.Stage == GitHubCoordinationStage.ContentCreated
+            ? new ProposalRefEntitlement(this, (StateCapability)state.State)
+            : null;
+        return new(GitHubCoordinationOutcome.Advanced, state: state.State,
+            proposalRefEntitlement: entitlement);
     }
 
     private async ValueTask<GitHubCoordinationResult> ReadPreparedAsync(
@@ -761,6 +792,7 @@ internal sealed class GitHubCoordinationStore
                     || operationId == authority.OperationId
                         && !ValidAuthorityRoot(cursor.State, predecessorState.State))
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+                currentState.AdmissionSource = predecessorState;
                 return current;
             }
             if (++sameOperationTransitions > MaximumSameOperationTransitions)
@@ -1192,6 +1224,7 @@ internal sealed class GitHubCoordinationStore
         { this.owner = owner; this.repository = repository; this.target = target; this.headOid = headOid; this.state = state; this.canonicalBytes = canonicalBytes; }
         internal GitHubCoordinationStore Owner => owner;
         public GitHubRepositoryIdentity Repository => repository;
+        internal StateCapability? AdmissionSource { get; set; }
         internal GitHubRef Target => target;
         public string HeadOid => headOid;
         public GitHubCoordinationStage Stage => state.Stage;
@@ -1226,6 +1259,22 @@ internal sealed class GitHubCoordinationStore
         internal GitHubCoordinationState State => state;
         internal ImmutableArray<byte> CanonicalBytes => canonicalBytes;
         public override string ToString() => nameof(StateCapability);
+    }
+
+    private sealed class ProposalRefEntitlement : IGitHubProposalRefEntitlement
+    {
+        internal ProposalRefEntitlement(GitHubCoordinationStore owner, StateCapability state)
+        {
+            Owner = owner;
+            State = state;
+            BeforeOid = state.Transition == "same-snapshot-append"
+                ? state.AdmissionSource!.ProposalCommitOid! : ZeroOid;
+        }
+        internal GitHubCoordinationStore Owner { get; }
+        internal StateCapability State { get; }
+        internal string BeforeOid { get; }
+        internal int Consumed;
+        public override string ToString() => nameof(ProposalRefEntitlement);
     }
 
     private sealed class GuardCapability : IGitHubCoordinationGuardCapability
