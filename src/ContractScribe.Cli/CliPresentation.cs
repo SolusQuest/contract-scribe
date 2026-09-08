@@ -9,7 +9,11 @@ namespace ContractScribe.Cli;
 internal sealed record CliExecutionResult(
     int ExitCode,
     string StandardOutput,
-    IReadOnlyList<CliDiagnostic> Diagnostics);
+    IReadOnlyList<CliDiagnostic> Diagnostics)
+{
+    internal bool IsPublication { get; init; }
+    internal long? AuthoritativeCheckpointRevision { get; init; }
+}
 
 internal sealed record AuditCounts(int Compliant, int Violation, int Skipped);
 

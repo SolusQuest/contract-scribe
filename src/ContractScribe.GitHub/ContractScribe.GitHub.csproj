@@ -2,5 +2,6 @@
   <ItemGroup>
     <ProjectReference Include="../ContractScribe.Core/ContractScribe.Core.csproj" />
     <InternalsVisibleTo Include="ContractScribe.Tests" />
+    <InternalsVisibleTo Include="ContractScribe.Cli" />
   </ItemGroup>
 </Project>

@@ -24,7 +24,8 @@ internal sealed record DocumentationCampaignPatchInput(
     DocumentationPatchEngine? PatchEngine = null,
     TimeProvider? TimeProvider = null,
     Action? AfterPatchExecutionObserver = null,
-    Func<bool>? DispatchGuard = null);
+    Func<bool>? DispatchGuard = null,
+    bool AcceptedOnly = false);
 
 internal static class DocumentationCampaignPatchExecutor
 {
@@ -96,6 +97,9 @@ internal static class DocumentationCampaignPatchExecutor
             }
 
             var action = Classify(state);
+            if (input.AcceptedOnly && action == PatchStateAction.Active
+                && state.WorkItems.Any(item => item.Status == CampaignWorkStatus.Accepted))
+                action = PatchStateAction.AcceptedReconstruction;
             if (action == PatchStateAction.Replay)
             {
                 return FromArtifact(current);
@@ -150,7 +154,8 @@ internal static class DocumentationCampaignPatchExecutor
                     input.AcceptedPlan,
                     auditAuthority,
                     state,
-                    action == PatchStateAction.AcceptedReconstruction,
+                    action == PatchStateAction.AcceptedReconstruction
+                        || input.AcceptedOnly && action == PatchStateAction.Retry,
                     input.ExecutionToken);
             }
             catch (OperationCanceledException) when (input.ExecutionToken.IsCancellationRequested)

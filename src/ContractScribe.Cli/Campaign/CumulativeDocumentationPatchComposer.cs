@@ -66,7 +66,9 @@ internal static class CumulativeDocumentationPatchComposer
             session.RepositorySession.InputIdentity,
             planningInput.Snapshot.TargetProfile);
         var request = acceptedOnly
-            ? CampaignStateFactory.ReconstructAcceptedPatchRequest(state, context, currentEvidence)
+            ? state.ActiveReservation is CampaignPatchReservation
+                ? CampaignStateFactory.ReconstructRetriedAcceptedPatchRequest(state, context, currentEvidence)
+                : CampaignStateFactory.ReconstructAcceptedPatchRequest(state, context, currentEvidence)
             : state.ActiveReservation is CampaignPatchReservation
                 ? CampaignStateFactory.ReconstructRetriedPatchRequest(state, context, currentEvidence)
             : CampaignStateFactory.ReconstructPatchRequest(state, context, currentEvidence);

@@ -1,0 +1,30 @@
+ContractScribe github-proposal
+
+Usage:
+  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>
+  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>
+
+Options:
+  --repository-root <path>       Existing repository root.
+  --input <path>                 Existing .sln, .slnx, or .csproj inside the repository.
+  --policy <path>                Existing M1 policy file inside the repository.
+  --snapshot <binding>           Caller-attested immutable snapshot binding.
+  --state <path>                 Campaign checkpoint outside the repository.
+  --configuration <path>         Strict non-secret campaign configuration JSON.
+  --github-configuration <path>  Strict non-secret GitHub publication configuration JSON.
+  -h, --help                     Print this help.
+
+All seven options are required exactly once. Both --option value and --option=value forms are accepted in any order.
+
+Environment:
+  CONTRACTSCRIBE_PROVIDER_API_KEY  Existing campaign provider credential.
+  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local publication admission.
+
+Exit codes:
+  0  Published, replayed, no work, awaiting review, or merged.
+  2  Invalid command-line usage.
+  3  Bounded resumable conflict, rate limit, or stale base after creation.
+  4  Invalid state or authority, human change, permission failure, or closed unmerged.
+  5  Host failure.
+  6  Cancelled.
+  7  Timeout.

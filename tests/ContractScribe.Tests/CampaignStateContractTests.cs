@@ -11,7 +11,7 @@ using Json.Schema;
 
 namespace ContractScribe.Tests;
 
-public sealed class CampaignStateContractTests
+public sealed partial class CampaignStateContractTests
 {
     private static readonly Lazy<JsonSchema> CampaignSchema = new(LoadCampaignSchema);
 
@@ -24,7 +24,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("1ce04ed0b5713a3b08f00cb452315894cba1da3dc21ac959ba564dbec6a648cc", artifact.Sha256);
+        Assert.Equal("e4bbf9b6c3c0cadc5d9e74b4f4886155dbb8654c55edb76872d0793ef3cec4d5", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }
@@ -719,6 +719,18 @@ public sealed class CampaignStateContractTests
         Assert.Equal(CampaignTransitionKind.Applied, reconstructed.Kind);
         Assert.Equal(CampaignTerminalKind.Complete, reconstructed.Artifact.State.TerminalOutcome!.Kind);
         Assert.Equal(CampaignWorkStatus.Accepted, reconstructed.Artifact.State.WorkItems[0].Status);
+        var original = CampaignStateFactory.ProveAcceptedCandidateOrigin(completed.Artifact, historicalRequest,
+            CreateAcceptedPatchResult(historicalRequest, proposal));
+        var replay = CampaignStateFactory.ProveAcceptedCandidateOrigin(reconstructed.Artifact, freshRequest,
+            CreateAcceptedPatchResult(freshRequest, proposal));
+        Assert.Equal(completed.Artifact.CheckpointRevision, replay.CheckpointRevision);
+        Assert.Equal(completed.Artifact.Sha256, replay.CheckpointSha256);
+        Assert.Equal(original.CandidateObservation.PatchRequestSha256, replay.CandidateObservation.PatchRequestSha256);
+        Assert.Equal(original.CandidateObservation.PatchResultCommitmentSha256, replay.CandidateObservation.PatchResultCommitmentSha256);
+        Assert.Equal(original.CandidateObservation.ChangedFiles, replay.CandidateObservation.ChangedFiles);
+        Assert.Equal(replay.CheckpointSha256, freshReservation.Artifact.State.AcceptedCandidateOrigin!.CheckpointSha256);
+        Assert.True(reconstructed.Artifact.State.LineageCharges.PatchValidationInvocations
+            > completed.Artifact.State.LineageCharges.PatchValidationInvocations);
     }
 
     [Fact]
@@ -3498,8 +3510,10 @@ public sealed class CampaignStateContractTests
             CampaignStateValidationCode.InvalidCorrelation);
     }
 
-    [Fact]
-    public void Supersession_revalidates_the_fresh_template_and_continues_lineage_revision()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Supersession_revalidates_the_fresh_template_and_continues_lineage_revision(bool acceptedCandidate)
     {
         var scenario = CreateProposalScenario();
         var successorInput = scenario.Input with
@@ -3519,7 +3533,8 @@ public sealed class CampaignStateContractTests
             "samples/Synthetic.csproj",
             successorInput,
             successorPlan));
-        var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var predecessor = CampaignStateJson.CreateArtifact(acceptedCandidate
+            ? CreateAcceptedCandidateScenario().State : scenario.InitialState);
         var simultaneousStop = CampaignStateReducer.Stop(
             predecessor,
             CampaignTerminalKind.Cancelled);
@@ -3542,6 +3557,7 @@ public sealed class CampaignStateContractTests
         Assert.Equal(predecessor.State.LineageCharges, applied.Artifact.State.LineageCharges);
         Assert.Equal(successorTemplate.State.Snapshot, applied.Artifact.State.Snapshot);
         Assert.Null(applied.Artifact.State.CandidateObservation);
+        Assert.Null(applied.Artifact.State.AcceptedCandidateOrigin);
         Assert.Null(applied.Artifact.State.ActiveReservation);
         Assert.Null(applied.Artifact.State.TerminalOutcome);
 

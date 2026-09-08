@@ -13,7 +13,7 @@ internal enum CampaignTrustedProposalAdmissionKind
     Invalid,
 }
 
-public static class CampaignStateFactory
+public static partial class CampaignStateFactory
 {
     private static readonly HashSet<string> RemovablePatchDiagnosticCodes = new(StringComparer.Ordinal)
     {
@@ -221,6 +221,7 @@ public static class CampaignStateFactory
             boundedKnownCompletedOperations,
             terminalOutcome,
             predecessor);
+        state = state with { AcceptedCandidateOrigin = CreateSelfOrigin(state) };
         Validate(state);
         return state;
     }
@@ -817,7 +818,20 @@ public static class CampaignStateFactory
     public static DocumentationPatchRequest ReconstructAcceptedPatchRequest(
         CampaignCheckpointState state,
         DocumentationPatchContext context,
-        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence)
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence) =>
+        ReconstructAcceptedPatchRequestCore(state, context, currentEvidence, requireActiveReservationMatch: true);
+
+    internal static DocumentationPatchRequest ReconstructRetriedAcceptedPatchRequest(
+        CampaignCheckpointState state,
+        DocumentationPatchContext context,
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence) =>
+        ReconstructAcceptedPatchRequestCore(state, context, currentEvidence, requireActiveReservationMatch: false);
+
+    private static DocumentationPatchRequest ReconstructAcceptedPatchRequestCore(
+        CampaignCheckpointState state,
+        DocumentationPatchContext context,
+        IEnumerable<DocumentationScribeEvidenceReference> currentEvidence,
+        bool requireActiveReservationMatch)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(context);
@@ -841,7 +855,7 @@ public static class CampaignStateFactory
                 CreateAcceptedProjectionCommitment(proposals),
                 StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
-        if (state.ActiveReservation is CampaignPatchReservation reservation)
+        if (requireActiveReservationMatch && state.ActiveReservation is CampaignPatchReservation reservation)
         {
             Require(
                 string.Equals(reservation.PatchRequestSha256, request.ArtifactSha256, StringComparison.Ordinal),
@@ -1011,9 +1025,14 @@ public static class CampaignStateFactory
             result.Diagnostics.Length <= CampaignStateContract.MaximumDiagnostics,
             CampaignStateValidationCode.InvalidBound);
 
+        return FramePatchResult(request.ArtifactSha256, result);
+    }
+
+    private static string FramePatchResult(string requestSha256, DocumentationPatchValidationResult result)
+    {
         using var writer = new CampaignPlanningCommitmentWriter(
             "contract-scribe/campaign/patch-result/v1");
-        writer.Add("request", request.ArtifactSha256);
+        writer.Add("request", requestSha256);
         writer.Add("outcome", PatchOutcomeId(result.Outcome));
         writer.Add("target.count", result.Targets.Length);
         foreach (var target in result.Targets)
@@ -1191,7 +1210,10 @@ public static class CampaignStateFactory
                 state.CumulativeOutcome,
                 state.KnownCompletedOperations,
                 state.TerminalOutcome,
-                state.Predecessor);
+                state.Predecessor)
+            {
+                AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
+            };
             Validate(projectionCheck);
 
             return new CampaignPatchRejectionDecision(
@@ -1378,6 +1400,7 @@ public static class CampaignStateFactory
 
         ValidateReservation(state);
         ValidateCandidate(state);
+        ValidateOrigin(state);
         ValidateCumulativeOutcome(state);
         ValidateKnownCompletedOperations(state);
         ValidateTerminal(state);

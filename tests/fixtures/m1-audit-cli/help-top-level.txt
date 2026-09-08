@@ -9,6 +9,7 @@ Usage:
 Commands:
   audit       Run the deterministic XML documentation audit.
   campaign    Start or resume a durable documentation campaign.
+  github-proposal  Publish or reconcile a documentation proposal on GitHub.
   doctor      Print an allowlisted local runtime diagnostic without network or credential access.
 
 Options:

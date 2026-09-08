@@ -126,6 +126,7 @@ public sealed class DocumentationScribeArchitectureTests
             {
                 "../ContractScribe.Agent/ContractScribe.Agent.csproj",
                 "../ContractScribe.Core/ContractScribe.Core.csproj",
+                "../ContractScribe.GitHub/ContractScribe.GitHub.csproj",
                 "../ContractScribe.Patching/ContractScribe.Patching.csproj",
                 "../ContractScribe.Roslyn/ContractScribe.Roslyn.csproj",
             },

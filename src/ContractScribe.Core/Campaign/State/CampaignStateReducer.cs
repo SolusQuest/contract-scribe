@@ -1040,6 +1040,7 @@ public static class CampaignStateReducer
                     ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget)
                     : state.TerminalOutcome,
                 state.Predecessor);
+            CampaignStateFactory.ValidatePatchSuccessorCapacity(predecessor, reservable, request);
             var reservation = CampaignStateFactory.CreatePatchReservation(
                 reservable,
                 request,
@@ -1284,6 +1285,7 @@ public static class CampaignStateReducer
                     ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget)
                     : state.TerminalOutcome,
                 state.Predecessor);
+            CampaignStateFactory.ValidatePatchSuccessorCapacity(predecessor, reservable, request);
             var reservation = CampaignStateFactory.CreatePatchReservation(
                 reservable,
                 request,
@@ -1680,7 +1682,7 @@ public static class CampaignStateReducer
             reduction.PatchResultCommitmentSha256,
             CampaignStateFactory.CreateActiveProjectionCommitment(state),
             reservation.ExpectedCheckpointRevision);
-        return CampaignStateJson.CreateArtifact(CreateState(
+        return CampaignStateJson.CreateArtifact(CampaignStateFactory.PreserveOrigin(reduction.Predecessor, CreateState(
             state,
             NextRevision(state.CheckpointRevision),
             charges,
@@ -1689,7 +1691,7 @@ public static class CampaignStateReducer
             state.CandidateObservation,
             cumulative,
             terminal,
-            state.Predecessor));
+            state.Predecessor)));
     }
 
     private static CampaignPredecessorSummary CreatePredecessorSummary(
@@ -2023,7 +2025,7 @@ public static class CampaignStateReducer
         DocumentationScribeAttemptId? attemptId = null) => new(
             CampaignTransitionKind.Applied,
             predecessor,
-            CampaignStateJson.CreateArtifact(state),
+            CampaignStateJson.CreateArtifact(CampaignStateFactory.PreserveOrigin(predecessor, state)),
             CampaignTransitionFailure.None,
             attemptId);
 

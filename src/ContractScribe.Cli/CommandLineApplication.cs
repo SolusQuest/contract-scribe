@@ -21,6 +21,7 @@ public static class CommandLineApplication
         "Commands:\n" +
         "  audit       Run the deterministic XML documentation audit.\n" +
         "  campaign    Start or resume a durable documentation campaign.\n" +
+        "  github-proposal  Publish or reconcile a documentation proposal on GitHub.\n" +
         "  doctor      Print an allowlisted local runtime diagnostic without network or credential access.\n" +
         "\n" +
         "Options:\n" +
@@ -148,6 +149,43 @@ public static class CommandLineApplication
                 case "doctor":
                     WriteDoctor(output);
                     return 0;
+            }
+        }
+
+        if (string.Equals(args[0], "github-proposal", StringComparison.Ordinal))
+        {
+            var proposalParse = GitHubProposalCommandParser.Parse(args.AsSpan(1));
+            if (proposalParse.HelpRequested)
+            {
+                output.Write(GitHubProposalCommand.Help);
+                return 0;
+            }
+            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            var proposalSignals = installSignalHandlers ? AuditSignalRegistration.Install(stop) : null;
+            CliExecutionResult selected;
+            try
+            {
+                selected = proposalParse.Failure is { } failure
+                    ? GitHubProposalPresentation.Usage(CliBuildIdentity.Current, failure)
+                    : await GitHubProposalCommand.RunAsync(proposalParse.Arguments!,
+                        currentDirectory ?? Environment.CurrentDirectory, stop.Token).ConfigureAwait(false);
+                try { GitHubProposalProcessHooks.Reach("before-presentation"); }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                {
+                    // A fully serialized publication result has already been selected by R6.
+                    // Before any public byte, other presentation failures have one closed fallback.
+                    if (!selected.IsPublication)
+                        selected = GitHubProposalPresentation.ContractError(CliBuildIdentity.Current,
+                            proposalParse.Arguments?.Operation ?? proposalParse.Failure?.Operation, selected.AuthoritativeCheckpointRevision);
+                }
+                GitHubProposalPresentation.Write(selected, output, error);
+                return selected.ExitCode;
+            }
+            finally
+            {
+                if (proposalSignals is not null && retainHandledSignalRegistration is not null)
+                    retainHandledSignalRegistration(proposalSignals);
+                else proposalSignals?.Dispose();
             }
         }
 
