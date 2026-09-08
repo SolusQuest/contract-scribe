@@ -1,0 +1,94 @@
+# M5 manual and scheduled synthetic proof
+
+This is the pre-run protocol for [issue #166](https://github.com/SolusQuest/contract-scribe/issues/166). The workflow, driver, and tests are source for one development proof. They do not establish that a live run has occurred. The implementation PR references #166 without closing it; live evidence remains necessary for issue completion.
+
+## Authority and the prepared target
+
+The maintainer authorized preparation of public `SolusQuest/contract-scribe-sandbox` within #166 and one ContractScribe implementation PR. The sandbox has repository ID `1361354906`, node ID `R_kgDOUSSgmg`, and default branch `main`. Its bootstrap commit is `b4fdbb719974f6182cde137e5c900f91435424e7`; the original five files were read back byte-for-byte. The fixture intentionally has one undocumented `Synthetic.Run` method. Broader inheritance, abstract/virtual, and inherited-documentation cases belong to later concrete requirements.
+
+The independent observer is `.github/workflows/pr-observer.yml`, workflow ID `353111702`, active at bootstrap. Its SHA-256 is `6dd062f5b64b7ebfe701b1d168e7d59e29610c7aafd39474023a67859a110c8b`. It observes `pull_request` opened/synchronize/reopened against `main`, without a path or draft exclusion, and builds the synthetic project with `contents: read`. It is frozen for this proof. Repository default Actions permission was narrowed to read; the inherited PR-creation setting was preserved as enabled. Revalidate those settings before live authorization.
+
+Owner `Yuee98` retains generated refs, commits, and draft PRs and owns later cleanup and the completion comment. There is no automatic merge, ready transition, approval, closure, branch deletion, workflow disable, token/App/secret creation, or unrelated-repository operation in this proof.
+
+Three separate authorizations apply:
+
+1. **Stage A:** the already authorized synthetic initialization and one focused ContractScribe source PR. No live invocation is authorized by that work.
+2. **After human merge:** explicit authority to place the exact reviewed YAML in the sandbox while activation is absent. Prepare the exact installation commit against the freshly verified expected `main` tip, present its diff and source digest, and publish only an ordinary non-force fast-forward. Read back the new commit and exact bytes. There is no second ContractScribe PR or synchronization service.
+3. **Stage B:** a separate explicit authorization of the completed revision tuple, current settings/observer, finite run slots/window, three scenarios, temporary checkpoint transfer, and owners. Human merge or placement authorization does not grant this authority.
+
+## Revision tuple and activation
+
+| Value | Meaning |
+| --- | --- |
+| P | Accepted H2 product source `11acc2f3fbd472a82b7fbdacd21af21b1f105c80`, built and executed in Release. |
+| S | Human-merged ContractScribe source containing this workflow and its helper/fixture. |
+| W | Installed sandbox workflow revision, compared with actual `github.workflow_sha`. |
+| B | Approved sandbox `main` tip after installation, compared with actual run head and live target. It may equal W and must differ from bootstrap. |
+| O | The fixed observer path, ID, defining commit, content digest, enabled state, and filters above. |
+
+The installed YAML must be byte-identical to `.github/workflows/m5-github-proposal-proof.yml` at S. Product, proof source, and target are separate exact-commit checkouts. An alternate branch, superseding default-branch commit, changed workflow bytes, or missing revision fails the gate. Helpers introduced by this PR come from S, not the earlier P.
+
+Fill `tests/fixtures/github/live-proof/authorization.example.json` only after installation readback. The example is intentionally invalid/inert. Store the completed non-secret JSON as repository variable `M5_H3_PROOF`. All listed fields are required; extra fields are rejected. The maintainer's authorized identity is login `Yuee98`, account ID `16307884`. The finite scenario list is exactly `stale`, `published`, `replayed`. The UTC interval has explicit seconds and `Z`, lasts at most six hours, and must fit the original checkpoint artifact's actual expiry.
+
+The configuration alone cannot activate a run. The live non-commit switch is the single repository topic `m5-h3-<activation>`, where `activation` is the same fresh 32 lowercase hexadecimal characters as the JSON. The maintainer adds/removes only that topic, preserving unrelated topics. Multiple topics with the `m5-h3-` prefix are invalid. Topic GETs allow fresh revocation observations without adding a Variables or administration credential to the workflow. No workflow writes a topic or variable.
+
+Before authorizing slots, read this installed workflow's current run sequence and pending activity. Reserve manual `run_number=N` and actual scheduled `N+1`, both attempt 1. A new unexpected run consumes its own number; it never shifts authority to a later run. Reruns retain the number and increment attempt, so they are rejected, including reruns of only the product job using old dependency outputs. A failed run does not authorize another run.
+
+The schedule is `17 * * * *` UTC. Arrange the bounded window so the authorized manual run, its readback, and the next actual schedule can complete. GitHub may delay or drop scheduled events; do not extend the window, change revisions, find another slot, or substitute a manual dispatch for a schedule automatically. Request a new explicit run authorization if needed.
+
+The H3 workflow's own PR event has a path filter limited to its workflow, this protocol, and `tests/fixtures/github/live-proof/**`. Its allowed candidate changes only `Synthetic.cs`, so the proof's PR does not normally create an H3 run and consume `N+1`. The separate observer remains unfiltered; its run number belongs to its own workflow. Tests inspect the actual YAML filters, not a second list of proposed patterns. The source workflow's dispatch/schedule path is inert in ContractScribe; its separate PR job runs the offline tests.
+
+## Jobs, permissions, and invocation gates
+
+The workflow has no default controllable permissions. Preflight/transfer and final readback use separate job tokens with `contents: read`, `actions: read`, and `pull-requests: read`. The product job has exactly `contents: write` and `pull-requests: write`; all other controllable scopes are none. Metadata read is inherent. Only the three CLI scenario steps receive `CONTRACTSCRIBE_GITHUB_TOKEN`; public git fetches, build, provider, gate, artifact actions, and readback do not receive that token. The Python API adapter performs only GET requests and cannot independently publish with the product token.
+
+Before use, calculate the grant from the exact executing YAML's workflow/job declarations and authenticated own-repository dispatch/schedule event. GitHub applies defaults, workflow override, job override, then any applicable fork-PR adjustment; the admitted events have no fork-PR adjustment. This is a calculation of this product job's vector, not a repository-role boolean or accepted-permission response header. After the product job completes, the read job resolves its exact run/attempt/job and checks the setup-stage `GITHUB_TOKEN Permissions` group against that vector. Missing or contradictory issued-vector evidence prevents successful proof completion. There is no `/user` probe or invented pre-completion log API.
+
+Every scenario has a separate gate before its token-bearing step and another current check immediately before the wrapper forwards the token to the CLI. Check repository and run identity, current attempt and fixed slot, event/cron/ref, topic, wall clock, P/S/W/B and YAML bytes, current target, and O. No saved `needs` output is itself an execution right. These are fresh bounded observations; they do not promise cross-service atomic revocation of an already running operation.
+
+The target is built in **Debug before its first load**, while the product is built Release. This prepares the loader's default design-time generated inputs and avoids first-load `repository.protected-drift`. Do not replace it with an extra audit/campaign invocation or weaken the protected-input check. The offline integration test exercises this exact preparation function on a fresh copy.
+
+The original synthetic provider uses the accepted production HTTP transport at fixed numeric loopback `http://127.0.0.1:48265/v1/chat/completions`, with no key. It returns only the fixed summary using the real current target/evidence reference. Campaign/provider/snapshot/operation/policy configuration remains identical between positive start and scheduled resume. There is no GitHub fake, startup hook, induced transport loss, or fabricated local admission.
+
+## Exactly three scenarios and one temporary state transfer
+
+1. **Manual wrong-base start:** require no prior proposal/coordination work, keep target at B, and use the real bootstrap commit as expected base in a separate private state directory. Require exit 4 and publication-layer `github-proposal.stale`, then unchanged remote refs/PR observations. Any other result halts the sequence.
+2. **Manual correct-base start:** repeat gates and invoke one `start` with expected base B. Require publication-layer `published`, one owned coordination ref, one proposal commit/tree/ref, and one bot-owned draft PR with exact base/head/marker/operation facts. The only changed path must be `Synthetic.cs` with documentation-only content. Upload only this successful completed checkpoint.
+3. **Actual scheduled resume:** authenticate and restore that exact successful manual checkpoint, repeat gates, then invoke one `resume`. Require publication-layer `replayed` and identical remote facts. A null replay PR URL is permitted by the existing presentation; read the actual PR separately. No-work, hold, another exit-zero outcome, a fresh start, or a second attempt cannot substitute.
+
+The expected publisher is `github-actions[bot]`, ID `41898282`, node `MDM6Qm90NDE4OTgyODI=`. The existing production adapter owns all contents/ref/commit/PR mutations. Unchanged snapshots demonstrate no mutation observed; they are not claimed as a wire-request count.
+
+The original immutable artifact contains one regular `checkpoint.json`, uses ZIP archive mode, no overwrite, and one-day retention. Its name binds the complete non-secret authorization configuration digest. Scheduled read-only preflight requires the exact unique successful manual workflow/run/attempt, source/head/event/actor/configuration association, artifact ID, lifetime, size, and archive digest. Missing, ambiguous, substituted, or expired state fails; it never starts a new campaign.
+
+Hosted jobs do not share files. After authenticating the original archive and its single bounded checkpoint entry, the read job reuploads the **same bytes** as one current-run relay artifact. Bounded outputs retain the original producer/run/attempt/artifact/archive identity, checkpoint content digest, and current receiver identity. They contain no checkpoint bytes, signed URL, or retrieval token. The relay is an intermediate physical transfer, not a new accepted checkpoint or producer.
+
+The product job downloads the exact relay artifact ID through Actions' native same-run runtime capability, without `github-token` or cross-run options. The pinned download action keeps the raw archive and treats a reported digest mismatch as an error. Independently require the actual relay digest, hash the raw archive, admit exactly one safe entry, and require its content digest to equal the original. The two ZIP digests may differ; the checkpoint bytes may not.
+
+Both archives are capped at 1 MiB and the checkpoint at 512 KiB. Reject path components, extra/duplicate entries, symlinks, encryption, malformed JSON and oversized data; never call `extractall`. Restore exclusively as a regular single-link 0600 file in a new owner-private 0700 Linux directory outside the checkouts. Invoke the exact built P Core assembly's public `CampaignStateJson.Parse` through the small helper before product-token attachment. That pure call validates current intrinsic/canonical C2 bytes without reconstruction, accounting changes or state writes. The one actual scheduled `resume` still owns fresh H1 candidate/origin and current-context validation.
+
+No source tree, candidate/diff, provider request/response, lease/temp checkpoint, log, or product binary is uploaded. Raw checkpoint data is never a job output or completion comment.
+
+## Observer and completion evidence
+
+Tie observer evidence to the manual PR creation, even when read during the scheduled replay. Revalidate O and inspect the actual matching observer run/jobs over a bounded ten-minute observation. Classify:
+
+- `triggered`: an actual matching observer job started.
+- `approval-gated`: the matching run has GitHub's explicit pre-job `action_required` conclusion and no started job. Do not approve it.
+- `absent-after-proven-eligible`: complete prerequisite and bounded paginated observations establish eligibility and absence.
+- `inconclusive`: unavailable/ambiguous evidence, generic queued/waiting, or missing prerequisites; this blocks completion.
+
+A replay that writes nothing creates no new PR event. Its lack of a new observer run is not suppression evidence. GitHub currently documents approval-required opened/synchronize/reopened workflow runs for PRs created using `GITHUB_TOKEN`.
+
+After both accepted runs, the maintainer clears the activation topic and independently reads its absence back. Keep W/B unchanged and observe the next **actual** scheduled occurrence report inactive before live-slot/window requirements, with no product job or credential attachment. Do not use Actions-write or auto-disable the workflow.
+
+Only after all three scenario results, job-specific grants, resource/actor readback, observer classification, topic-clear readback and later inactive schedule are verified does the maintainer/graph owner post one sanitized completion comment to #166. Include P/S/W/B/O and YAML digest, exact run/attempt/job URLs, target PR and ref/commit/tree IDs, expected/observed outcome counts, grant/actor facts, observer classification, activation-clear and inactive-run references, risks and owner. Read the comment back before closure. No second evidence PR is required and the product token has no Issues permission.
+
+Retain refs, commits and draft PRs. The temporary original and relay artifacts expire after one day; expiry never grants another attempt. Remaining risks include dropped/delayed schedules, consumed slots, public-read rate limits, artifact expiry, current platform permission/approval behavior, and observations becoming stale between services. Fail closed or report inconclusive instead of widening credentials or repairing remote state.
+
+## Validation
+
+The owned workflow's **H3 offline gates** job builds the normal CLI and pure helper, then runs the Python tests, including real credential-absent start and a copied-checkpoint fresh-process resume on Linux. This proves local admission and continuity, not live publication. Tests cover actual YAML triggers/permissions, inactive and expired gates, altered revisions and attempts, consumed slots, producer/relay substitution, unsafe ZIP entries, private-file admission, Core parser rejection, exact scenario outcomes, token forwarding, and observer/permission-log interpretation.
+
+Before review, also run the issue's existing Release build, `FullyQualifiedName~GitHub` unit tests, `FullyQualifiedName~GitHubProposalCliProcessTests` integration tests, and `dotnet format --verify-no-changes`. Check the new offline job explicitly on the exact pushed head alongside ordinary CI/CodeQL; ordinary .NET CI alone does not execute this new Python suite. The implementation PR goes through exact-head GitHub and Relay review and stops at Ready for human review. Live installation and Stage B stay deferred.
+
+Sources: [GitHub token scope and trigger behavior](https://docs.github.com/en/actions/concepts/security/github_token), [permission calculation, path filters and schedule](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax), [run and workflow identities](https://docs.github.com/en/actions/reference/workflows-and-actions/contexts), [artifact REST metadata](https://docs.github.com/en/rest/actions/artifacts), [job logs](https://docs.github.com/en/rest/actions/workflow-jobs), [pre-job approval conclusion](https://github.blog/changelog/2025-04-15-upcoming-breaking-changes-and-releases-for-github-actions/).
