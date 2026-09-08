@@ -78,3 +78,39 @@ internal static class GitHubProposalProcessHooks
         ? new("campaign", operation, selected.Source, selected.Revision) : null;
     internal static void Reach(string boundary) => observer?.Invoke(boundary);
 }
+
+// A retained handler must keep its cancellation source alive through physical output.
+internal sealed class GitHubProposalSignalLifetime : IDisposable
+{
+    private readonly CancellationTokenSource stop;
+    private readonly AuditSignalRegistration? signals;
+    private readonly CancellationTokenRegistration observation;
+
+    internal GitHubProposalSignalLifetime(CancellationToken caller, bool install)
+    {
+        stop = CancellationTokenSource.CreateLinkedTokenSource(caller);
+        try
+        {
+            observation = stop.Token.Register(static () => GitHubProposalProcessHooks.Reach("signal-observed"));
+            signals = install ? AuditSignalRegistration.Install(stop) : null;
+        }
+        catch
+        {
+            observation.Dispose();
+            stop.Dispose();
+            throw;
+        }
+    }
+
+    internal CancellationToken Token => stop.Token;
+
+    public void Dispose()
+    {
+        try { signals?.Dispose(); }
+        finally
+        {
+            try { observation.Dispose(); }
+            finally { stop.Dispose(); }
+        }
+    }
+}

@@ -13,6 +13,7 @@ var exitCode = await CommandLineApplication.ExecuteProcessAsync(
 
 try
 {
+    if (args.FirstOrDefault() == "github-proposal") GitHubProposalProcessHooks.Reach("before-physical-output");
     var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     using var output = new StreamWriter(standardStreams.OpenPresentationOutput(), utf8)
     {

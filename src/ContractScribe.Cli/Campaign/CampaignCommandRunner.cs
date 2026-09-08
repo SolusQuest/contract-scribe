@@ -288,6 +288,8 @@ internal static class CampaignCommandRunner
             if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted })
                 return Terminal(preflight.Operation, "campaign", "campaign.budget-exhausted", current);
 
+            if (continuation?.PersistedStop(stateNow) is { } persistedStop) return persistedStop;
+
             if (continuation?.HasNoAppendWork(stateNow) == true)
                 return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
             var reconstructAccepted = continuation?.ReconstructAccepted(stateNow) == true;
@@ -330,6 +332,17 @@ internal static class CampaignCommandRunner
                     var fresh = await CampaignCheckpointAcceptance.AcceptCurrentAsync(store, cancellationToken).ConfigureAwait(false);
                     if (fresh.Kind != CampaignCheckpointAcceptanceKind.Accepted || fresh.AcceptedCheckpoint is null)
                         return Terminal(preflight.Operation, "state", AcceptanceOutcome(fresh.Kind), current);
+                    if (continuation.ValidateHandoff(fresh.AcceptedCheckpoint.Artifact, patched) is { } handoffFailure)
+                        return new(null, handoffFailure);
+                    current = fresh.AcceptedCheckpoint;
+                    // Reconstruction of the append's predecessor is not newly accepted work.
+                    // Reevaluate progress after exact readback before any H1/token/publication.
+                    if (!continuation.ReconstructAccepted(current.Artifact.State))
+                    {
+                        if (continuation.HasNoAppendWork(current.Artifact.State))
+                            return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
+                        continue;
+                    }
                     return await continuation.ContinueAsync(new GitHubPublicationContext(
                         bundle.Classified, bundle.Observed, bundle.Policy, bundle.AuditInputs.ToImmutableArray(), bundle.Audit,
                         planning, plan, execution, configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,

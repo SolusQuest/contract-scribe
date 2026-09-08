@@ -160,15 +160,14 @@ public static class CommandLineApplication
                 output.Write(GitHubProposalCommand.Help);
                 return 0;
             }
-            using var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            var proposalSignals = installSignalHandlers ? AuditSignalRegistration.Install(stop) : null;
+            var proposalLifetime = new GitHubProposalSignalLifetime(cancellationToken, installSignalHandlers);
             CliExecutionResult selected;
             try
             {
                 selected = proposalParse.Failure is { } failure
                     ? GitHubProposalPresentation.Usage(CliBuildIdentity.Current, failure)
                     : await GitHubProposalCommand.RunAsync(proposalParse.Arguments!,
-                        currentDirectory ?? Environment.CurrentDirectory, stop.Token).ConfigureAwait(false);
+                        currentDirectory ?? Environment.CurrentDirectory, proposalLifetime.Token).ConfigureAwait(false);
                 try { GitHubProposalProcessHooks.Reach("before-presentation"); }
                 catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
                 {
@@ -183,9 +182,9 @@ public static class CommandLineApplication
             }
             finally
             {
-                if (proposalSignals is not null && retainHandledSignalRegistration is not null)
-                    retainHandledSignalRegistration(proposalSignals);
-                else proposalSignals?.Dispose();
+                if (installSignalHandlers && retainHandledSignalRegistration is not null)
+                    retainHandledSignalRegistration(proposalLifetime);
+                else proposalLifetime.Dispose();
             }
         }
 

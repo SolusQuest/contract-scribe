@@ -7,6 +7,42 @@ namespace ContractScribe.Tests;
 
 public sealed class GitHubProposalConfigurationTests
 {
+    [Theory]
+    [InlineData("\"\\uD800\"")]
+    [InlineData("\"\\uDC00\"")]
+    [InlineData("\"\\uD800x\"")]
+    [InlineData("\"\\uD800\\u0041\"")]
+    [InlineData("\"\\uD800\\uD800\"")]
+    [InlineData("property")]
+    public void Malformed_escaped_scalars_are_configuration_failures(string value)
+    {
+        var json = value == "property" ? Configuration()[..^1] + ",\"\\uD800\":1}"
+            : Configuration().Replace("\"operation.initial\"", value, StringComparison.Ordinal);
+        var directory = Path.Join(Path.GetTempPath(), "github-unicode-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Join(directory, "github.json");
+            File.WriteAllBytes(path, Encoding.UTF8.GetBytes(json));
+            Assert.ThrowsAny<JsonException>(() => GitHubProposalConfigurationReader.Read(path, directory));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [Fact]
+    public void Valid_escaped_ASCII_configuration_values_keep_their_decoded_identity()
+    {
+        var directory = Path.Join(Path.GetTempPath(), "github-unicode-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        try
+        {
+            var path = Path.Join(directory, "github.json");
+            File.WriteAllText(path, Configuration().Replace("operation.initial", "operation.\\u0061", StringComparison.Ordinal));
+            Assert.Equal("operation.a", GitHubProposalConfigurationReader.Read(path, directory).Configuration.OperationId);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     private static string Configuration() => JsonSerializer.Serialize(new
     {
         repositoryOwner = "Owner",

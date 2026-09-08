@@ -7,6 +7,54 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
+    [Theory]
+    [InlineData("published", "INT", 0)]
+    [InlineData("published", "TERM", 0)]
+    [InlineData("no-op", "TERM", 0)]
+    [InlineData("usage", "INT", 2)]
+    public async Task Late_real_signal_after_terminal_selection_preserves_physical_output(string outcome, string signal, int exit)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync(required: outcome == "published");
+        var environment = fixture.Environment();
+        var release = Path.Join(fixture.Outside, "physical-output.release");
+        environment["CONTRACTSCRIBE_TEST_GITHUB_PAUSE"] = "before-physical-output";
+        environment["CONTRACTSCRIBE_TEST_GITHUB_RELEASE"] = release;
+        using var running = CampaignCliProcessTests.Start(outcome == "usage" ? ["github-proposal", "invalid"] : fixture.Args("start"), environment);
+        try
+        {
+            await Observed("before-physical-output");
+            var writes = fixture.GitHub.Mutations;
+            using var sender = Process.Start(new ProcessStartInfo("kill")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                ArgumentList = { "-" + signal, running.Process.Id.ToString(CultureInfo.InvariantCulture) },
+            })!;
+            await sender.WaitForExitAsync();
+            Assert.Equal(0, sender.ExitCode);
+            await Observed("signal-observed");
+            Assert.False(running.Process.HasExited);
+            await File.WriteAllTextAsync(release, "release\n");
+            await running.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(1));
+            AssertResult(await running.CompleteAsync(), exit, outcome == "usage" ? "local-invalid" : outcome);
+            Assert.Equal(writes, fixture.GitHub.Mutations);
+            Assert.Equal(outcome == "published" ? 1 : 0, fixture.TokenReads());
+        }
+        finally { await CampaignCliProcessTests.StopAsync(running); }
+
+        async Task Observed(string boundary)
+        {
+            var elapsed = Stopwatch.StartNew();
+            while (!File.Exists(fixture.Observations) || !File.ReadAllLines(fixture.Observations).Contains(boundary, StringComparer.Ordinal))
+            {
+                Assert.False(running.Process.HasExited, "The owned process exited before acknowledging " + boundary);
+                Assert.True(elapsed.Elapsed < TimeSpan.FromMinutes(2));
+                await Task.Delay(20);
+            }
+        }
+    }
+
     [Fact]
     public async Task Ordinary_environment_cannot_activate_startup_controls_and_help_matches_its_fixture()
     {

@@ -59,7 +59,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         baseBlobs = Blobs.Keys.ToHashSet(StringComparer.Ordinal);
         baseTrees = Trees.Keys.ToHashSet(StringComparer.Ordinal);
         baseCommits = Commits.Keys.ToHashSet(StringComparer.Ordinal);
-        var port = new TcpListener(IPAddress.Loopback, 0);
+        using var port = new TcpListener(IPAddress.Loopback, 0);
         port.Start();
         var number = ((IPEndPoint)port.LocalEndpoint).Port;
         port.Stop();

@@ -111,6 +111,8 @@ internal static class StartupHook
         var endpoint = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT");
         var observations = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS");
         var fault = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_FAULT");
+        var pause = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_PAUSE");
+        var release = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_RELEASE");
         var terminal = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_TERMINAL");
         if (endpoint is null && observations is null && fault is null && terminal is null) return;
         var cli = Assembly.Load(CliAssemblyName);
@@ -130,6 +132,8 @@ internal static class StartupHook
         {
             if (observations is not null) File.AppendAllText(observations, name + "\n");
             if (fault == name) throw new InvalidOperationException("synthetic private fault sentinel");
+            if (pause == name && (release is null || !SpinWait.SpinUntil(() => File.Exists(release), TimeSpan.FromSeconds(45))))
+                throw new TimeoutException("Synthetic physical-output pause expired.");
         };
         boundaries.GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [callback]);
     }

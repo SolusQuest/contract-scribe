@@ -25,6 +25,7 @@ internal static class GitHubPublicationFacade
             return new(GitHubPublicationResult.FromRemoteFailure(token.IsCancellationRequested
                 ? GitHubPublicationRemoteFailureKind.Cancelled : GitHubPublicationRemoteFailureKind.Permission), null, null, null);
         }
+        using var clientLifetime = client;
         GitHubPublicationObservation? selected = null;
         try
         {
@@ -44,11 +45,7 @@ internal static class GitHubPublicationFacade
                 token.IsCancellationRequested ? GitHubPublicationRemoteFailureKind.Cancelled
                     : GitHubPublicationRemoteFailureKind.HostFailure), null, null, null);
         }
-        finally
-        {
-            try { client.Dispose(); }
-            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { }
-        }
+        // R2 disposal already clears its credential and contains handler teardown failures.
         return selected!;
     }
 

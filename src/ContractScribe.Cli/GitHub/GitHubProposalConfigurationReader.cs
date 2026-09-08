@@ -80,7 +80,7 @@ internal static class GitHubProposalConfigurationReader
             var names = new HashSet<string>(StringComparer.Ordinal);
             foreach (var property in value.EnumerateObject())
             {
-                if (!names.Add(property.Name)) throw new JsonException();
+                if (!names.Add(DecodeName(property))) throw new JsonException();
                 ValidateClosedJson(property.Value);
             }
         }
@@ -91,9 +91,21 @@ internal static class GitHubProposalConfigurationReader
         }
         else if (value.ValueKind == JsonValueKind.String)
         {
-            var text = value.GetString()!;
+            var text = DecodeString(value);
             if (text.Length is 0 or > 4096 || text.Any(char.IsControl)) throw new JsonException();
         }
+    }
+
+    private static string DecodeString(JsonElement value)
+    {
+        try { return value.GetString()!; }
+        catch (InvalidOperationException) { throw new JsonException("Invalid escaped Unicode scalar."); }
+    }
+
+    private static string DecodeName(JsonProperty property)
+    {
+        try { return property.Name; }
+        catch (InvalidOperationException) { throw new JsonException("Invalid escaped Unicode property name."); }
     }
 
     private static void ValidateShape(GitHubPublicationConfiguration configuration)
