@@ -30,7 +30,8 @@ class Api:
         self.read_token = read_token
 
     def request(self, path, limit=2097152, redirect=False):
-        require(path.startswith('repos/' + REPOSITORY + '/'), 'api-target')
+        root = 'repos/' + REPOSITORY
+        require(path == root or (path.startswith(root + '/') and len(path) > len(root) + 1), 'api-target')
         headers = {'Accept': 'application/vnd.github+json', 'User-Agent': 'ContractScribe-issue166-proof',
                    'X-GitHub-Api-Version': '2026-03-10', 'Cache-Control': 'no-cache'}
         if self.read_token:
@@ -60,7 +61,7 @@ class Api:
         return data
 
     def get(self, suffix):
-        return parse_json(self.request('repos/' + REPOSITORY + '/' + suffix))
+        return parse_json(self.request('repos/' + REPOSITORY + ('/' + suffix if suffix else '')))
 
     def pages(self, suffix, key=None):
         result = []

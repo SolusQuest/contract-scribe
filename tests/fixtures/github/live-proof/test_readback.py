@@ -1,7 +1,11 @@
 """Read-adapter regressions; these observations never substitute for Stage B."""
 import copy
+import base64
 import hashlib
+import io
+import os
 import unittest
+import urllib.error
 from unittest import mock
 
 import proof
@@ -10,6 +14,72 @@ from test_proof import inputs
 
 
 class ReadbackTests(unittest.TestCase):
+    def test_request_construction_preserves_root_children_and_repository_boundary(self):
+        root = 'repos/' + REPOSITORY
+        observed = []
+        def respond(request, timeout):
+            observed.append(request)
+            return io.BytesIO(b'{}')
+        opener = mock.Mock()
+        opener.open.side_effect = respond
+        with mock.patch.object(proof.urllib.request, 'build_opener', return_value=opener):
+            api = proof.Api()
+            for suffix in ('', 'actions/runs/100', 'git/matching-refs/heads/contract-scribe/'):
+                api.get(suffix)
+                expected = 'https://api.github.com/' + root + ('/' + suffix if suffix else '')
+                self.assertEqual(expected, observed[-1].full_url)
+                self.assertEqual('GET', observed[-1].method)
+                self.assertIsNone(observed[-1].data)
+                self.assertIsNone(observed[-1].get_header('Authorization'))
+            for path in (root + '/', root + '-other', root + '-other/actions/runs/100',
+                         'repos/SolusQuest/another-repository', 'users/Yuee98'):
+                count = len(observed)
+                with self.subTest(path=path), self.assertRaisesRegex(ProofFailure, 'api-target'):
+                    api.request(path)
+                self.assertEqual(count, len(observed))
+            proof.Api('read-sentinel').get('')
+            self.assertEqual('Bearer read-sentinel', observed[-1].get_header('Authorization'))
+
+    def test_complete_active_inactive_and_failed_gate_through_real_http_request_boundary(self):
+        config, ctx, repository, run = inputs()
+        prefix = 'https://api.github.com/repos/' + REPOSITORY
+        observer_bytes = b'fixed observer bytes for request-construction regression'
+        def content(data):
+            return {'type': 'file', 'encoding': 'base64', 'size': len(data),
+                    'content': base64.b64encode(data).decode(),
+                    'sha': hashlib.sha1(b'blob ' + str(len(data)).encode() + b'\0' + data).hexdigest()}
+        values = {prefix: repository, prefix + '/actions/runs/100': run,
+                  prefix + '/contents/' + WORKFLOW + '?ref=' + config['workflow_sha']: content((proof.SOURCE / WORKFLOW).read_bytes()),
+                  prefix + '/git/ref/heads/main': {'object': {'sha': config['base_sha']}},
+                  prefix + '/actions/workflows/' + str(OBSERVER_ID): {'id': OBSERVER_ID, 'path': OBSERVER, 'state': 'active'},
+                  prefix + '/contents/' + OBSERVER + '?ref=' + config['base_sha']: content(observer_bytes)}
+        observed = []
+        def respond(request, timeout):
+            observed.append(request)
+            if request.full_url not in values:
+                raise urllib.error.HTTPError(request.full_url, 404, 'Not Found', {}, None)
+            return io.BytesIO(canonical(values[request.full_url]))
+        opener = mock.Mock()
+        opener.open.side_effect = respond
+        with mock.patch.object(proof.urllib.request, 'build_opener', return_value=opener), \
+             mock.patch.object(proof, 'OBSERVER_DIGEST', sha(observer_bytes)):
+            api = proof.Api()
+            now = timestamp('2026-09-09T02:00:00Z')
+            self.assertEqual('manual', proof.fresh_gate(config, ctx, api, now))
+            repository['topics'] = []
+            self.assertEqual('inactive', proof.fresh_gate(config, ctx, api, now))
+            self.assertEqual(12, len(observed))
+            self.assertTrue(all(request.method == 'GET' and request.get_header('Authorization') is None for request in observed))
+            del values[prefix]
+            with mock.patch.object(proof, 'current_config', return_value=config), \
+                 mock.patch.object(proof, 'context', return_value=ctx), \
+                 mock.patch.object(proof.subprocess, 'Popen') as launch, \
+                 mock.patch.dict(os.environ, CONTRACTSCRIBE_GITHUB_TOKEN='product-sentinel'):
+                with self.assertRaisesRegex(ProofFailure, 'github-read-unavailable'):
+                    proof.invoke('negative')
+                launch.assert_not_called()
+                self.assertIsNone(observed[-1].get_header('Authorization'))
+
     def test_each_fresh_gate_reads_current_topics_attempt_main_and_observer(self):
         config, ctx, repository, run = inputs()
         observer_bytes = (proof.HERE / 'Synthetic.cs').read_bytes()
