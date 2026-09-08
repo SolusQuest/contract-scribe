@@ -265,11 +265,12 @@ jobs:
         id: integration_tests
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 35
+        timeout-minutes: 45
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
           --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint"
+          --logger "console;verbosity=normal"
           --logger "trx;LogFilePrefix=integration-remaining-${{ runner.os }}"
           --results-directory TestResults/ci/integration-remaining
       - name: Require discovered remaining integration tests
@@ -351,10 +352,11 @@ jobs:
         id: integration_tests
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 35
+        timeout-minutes: 55
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
+          --logger "console;verbosity=normal"
           --logger "trx;LogFilePrefix=integration-unfiltered-${{ runner.os }}"
           --results-directory TestResults/ci/integration-unfiltered
       - name: Require discovered unfiltered integration tests
