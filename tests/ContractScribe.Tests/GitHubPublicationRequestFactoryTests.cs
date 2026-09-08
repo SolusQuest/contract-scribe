@@ -421,9 +421,12 @@ public sealed partial class DocumentationScribeCompositionTests
         var current = PublicationContext(fixture, campaign, store.Current!);
         var second = GitHubPublicationRequestFactory.Create(current, reconstructed, PublicationConfiguration());
         AssertPublicationAccepted(second);
-        Assert.True(second.Authority!.CheckpointRevision > first.Authority!.CheckpointRevision);
-        Assert.NotEqual(first.Authority.CheckpointSha256, second.Authority.CheckpointSha256);
-        Assert.NotEqual(first.Authority.AuthorityCommitmentSha256, second.Authority.AuthorityCommitmentSha256);
+        Assert.True(reconstructed.Artifact!.CheckpointRevision > accepted.Artifact!.CheckpointRevision);
+        Assert.True(reconstructed.Artifact.State.LineageCharges.PatchValidationInvocations
+            > accepted.Artifact.State.LineageCharges.PatchValidationInvocations);
+        Assert.Equal(first.Authority!.CheckpointRevision, second.Authority!.CheckpointRevision);
+        Assert.Equal(first.Authority.CheckpointSha256, second.Authority.CheckpointSha256);
+        Assert.Equal(first.Authority.AuthorityCommitmentSha256, second.Authority.AuthorityCommitmentSha256);
         Assert.Equal(first.Authority.SnapshotCommitmentSha256, second.Authority.SnapshotCommitmentSha256);
         Assert.Equal(first.Authority.CandidateCommitmentSha256, second.Authority.CandidateCommitmentSha256);
         Assert.Equal(Assert.Single(first.Payload!.Files).CandidateBytes.ToArray(), Assert.Single(second.Payload!.Files).CandidateBytes.ToArray());
@@ -499,7 +502,13 @@ public sealed partial class DocumentationScribeCompositionTests
         basis.ProductRevision, basis.CampaignLineage, basis.Snapshot, revision ?? basis.CheckpointRevision,
         basis.ConfiguredCeilings, basis.LineageCharges, basis.WorkItems, basis.ActiveReservation,
         removeObservation ? null : observation ?? basis.CandidateObservation, cumulative ?? basis.CumulativeOutcome,
-        basis.KnownCompletedOperations, terminal, basis.Predecessor);
+        basis.KnownCompletedOperations, terminal, basis.Predecessor)
+        {
+            AcceptedCandidateOrigin = removeObservation ? null : basis.AcceptedCandidateOrigin is { } origin
+            && revision > basis.CheckpointRevision
+                ? origin with { CheckpointSha256 = origin.CheckpointSha256 ?? CampaignStateJson.CreateArtifact(basis).Sha256 }
+                : basis.AcceptedCandidateOrigin,
+        };
 
     private static CampaignCheckpointArtifact PublicationArtifact(CampaignCheckpointState state, CampaignCheckpointArtifact basis)
     {

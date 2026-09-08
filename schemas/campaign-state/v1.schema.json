@@ -4,7 +4,7 @@
   "title": "ContractScribe Campaign State v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
   "properties": {
     "campaignStateVersion": { "const": 1 },
     "productRevision": { "$ref": "#/$defs/revision" },
@@ -16,12 +16,26 @@
     "workItems": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/work" } },
     "activeReservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/providerReservation" }, { "$ref": "#/$defs/patchReservation" }] },
     "candidateObservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidate" }] },
+    "acceptedCandidateOrigin": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/acceptedCandidateOrigin" }] },
     "cumulativeOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/cumulative" }] },
     "knownCompletedOperations": { "type": "array", "maxItems": 512, "items": { "$ref": "#/$defs/knownCompletedOperation" } },
     "terminalOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/terminal" }] },
     "predecessor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessor" }] }
   },
   "$defs": {
+    "acceptedCandidateOrigin": {
+      "type": "object", "additionalProperties": false,
+      "required": ["checkpointRevision", "checkpointSha256", "productRevision", "campaignLineage", "snapshot", "campaignConfigurationCommitmentSha256", "candidateObservation"],
+      "properties": {
+        "checkpointRevision": { "$ref": "#/$defs/nonNegativeInt64" },
+        "checkpointSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
+        "productRevision": { "$ref": "#/$defs/revision" },
+        "campaignLineage": { "$ref": "#/$defs/opaqueId" },
+        "snapshot": { "$ref": "#/$defs/snapshot" },
+        "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" },
+        "candidateObservation": { "$ref": "#/$defs/candidate" }
+      }
+    },
     "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "opaqueId": { "type": "string", "minLength": 1, "maxLength": 512, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" },
     "evidenceIdentifier": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9.-]*[a-z0-9]$|^[a-z]$" },

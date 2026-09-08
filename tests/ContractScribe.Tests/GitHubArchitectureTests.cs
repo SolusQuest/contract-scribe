@@ -10,21 +10,21 @@ namespace ContractScribe.Tests;
 public sealed class GitHubArchitectureTests
 {
     [Fact]
-    public void Adapter_has_one_real_Core_edge_no_packages_no_reverse_edges_and_only_test_friend()
+    public void Adapter_has_one_Core_edge_and_only_CLI_composition_and_test_friends()
     {
         var root = Root();
         var project = XDocument.Load(Path.Join(root, "src/ContractScribe.GitHub/ContractScribe.GitHub.csproj"));
         Assert.Equal("../ContractScribe.Core/ContractScribe.Core.csproj",
             Assert.Single(project.Descendants("ProjectReference")).Attribute("Include")!.Value);
         Assert.Empty(project.Descendants("PackageReference"));
-        Assert.Equal("ContractScribe.Tests", Assert.Single(project.Descendants("InternalsVisibleTo")).Attribute("Include")!.Value);
+        Assert.Equal(new[] { "ContractScribe.Cli", "ContractScribe.Tests" }, project.Descendants("InternalsVisibleTo").Select(item => item.Attribute("Include")!.Value).Order(StringComparer.Ordinal));
         var assembly = typeof(GitHubApiClient).Assembly;
-        Assert.Equal("ContractScribe.Tests", Assert.Single(assembly.GetCustomAttributes<InternalsVisibleToAttribute>()).AssemblyName);
+        Assert.Equal(new[] { "ContractScribe.Cli", "ContractScribe.Tests" }, assembly.GetCustomAttributes<InternalsVisibleToAttribute>().Select(item => item.AssemblyName).Order(StringComparer.Ordinal));
         Assert.Empty(assembly.GetExportedTypes());
         var referenced = assembly.GetReferencedAssemblies().Select(item => item.Name!).ToArray();
         Assert.Contains("ContractScribe.Core", referenced);
         Assert.All(referenced, name => Assert.True(name == "ContractScribe.Core" || name.StartsWith("System", StringComparison.Ordinal)));
-        foreach (var name in new[] { "Core", "Roslyn", "Patching", "Agent", "Cli" })
+        foreach (var name in new[] { "Core", "Roslyn", "Patching", "Agent" })
         {
             var other = XDocument.Load(Path.Join(root, "src", "ContractScribe." + name, "ContractScribe." + name + ".csproj"));
             Assert.DoesNotContain(other.Descendants("ProjectReference"), item => item.Attribute("Include")!.Value.Contains("ContractScribe.GitHub", StringComparison.Ordinal));
@@ -48,7 +48,9 @@ public sealed class GitHubArchitectureTests
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
             "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
-        var authority = Assert.Single(client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance));
+        var properties = client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.Equal(new[] { "AuthenticatedRepository", "Authority" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+        var authority = Assert.Single(properties, p => p.Name == "Authority");
         Assert.Equal("Authority", authority.Name);
         Assert.Equal(typeof(ValidatedGitHubPublicationAuthority), authority.PropertyType);
         Assert.False(authority.CanWrite);
@@ -190,7 +192,7 @@ public sealed class GitHubArchitectureTests
             Assert.DoesNotContain("GitHubTransportTestHook.Register(", File.ReadAllText(path), StringComparison.Ordinal);
         var docs = File.ReadAllText(Path.Join(Root(), "docs/20_architecture/project-structure.md"));
         Assert.Contains("`GitHub -> Core`", docs, StringComparison.Ordinal);
-        Assert.Contains("no `Cli -> GitHub`", docs, StringComparison.Ordinal);
+        Assert.Contains("`Cli -> GitHub`", docs, StringComparison.Ordinal);
     }
 
     private static string Root()

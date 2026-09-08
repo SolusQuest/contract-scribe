@@ -18,15 +18,20 @@ internal static class CampaignCommandRunner
         CliBuildIdentity identity,
         CampaignPreflightResult preflight,
         CancellationToken cancellationToken,
-        Func<string, string?>? credentialAccessor = null)
+        Func<string, string?>? credentialAccessor = null,
+        CampaignAcceptedCandidateContinuation? continuation = null)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(preflight);
+        CliExecutionResult PresentCampaign(CliBuildIdentity build, CampaignOperation operation,
+            string layer, string outcome, long? revision) => continuation is null
+                ? Present(build, operation, layer, outcome, revision)
+                : continuation.Present(new(layer, operation, outcome, revision));
         var configuration = preflight.Configuration.Document;
         if (!preflight.Configuration.Revalidate()
             || !MatchesProductRevision(identity, configuration.Planning))
         {
-            return Present(identity, preflight.Operation, "preflight",
+            return PresentCampaign(identity, preflight.Operation, "preflight",
                 "campaign.invalid-configuration", null);
         }
 
@@ -37,7 +42,7 @@ internal static class CampaignCommandRunner
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
-            return Present(identity, preflight.Operation, "state", "campaign.state-unsafe", null);
+            return PresentCampaign(identity, preflight.Operation, "state", "campaign.state-unsafe", null);
         }
 
         CampaignCheckpointReadResult read;
@@ -47,12 +52,12 @@ internal static class CampaignCommandRunner
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return Present(identity, preflight.Operation, "state", "campaign.cancelled", null);
+            return PresentCampaign(identity, preflight.Operation, "state", "campaign.cancelled", null);
         }
         var stateFailure = ClassifyInitialRead(preflight.Operation, read);
         if (stateFailure is not null)
         {
-            return Present(identity, preflight.Operation, "state", stateFailure, null);
+            return PresentCampaign(identity, preflight.Operation, "state", stateFailure, null);
         }
 
         CampaignAcceptedCheckpoint? existing = null;
@@ -62,18 +67,18 @@ internal static class CampaignCommandRunner
             if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted
                 || accepted.AcceptedCheckpoint is not { } checkpoint)
             {
-                return Present(identity, preflight.Operation, "state",
+                return PresentCampaign(identity, preflight.Operation, "state",
                     AcceptanceOutcome(accepted.Kind), null);
             }
             existing = checkpoint;
             if (!MatchesProductRevision(configuration.Planning, checkpoint.Artifact.State))
             {
-                return Present(identity, preflight.Operation, "state",
+                return PresentCampaign(identity, preflight.Operation, "state",
                     "campaign.incompatible-snapshot", checkpoint.Artifact.CheckpointRevision);
             }
         }
 
-        CampaignTerminal? campaignTerminal = null;
+        CampaignRunSelection? selection = null;
         var host = new ProductionRepositorySessionHost(new HostBuildProvenance(identity.SourceRevision));
         var hostOutcome = await host.RunAsync(
             new ProductionAuditRequest(
@@ -84,22 +89,26 @@ internal static class CampaignCommandRunner
                 PublishResult: false),
             new ProductionAuditHostControls(SessionConsumer: async (bundle, token) =>
             {
-                campaignTerminal = await RunInSessionAsync(
+                selection = await RunInSessionAsync(
                     preflight,
                     configuration,
                     store,
                     existing,
                     bundle,
                     credentialAccessor ?? Environment.GetEnvironmentVariable,
+                    continuation,
                     token).ConfigureAwait(false);
+                if (continuation is not null) GitHubProposalProcessHooks.Reach("after-terminal");
             }),
             cancellationToken).ConfigureAwait(false);
 
-        if (campaignTerminal is not null)
+        if (selection?.Result is { } publicationResult) return publicationResult;
+        if (selection?.Terminal is { } campaignTerminal)
         {
             // Issue #139 gives campaign terminal selection public precedence. In particular,
             // an exact-readback C3 terminal cannot be replaced by later host shutdown or process status.
-            return CampaignCliPresentation.Present(identity, campaignTerminal);
+            return continuation?.Present(campaignTerminal)
+                ?? CampaignCliPresentation.Present(identity, campaignTerminal);
         }
 
         var outcome = hostOutcome.Terminal.ExecutionOutcome switch
@@ -110,16 +119,17 @@ internal static class CampaignCommandRunner
                 or HostExecutionOutcome.InvalidInput => "campaign.load-failure",
             _ => "campaign.host-contract-error",
         };
-        return Present(identity, preflight.Operation, "execution", outcome, existing?.Artifact.CheckpointRevision);
+        return PresentCampaign(identity, preflight.Operation, "execution", outcome, existing?.Artifact.CheckpointRevision);
     }
 
-    private static async Task<CampaignTerminal> RunInSessionAsync(
+    private static async Task<CampaignRunSelection> RunInSessionAsync(
         CampaignPreflightResult preflight,
         CampaignConfigurationDocument configuration,
         ICampaignCheckpointStore store,
         CampaignAcceptedCheckpoint? existing,
         ProductionRepositorySessionBundle bundle,
         Func<string, string?> credentialAccessor,
+        CampaignAcceptedCandidateContinuation? continuation,
         CancellationToken cancellationToken)
     {
         if (!preflight.Configuration.Revalidate())
@@ -278,12 +288,17 @@ internal static class CampaignCommandRunner
             if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted })
                 return Terminal(preflight.Operation, "campaign", "campaign.budget-exhausted", current);
 
+            if (continuation?.PersistedStop(stateNow) is { } persistedStop) return persistedStop;
+
+            if (continuation?.HasNoAppendWork(stateNow) == true)
+                return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
+            var reconstructAccepted = continuation?.ReconstructAccepted(stateNow) == true;
             var reconstructAcceptedTerminal = stateNow.TerminalOutcome is
             { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed }
                 && stateNow.WorkItems.Any(item => item.Status == CampaignWorkStatus.Accepted);
             if (stateNow.ActiveReservation is CampaignPatchReservation
                 || stateNow.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete)
-                || reconstructAcceptedTerminal)
+                || reconstructAcceptedTerminal || reconstructAccepted)
             {
                 var patched = await DocumentationCampaignPatchExecutor.ExecuteAsync(new(
                     bundle.Classified,
@@ -300,7 +315,40 @@ internal static class CampaignCommandRunner
                     store,
                     cancellationToken,
                     cancellationToken,
-                    DispatchGuard: preflight.Configuration.Revalidate)).ConfigureAwait(false);
+                    DispatchGuard: preflight.Configuration.Revalidate,
+                    AcceptedOnly: reconstructAccepted)).ConfigureAwait(false);
+                if (continuation is not null && patched.Kind is
+                    DocumentationCampaignOutcomeKind.Accepted or DocumentationCampaignOutcomeKind.Reconstructed)
+                {
+                    if (patched.Artifact?.State.TerminalOutcome is { } stopped
+                        && stopped.Kind != CampaignTerminalKind.Complete)
+                        return Terminal(preflight.Operation, "campaign", stopped.Kind switch
+                        {
+                            CampaignTerminalKind.Cancelled => "campaign.cancelled",
+                            CampaignTerminalKind.Timeout => "campaign.timeout",
+                            CampaignTerminalKind.Exhausted => "campaign.budget-exhausted",
+                            _ => "campaign.host-contract-error",
+                        }, AcceptedObservation(patched.Artifact));
+                    var fresh = await CampaignCheckpointAcceptance.AcceptCurrentAsync(store, cancellationToken).ConfigureAwait(false);
+                    if (fresh.Kind != CampaignCheckpointAcceptanceKind.Accepted || fresh.AcceptedCheckpoint is null)
+                        return Terminal(preflight.Operation, "state", AcceptanceOutcome(fresh.Kind), current);
+                    if (continuation.ValidateHandoff(fresh.AcceptedCheckpoint.Artifact, patched) is { } handoffFailure)
+                        return new(null, handoffFailure);
+                    current = fresh.AcceptedCheckpoint;
+                    // Reconstruction of the append's predecessor is not newly accepted work.
+                    // Reevaluate progress after exact readback before any H1/token/publication.
+                    if (!continuation.ReconstructAccepted(current.Artifact.State))
+                    {
+                        if (continuation.HasNoAppendWork(current.Artifact.State))
+                            return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
+                        continue;
+                    }
+                    return await continuation.ContinueAsync(new GitHubPublicationContext(
+                        bundle.Classified, bundle.Observed, bundle.Policy, bundle.AuditInputs.ToImmutableArray(), bundle.Audit,
+                        planning, plan, execution, configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
+                        configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
+                        fresh.AcceptedCheckpoint.Artifact, cancellationToken), patched).ConfigureAwait(false);
+                }
                 if (patched.Kind == DocumentationCampaignOutcomeKind.Reconstructed
                     && reconstructAcceptedTerminal)
                 {

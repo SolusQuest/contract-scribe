@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace ContractScribe.Core;
 
-public static class CampaignStateJson
+public static partial class CampaignStateJson
 {
     private static readonly UTF8Encoding StrictUtf8 = new(
         encoderShouldEmitUTF8Identifier: false,
@@ -176,6 +176,8 @@ public static class CampaignStateJson
         WriteReservation(writer, state.ActiveReservation);
         writer.WritePropertyName("candidateObservation");
         WriteCandidate(writer, state.CandidateObservation);
+        writer.WritePropertyName("acceptedCandidateOrigin");
+        WriteOrigin(writer, state.AcceptedCandidateOrigin);
         writer.WritePropertyName("cumulativeOutcome");
         WriteCumulativeOutcome(writer, state.CumulativeOutcome);
         writer.WritePropertyName("knownCompletedOperations");
@@ -871,6 +873,7 @@ public static class CampaignStateJson
             "workItems",
             "activeReservation",
             "candidateObservation",
+            "acceptedCandidateOrigin",
             "cumulativeOutcome",
             "knownCompletedOperations",
             "terminalOutcome",
@@ -898,7 +901,10 @@ public static class CampaignStateJson
                 ParseKnownCompletedOperation,
                 CampaignStateContract.MaximumKnownPatchCompletedOperations),
             ParseTerminal(root.GetProperty("terminalOutcome")),
-            ParsePredecessor(root.GetProperty("predecessor")));
+            ParsePredecessor(root.GetProperty("predecessor")))
+        {
+            AcceptedCandidateOrigin = ParseOrigin(root.GetProperty("acceptedCandidateOrigin")),
+        };
     }
 
     private static CampaignStateProductRevision ParseProduct(JsonElement element)

@@ -390,6 +390,15 @@ public sealed record CampaignCandidateObservation
     public string PatchResultCommitmentSha256 { get; internal init; }
 }
 
+internal sealed record CampaignAcceptedCandidateOrigin(
+    long CheckpointRevision,
+    string? CheckpointSha256,
+    CampaignStateProductRevision ProductRevision,
+    string CampaignLineage,
+    CampaignStateSnapshotAuthority Snapshot,
+    string CampaignConfigurationCommitmentSha256,
+    CampaignCandidateObservation CandidateObservation);
+
 public sealed record CampaignCumulativeOutcome
 {
     internal CampaignCumulativeOutcome(
@@ -571,6 +580,7 @@ public sealed record CampaignCheckpointState
     public CampaignLineageCharges LineageCharges { get; }
     public ImmutableArray<CampaignWorkItemState> WorkItems { get; }
     public CampaignActiveReservation? ActiveReservation { get; }
+    internal CampaignAcceptedCandidateOrigin? AcceptedCandidateOrigin { get; init; }
     public CampaignCandidateObservation? CandidateObservation { get; }
     public CampaignCumulativeOutcome? CumulativeOutcome { get; }
     public ImmutableArray<CampaignKnownCompletedOperation> KnownCompletedOperations { get; }

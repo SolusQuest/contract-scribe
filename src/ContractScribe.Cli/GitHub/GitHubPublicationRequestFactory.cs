@@ -105,6 +105,8 @@ internal static class GitHubPublicationRequestFactory
                     request.Blocks.Select(block => block.BlockId).Order(StringComparer.Ordinal),
                     StringComparer.Ordinal));
 
+            var origin = CampaignStateFactory.ProveAcceptedCandidateOrigin(artifact, request, candidate.Result);
+
             field = GitHubPublicationFieldId.ChangedFiles;
             var changed = CorrelateChangedFiles(observation, candidate.Result);
 
@@ -127,11 +129,11 @@ internal static class GitHubPublicationRequestFactory
                 CreateSnapshotCommitment(state.Snapshot),
                 state.Snapshot.ExecutionCommitmentSha256,
                 context.AcceptedPlan.ExecutionCommitment,
-                artifact.CheckpointRevision,
-                artifact.Sha256,
-                resultCommitment,
-                request.ArtifactSha256,
-                resultCommitment,
+                origin.CheckpointRevision,
+                origin.CheckpointSha256!,
+                origin.CandidateObservation.PatchResultCommitmentSha256,
+                origin.CandidateObservation.PatchRequestSha256,
+                origin.CandidateObservation.PatchResultCommitmentSha256,
                 observation.AcceptedProjectionCommitmentSha256,
                 configuration.OperationId,
                 configuration.GenerationId,

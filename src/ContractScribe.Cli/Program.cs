@@ -13,6 +13,7 @@ var exitCode = await CommandLineApplication.ExecuteProcessAsync(
 
 try
 {
+    if (args.FirstOrDefault() == "github-proposal") GitHubProposalProcessHooks.Reach("before-physical-output");
     var utf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false);
     using var output = new StreamWriter(standardStreams.OpenPresentationOutput(), utf8)
     {
@@ -29,9 +30,16 @@ try
 
     return exitCode;
 }
+catch (Exception exception) when (args.FirstOrDefault() == "github-proposal"
+    && exception is not (OutOfMemoryException or StackOverflowException))
+{
+    // Physical stream failure cannot retract emitted bytes. Do not append a second envelope
+    // or expose an unhandled exception; preserve the already selected terminal exit.
+    return exitCode;
+}
 finally
 {
-    if (exitCode == 6)
+    if (exitCode == 6 || args.FirstOrDefault() == "github-proposal")
     {
         // A repeated control event may already be queued after the first handled
         // signal. Keep the handler rooted until process termination so that the

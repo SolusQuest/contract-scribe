@@ -174,7 +174,7 @@ Project-context bootstrap and bounded semantic traversal are component responsib
 
 ### `ContractScribe.GitHub`
 
-Issue #159 (active M5-R2) establishes an executable internal production transport boundary, not an empty project reservation. No existing source is migrated. Its only product reference is Core; HTTP and JSON use the .NET runtime with no added package. The closed factory consumes an existing validated publication authority and an already-supplied opaque credential. There is no `Cli -> GitHub` edge yet: H2 owns later CLI composition and credential resolution.
+Issue #159 (active M5-R2) establishes an executable internal production transport boundary, not an empty project reservation. No existing source is migrated. Its only product reference is Core; HTTP and JSON use the .NET runtime with no added package. The closed factory consumes an existing validated publication authority and an already-supplied opaque credential. Issue #165 (M5-H2) adds `Cli -> GitHub` for accepted-candidate publication composition and post-admission credential resolution. GitHub exposes only an internal facade to its CLI friend; Core, Roslyn, Patching, and Agent retain no GitHub reference.
 
 The current `Transport` directory owns typed repository/authenticated-user observations, exact ref reads, bounded Git blob/tree/commit reads and creates, complete bounded PR list/detail observations and draft creation, and one fixed single-entry GraphQL `updateRefs` mutation. REST ref writes, Issues, PR updates, arbitrary endpoints, generic JSON send methods, provider/Roslyn/filesystem/shell access, and token acquisition are absent. The assembly exports no public types; only the fast test assembly has friend access. The internal reflection-only test hook is default-inert and accepts only a fixed synthetic credential with a canonical numeric loopback root. H2 owns the eventual process startup bridge.
 
@@ -201,7 +201,7 @@ The same CLI is the payload invoked locally, from validation workflows, and by a
 
 ## Dependency graph
 
-Patching's outbound edges to Core and Roslyn, Agent's and GitHub's outbound edges to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider transport remains confined outside Runtime/Prompting. GitHub has no CLI composition edge until H2.
+Patching's outbound edges to Core and Roslyn, Agent's and GitHub's outbound edges to Core, and CLI's composition edges to Agent and Patching are current. Patching's candidate-write authority is internal and does not add a reverse edge or package dependency. Agent has no Roslyn/Patching edge and its provider transport remains confined outside Runtime/Prompting. CLI also composes the internal GitHub facade under H2, after live H1 admission.
 
 ```text
 ContractScribe.Cli
@@ -238,7 +238,7 @@ Current architecture tests enumerate existing project references and fail when a
 | M2 | Add `ContractScribe.Patching`; issue #91 establishes deterministic resolution, issue #92 adds baseline-bound rendering and isolated unaccepted candidates, and issue #93 owns final validation/results. |
 | M3 | Add `ContractScribe.Agent`; issue #103 establishes the Core-only read-only runtime, while #104 through #108 add concrete context, tools, transport, evaluation, and CLI composition without broadening its authority. |
 | M4 | Candidate: keep platform-neutral campaign behavior in `Core`; create no milestone-named project without an observed split need. |
-| M5 | R1 freezes source-free Core contracts; R2 adds the Core-only `ContractScribe.GitHub` transport. R3-R6 own resource reconciliation/orchestration; H2 owns the later CLI edge. |
+| M5 | R1 freezes source-free Core contracts; R2 adds the Core-only `ContractScribe.GitHub` transport. R3-R6 own resource reconciliation/orchestration; H2 implements the CLI edge and real-process fake-server path. |
 | M6 | Add the selected Action wrapper and release artifacts; add no C# project without an observed split need. |
 
 This sequence prevents later projects from becoming speculative dependencies of earlier milestones; implementation evidence, not this table alone, decides the final placement.

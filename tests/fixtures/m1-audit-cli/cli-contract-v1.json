@@ -67,7 +67,7 @@
     {
       "caseId": "help.top-level",
       "argvForms": [[], ["--help"], ["-h"]],
-      "stdoutFixture": { "path": "tests/fixtures/m1-audit-cli/help-top-level.txt", "sha256": "5b0e71a7f846c2c730ce6235492682cb8cc11cd9d05d4370e2bf7e967905210e" },
+      "stdoutFixture": { "path": "tests/fixtures/m1-audit-cli/help-top-level.txt", "sha256": "40800bdbda9d4e1ceea64f48e6951705ce0694d29e2dbf11e7636b28a3630650" },
       "stderr": "empty",
       "exitCode": 0
     },

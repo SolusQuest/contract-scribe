@@ -9,7 +9,7 @@
 ## Boundary and ownership
 
 GitHub Publication v1 is the closed boundary between the M5-H1 CLI producer and
-the future GitHub adapter. Core owns:
+the GitHub adapter. Core owns:
 
 1. credential-free, source-free caller authority and local validation;
 2. a separate defensive-copy byte payload correlated to that authority;
@@ -22,6 +22,8 @@ blobs, trees or commits, overlay proposal trees, construct PR text, choose an
 authenticated transition, or reconcile remote state. Those are the independent
 R3-R6 authorities described below; adding them to Core would create a second
 production implementation and is forbidden.
+
+M5-H2 composes this boundary through [the GitHub proposal CLI](../github-proposal-cli.md). H1 still validates the exact fresh checkpoint readback and live reconstructed candidate. After proving correspondence with M4's retained accepted-candidate origin, it supplies the original checkpoint revision/SHA and original request/result/candidate commitments to the unchanged R1 factory. Fresh reconstruction continues to execute and settle accounting; the CLI displays its current revision. R1 commitment framing and R3–R6 equality, CAS, ownership and lost-entitlement behavior are unchanged.
 
 ## Credential-free authority
 

@@ -33,6 +33,16 @@ The initial factory receives the exact `CampaignPlanningInput`, the caller-accep
 
 The artifact digest is lowercase SHA-256 over the exact canonical UTF-8 JSON bytes, including the one trailing LF. It is a wrapper property and is not serialized into its own preimage.
 
+## Accepted-candidate origin
+
+The current v1 root includes `acceptedCandidateOrigin` immediately after `candidateObservation`. It is null exactly when no accepted candidate exists. On first acceptance, or genuinely new cumulative accepted work, it is a self record with the current checkpoint revision and a null checkpoint SHA. It also records the immutable product revision, lineage, snapshot and campaign-configuration commitment plus the original bounded typed candidate observation. The effective self digest is the enclosing exact accepted artifact SHA; no self digest is serialized into its preimage.
+
+At the first later C3 transition preserving that accepted membership, the final successor retains the original revision and captures the exact externally accepted predecessor SHA. A retained origin has a non-null SHA and a strictly older revision. Intermediate reservation-construction states never supply this digest. Every preserving transition, including provider progress, reservation, retry, settlement and stop, uses the same final-successor owner. Genuine new accepted work replaces the origin; snapshot supersession clears it. Missing origin or a missing retained hash is invalid and never means “use the latest checkpoint.”
+
+The origin contains no GitHub data, candidate bytes, recursive artifact, history list or sidecar. Before M2 dispatch, reservation construction checks an encoded upper bound for both future candidate observations and bounded scope/scalar growth against the existing 4 MiB ceiling. This includes first/replacement acceptance and later self-to-retained growth. A settled reconstruction with different candidate facts remains representable and charged; it fails publication equivalence instead of discarding the executed invocation's accounting.
+
+A nonserialized internal proof first validates the actual fresh request/result and exact current artifact. It then compares immutable scope, accepted membership/projection, complete changed-file observations and every typed validation-result field. Historical result framing substitutes only the retained original request SHA, after real fresh-request validation, and compares against the retained original result commitment. No public arbitrary-hash authority API is added. The proof relies on the existing protected-checkpoint model; it is not an independent historical signature or attestation. H1 consumes it only together with current live-session, candidate and payload validation.
+
 ## State model
 
 Every C1 work item appears exactly once and in exact C1 order. Its closed status is:
