@@ -184,6 +184,43 @@ def scenario_result(scenario, exit_code, data, product_sha=PRODUCT):
     return result
 
 
+def unexpected_result_summary(exit_code, data):
+    """Report only closed public codes; never reproduce an unexpected result body."""
+    summary = {'exitCode': exit_code if type(exit_code) is int and -128 <= exit_code <= 255 else None,
+               'terminalLayer': None, 'outcome': None, 'campaignOperation': None,
+               'baselineMatches': False, 'diagnosticCodes': [], 'omittedDiagnosticCount': 0}
+    if not isinstance(data, bytes) or len(data) > 8192:
+        return summary
+    try:
+        value = parse_json(data)
+    except ProofFailure:
+        return summary
+    if not isinstance(value, dict):
+        return summary
+    outcomes = {'local-invalid', 'host-failure', 'published', 'replayed', 'no-op', 'awaiting-review',
+                'merged', 'closed-unmerged', 'stale-base-after-create', 'stale', 'human-change',
+                'conflict', 'permission', 'rate-limit', 'cancelled', 'timeout'}
+    known = {'github-proposal.' + name for name in outcomes | {'admitted', 'recovered-content-partial',
+             'recovered-ref-partial', 'campaign-contract-error'}}
+    known |= {'campaign.' + name for name in {'complete', 'no-work', 'provider-retryable', 'budget-exhausted',
+              'attempt-ambiguous', 'invalid-configuration', 'state-missing', 'state-present', 'state-corrupt',
+              'state-unsafe', 'state-conflict', 'lease-conflict', 'lease-unverifiable', 'unsupported-revision',
+              'incompatible-snapshot', 'patch-stale', 'load-failure', 'target-terminal', 'provider-terminal',
+              'proposal-invalid', 'patch-rejected', 'patch-host-failure', 'state-publication-failure',
+              'host-contract-error', 'cancelled', 'timeout'}}
+    for key, allowed in [('terminalLayer', {'usage', 'preflight', 'campaign', 'presentation', 'publication'}),
+                         ('outcome', {'github-proposal.' + name for name in outcomes}),
+                         ('campaignOperation', {'start', 'resume'})]:
+        if isinstance(value.get(key), str) and value[key] in allowed:
+            summary[key] = value[key]
+    summary['baselineMatches'] = value.get('cliContractBaseline') == PRODUCT
+    codes = value.get('diagnosticCodes')
+    if isinstance(codes, list):
+        summary['diagnosticCodes'] = [code for code in codes[:16] if isinstance(code, str) and code in known]
+        summary['omittedDiagnosticCount'] = len(codes) - len(summary['diagnosticCodes'])
+    return summary
+
+
 def permission_group(log, setup_start, setup_end):
     start, end = timestamp(setup_start), timestamp(setup_end)
     rows = []

@@ -412,7 +412,11 @@ def invoke(scenario):
                 '--configuration', str(root / 'campaign.json'), '--github-configuration',
                 str(root / ('github-negative.json' if scenario == 'negative' else 'github-positive.json'))]
         process = subprocess.run(args, env=environment, capture_output=True, timeout=180)
-        result = scenario_result(scenario, process.returncode, process.stdout)
+        try:
+            result = scenario_result(scenario, process.returncode, process.stdout)
+        except ProofFailure:
+            print('scenario-unexpected:' + canonical(unexpected_result_summary(process.returncode, process.stdout)).decode())
+            raise
         (root / (scenario + '-result.json')).write_bytes(canonical(result))
     finally:
         provider.terminate()
