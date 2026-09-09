@@ -315,11 +315,14 @@ def trial_snapshot(config, snapshot):
     lineage = 'campaign.issue166.' + config['activation']
     current = 'refs/heads/contract-scribe/coordination/' + identity_hash(
         'coordination-ref', 'solusquest', 'contract-scribe-sandbox', 'refs/heads/main', lineage)
-    require(RETAINED_CLAIM['ref'] != current, 'history-overlaps-trial')
-    history = [ref for ref in snapshot['refs'] if ref['ref'] == RETAINED_CLAIM['ref']]
-    require(history == [RETAINED_CLAIM], 'retained-history-changed')
-    return {'refs': [ref for ref in snapshot['refs'] if ref['ref'] != RETAINED_CLAIM['ref']],
-            'pulls': snapshot['pulls']}
+    refs = {ref['ref'] for ref in RETAINED_HISTORY['refs']}
+    pulls = {pr['number'] for pr in RETAINED_HISTORY['pulls']}
+    require(current not in refs, 'history-overlaps-trial')
+    history = {'refs': [ref for ref in snapshot['refs'] if ref['ref'] in refs],
+               'pulls': [pr for pr in snapshot['pulls'] if pr['number'] in pulls]}
+    require(history == RETAINED_HISTORY, 'retained-history-changed')
+    return {'refs': [ref for ref in snapshot['refs'] if ref['ref'] not in refs],
+            'pulls': [pr for pr in snapshot['pulls'] if pr['number'] not in pulls]}
 
 
 def published_facts(config, api, *, inspect_trees=False):
@@ -338,7 +341,7 @@ def published_facts(config, api, *, inspect_trees=False):
             and state.get('generationId') == 'generation.issue166.' + config['activation']
             and state.get('transition') == 'initial' and state.get('expectedBaseOid') == state.get('observedBaseOid') == config['base_sha']
             and state.get('proposalRefOid') == state.get('proposalCommitOid') == state.get('contentCommitOid') == proposals[0]['oid'], 'coordination-state')
-    pr = api.get('pulls/' + str(snapshot['pulls'][0]['number']))
+    pr = api.get('pulls/' + str(current['pulls'][0]['number']))
     require(pr.get('number') == state.get('pullRequestNumber') and pr.get('state') == 'open' and pr.get('draft') is True
             and pr.get('merged') is False and all(pr.get('user', {}).get(k) == v for k, v in ACTOR.items())
             and pr.get('head', {}).get('sha') == proposals[0]['oid'] and 'refs/heads/' + pr['head']['ref'] == proposals[0]['ref']
@@ -423,7 +426,12 @@ def invoke(scenario):
                 '--snapshot', 'snapshot.issue166.' + config['activation'], '--state', str(checkpoint),
                 '--configuration', str(root / 'campaign.json'), '--github-configuration',
                 str(root / ('github-negative.json' if scenario == 'negative' else 'github-positive.json'))]
-        process = subprocess.run(args, env=environment, capture_output=True, timeout=180)
+        try:
+            process = subprocess.run(args, env=environment, capture_output=True, timeout=360)
+        except subprocess.TimeoutExpired:
+            # subprocess.run kills and waits for its child before raising. Never
+            # emit the exception's command, partial stdout/stderr or credential.
+            raise ProofFailure('product-process-timeout') from None
         try:
             result = scenario_result(scenario, process.returncode, process.stdout)
         except ProofFailure:

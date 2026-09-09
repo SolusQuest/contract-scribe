@@ -24,10 +24,18 @@ READ_PERMISSIONS = {'contents': 'read', 'actions': 'read', 'pull-requests': 'rea
 WRITE_PERMISSIONS = {'contents': 'write', 'pull-requests': 'write'}
 MAX_ARCHIVE = 1048576
 MAX_CHECKPOINT = 524288
-# Exact retained claim from failed manual4/attempt1, read back 2026-09-09T12:26:00Z.
+# Failed manual4 claim and manual5 publication, read back 2026-09-09T14:43:07Z.
 # Frozen with reviewed source; never learn history from the target during a trial.
-RETAINED_CLAIM = {'ref': 'refs/heads/contract-scribe/coordination/e7a6289b5748fc64638a8011d4bdadd3cfdda6b4279702b4b8f22932a892b3d0',
-                  'oid': 'ab87ad83cdc95223f74294a6686d1917c9c6d298'}
+RETAINED_HISTORY = {
+    'refs': [
+        {'ref': 'refs/heads/contract-scribe/coordination/859d9029d66cf17166602bc07f5b0f4172e68d763cf8589a796706ac4d1588f5',
+         'oid': 'ddbd8e6d89d5d5d88bbd3c4ca55a55d16268f0a4'},
+        {'ref': 'refs/heads/contract-scribe/coordination/e7a6289b5748fc64638a8011d4bdadd3cfdda6b4279702b4b8f22932a892b3d0',
+         'oid': 'ab87ad83cdc95223f74294a6686d1917c9c6d298'},
+        {'ref': 'refs/heads/contract-scribe/proposals/29090711e7ec9dbde8311cdb3142d1949c298d139b140faded09cbdce8b9d5b5/d30f4d3006ee2dbbb1a9587dfa7649347b32ed295a0883422ac9026fc7991272',
+         'oid': '86398aa1f7f4a2ca39f2c115dd0ef1962420dff0'}],
+    'pulls': [{'number': 1, 'head': '86398aa1f7f4a2ca39f2c115dd0ef1962420dff0', 'state': 'open', 'draft': True,
+               'body_digest': '187d3278f9c134b39777d4faf5745411588203b80a26cd2ef5d391c98fa1d802', 'actor': 41898282}]}
 FIELDS = {'product_sha', 'source_sha', 'workflow_sha', 'base_sha', 'workflow_digest',
           'workflow_id', 'activation', 'not_before', 'not_after', 'manual_run_number',
           'scheduled_run_number', 'actor_id', 'actor_login', 'owner', 'issue', 'scenarios'}

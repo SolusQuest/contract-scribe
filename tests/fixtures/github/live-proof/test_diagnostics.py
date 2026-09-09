@@ -100,6 +100,29 @@ class UnexpectedResultDiagnosticsTests(unittest.TestCase):
             self.assertNotIn('private-sentinel', text)
             return text
 
+    def test_process_timeout_stops_once_cleans_provider_and_never_emits_partial_output(self):
+        with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
+            root = Path(temporary)
+            (root / 'negative.ok').write_text('stale')
+            stack.enter_context(mock.patch.object(proof, 'current_config', return_value=inputs()[0]))
+            stack.enter_context(mock.patch.object(proof, 'context', return_value={}))
+            stack.enter_context(mock.patch.object(proof, 'fresh_gate', return_value='manual'))
+            stack.enter_context(mock.patch.object(proof, 'work', return_value=root))
+            stack.enter_context(mock.patch.object(proof.sys, 'argv', ['proof.py', 'invoke', 'positive']))
+            provider = stack.enter_context(mock.patch.object(proof.subprocess, 'Popen')).return_value
+            timeout = subprocess.TimeoutExpired(['private-sentinel'], 360, output=b'private-sentinel', stderr=b'private-sentinel')
+            run = stack.enter_context(mock.patch.object(proof.subprocess, 'run', side_effect=timeout))
+            stack.enter_context(mock.patch('provider.wait_ready'))
+            stack.enter_context(mock.patch.dict(os.environ, CONTRACTSCRIBE_GITHUB_TOKEN='private-sentinel'))
+            output = stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            self.assertEqual(1, proof.main())
+            self.assertEqual('proof-stopped:product-process-timeout\n', output.getvalue())
+            run.assert_called_once()
+            provider.terminate.assert_called_once()
+            provider.wait.assert_called_once()
+            self.assertFalse((root / 'positive-result.json').exists())
+            self.assertFalse((root / 'facts.json').exists())
+
     def test_malformed_or_unknown_fields_are_bounded_and_never_echoed(self):
         for raw in [b'private-sentinel', b'"private-sentinel"', b'[]', b'x' * 8193,
                     b'{"outcome":"private-sentinel","outcome":"duplicate"}',
