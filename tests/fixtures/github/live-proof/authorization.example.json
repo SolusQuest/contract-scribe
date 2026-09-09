@@ -1,0 +1,18 @@
+{
+  "product_sha": "11acc2f3fbd472a82b7fbdacd21af21b1f105c80",
+  "source_sha": "SET_AFTER_HUMAN_MERGE",
+  "workflow_sha": "SET_AFTER_AUTHORIZED_INSTALLATION",
+  "base_sha": "SET_AFTER_AUTHORIZED_INSTALLATION",
+  "workflow_digest": "SHA256_OF_EXACT_INSTALLED_WORKFLOW_BYTES",
+  "workflow_id": 0,
+  "activation": "FRESH_32_LOWERCASE_HEX_CHARACTERS",
+  "not_before": "UTC_TIMESTAMP_WITH_SECONDS_AND_Z",
+  "not_after": "UTC_TIMESTAMP_WITH_SECONDS_AND_Z",
+  "manual_run_number": 0,
+  "scheduled_run_number": 0,
+  "actor_id": 16307884,
+  "actor_login": "Yuee98",
+  "owner": "Yuee98",
+  "issue": 166,
+  "scenarios": ["stale", "published", "replayed"]
+}

@@ -1,0 +1,229 @@
+name: M5 synthetic GitHub proof
+run-name: M5 H3 ${{ github.event_name }}
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 * * * *'
+  pull_request:
+    paths:
+      - '.github/workflows/m5-github-proposal-proof.yml'
+      - 'docs/20_architecture/validation/m5-github-proposal-proof.md'
+      - 'tests/fixtures/github/live-proof/**'
+
+permissions: {}
+concurrency:
+  group: m5-h3-${{ github.repository }}-${{ github.event_name == 'pull_request' && github.ref || 'live' }}
+  cancel-in-progress: false
+
+env:
+  M5_CONFIG: ${{ vars.M5_H3_PROOF }}
+  M5_CONTEXT: >-
+    {"repository":${{ toJSON(github.repository) }},"repository_id":${{ toJSON(github.repository_id) }},
+    "event":${{ toJSON(github.event_name) }},"ref":${{ toJSON(github.ref) }},"cron":${{ toJSON(github.event.schedule || '') }},
+    "workflow_sha":${{ toJSON(github.workflow_sha) }},"sha":${{ toJSON(github.sha) }},
+    "run_id":${{ toJSON(github.run_id) }},"run_number":${{ toJSON(github.run_number) }},"attempt":${{ toJSON(github.run_attempt) }}}
+
+jobs:
+  offline:
+    name: H3 offline gates
+    if: github.repository == 'SolusQuest/contract-scribe' && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Build the normal CLI and pure checkpoint helper
+        shell: bash
+        run: |
+          dotnet build src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release
+          dotnet build tests/fixtures/github/live-proof/CheckpointCheck/CheckpointCheck.csproj --configuration Release -p:ProductCorePath="$GITHUB_WORKSPACE/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Core.dll" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false
+      - name: Test the workflow and real credential-absent reconstruction
+        shell: bash
+        env:
+          M5_TEST_CLI: ${{ github.workspace }}/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll
+          M5_TEST_CHECKER: ${{ github.workspace }}/tests/fixtures/github/live-proof/CheckpointCheck/bin/Release/net10.0/CheckpointCheck.dll
+          M5_TEST_PRODUCT_SHA: ${{ github.sha }}
+        run: |
+          python3 -m venv "$RUNNER_TEMP/m5-tests"
+          "$RUNNER_TEMP/m5-tests/bin/pip" install --disable-pip-version-check -r tests/fixtures/github/live-proof/requirements.txt
+          "$RUNNER_TEMP/m5-tests/bin/python" -m unittest discover -s tests/fixtures/github/live-proof -p 'test_*.py' -v
+
+  preflight:
+    name: Read-only preflight and transfer
+    if: github.repository == 'SolusQuest/contract-scribe-sandbox' && github.repository_id == '1361354906' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    outputs:
+      role: ${{ steps.gate.outputs.role }}
+      origin: ${{ steps.gate.outputs.origin }}
+      relay_id: ${{ steps.relay.outputs.artifact-id }}
+      relay_digest: ${{ steps.relay.outputs.artifact-digest }}
+    steps:
+      - &source
+        name: Fetch the authorized proof source without a credential
+        id: source
+        shell: python
+        run: |
+          import json, os, pathlib, re, subprocess
+          raw = os.environ.get('M5_CONFIG', '')
+          if not raw:
+              print('gate:configuration-absent')
+              raise SystemExit(0)
+          try:
+              assert len(raw.encode()) <= 8192
+              value = json.loads(raw)
+              revision = value['source_sha']
+              assert isinstance(revision, str) and re.fullmatch('[0-9a-f]{40}', revision)
+          except (AssertionError, ValueError, KeyError, TypeError):
+              print('proof-stopped:configuration')
+              raise SystemExit(1)
+          path = pathlib.Path(os.environ['RUNNER_TEMP']) / 'm5-proof-source'
+          environment = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL='/dev/null', GIT_TERMINAL_PROMPT='0')
+          for args in (['git', 'init', '--quiet', str(path)],
+                       ['git', '-C', str(path), '-c', 'credential.helper=', 'fetch', '--quiet', '--depth=1', 'https://github.com/SolusQuest/contract-scribe.git', revision],
+                       ['git', '-C', str(path), 'checkout', '--quiet', '--detach', 'FETCH_HEAD']):
+              subprocess.run(args, env=environment, check=True, timeout=120)
+          assert subprocess.check_output(['git', '-C', str(path), 'rev-parse', 'HEAD'], env=environment).decode().strip() == revision
+          with open(os.environ['GITHUB_ENV'], 'a') as output:
+              output.write('M5_SOURCE=' + str(path) + '\n')
+              output.write('M5_DRIVER=' + str(path / 'tests/fixtures/github/live-proof/proof.py') + '\n')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('configured=true\n')
+      - &python
+        name: Prepare the proof Python environment
+        if: steps.source.outputs.configured == 'true'
+        shell: bash
+        run: |
+          python3 -m venv "$RUNNER_TEMP/m5-python"
+          "$RUNNER_TEMP/m5-python/bin/pip" install --disable-pip-version-check -r "$M5_SOURCE/tests/fixtures/github/live-proof/requirements.txt"
+          echo "M5_PYTHON=$RUNNER_TEMP/m5-python/bin/python" >> "$GITHUB_ENV"
+      - name: Read current authority and authenticate the original checkpoint
+        if: steps.source.outputs.configured == 'true'
+        id: gate
+        shell: bash
+        env:
+          M5_READ_TOKEN: ${{ github.token }}
+        run: '"$M5_PYTHON" "$M5_DRIVER" preflight'
+      - name: Relay the same authenticated checkpoint inside this run
+        if: steps.gate.outputs.role == 'scheduled'
+        id: relay
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.gate.outputs.artifact_name }}
+          path: ${{ runner.temp }}/m5-h3/transfer/checkpoint.json
+          archive: true
+          overwrite: false
+          if-no-files-found: error
+          retention-days: 1
+
+  product:
+    name: Product proof
+    needs: preflight
+    if: needs.preflight.outputs.role == 'manual' || needs.preflight.outputs.role == 'scheduled'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      M5_ORIGIN: ${{ needs.preflight.outputs.origin }}
+      M5_RELAY_ID: ${{ needs.preflight.outputs.relay_id }}
+      M5_RELAY_DIGEST: ${{ needs.preflight.outputs.relay_digest }}
+    outputs:
+      facts: ${{ steps.facts.outputs.facts }}
+    steps:
+      - *source
+      - *python
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          dotnet-version: '10.0.x'
+      - name: Reject absent or stale relay identity before download
+        if: needs.preflight.outputs.role == 'scheduled'
+        shell: bash
+        run: '"$M5_PYTHON" "$M5_DRIVER" relay-gate'
+      - name: Download only the exact current-run relay archive
+        if: needs.preflight.outputs.role == 'scheduled'
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ needs.preflight.outputs.relay_id }}
+          path: ${{ runner.temp }}/m5-relay-download
+          merge-multiple: true
+          skip-decompress: true
+          digest-mismatch: error
+      - name: Build exact product and prepare the target and private checkpoint
+        shell: bash
+        run: '"$M5_PYTHON" "$M5_DRIVER" prepare'
+      - name: Current gate before wrong-base scenario
+        if: needs.preflight.outputs.role == 'manual'
+        shell: bash
+        run: '"$M5_PYTHON" "$M5_DRIVER" gate'
+      - name: One wrong-base start
+        if: needs.preflight.outputs.role == 'manual'
+        shell: bash
+        env:
+          CONTRACTSCRIBE_GITHUB_TOKEN: ${{ github.token }}
+        run: '"$M5_PYTHON" "$M5_DRIVER" invoke negative'
+      - name: Current gate before publication scenario
+        if: needs.preflight.outputs.role == 'manual'
+        shell: bash
+        run: '"$M5_PYTHON" "$M5_DRIVER" gate'
+      - name: One correct-base start
+        if: needs.preflight.outputs.role == 'manual'
+        shell: bash
+        env:
+          CONTRACTSCRIBE_GITHUB_TOKEN: ${{ github.token }}
+        run: '"$M5_PYTHON" "$M5_DRIVER" invoke positive'
+      - name: Current gate before exact replay
+        if: needs.preflight.outputs.role == 'scheduled'
+        shell: bash
+        run: '"$M5_PYTHON" "$M5_DRIVER" gate'
+      - name: One scheduled resume
+        if: needs.preflight.outputs.role == 'scheduled'
+        shell: bash
+        env:
+          CONTRACTSCRIBE_GITHUB_TOKEN: ${{ github.token }}
+        run: '"$M5_PYTHON" "$M5_DRIVER" invoke replay'
+      - name: Export bounded remote facts
+        id: facts
+        shell: bash
+        run: '"$M5_PYTHON" "$M5_DRIVER" outputs'
+      - name: Retain only the successful manual checkpoint
+        if: needs.preflight.outputs.role == 'manual'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: ${{ steps.facts.outputs.artifact_name }}
+          path: ${{ runner.temp }}/m5-h3/positive/checkpoint.json
+          archive: true
+          overwrite: false
+          if-no-files-found: error
+          retention-days: 1
+
+  readback:
+    name: Read-only platform evidence
+    needs: [preflight, product]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      pull-requests: read
+    steps:
+      - *source
+      - *python
+      - name: Verify the actual product job grants and observer result
+        shell: bash
+        env:
+          M5_READ_TOKEN: ${{ github.token }}
+          M5_FACTS: ${{ needs.product.outputs.facts }}
+        run: '"$M5_PYTHON" "$M5_DRIVER" readback'
