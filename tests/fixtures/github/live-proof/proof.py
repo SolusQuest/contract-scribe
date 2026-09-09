@@ -311,13 +311,25 @@ def remote_snapshot(api):
                               'body_digest': sha((pr.get('body') or '').encode()), 'actor': pr['user']['id']} for pr in owned], key=lambda pr: pr['number'])}
 
 
+def trial_snapshot(config, snapshot):
+    lineage = 'campaign.issue166.' + config['activation']
+    current = 'refs/heads/contract-scribe/coordination/' + identity_hash(
+        'coordination-ref', 'solusquest', 'contract-scribe-sandbox', 'refs/heads/main', lineage)
+    require(RETAINED_CLAIM['ref'] != current, 'history-overlaps-trial')
+    history = [ref for ref in snapshot['refs'] if ref['ref'] == RETAINED_CLAIM['ref']]
+    require(history == [RETAINED_CLAIM], 'retained-history-changed')
+    return {'refs': [ref for ref in snapshot['refs'] if ref['ref'] != RETAINED_CLAIM['ref']],
+            'pulls': snapshot['pulls']}
+
+
 def published_facts(config, api, *, inspect_trees=False):
     snapshot = remote_snapshot(api)
-    require(len(snapshot['refs']) == 2 and len(snapshot['pulls']) == 1, 'published-resource-count')
+    current = trial_snapshot(config, snapshot)
+    require(len(current['refs']) == 2 and len(current['pulls']) == 1, 'published-resource-count')
     lineage = 'campaign.issue166.' + config['activation']
     key = identity_hash('coordination-ref', 'solusquest', 'contract-scribe-sandbox', 'refs/heads/main', lineage)
-    coordination = [ref for ref in snapshot['refs'] if ref['ref'] == 'refs/heads/contract-scribe/coordination/' + key]
-    proposals = [ref for ref in snapshot['refs'] if ref['ref'].startswith('refs/heads/contract-scribe/proposals/')]
+    coordination = [ref for ref in current['refs'] if ref['ref'] == 'refs/heads/contract-scribe/coordination/' + key]
+    proposals = [ref for ref in current['refs'] if ref['ref'].startswith('refs/heads/contract-scribe/proposals/')]
     require(len(coordination) == len(proposals) == 1, 'publication-refs')
     state = parse_json(api.content('.contract-scribe/coordination-state-v1.json', coordination[0]['oid']))
     require(state.get('stage') == 'published' and state.get('repositoryId') == REPOSITORY
@@ -381,7 +393,7 @@ def invoke(scenario):
     api = Api()  # Never receives the product token.
     if scenario == 'negative':
         before = remote_snapshot(api)
-        require(before == {'refs': [], 'pulls': []}, 'preexisting-work')
+        require(trial_snapshot(config, before) == {'refs': [], 'pulls': []}, 'preexisting-work')
         (root / 'before.json').write_bytes(canonical(before))
     elif scenario == 'positive':
         require((root / 'negative.ok').read_text() == 'stale', 'negative-not-complete')

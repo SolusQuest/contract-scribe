@@ -342,7 +342,7 @@ class ResultTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(proof, 'context', return_value=ctx))
             stack.enter_context(mock.patch.object(proof, 'fresh_gate', return_value='manual'))
             stack.enter_context(mock.patch.object(proof, 'work', return_value=root))
-            stack.enter_context(mock.patch.object(proof, 'remote_snapshot', return_value={'refs': [], 'pulls': []}))
+            stack.enter_context(mock.patch.object(proof, 'remote_snapshot', return_value={'refs': [dict(RETAINED_CLAIM)], 'pulls': []}))
             stack.enter_context(mock.patch.object(proof.subprocess, 'Popen', side_effect=start_provider))
             stack.enter_context(mock.patch.object(proof.subprocess, 'run', side_effect=run_cli))
             stack.enter_context(mock.patch('provider.wait_ready'))

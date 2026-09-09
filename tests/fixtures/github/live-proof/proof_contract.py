@@ -12,7 +12,7 @@ import yaml
 REPOSITORY = 'SolusQuest/contract-scribe-sandbox'
 REPOSITORY_ID = 1361354906
 REPOSITORY_NODE = 'R_kgDOUSSgmg'
-PRODUCT = 'f3b74326f7f8849cf90c2ba206c233e8bcfcf69c'
+PRODUCT = 'f78a8a0651a788c1b7eda933fa174dc4707c32af'
 BOOTSTRAP = 'b4fdbb719974f6182cde137e5c900f91435424e7'
 WORKFLOW = '.github/workflows/m5-github-proposal-proof.yml'
 OBSERVER = '.github/workflows/pr-observer.yml'
@@ -24,6 +24,10 @@ READ_PERMISSIONS = {'contents': 'read', 'actions': 'read', 'pull-requests': 'rea
 WRITE_PERMISSIONS = {'contents': 'write', 'pull-requests': 'write'}
 MAX_ARCHIVE = 1048576
 MAX_CHECKPOINT = 524288
+# Exact retained claim from failed manual4/attempt1, read back 2026-09-09T12:26:00Z.
+# Frozen with reviewed source; never learn history from the target during a trial.
+RETAINED_CLAIM = {'ref': 'refs/heads/contract-scribe/coordination/e7a6289b5748fc64638a8011d4bdadd3cfdda6b4279702b4b8f22932a892b3d0',
+                  'oid': 'ab87ad83cdc95223f74294a6686d1917c9c6d298'}
 FIELDS = {'product_sha', 'source_sha', 'workflow_sha', 'base_sha', 'workflow_digest',
           'workflow_id', 'activation', 'not_before', 'not_after', 'manual_run_number',
           'scheduled_run_number', 'actor_id', 'actor_login', 'owner', 'issue', 'scenarios'}
@@ -184,11 +188,54 @@ def scenario_result(scenario, exit_code, data, product_sha=PRODUCT):
     return result
 
 
+DIAGNOSTIC_CODES = {'InvalidRequest', 'Authentication', 'Permission', 'NotFound', 'Conflict', 'Validation',
+                    'RateLimit', 'Cancelled', 'Timeout', 'ResponseLost', 'InvalidResponse', 'HostFailure'}
+DIAGNOSTIC_FIELDS = {
+    'boundary': {'Reconcile', 'Repository', 'CoordinationRead', 'CoordinationClaim', 'CoordinationRecord',
+                 'CoordinationAdvanceStale', 'CoordinationAdvanceContent', 'CoordinationAdvanceRef',
+                 'GitInspect', 'GitInspectPredecessor', 'GitPrepare', 'GitCreateContent', 'GitAdvanceRef',
+                 'PullRequestPreflight', 'PullRequestObserve', 'PullRequestCreate', 'PullRequestRecover'},
+    'owner': {'Reconciler', 'Transport', 'Coordination', 'GitData', 'PullRequests'},
+    'coordinationFailure': {'InvalidInput', 'MissingPredecessor', 'DifferentOperation', 'StageConflict',
+                            'TargetMoved', 'HumanChange', 'Conflict', 'ObjectMismatch', 'Bounds', 'Unresolved', 'Transport'},
+    'proposalFailure': {'InvalidInput', 'Integrity', 'Bounds', 'Conflict', 'Unresolved', 'Transport'},
+    'pullRequestOutcome': {'Absent', 'Appendable', 'HeldDraft', 'Ready', 'Merged', 'ClosedUnmerged',
+                           'StaleDraft', 'Conflict', 'Unresolved', 'Failed'},
+    'transportCode': DIAGNOSTIC_CODES,
+    'transportHttpStatus': None,
+    'delivery': {'NotDispatched', 'Read', 'NeedsReadback', 'Ambiguous'},
+    'recoveryCode': DIAGNOSTIC_CODES,
+    'recoveryHttpStatus': None,
+    'objectKind': {'Blob', 'Tree', 'Commit'},
+    'predicate': {'InvalidCorrelation', 'Cancelled', 'UnhandledException', 'RepositoryUnavailable', 'DifferentOperation',
+                  'TargetMoved', 'SuccessorMismatch', 'AppendMismatch', 'TransitionMismatch', 'UnexpectedProposalRef',
+                  'ClaimMismatch', 'CurrentMismatch', 'ClaimedRefPresent', 'StaleStage', 'UnexpectedStage',
+                  'AppendCreateForbidden', 'CompletionHeadChanged', 'ObservationLimit', 'LifecycleOutcome',
+                  'MissingOrUnexpectedComponent'},
+}
+
+
+def publication_diagnostic(value):
+    if not isinstance(value, dict) or value.keys() != DIAGNOSTIC_FIELDS.keys():
+        return None
+    for key, allowed in DIAGNOSTIC_FIELDS.items():
+        item = value[key]
+        if item is None and key not in ('boundary', 'owner'):
+            continue
+        if allowed is None:
+            if type(item) is not int or not 100 <= item <= 599:
+                return None
+        elif not isinstance(item, str) or item not in allowed:
+            return None
+    return {key: value[key] for key in DIAGNOSTIC_FIELDS}
+
+
 def unexpected_result_summary(exit_code, data):
     """Report only closed public codes; never reproduce an unexpected result body."""
     summary = {'exitCode': exit_code if type(exit_code) is int and -128 <= exit_code <= 255 else None,
                'terminalLayer': None, 'outcome': None, 'campaignOperation': None,
-               'baselineMatches': False, 'diagnosticCodes': [], 'omittedDiagnosticCount': 0}
+               'baselineMatches': False, 'diagnosticCodes': [], 'omittedDiagnosticCount': 0,
+               'publicationDiagnostic': None}
     if not isinstance(data, bytes) or len(data) > 8192:
         return summary
     try:
@@ -218,6 +265,10 @@ def unexpected_result_summary(exit_code, data):
     if isinstance(codes, list):
         summary['diagnosticCodes'] = [code for code in codes[:16] if isinstance(code, str) and code in known]
         summary['omittedDiagnosticCount'] = len(codes) - len(summary['diagnosticCodes'])
+    failures = outcomes - {'published', 'replayed', 'no-op', 'awaiting-review', 'merged'}
+    if (summary['terminalLayer'] == 'publication' and summary['exitCode'] not in (None, 0)
+            and summary['outcome'] in {'github-proposal.' + name for name in failures}):
+        summary['publicationDiagnostic'] = publication_diagnostic(value.get('publicationDiagnostic'))
     return summary
 
 

@@ -4,6 +4,8 @@ import base64
 import hashlib
 import io
 import os
+from pathlib import Path
+import tempfile
 import unittest
 import urllib.error
 from unittest import mock
@@ -14,6 +16,35 @@ from test_proof import inputs
 
 
 class ReadbackTests(unittest.TestCase):
+    def test_only_the_exact_retained_claim_is_excluded_from_the_new_trial(self):
+        config = inputs()[0]
+        before = {'refs': [dict(RETAINED_CLAIM)], 'pulls': []}
+        self.assertEqual({'refs': [], 'pulls': []}, proof.trial_snapshot(config, before))
+        self.assertEqual([RETAINED_CLAIM], before['refs'])
+        overlapping = dict(config, activation='30e43175076e492e95133b8d98a5ff89')
+        with self.assertRaisesRegex(ProofFailure, 'history-overlaps-trial'):
+            proof.trial_snapshot(overlapping, before)
+        cases = [({'refs': [], 'pulls': []}, 'retained-history-changed'),
+                 ({'refs': [dict(RETAINED_CLAIM, oid='0' * 40)], 'pulls': []}, 'retained-history-changed'),
+                 ({'refs': [dict(RETAINED_CLAIM, ref=RETAINED_CLAIM['ref'] + '-other')], 'pulls': []}, 'retained-history-changed'),
+                 ({'refs': [dict(RETAINED_CLAIM)] * 2, 'pulls': []}, 'retained-history-changed'),
+                 ({'refs': [dict(RETAINED_CLAIM), {'ref': 'refs/heads/contract-scribe/unexpected', 'oid': 'a' * 40}],
+                   'pulls': []}, 'preexisting-work'),
+                 ({'refs': [dict(RETAINED_CLAIM)], 'pulls': [{'number': 99}]}, 'preexisting-work')]
+        for snapshot, error in cases:
+            with self.subTest(snapshot=snapshot), tempfile.TemporaryDirectory() as temporary, \
+                 mock.patch.object(proof, 'current_config', return_value=config), \
+                 mock.patch.object(proof, 'context', return_value={}), \
+                 mock.patch.object(proof, 'fresh_gate', return_value='manual'), \
+                 mock.patch.object(proof, 'work', return_value=Path(temporary)), \
+                 mock.patch.object(proof, 'remote_snapshot', return_value=snapshot), \
+                 mock.patch.object(proof.subprocess, 'Popen') as provider, \
+                 mock.patch.object(proof.subprocess, 'run') as cli:
+                with self.assertRaisesRegex(ProofFailure, error):
+                    proof.invoke('negative')
+                provider.assert_not_called()
+                cli.assert_not_called()
+
     def test_request_construction_preserves_root_children_and_repository_boundary(self):
         root = 'repos/' + REPOSITORY
         observed = []
@@ -112,7 +143,8 @@ class ReadbackTests(unittest.TestCase):
         key = proof.identity_hash('coordination-ref', 'solusquest', 'contract-scribe-sandbox', 'refs/heads/main', lineage)
         generation = 'd' * 64
         proposal_ref = 'refs/heads/contract-scribe/proposals/' + key + '/' + generation
-        refs = [{'ref': 'refs/heads/contract-scribe/coordination/' + key, 'object': {'sha': 'e' * 40}},
+        refs = [{'ref': RETAINED_CLAIM['ref'], 'object': {'sha': RETAINED_CLAIM['oid']}},
+                {'ref': 'refs/heads/contract-scribe/coordination/' + key, 'object': {'sha': 'e' * 40}},
                 {'ref': proposal_ref, 'object': {'sha': 'f' * 40}}]
         original = (proof.HERE / 'Synthetic.cs').read_bytes()
         candidate = original.replace(b'    public static void Run()', b'    /// <summary>Runs the synthetic operation.</summary>\n    public static void Run()')
@@ -153,6 +185,17 @@ class ReadbackTests(unittest.TestCase):
         api.content.side_effect = lambda path, commit: canonical(state) if path.startswith('.contract-scribe/') else candidate
         facts = proof.published_facts(config, api, inspect_trees=True)
         self.assertEqual(1, facts['pull_request'])
+        self.assertIn(RETAINED_CLAIM, facts['snapshot']['refs'])
+        self.assertEqual(facts, proof.published_facts(config, api, inspect_trees=True))
+        for residue in ({'ref': 'refs/heads/contract-scribe/unexpected', 'object': {'sha': 'a' * 40}},):
+            refs.append(residue)
+            with self.assertRaisesRegex(ProofFailure, 'published-resource-count'):
+                proof.published_facts(config, api)
+            refs.pop()
+        refs[0]['object']['sha'] = '0' * 40
+        with self.assertRaisesRegex(ProofFailure, 'retained-history-changed'):
+            proof.published_facts(config, api)
+        refs[0]['object']['sha'] = RETAINED_CLAIM['oid']
         for value, field, bad in [(pr['user'], 'id', 1), (pr, 'body', body + 'changed'), (pr, 'draft', False),
                                   (pr['base'], 'sha', '0' * 40), (changes[0], 'filename', 'Injected.cs'),
                                   (commit, 'parents', []), (candidate_tree, 'truncated', True),

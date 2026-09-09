@@ -14,6 +14,42 @@ from test_proof import inputs
 
 
 class UnexpectedResultDiagnosticsTests(unittest.TestCase):
+    def diagnostic(self):
+        return {'boundary': 'GitCreateContent', 'owner': 'GitData', 'coordinationFailure': None,
+                'proposalFailure': 'Unresolved', 'pullRequestOutcome': None, 'transportCode': None,
+                'transportHttpStatus': None, 'delivery': 'NeedsReadback', 'recoveryCode': 'NotFound',
+                'recoveryHttpStatus': 404, 'objectKind': 'Tree', 'predicate': None}
+
+    def test_internal_diagnostic_reaches_the_real_failure_logger_without_another_call(self):
+        payload = {'terminalLayer': 'publication', 'outcome': 'github-proposal.conflict',
+                   'campaignOperation': 'start', 'cliContractBaseline': PRODUCT,
+                   'diagnosticCodes': ['github-proposal.conflict'], 'publicationDiagnostic': self.diagnostic()}
+        text = self.invoke_failure(3, canonical(payload))
+        self.assertIn('"recoveryCode":"NotFound"', text)
+        self.assertIn('"boundary":"GitCreateContent"', text)
+        self.assertLess(len(text), 2048)
+
+    def test_internal_diagnostic_rejects_unknown_fields_values_status_types_and_contamination(self):
+        diagnostic = self.diagnostic()
+        self.assertEqual(diagnostic, proof_contract.publication_diagnostic(diagnostic))
+        bad = [None, [], 'private-sentinel', dict(diagnostic, private='private-sentinel')]
+        for key in diagnostic:
+            missing = dict(diagnostic)
+            del missing[key]
+            bad.append(missing)
+            for value in ('private-sentinel', {}, [], True, -1, 600, '404'):
+                bad.append(dict(diagnostic, **{key: value}))
+        for value in bad:
+            with self.subTest(value=value):
+                self.assertIsNone(proof_contract.publication_diagnostic(value))
+        for key in ('transportHttpStatus', 'recoveryHttpStatus'):
+            for status in (100, 599):
+                self.assertEqual(status, proof_contract.publication_diagnostic(dict(diagnostic, **{key: status}))[key])
+        for layer, outcome, exit_code in [('campaign', 'conflict', 3), ('publication', 'published', 0),
+                                         ('publication', 'replayed', 3), ('publication', 'conflict', 0)]:
+            payload = {'terminalLayer': layer, 'outcome': 'github-proposal.' + outcome, 'publicationDiagnostic': diagnostic}
+            self.assertIsNone(proof_contract.unexpected_result_summary(exit_code, canonical(payload))['publicationDiagnostic'])
+
     def test_real_invoke_retains_closed_failure_codes_and_stops_without_success(self):
         payload = {'terminalLayer': 'publication', 'outcome': 'github-proposal.host-failure',
                    'campaignOperation': 'start', 'cliContractBaseline': PRODUCT,
