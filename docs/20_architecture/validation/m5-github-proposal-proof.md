@@ -22,7 +22,7 @@ Three distinct gates still apply:
 
 | Value | Meaning |
 | --- | --- |
-| P | Product correction commit `f78a8a0651a788c1b7eda933fa174dc4707c32af` within the reviewed corrective PR, built and executed in Release. |
+| P | Product correction commit `22142cf04efc66b728e5cdb8951efa2d15934aca` within the reviewed corrective PR, built and executed in Release. |
 | S | Reviewed and explicitly authorized exact ContractScribe PR head containing this workflow and its helper/fixture. |
 | W | Installed sandbox workflow revision, compared with actual `github.workflow_sha`. |
 | B | Approved sandbox `main` tip after installation, compared with actual run head and live target. It may equal W and must differ from bootstrap. |
