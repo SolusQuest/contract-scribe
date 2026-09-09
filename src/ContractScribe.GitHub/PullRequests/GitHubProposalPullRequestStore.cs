@@ -97,7 +97,7 @@ internal sealed class GitHubProposalPullRequestStore
             && proof.ObservedRefOid == source.ProposalCommitOid && proof.BeforeOid == source.ProposalCommitOid)
             head = new(proof.Ref, source.ProposalCommitOid!, source.ProposalTreeOid!);
         return head is null ? ValueTask.FromResult(Conflict())
-            : ObserveCoreAsync(state, head, previous, recovering, token, verifiedPartial: true);
+            : ObserveCoreAsync(state, head, previous, recovering, token, verified: proof);
     }
 
     internal async ValueTask<GitHubProposalResult> PreflightAsync(IGitHubCoordinationReadCapability read,
@@ -167,9 +167,9 @@ internal sealed class GitHubProposalPullRequestStore
 
     private async ValueTask<GitHubProposalResult> ObserveCoreAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubProposalObservation? previous, bool recovering,
-        CancellationToken cancellationToken, bool verifiedPartial = false)
+        CancellationToken cancellationToken, IGitHubInspectedProposal? verified = null)
     {
-        if ((!verifiedPartial && !Input(state, expected)) || previous is not null
+        if ((verified is null && !Input(state, expected)) || previous is not null
             && (previous is not Observation prior || !ReferenceEquals(prior.Owner, this))) return Conflict();
         var current = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (current.State is null) return ClaimFailure(current);
@@ -177,7 +177,7 @@ internal sealed class GitHubProposalPullRequestStore
         state = current.State;
         var metadata = Metadata(state);
         if (metadata is null) return Conflict();
-        var proposal = await VerifyProposalAsync(state, expected, cancellationToken).ConfigureAwait(false);
+        var proposal = await VerifyProposalAsync(state, expected, verified, cancellationToken).ConfigureAwait(false);
         if (proposal is not null) return proposal;
         var collection = await ReadCampaign(expected.Ref, metadata.CampaignKey, metadata.CreationCommitment,
             [state.PullRequestNumber, coordination.CreationSource(state)?.PullRequestNumber, previous?.PullRequest.Number],
@@ -208,15 +208,15 @@ internal sealed class GitHubProposalPullRequestStore
         }
         var candidate = candidates[0];
         if (active > (candidate.Open ? 1 : 0)) return Conflict();
-        var classified = Classify(state, expected, metadata, candidate, previous);
+        var classified = Classify(state, expected, metadata, candidate, previous, out var headMismatch);
         if (classified.Observation is null)
-            return classified.Cause == GitHubCoordinationFailureKind.HumanChange
-                ? await ConfirmHumanChangeAsync(state, cancellationToken).ConfigureAwait(false) : classified;
+            return headMismatch
+                ? await ClassifyHeadMismatchAsync(state, expected, candidate.Head.Oid, verified, cancellationToken).ConfigureAwait(false) : classified;
         // Close the read window against a changed coordination/proposal authority.
         var final = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (final.State is null) return ClaimFailure(final);
         if (final.State.HeadOid != state.HeadOid || final.State.Repository != state.Repository) return Conflict();
-        proposal = await VerifyProposalAsync(state, expected, cancellationToken).ConfigureAwait(false);
+        proposal = await VerifyProposalAsync(state, expected, verified, cancellationToken).ConfigureAwait(false);
         if (proposal is not null) return proposal;
         var finalTarget = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (finalTarget.Value is null) return Failed(finalTarget);
@@ -253,11 +253,12 @@ internal sealed class GitHubProposalPullRequestStore
     }
 
     private GitHubProposalResult Classify(IGitHubCoordinationStateCapability state, GitHubProposalHead expected,
-        GitHubProposalMetadata metadata, GitHubPullRequest pr, IGitHubProposalObservation? previous)
+        GitHubProposalMetadata metadata, GitHubPullRequest pr, IGitHubProposalObservation? previous, out bool headMismatch)
     {
+        headMismatch = false;
         var source = coordination.CreationSource(state)!;
         if (pr.Author != publisher || pr.Head.Repository != state.Repository || pr.BaseRepository != state.Repository
-            || "refs/heads/" + pr.Head.Ref != expected.Ref || pr.Head.Oid != expected.CommitOid
+            || "refs/heads/" + pr.Head.Ref != expected.Ref
             || "refs/heads/" + pr.BaseRef != state.TargetRef || pr.Title != metadata.Title || pr.Body != metadata.Body
             || pr.MaintainerCanModify != false || pr.Merged is null
             || source.PullRequestNumber is { } number && pr.Number != number
@@ -267,6 +268,11 @@ internal sealed class GitHubProposalPullRequestStore
             || !previous.PullRequest.Draft && pr.Draft)) return HumanChange();
         if (state.Stage is GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged
             && (pr.Open || (state.Stage == GitHubCoordinationStage.Merged) != pr.Merged.Value)) return HumanChange();
+        if (pr.Head.Oid != expected.CommitOid)
+        {
+            headMismatch = true;
+            return HumanChange();
+        }
         var retainedStaleBase = StaleBase(state) ?? StaleBase(source)
             ?? (previous?.PullRequest.BaseOid is { } priorBase && priorBase != state.TargetCommitOid ? priorBase : null);
         if (!pr.Open)
@@ -308,12 +314,12 @@ internal sealed class GitHubProposalPullRequestStore
         && expected.TreeOid == state.ProposalTreeOid && state.ProposalCommitOid is not null;
 
     private async ValueTask<GitHubProposalResult?> VerifyProposalAsync(IGitHubCoordinationStateCapability state,
-        GitHubProposalHead expected, CancellationToken cancellationToken)
+        GitHubProposalHead expected, IGitHubInspectedProposal? verified, CancellationToken cancellationToken)
     {
         var reference = await client.GetRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
         if (reference.Value is null) return Failed(reference);
         if (reference.Value.Oid != expected.CommitOid)
-            return await ConfirmHumanChangeAsync(state, cancellationToken).ConfigureAwait(false);
+            return await ClassifyHeadMismatchAsync(state, expected, reference.Value.Oid, verified, cancellationToken).ConfigureAwait(false);
         var commit = await client.GetCommitAsync(expected.CommitOid, cancellationToken).ConfigureAwait(false);
         if (commit.Value is null) return Failed(commit);
         if (commit.Value.TreeOid != expected.TreeOid) return Conflict();
@@ -325,15 +331,24 @@ internal sealed class GitHubProposalPullRequestStore
         return null;
     }
 
-    private async ValueTask<GitHubProposalResult> ConfirmHumanChangeAsync(
-        IGitHubCoordinationStateCapability state, CancellationToken cancellationToken)
+    private async ValueTask<GitHubProposalResult> ClassifyHeadMismatchAsync(
+        IGitHubCoordinationStateCapability state, GitHubProposalHead expected, string? observed,
+        IGitHubInspectedProposal? verified, CancellationToken cancellationToken)
     {
         // A legitimate append can move the proposal while this reader still holds its predecessor.
         // Attribute drift to a human only under the same authenticated coordination authority.
         var current = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (current.State is null) return ClaimFailure(current);
-        return current.State.HeadOid == state.HeadOid && current.State.Repository == state.Repository
-            ? HumanChange() : Conflict();
+        if (current.State.HeadOid != state.HeadOid || current.State.Repository != state.Repository) return Conflict();
+        // The ref CAS can also precede its stage CAS. Only R4's complete, owner-bound
+        // proof of this exact forward successor explains that unchanged-stage window.
+        if (verified is { ContentExists: true } && GitHubProposalStore.Authenticates(verified, coordination, state)
+            && state.Stage == GitHubCoordinationStage.ContentCreated && state.Transition == "same-snapshot-append"
+            && state.ContentCommitOid == verified.CommitOid && verified.Ref == expected.Ref
+            && verified.BeforeOid == expected.CommitOid && verified.ObservedRefOid == expected.CommitOid
+            && verified.CommitOid == observed && coordination.AdmissionSource(state)?.ProposalCommitOid == expected.CommitOid)
+            return Conflict();
+        return HumanChange();
     }
 
     private static bool Stable(GitHubPullRequest list, GitHubPullRequest detail) =>

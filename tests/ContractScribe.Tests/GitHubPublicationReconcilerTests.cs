@@ -1012,6 +1012,99 @@ public sealed class GitHubPublicationReconcilerTests
         public bool ContentExists => source.ContentExists;
     }
 
+    [Theory]
+    [InlineData("first-proposal", "forward")]
+    [InlineData("classification", "forward")]
+    [InlineData("final-proposal", "forward")]
+    [InlineData("first-proposal", "foreign")]
+    [InlineData("classification", "foreign")]
+    [InlineData("final-proposal", "foreign")]
+    [InlineData("first-proposal", "rewind")]
+    [InlineData("classification", "rewind")]
+    [InlineData("final-proposal", "rewind")]
+    [InlineData("classification", "title")]
+    [InlineData("classification", "body")]
+    [InlineData("classification", "actor")]
+    [InlineData("classification", "base-ref")]
+    [InlineData("classification", "head-repository")]
+    [InlineData("first-proposal", "permission")]
+    public async Task Partial_append_observation_preserves_only_the_genuine_forward_content_proof(string window, string change)
+    {
+        var remote = new Remote();
+        var first = Branch.Authority(remote.Git);
+        using var initial = new Session(remote, first);
+        await initial.Publish(); await initial.Publish();
+        byte[] bytes = [9, 8];
+        var next = Branch.Authority(remote.Git, "partial-observation", first, bytes);
+        using var writer = new Session(remote, next, Branch.Payload(next, bytes));
+        var coordination = GitHubCoordinationStore.Create(writer.Client);
+        var git = GitHubProposalStore.Create(writer.Client, coordination);
+        var read = await coordination.ReadCurrentAsync();
+        var claim = (await coordination.ClaimAsync(read.Read!)).State!;
+        var prepared = await git.PrepareAsync(claim, writer.Payload);
+        var content = (await git.CreateContentAsync(prepared.Prepared!, claim)).Content!;
+        var stage = await coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(content.CommitOid));
+        Assert.NotNull(stage.ProposalRefEntitlement);
+        var reference = GitHubPublicationFactory.CreateProposalRef(next);
+        var before = remote.Git.Refs[reference];
+        async Task Advance()
+        {
+            Assert.Null((await git.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement)).Failure);
+            Assert.Equal(stage.State!.HeadOid, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
+            Assert.Equal(content.CommitOid, remote.Git.Refs[reference]);
+        }
+        if (change == "rewind") await Advance();
+        using var observer = new Session(remote, next, writer.Payload);
+        var owner = GitHubCoordinationStore.Create(observer.Client);
+        var current = await owner.ReadCurrentAsync();
+        var inspection = (await GitHubProposalStore.Create(observer.Client, owner).InspectAsync(current.Read!, observer.Payload)).Inspection!;
+        Assert.NotNull(inspection);
+        Assert.True(inspection.ContentExists);
+        Assert.Equal(content.CommitOid, inspection.CommitOid);
+        Assert.Equal(before, inspection.BeforeOid);
+        Assert.Equal(change == "rewind" ? content.CommitOid : before, inspection.ObservedRefOid);
+        var store = GitHubProposalPullRequestStore.Create(observer.Client, owner, Publisher);
+        var requests = remote.Attempts.Count;
+        Assert.Null((await store.ObserveVerifiedAsync(current.State!, new CounterfeitInspection(inspection))).Observation);
+        Assert.Equal(requests, remote.Attempts.Count);
+        var proposalReads = 0;
+        remote.BeforeReadAsync = async path =>
+        {
+            if (path.Contains("/git/ref/heads/contract-scribe/proposals/", StringComparison.Ordinal)) proposalReads++;
+            if (!(window == "classification" && path == "/repos/Owner/repo/pulls")
+                && !(window == "first-proposal" && proposalReads == 1)
+                && !(window == "final-proposal" && proposalReads == 2)) return;
+            remote.BeforeReadAsync = null;
+            if (change != "rewind") await Advance();
+            switch (change)
+            {
+                case "foreign": remote.Git.Refs[reference] = first.ExpectedBaseCommitOid; break;
+                case "rewind": remote.Git.Refs[reference] = before; break;
+                case "title": remote.Prs[0]["title"] = "human title"; break;
+                case "body": remote.Prs[0]["body"] = "human body"; break;
+                case "actor": remote.Prs[0]["user"]!["id"] = 100; break;
+                case "base-ref": remote.Prs[0]["base"]!["ref"] = "other"; break;
+                case "head-repository": remote.Prs[0]["head"]!["repo"]!["id"] = 100; break;
+                case "permission": remote.RejectRead = p => p == "/repos/Owner/repo" ? HttpStatusCode.Forbidden : null; break;
+            }
+        };
+        var writes = remote.Writes;
+
+        var result = await store.ObserveVerifiedAsync(current.State!, inspection);
+
+        Assert.Null(remote.BeforeReadAsync);
+        Assert.Null(result.Observation);
+        Assert.Equal(stage.State!.HeadOid, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
+        Assert.Equal(writes + (change == "rewind" ? 0 : 1), remote.Writes);
+        Assert.Equal(1, remote.PrAttempts);
+        Assert.Single(remote.Prs);
+        Assert.Equal(change == "permission" ? ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Failed
+            : ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Conflict, result.Outcome);
+        Assert.Equal(change == "forward" ? (GitHubCoordinationFailureKind?)null
+            : change == "permission" ? GitHubCoordinationFailureKind.Transport : GitHubCoordinationFailureKind.HumanChange, result.Cause);
+        if (change == "permission") Assert.Equal(403, result.Failure!.HttpStatus);
+    }
+
     private static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
     private static GitHubPublicationAuthorityInput Input(ValidatedGitHubPublicationAuthority a) => new(
         a.RepositoryOwner, a.RepositoryName, a.TargetRef, a.ExpectedBaseCommitOid, a.CampaignLineage,
@@ -1069,6 +1162,7 @@ public sealed class GitHubPublicationReconcilerTests
         internal Func<string, HttpStatusCode?>? RejectMutation;
         internal Func<CancellationToken, Task>? BeforeCas;
         internal Action<string>? BeforeRead, AfterRead;
+        internal Func<string, Task>? BeforeReadAsync;
         internal bool Paginate, FailLastPage, DelayPrReads;
         internal GitHubCoordinationState State(ValidatedGitHubPublicationAuthority authority) =>
             Git.CoordinationState(Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)]);
@@ -1086,6 +1180,8 @@ public sealed class GitHubPublicationReconcilerTests
         {
             lock (Git.SyncRoot) Attempts.Add((request.Method.Method, request.RequestUri!.AbsolutePath));
             if (request.Method == HttpMethod.Get) BeforeRead?.Invoke(request.RequestUri!.AbsolutePath);
+            if (request.Method == HttpMethod.Get && BeforeReadAsync is { } beforeRead)
+                await beforeRead(request.RequestUri!.AbsolutePath);
             if (DelayPrReads && Posts > 0 && request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/pulls", StringComparison.Ordinal))
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             if (request.Method == HttpMethod.Get && RejectRead?.Invoke(request.RequestUri!.AbsolutePath) is { } rejected)
