@@ -57,10 +57,26 @@ Every recognized non-help return is exactly one compact JSON object followed by 
 ```text
 githubProposalEnvelopeVersion, terminalLayer, cliContractBaseline, toolVersion,
 campaignOperation, publicationOperationId, generationId, outcome, diagnosticCodes,
-checkpointRevision, pullRequestUrl
+checkpointRevision, pullRequestUrl, publicationDiagnostic
 ```
 
 Envelope version is `1`. Layers are `usage`, `preflight`, `campaign`, `publication`, or `presentation`. Campaign operation is `start`, `resume`, or null when unavailable. Unavailable operation ID, generation, revision, and PR URL are explicitly null. Successful results have no stderr; controlled failures have exactly one closed, sanitized stderr line. No raw HTTP/header/exception, credential, source, candidate, private path or provider data is emitted.
+
+`publicationDiagnostic` is null outside a failed publication, on success, or when no internal observation is available. Otherwise its ordered fields are `boundary`, `owner`, `coordinationFailure`, `proposalFailure`, `pullRequestOutcome`, `transportCode`, `transportHttpStatus`, `delivery`, `recoveryCode`, `recoveryHttpStatus`, `objectKind`, and `predicate`. Boundary and owner are required closed names; all other fields may be null. HTTP statuses are integers from 100 through 599. Undefined enum values or out-of-range statuses suppress the complete diagnostic to null without replacing the original outcome, exit or stderr. This is an in-place correction of the current draft envelope; no alternate version is supported.
+
+| Field | Closed values |
+| --- | --- |
+| boundary | Reconcile, Repository, CoordinationRead, CoordinationClaim, CoordinationRecord, CoordinationAdvanceStale, CoordinationAdvanceContent, CoordinationAdvanceRef, GitInspect, GitInspectPredecessor, GitPrepare, GitCreateContent, GitAdvanceRef, PullRequestPreflight, PullRequestObserve, PullRequestCreate, PullRequestRecover |
+| owner | Reconciler, Transport, Coordination, GitData, PullRequests |
+| coordinationFailure | InvalidInput, MissingPredecessor, DifferentOperation, StageConflict, TargetMoved, HumanChange, Conflict, ObjectMismatch, Bounds, Unresolved, Transport |
+| proposalFailure | InvalidInput, Integrity, Bounds, Conflict, Unresolved, Transport |
+| pullRequestOutcome | Absent, Appendable, HeldDraft, Ready, Merged, ClosedUnmerged, StaleDraft, Conflict, Unresolved, Failed |
+| transportCode, recoveryCode | InvalidRequest, Authentication, Permission, NotFound, Conflict, Validation, RateLimit, Cancelled, Timeout, ResponseLost, InvalidResponse, HostFailure |
+| delivery | NotDispatched, Read, NeedsReadback, Ambiguous |
+| objectKind | Blob, Tree, Commit |
+| predicate | InvalidCorrelation, Cancelled, UnhandledException, RepositoryUnavailable, DifferentOperation, TargetMoved, SuccessorMismatch, AppendMismatch, TransitionMismatch, UnexpectedProposalRef, ClaimMismatch, CurrentMismatch, ClaimedRefPresent, StaleStage, UnexpectedStage, AppendCreateForbidden, CompletionHeadChanged, ObservationLimit, LifecycleOutcome, MissingOrUnexpectedComponent |
+
+The adapter pairs this observation with one invocation's unchanged Core result. Original transport and recovery observations remain separate even when the existing result mapping gives one precedence. Owners that retain only one error do not invent a second; missing owner components use the reconciler's closed predicate without inventing an owner failure. The facade emits only the selected call's pair, including its existing second call after `RecoveredRefPartial`. No diagnostic affects request sequencing, recovery, permissions or capabilities. These fields are observations, not retry instructions or proof of a historical failure's cause. They contain no context identity, OID, body, permission header, exception or retry metadata.
 
 | Outcome suffix (`github-proposal.` prefix) | Exit |
 | --- | --- |

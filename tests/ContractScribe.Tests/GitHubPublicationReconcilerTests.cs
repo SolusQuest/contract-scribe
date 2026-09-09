@@ -19,6 +19,127 @@ public sealed class GitHubPublicationReconcilerTests
 {
     private static readonly GitHubActor Publisher = new(99, "BOT_99", "github-actions[bot]", GitHubActorKind.Bot);
 
+    [Theory]
+    [InlineData("required-read")]
+    [InlineData("applied-claim")]
+    [InlineData("acknowledged-tree")]
+    public async Task Observed_failures_preserve_owner_boundary_and_the_ordinary_request_trace(string fault)
+    {
+        async Task<(GitHubPublicationAttempt Attempt, Remote Remote)> Run(bool observed)
+        {
+            var remote = new Remote();
+            var authority = Branch.Authority(remote.Git);
+            using var session = new Session(remote, authority);
+            if (fault == "acknowledged-tree")
+            {
+                var owner = GitHubCoordinationStore.Create(session.Client);
+                var read = await owner.ReadCurrentAsync();
+                Assert.NotNull((await owner.ClaimAsync(read.Read!)).State);
+            }
+            var applied = false;
+            remote.AfterMutation = (_, body) =>
+            {
+                var payload = JsonNode.Parse(body!);
+                if (fault == "applied-claim" && payload?["variables"] is not null
+                    || fault == "acknowledged-tree" && payload?["tree"] is JsonArray) applied = true;
+            };
+            remote.RejectRead = path => fault == "required-read" && path == "/repos/Owner/repo/git/ref/heads/main"
+                ? HttpStatusCode.Conflict
+                : applied && (fault == "applied-claim" && path.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)
+                    || fault == "acknowledged-tree" && path.Contains("/git/trees/", StringComparison.Ordinal))
+                    ? HttpStatusCode.NotFound : null;
+            var attempt = observed ? await session.Observe() : new GitHubPublicationAttempt(await session.Publish());
+            Assert.Equal(GitHubPublicationResultKind.Conflict, attempt.Result.Kind);
+            Assert.Equal(0, remote.PrAttempts);
+            Assert.Equal(0, remote.Git.ProposalWrites);
+            if (fault != "required-read") Assert.Equal(GitHubCoordinationStage.Claimed, remote.State(authority).Stage);
+            else Assert.Equal(0, remote.Writes);
+            return (attempt, remote);
+        }
+
+        var observed = await Run(true);
+        var ordinary = await Run(false);
+        Assert.Equal(ordinary.Remote.Attempts, observed.Remote.Attempts);
+        Assert.Equal(ordinary.Remote.Mutations, observed.Remote.Mutations);
+        Assert.Equal(ordinary.Remote.Writes, observed.Remote.Writes);
+        var diagnostic = Assert.IsType<GitHubPublicationDiagnostic>(observed.Attempt.Diagnostic);
+        Assert.True(diagnostic.IsValid);
+        Assert.Equal(fault switch
+        {
+            "required-read" => GitHubPublicationBoundary.CoordinationRead,
+            "applied-claim" => GitHubPublicationBoundary.CoordinationClaim,
+            _ => GitHubPublicationBoundary.GitCreateContent,
+        }, diagnostic.Boundary);
+        if (fault == "required-read")
+        {
+            Assert.Equal(GitHubPublicationOwner.Coordination, diagnostic.Owner);
+            Assert.Equal(GitHubFailureCode.Conflict, diagnostic.TransportCode);
+            Assert.Equal(409, diagnostic.TransportHttpStatus);
+            Assert.Null(diagnostic.RecoveryCode);
+        }
+        else
+        {
+            Assert.Null(diagnostic.TransportCode);
+            Assert.Equal(GitHubFailureCode.NotFound, diagnostic.RecoveryCode);
+            Assert.Equal(404, diagnostic.RecoveryHttpStatus);
+            Assert.Equal(GitHubDelivery.NeedsReadback, diagnostic.Delivery);
+            if (fault == "acknowledged-tree")
+            {
+                Assert.Equal(GitHubPublicationOwner.GitData, diagnostic.Owner);
+                Assert.Equal(GitHubProposalFailureKind.Unresolved, diagnostic.ProposalFailure);
+                Assert.Equal(GitHubObjectKind.Tree, diagnostic.ObjectKind);
+            }
+        }
+    }
+
+    [Fact]
+    public async Task Invalid_correlation_is_call_local_and_never_dispatches()
+    {
+        var remote = new Remote();
+        var authority = Branch.Authority(remote.Git);
+        using var session = new Session(remote, authority);
+        var other = Branch.Authority(remote.Git, "other-operation");
+        var invalid = await session.Reconciler.PublishObservedAsync(other, session.Payload);
+        Assert.Equal(GitHubPublicationResultKind.LocalInvalid, invalid.Result.Kind);
+        Assert.Equal(GitHubPublicationPredicate.InvalidCorrelation, invalid.Diagnostic!.Predicate);
+        Assert.Empty(remote.Attempts);
+        Assert.Null((await session.Observe()).Diagnostic);
+        Assert.Equal(GitHubPublicationPredicate.InvalidCorrelation, invalid.Diagnostic.Predicate);
+    }
+
+    [Fact]
+    public async Task Cancelled_queued_call_cannot_contaminate_the_active_call_or_later_publication()
+    {
+        var remote = new Remote();
+        using var session = new Session(remote, Branch.Authority(remote.Git));
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        remote.BeforeCas = async token =>
+        {
+            entered.TrySetResult();
+            await release.Task.WaitAsync(token);
+        };
+        var active = session.Observe().AsTask();
+        await entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        using var cancel = new CancellationTokenSource();
+        var queued = session.Observe(cancel.Token).AsTask();
+        cancel.Cancel();
+        var failed = await queued;
+        Assert.Equal(GitHubPublicationResultKind.Cancelled, failed.Result.Kind);
+        Assert.Equal(GitHubPublicationPredicate.Cancelled, failed.Diagnostic!.Predicate);
+        remote.BeforeCas = null;
+        release.SetResult();
+        var partial = await active;
+        Assert.Equal(GitHubPublicationResultKind.RecoveredRefPartial, partial.Result.Kind);
+        Assert.Null(partial.Diagnostic);
+        var published = await session.Observe();
+        Assert.Equal(GitHubPublicationResultKind.Published, published.Result.Kind);
+        Assert.Null(published.Diagnostic);
+        Assert.Equal(GitHubPublicationPredicate.Cancelled, failed.Diagnostic.Predicate);
+        Assert.Equal(1, remote.Posts);
+        Assert.Equal(1, remote.Git.ProposalWrites);
+    }
+
     [Fact]
     public async Task First_publication_uses_two_bounded_calls_then_cold_replay_reads_every_resource()
     {
@@ -475,9 +596,11 @@ public sealed class GitHubPublicationReconcilerTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Target_move_after_unrecorded_content_or_ref_preserves_exact_residual_before_stale(bool afterRef)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task Target_move_after_unrecorded_content_or_ref_preserves_exact_residual_before_stale(bool afterRef, bool denyObservation)
     {
         var remote = new Remote();
         var authority = Branch.Authority(remote.Git);
@@ -493,6 +616,23 @@ public sealed class GitHubPublicationReconcilerTests
         Assert.Equal(GitHubPublicationResultKind.Stale, (await session.Publish()).Kind);
         remote.AfterMutation = null;
         using var restart = new Session(remote, authority);
+        if (denyObservation)
+        {
+            var reference = GitHubPublicationFactory.CreateCoordinationRef(authority);
+            var predecessor = remote.Git.Refs[reference];
+            remote.RejectMutation = path => path == "/graphql" ? HttpStatusCode.Forbidden : null;
+            var denied = await restart.Observe();
+            Assert.Equal(GitHubPublicationResultKind.Permission, denied.Result.Kind);
+            Assert.Equal(afterRef ? GitHubPublicationBoundary.CoordinationAdvanceRef : GitHubPublicationBoundary.CoordinationAdvanceContent,
+                denied.Diagnostic!.Boundary);
+            Assert.Equal(predecessor, remote.Git.Refs[reference]);
+            remote.RejectMutation = null;
+            var retainedWrites = remote.Writes;
+            Assert.Equal(GitHubPublicationResultKind.Conflict, (await restart.Publish()).Kind);
+            Assert.Equal(retainedWrites, remote.Writes);
+            Assert.Equal(0, remote.Posts);
+            return;
+        }
         Assert.Equal(GitHubPublicationResultKind.Stale, (await restart.Publish()).Kind);
         var state = remote.State(authority);
         Assert.Equal(GitHubCoordinationStage.Stale, state.Stage);
@@ -739,7 +879,20 @@ public sealed class GitHubPublicationReconcilerTests
         var writes = remote.Writes;
         var expected = failedRecovery ? GitHubPublicationResultKind.HostFailure
             : status == 429 ? GitHubPublicationResultKind.RateLimit : GitHubPublicationResultKind.Permission;
-        Assert.Equal(expected, (await session.Publish()).Kind);
+        var actual = await session.Observe();
+        Assert.Equal(expected, actual.Result.Kind);
+        Assert.Equal(proposal ? GitHubPublicationBoundary.GitCreateContent : GitHubPublicationBoundary.CoordinationClaim,
+            actual.Diagnostic!.Boundary);
+        Assert.Equal(status switch
+        {
+            401 => GitHubFailureCode.Authentication,
+            429 => GitHubFailureCode.RateLimit,
+            _ => GitHubFailureCode.Permission,
+        }, actual.Diagnostic.TransportCode);
+        Assert.Equal(status, actual.Diagnostic.TransportHttpStatus);
+        Assert.Equal(failedRecovery ? GitHubFailureCode.HostFailure : GitHubFailureCode.NotFound, actual.Diagnostic.RecoveryCode);
+        Assert.Equal(failedRecovery ? 503 : 404, actual.Diagnostic.RecoveryHttpStatus);
+        Assert.Equal(GitHubObjectKind.Blob, actual.Diagnostic.ObjectKind);
         Assert.True(rejected);
         Assert.Equal(writes, remote.Writes);
         Assert.Equal(0, remote.PrAttempts);
@@ -811,7 +964,21 @@ public sealed class GitHubPublicationReconcilerTests
             if (scenario == "exact" && JsonNode.Parse(body!)?["variables"] is not null)
                 throw new IOException("synthetic acknowledged-state response loss");
         };
-        Assert.Equal((GitHubPublicationResultKind)expected, (await session.Publish(cancel.Token)).Kind);
+        var actual = await session.Observe(cancel.Token);
+        Assert.Equal((GitHubPublicationResultKind)expected, actual.Result.Kind);
+        if (scenario == "exact") Assert.Null(actual.Diagnostic);
+        else
+        {
+            Assert.Equal(GitHubPublicationBoundary.CoordinationAdvanceContent, actual.Diagnostic!.Boundary);
+            Assert.Equal(GitHubPublicationOwner.Coordination, actual.Diagnostic.Owner);
+            if (scenario == "failed-recovery")
+            {
+                Assert.Equal(GitHubFailureCode.Permission, actual.Diagnostic.TransportCode);
+                Assert.Equal(403, actual.Diagnostic.TransportHttpStatus);
+                Assert.Equal(GitHubFailureCode.HostFailure, actual.Diagnostic.RecoveryCode);
+                Assert.Equal(503, actual.Diagnostic.RecoveryHttpStatus);
+            }
+        }
         Assert.Equal(1, attempts);
         Assert.Equal(0, remote.Git.ProposalWrites);
         Assert.Equal(0, remote.PrAttempts);
@@ -873,6 +1040,7 @@ public sealed class GitHubPublicationReconcilerTests
             Reconciler = GitHubPublicationReconciler.Create(client, Publisher);
         }
         internal ValueTask<GitHubPublicationResult> Publish(CancellationToken token = default) => Reconciler.PublishAsync(Authority, Payload, token);
+        internal ValueTask<GitHubPublicationAttempt> Observe(CancellationToken token = default) => Reconciler.PublishObservedAsync(Authority, Payload, token);
         public void Dispose() => client.Dispose();
     }
 
@@ -886,6 +1054,7 @@ public sealed class GitHubPublicationReconcilerTests
     {
         internal readonly Branch.Remote Git = new();
         internal readonly List<JsonObject> Prs = [];
+        internal readonly List<(string Method, string Path)> Attempts = [];
         internal int Posts;
         internal int Writes => Git.Writes + Posts;
         internal Action? BeforePost;
@@ -915,6 +1084,7 @@ public sealed class GitHubPublicationReconcilerTests
         }
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request, CancellationToken token)
         {
+            lock (Git.SyncRoot) Attempts.Add((request.Method.Method, request.RequestUri!.AbsolutePath));
             if (request.Method == HttpMethod.Get) BeforeRead?.Invoke(request.RequestUri!.AbsolutePath);
             if (DelayPrReads && Posts > 0 && request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/pulls", StringComparison.Ordinal))
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);

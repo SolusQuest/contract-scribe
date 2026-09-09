@@ -1,6 +1,8 @@
 using System.Text.Json;
 using ContractScribe.Cli;
 using ContractScribe.Core;
+using ContractScribe.GitHub.Coordination;
+using ContractScribe.GitHub.GitData;
 using ContractScribe.GitHub.Publication;
 using ContractScribe.GitHub.Transport;
 
@@ -9,6 +11,91 @@ namespace ContractScribe.Tests;
 public sealed class GitHubProposalCliContractTests
 {
     private static readonly CliBuildIdentity Identity = new("test+" + new string('a', 40), new('a', 40), new('a', 40));
+
+    [Fact]
+    public void Publication_diagnostic_has_fixed_order_nulls_and_no_effect_on_terminal()
+    {
+        var diagnostic = new GitHubPublicationDiagnostic(GitHubPublicationBoundary.GitCreateContent,
+            GitHubPublicationOwner.GitData, ProposalFailure: GitHubProposalFailureKind.Unresolved,
+            Delivery: GitHubDelivery.NeedsReadback, RecoveryCode: GitHubFailureCode.NotFound,
+            RecoveryHttpStatus: 404, ObjectKind: GitHubObjectKind.Tree);
+        var result = Present(diagnostic);
+        using var json = JsonDocument.Parse(result.StandardOutput);
+        Assert.Equal("{\"boundary\":\"GitCreateContent\",\"owner\":\"GitData\",\"coordinationFailure\":null,"
+            + "\"proposalFailure\":\"Unresolved\",\"pullRequestOutcome\":null,\"transportCode\":null,"
+            + "\"transportHttpStatus\":null,\"delivery\":\"NeedsReadback\",\"recoveryCode\":\"NotFound\","
+            + "\"recoveryHttpStatus\":404,\"objectKind\":\"Tree\",\"predicate\":null}",
+            json.RootElement.GetProperty("publicationDiagnostic").GetRawText());
+        Assert.Equal("publicationDiagnostic", json.RootElement.EnumerateObject().Last().Name);
+        Assert.Equal(3, result.ExitCode);
+        Assert.Equal("github-proposal.conflict", json.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal("github proposal publication stopped: github-proposal.conflict", Assert.Single(result.Diagnostics).Message);
+        var authority = GitHubProposalBranchTests.Authority(new());
+        var observed = GitHubPublicationFacade.Observe(authority,
+            GitHubPublicationResult.FromRemoteFailure(GitHubPublicationRemoteFailureKind.Conflict), null, diagnostic);
+        Assert.Same(diagnostic, observed.Diagnostic);
+        Assert.DoesNotContain("NotFound", diagnostic.ToString());
+    }
+
+    [Fact]
+    public void Defined_diagnostic_values_are_closed_and_undefined_values_do_not_replace_the_terminal()
+    {
+        var basis = new GitHubPublicationDiagnostic(GitHubPublicationBoundary.Reconcile, GitHubPublicationOwner.Reconciler);
+        void Check<T>(string field, Func<T, GitHubPublicationDiagnostic> set) where T : struct, Enum
+        {
+            foreach (var value in Enum.GetValues<T>())
+            {
+                using var json = JsonDocument.Parse(Present(set(value)).StandardOutput);
+                Assert.Equal(value.ToString(), json.RootElement.GetProperty("publicationDiagnostic").GetProperty(field).GetString());
+                Assert.True(Present(set(value)).StandardOutput.Length < 2048);
+            }
+            var invalid = Present(set((T)Enum.ToObject(typeof(T), -1)));
+            using var rejected = JsonDocument.Parse(invalid.StandardOutput);
+            Assert.Equal(JsonValueKind.Null, rejected.RootElement.GetProperty("publicationDiagnostic").ValueKind);
+            Assert.Equal(3, invalid.ExitCode);
+            Assert.Equal("github-proposal.conflict", Assert.Single(invalid.Diagnostics).Code);
+        }
+        Check<GitHubPublicationBoundary>("boundary", v => basis with { Boundary = v });
+        Check<GitHubPublicationOwner>("owner", v => basis with { Owner = v });
+        Check<GitHubCoordinationFailureKind>("coordinationFailure", v => basis with { CoordinationFailure = v });
+        Check<GitHubProposalFailureKind>("proposalFailure", v => basis with { ProposalFailure = v });
+        Check<ContractScribe.GitHub.PullRequests.GitHubProposalOutcome>("pullRequestOutcome", v => basis with { PullRequestOutcome = v });
+        Check<GitHubFailureCode>("transportCode", v => basis with { TransportCode = v });
+        Check<GitHubFailureCode>("recoveryCode", v => basis with { RecoveryCode = v });
+        Check<GitHubDelivery>("delivery", v => basis with { Delivery = v });
+        Check<GitHubObjectKind>("objectKind", v => basis with { ObjectKind = v });
+        Check<GitHubPublicationPredicate>("predicate", v => basis with { Predicate = v });
+        foreach (var status in new[] { int.MinValue, 99, 100, 599, 600, int.MaxValue })
+        {
+            foreach (var recovery in new[] { false, true })
+            {
+                var diagnostic = recovery ? basis with { RecoveryHttpStatus = status } : basis with { TransportHttpStatus = status };
+                var rendered = Present(diagnostic);
+                using var json = JsonDocument.Parse(rendered.StandardOutput);
+                Assert.Equal(status is >= 100 and <= 599 ? JsonValueKind.Object : JsonValueKind.Null,
+                    json.RootElement.GetProperty("publicationDiagnostic").ValueKind);
+                Assert.Equal(3, rendered.ExitCode);
+            }
+        }
+    }
+
+    [Fact]
+    public void Success_suppresses_an_injected_failure_diagnostic()
+    {
+        var diagnostic = new GitHubPublicationDiagnostic(GitHubPublicationBoundary.Reconcile,
+            GitHubPublicationOwner.Reconciler, Predicate: GitHubPublicationPredicate.UnhandledException);
+        var result = GitHubProposalPresentation.Publication(Identity, CampaignOperation.Resume, 15,
+            new(GitHubPublicationResult.ReplayNoOp(new("refs/heads/claim", new('a', 40), "op", new('b', 64))),
+                "op", "gen", null, diagnostic));
+        using var json = JsonDocument.Parse(result.StandardOutput);
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("publicationDiagnostic").ValueKind);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
+    }
+
+    private static CliExecutionResult Present(GitHubPublicationDiagnostic diagnostic) =>
+        GitHubProposalPresentation.Publication(Identity, CampaignOperation.Start, 14,
+            new(GitHubPublicationResult.FromRemoteFailure(GitHubPublicationRemoteFailureKind.Conflict), null, null, null, diagnostic));
 
     public static TheoryData<string, string, int> CampaignRows => new()
     {
@@ -40,7 +127,7 @@ public sealed class GitHubProposalCliContractTests
             + "\",\"cliContractBaseline\":\"" + new string('a', 40) + "\",\"toolVersion\":\"test+" + new string('a', 40)
             + "\",\"campaignOperation\":\"resume\",\"publicationOperationId\":null,\"generationId\":null,\"outcome\":\"github-proposal."
             + outcome + "\",\"diagnosticCodes\":[" + (exit == 0 ? "" : "\"" + code + "\"")
-            + "],\"checkpointRevision\":12,\"pullRequestUrl\":null}\n";
+            + "],\"checkpointRevision\":12,\"pullRequestUrl\":null,\"publicationDiagnostic\":null}\n";
         Assert.Equal(expected, stdout.ToString());
         Assert.Equal(exit == 0 ? "" : "github proposal stopped before publication: " + code + "\n", stderr.ToString());
     }

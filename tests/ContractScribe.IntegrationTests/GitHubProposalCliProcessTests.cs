@@ -11,6 +11,35 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [Fact]
+    public async Task Applied_claim_readback_failure_reaches_the_real_CLI_as_a_closed_call_diagnostic()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.GitHub.After = request =>
+        {
+            if (request.Method == "POST" && request.Path == "/graphql")
+            {
+                fixture.GitHub.RejectPath = "/git/ref/heads/contract-scribe/coordination/";
+                fixture.GitHub.RejectionStatus = 404;
+            }
+        };
+        var result = await fixture.Run("start");
+        AssertResult(result, 3, "conflict");
+        using var json = JsonDocument.Parse(result.Stdout);
+        var diagnostic = json.RootElement.GetProperty("publicationDiagnostic");
+        Assert.Equal("CoordinationClaim", diagnostic.GetProperty("boundary").GetString());
+        Assert.Equal("Coordination", diagnostic.GetProperty("owner").GetString());
+        Assert.Equal(JsonValueKind.Null, diagnostic.GetProperty("transportCode").ValueKind);
+        Assert.Equal("NotFound", diagnostic.GetProperty("recoveryCode").GetString());
+        Assert.Equal(404, diagnostic.GetProperty("recoveryHttpStatus").GetInt32());
+        Assert.Equal("claimed", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
+        Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.Equal(0, fixture.GitHub.PrAttempts);
+        Assert.Equal(1, fixture.GitHub.SuccessfulCas);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [Fact]
     public async Task Fresh_process_reconstructs_and_charges_but_replays_the_original_publication_without_writes()
     {
         if (!OperatingSystem.IsLinux()) return;
@@ -110,10 +139,14 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("github-proposal." + outcome, json.RootElement.GetProperty("outcome").GetString());
         Assert.Equal(new[] { "githubProposalEnvelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion",
             "campaignOperation", "publicationOperationId", "generationId", "outcome", "diagnosticCodes",
-            "checkpointRevision", "pullRequestUrl" }, json.RootElement.EnumerateObject().Select(p => p.Name));
+            "checkpointRevision", "pullRequestUrl", "publicationDiagnostic" }, json.RootElement.EnumerateObject().Select(p => p.Name));
         Assert.EndsWith("}\n", result.Stdout);
         Assert.DoesNotContain('\r', result.Stdout);
-        if (exit == 0) Assert.Empty(result.Stderr);
+        if (exit == 0)
+        {
+            Assert.Empty(result.Stderr);
+            Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("publicationDiagnostic").ValueKind);
+        }
         else Assert.Single(result.Stderr.Split('\n', StringSplitOptions.RemoveEmptyEntries));
         Assert.DoesNotContain(Fixture.Placeholder, result.Stdout + result.Stderr);
     }

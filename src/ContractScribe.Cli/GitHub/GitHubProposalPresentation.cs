@@ -78,7 +78,8 @@ internal static class GitHubProposalPresentation
         });
         return Result(identity, operation, "publication", outcome, revision,
             Exit(outcome) == 0 ? [] : [new(code, "github proposal publication stopped: " + code)],
-            observation.OperationId, observation.GenerationId, observation.PullRequestUrl) with
+            observation.OperationId, observation.GenerationId, observation.PullRequestUrl,
+            publicationDiagnostic: Exit(outcome) == 0 ? null : observation.Diagnostic) with
         { IsPublication = true };
     }
 
@@ -94,7 +95,8 @@ internal static class GitHubProposalPresentation
 
     private static CliExecutionResult Result(CliBuildIdentity identity, CampaignOperation? operation,
         string layer, string outcome, long? revision, IReadOnlyList<CliDiagnostic> diagnostics,
-        string? publicationOperation = null, string? generation = null, string? url = null, int? exitOverride = null)
+        string? publicationOperation = null, string? generation = null, string? url = null, int? exitOverride = null,
+        GitHubPublicationDiagnostic? publicationDiagnostic = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
@@ -119,10 +121,43 @@ internal static class GitHubProposalPresentation
             if (revision is null) writer.WriteNull("checkpointRevision");
             else writer.WriteNumber("checkpointRevision", revision.Value);
             writer.WriteString("pullRequestUrl", url);
+            WriteDiagnostic(writer, publicationDiagnostic);
             writer.WriteEndObject();
         }
         return new CliExecutionResult(exitOverride ?? Exit(outcome), Encoding.UTF8.GetString(buffer.WrittenSpan) + "\n", diagnostics)
         { AuthoritativeCheckpointRevision = revision };
+    }
+
+    private static void WriteDiagnostic(Utf8JsonWriter writer, GitHubPublicationDiagnostic? diagnostic)
+    {
+        if (diagnostic is not { IsValid: true })
+        {
+            writer.WriteNull("publicationDiagnostic");
+            return;
+        }
+        writer.WriteStartObject("publicationDiagnostic");
+        writer.WriteString("boundary", diagnostic.Boundary.ToString());
+        writer.WriteString("owner", diagnostic.Owner.ToString());
+        WriteEnum(writer, "coordinationFailure", diagnostic.CoordinationFailure);
+        WriteEnum(writer, "proposalFailure", diagnostic.ProposalFailure);
+        WriteEnum(writer, "pullRequestOutcome", diagnostic.PullRequestOutcome);
+        WriteEnum(writer, "transportCode", diagnostic.TransportCode);
+        WriteStatus(writer, "transportHttpStatus", diagnostic.TransportHttpStatus);
+        WriteEnum(writer, "delivery", diagnostic.Delivery);
+        WriteEnum(writer, "recoveryCode", diagnostic.RecoveryCode);
+        WriteStatus(writer, "recoveryHttpStatus", diagnostic.RecoveryHttpStatus);
+        WriteEnum(writer, "objectKind", diagnostic.ObjectKind);
+        WriteEnum(writer, "predicate", diagnostic.Predicate);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteEnum<T>(Utf8JsonWriter writer, string name, T? value) where T : struct, Enum =>
+        writer.WriteString(name, value?.ToString());
+
+    private static void WriteStatus(Utf8JsonWriter writer, string name, int? value)
+    {
+        if (value is null) writer.WriteNull(name);
+        else writer.WriteNumber(name, value.Value);
     }
 
     internal static void Write(CliExecutionResult result, TextWriter output, TextWriter error)
