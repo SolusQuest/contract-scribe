@@ -194,6 +194,8 @@ operation=<operation-commitment-sha256>
 stage=<lexical-stage-id>
 ```
 
+For the fixed coordination and proposal messages in this contract, response verification accepts the exact raw message or the observed REST representation that omits its single terminal LF. The independently prepared raw commit OID and all tree, parent, actor, date, state, and content checks must still match. This does not change the canonical raw preimage, request message, or known-answer OID, and does not allow general whitespace trimming, CRLF conversion, or other message changes. The response parser retains the observed text; this narrow equivalence is applied only by the owning commit verifier.
+
 For expected-absence initial creation, `coordinationPredecessorOid` and the
 coordination-ref `beforeOid` are forty zeroes, while the commit parent is the
 exact authenticated `targetCommitOid`. The zero value is ref-absence evidence,

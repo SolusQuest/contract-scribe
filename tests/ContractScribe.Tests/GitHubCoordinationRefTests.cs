@@ -2514,7 +2514,8 @@ public sealed partial class GitHubCoordinationRefTests
             sha = commit.Oid,
             tree = new { sha = commit.Tree },
             parents = new[] { new { sha = commit.Parent } },
-            message = commit.Message,
+            // GitHub's response omits the final LF; stored raw bytes still determine the OID.
+            message = commit.Message.EndsWith('\n') ? commit.Message[..^1] : commit.Message,
             author = Actor(commit.Author),
             committer = Actor(commit.Committer),
         };

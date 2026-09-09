@@ -1125,7 +1125,8 @@ public sealed class GitHubProposalBranchTests
             sha = c.Oid,
             tree = new { sha = c.TreeOid },
             parents = c.Parents.Select(p => new { sha = p }).ToArray(),
-            message = c.Message,
+            // Project only the HTTP response, never the raw commit used for hashing.
+            message = c.Message.EndsWith('\n') ? c.Message[..^1] : c.Message,
             author = ActorResponse(c.Author),
             committer = ActorResponse(c.Committer),
         };

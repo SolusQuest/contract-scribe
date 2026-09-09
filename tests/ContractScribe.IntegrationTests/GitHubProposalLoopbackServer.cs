@@ -188,7 +188,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
                 e!["path"]!.GetValue<string>(), e["mode"]!.GetValue<string>(), e["sha"]!.GetValue<string>())).ToArray());
             return (201, TreeResponse(oid));
         }
-        if (path == "/repos/Owner/repo/git/commits") return (201, Commits[AddCommit(body)]);
+        if (path == "/repos/Owner/repo/git/commits") return (201, CommitResponse(Commits[AddCommit(body)]));
         if (path == "/graphql")
         {
             Assert.Equal("mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}", body["query"]!.GetValue<string>());
@@ -261,8 +261,17 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         if (path.Contains("/git/blobs/", StringComparison.Ordinal) && Blobs.TryGetValue(key, out var bytes))
             return (200, new { sha = key, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
         if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(key)) return (200, TreeResponse(key));
-        if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(key, out var commit)) return (200, commit);
+        if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(key, out var commit)) return (200, CommitResponse(commit));
         return Missing();
+    }
+
+    private static JsonObject CommitResponse(JsonObject raw)
+    {
+        var response = raw.DeepClone().AsObject();
+        var message = response["message"]!.GetValue<string>();
+        // GitHub projects the message field; retain the raw object and its independently hashed OID.
+        if (message.EndsWith('\n')) response["message"] = message[..^1];
+        return response;
     }
 
     internal void Lifecycle(string kind)

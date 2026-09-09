@@ -1315,7 +1315,7 @@ internal sealed class GitHubCoordinationStore
     private static bool ExactCommit(GitHubCommit commit, GitHubPreparedCoordination prepared) =>
         commit.Oid == prepared.CommitOid && commit.TreeOid == prepared.RootTreeOid
         && commit.Parents.Length == 1 && commit.Parents[0] == prepared.ParentOid
-        && commit.Message == prepared.Message
+        && commit.HasOwnedMessage(prepared.Message)
         && ExactActor(commit.Author) && ExactActor(commit.Committer);
 
     private static bool ExactActor(GitHubCommitActor actor) =>
