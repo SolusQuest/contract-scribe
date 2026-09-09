@@ -12,7 +12,7 @@ Owner `Yuee98` retains generated refs, commits, and draft PRs and owns later cle
 
 Three separate authorizations apply:
 
-1. **Stage A:** the already authorized synthetic initialization and source work. The maintainer subsequently authorized one corrective PR for the observed lost-diagnostic failure, explicit PR-head offline checkout, and complete premerge proof. No live invocation is authorized by that source work.
+1. **Stage A:** the already authorized synthetic initialization and source work. The maintainer subsequently authorized one corrective PR for the observed lost-diagnostic failure, explicit PR-head offline checkout, complete premerge proof, and the three-consumer product correction for REST commit-message projection. No live invocation is authorized by that source work.
 2. **Before human merge:** after exact-head local validation, required CI and Relay source review, obtain explicit authority to place the exact reviewed YAML in the sandbox while activation is absent. Prepare the exact installation commit against the freshly verified expected `main` tip, present its diff and source digest, and publish only an ordinary non-force fast-forward. Read back the new commit and exact bytes. Source review establishes source acceptability for installation, not final Ready. There is no evidence-copy PR or synchronization service.
 3. **Stage B:** a separate explicit authorization of the completed revision tuple, current settings/observer, finite run slots/window, three scenarios, temporary checkpoint transfer, and owners. Source review, human merge or placement authorization does not grant this authority. The corrective source PR remains draft until full live acceptance and final GitHub/Relay evidence review pass.
 
@@ -20,13 +20,15 @@ Three separate authorizations apply:
 
 | Value | Meaning |
 | --- | --- |
-| P | Accepted H2 product source `11acc2f3fbd472a82b7fbdacd21af21b1f105c80`, built and executed in Release. |
+| P | Product correction commit `f3b74326f7f8849cf90c2ba206c233e8bcfcf69c` within the reviewed corrective PR, built and executed in Release. |
 | S | Reviewed and explicitly authorized exact ContractScribe PR head containing this workflow and its helper/fixture. |
 | W | Installed sandbox workflow revision, compared with actual `github.workflow_sha`. |
 | B | Approved sandbox `main` tip after installation, compared with actual run head and live target. It may equal W and must differ from bootstrap. |
 | O | The fixed observer path, ID, defining commit, content digest, enabled state, and filters above. |
 
 The installed YAML must be byte-identical to `.github/workflows/m5-github-proposal-proof.yml` at S. Product, proof source, and target are separate exact-commit checkouts. An alternate branch, superseding default-branch commit, changed workflow bytes, or missing revision fails the gate. Helpers come from S, not the earlier P. The sandbox schedule executes its own default branch and fetches exact S and P; S need not be merged in ContractScribe. Never follow a moving source branch or automatically authorize a new PR head. Any changed tested head or relevant execution identity stops continuation and requires applicable review and fresh explicit finite authority before another proof.
+
+P contains the product correction, its tests, and the raw-object contract clarification; the following S binds this proof to that immutable P. Verify P is an ancestor of S and that product, .NET tests, checkpoint helper, SDK/package, and build inputs are unchanged between them. Offline CI builds S and checks its S assembly baseline; live execution separately builds P and must report P. Source equivalence does not make an S binary a P binary. Earlier failed run slots and authorization tuples remain consumed.
 
 Fill `tests/fixtures/github/live-proof/authorization.example.json` only after installation readback. The example is intentionally invalid/inert. Store the completed non-secret JSON as repository variable `M5_H3_PROOF`. All listed fields are required; extra fields are rejected. The maintainer's authorized identity is login `Yuee98`, account ID `16307884`. The finite scenario list is exactly `stale`, `published`, `replayed`. The UTC interval has explicit seconds and `Z`, lasts at most six hours, and must fit the original checkpoint artifact's actual expiry.
 

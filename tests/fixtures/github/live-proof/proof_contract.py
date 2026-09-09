@@ -12,7 +12,7 @@ import yaml
 REPOSITORY = 'SolusQuest/contract-scribe-sandbox'
 REPOSITORY_ID = 1361354906
 REPOSITORY_NODE = 'R_kgDOUSSgmg'
-PRODUCT = '11acc2f3fbd472a82b7fbdacd21af21b1f105c80'
+PRODUCT = 'f3b74326f7f8849cf90c2ba206c233e8bcfcf69c'
 BOOTSTRAP = 'b4fdbb719974f6182cde137e5c900f91435424e7'
 WORKFLOW = '.github/workflows/m5-github-proposal-proof.yml'
 OBSERVER = '.github/workflows/pr-observer.yml'
