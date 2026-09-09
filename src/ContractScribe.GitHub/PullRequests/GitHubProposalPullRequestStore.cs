@@ -209,7 +209,9 @@ internal sealed class GitHubProposalPullRequestStore
         var candidate = candidates[0];
         if (active > (candidate.Open ? 1 : 0)) return Conflict();
         var classified = Classify(state, expected, metadata, candidate, previous);
-        if (classified.Observation is null) return classified;
+        if (classified.Observation is null)
+            return classified.Cause == GitHubCoordinationFailureKind.HumanChange
+                ? await ConfirmHumanChangeAsync(state, cancellationToken).ConfigureAwait(false) : classified;
         // Close the read window against a changed coordination/proposal authority.
         var final = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (final.State is null) return ClaimFailure(final);
@@ -310,7 +312,8 @@ internal sealed class GitHubProposalPullRequestStore
     {
         var reference = await client.GetRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
         if (reference.Value is null) return Failed(reference);
-        if (reference.Value.Oid != expected.CommitOid) return HumanChange();
+        if (reference.Value.Oid != expected.CommitOid)
+            return await ConfirmHumanChangeAsync(state, cancellationToken).ConfigureAwait(false);
         var commit = await client.GetCommitAsync(expected.CommitOid, cancellationToken).ConfigureAwait(false);
         if (commit.Value is null) return Failed(commit);
         if (commit.Value.TreeOid != expected.TreeOid) return Conflict();
@@ -320,6 +323,17 @@ internal sealed class GitHubProposalPullRequestStore
         if (target.Value is null) return Failed(target);
         // A merged PR may legitimately advance the target. Eligibility is checked after classification.
         return null;
+    }
+
+    private async ValueTask<GitHubProposalResult> ConfirmHumanChangeAsync(
+        IGitHubCoordinationStateCapability state, CancellationToken cancellationToken)
+    {
+        // A legitimate append can move the proposal while this reader still holds its predecessor.
+        // Attribute drift to a human only under the same authenticated coordination authority.
+        var current = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
+        if (current.State is null) return ClaimFailure(current);
+        return current.State.HeadOid == state.HeadOid && current.State.Repository == state.Repository
+            ? HumanChange() : Conflict();
     }
 
     private static bool Stable(GitHubPullRequest list, GitHubPullRequest detail) =>

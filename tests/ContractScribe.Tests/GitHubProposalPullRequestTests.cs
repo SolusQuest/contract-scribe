@@ -323,6 +323,8 @@ public sealed class GitHubProposalPullRequestTests
         }
         var result = await h.Store.CreateAsync(h.State, h.Head);
         Assert.Contains(result.Outcome, new[] { GitHubProposalOutcome.Conflict, GitHubProposalOutcome.Failed });
+        if (kind is "title" or "body" or "marker" or "bot" or "user" or "head" or "head-repo" or "base-ref" or "generation" or "proposal")
+            Assert.Equal(GitHubCoordinationFailureKind.HumanChange, result.Cause);
         Assert.Null(result.Observation);
         Assert.Equal(1, h.Remote.Posts);
     }
@@ -420,6 +422,82 @@ public sealed class GitHubProposalPullRequestTests
     }
 
     [Theory]
+    [InlineData("first-proposal", "append")]
+    [InlineData("classification", "append")]
+    [InlineData("final-proposal", "append")]
+    [InlineData("first-proposal", "stable")]
+    [InlineData("classification", "stable")]
+    [InlineData("final-proposal", "stable")]
+    [InlineData("first-proposal", "unavailable")]
+    [InlineData("classification", "unavailable")]
+    [InlineData("final-proposal", "unavailable")]
+    [InlineData("first-proposal", "invalid")]
+    [InlineData("classification", "invalid")]
+    [InlineData("final-proposal", "invalid")]
+    public async Task Human_change_requires_a_stable_authenticated_coordination_window(string window, string coordination)
+    {
+        using var initial = await Harness.Create();
+        await initial.Publish(await initial.Store.CreateAsync(initial.State, initial.Head));
+        var authority = AppendAuthority(initial.Authority, "append-observation-race", '6');
+        using var observer = await Harness.Create(initial.Remote, authority, seed: false);
+        using var writer = await Harness.Create(initial.Remote, authority, seed: false);
+        var read = await writer.Coordination.ReadCurrentAsync();
+        var claim = await writer.Coordination.ClaimAsync(read.Read!);
+        var content = await writer.Coordination.AdvanceAsync(claim.State!, GitHubCoordinationStageUpdate.ContentCreated(Oid('4')));
+        var advanced = await writer.Coordination.AdvanceAsync(content.State!, GitHubCoordinationStageUpdate.ProposalRefAdvanced(Oid('4'), Oid('3')));
+        Assert.Null(advanced.Failure);
+        // Prebuild a legal append with real R3 APIs, then expose it at the selected read boundary.
+        initial.Remote.Coordination.ForceCoordinationHead(observer.State.HeadOid);
+        var proposalReads = 0;
+        initial.Remote.BeforeGet = path =>
+        {
+            if (path.Contains("/git/ref/heads/contract-scribe/proposals/", StringComparison.Ordinal)) proposalReads++;
+            if (!(window == "classification" && path == "/repos/Owner/repo/pulls")
+                && !(window == "first-proposal" && proposalReads == 1)
+                && !(window == "final-proposal" && proposalReads == 2)) return;
+            initial.Remote.BeforeGet = null;
+            initial.Remote.Head = Oid('4');
+            initial.Remote.Prs[0]["head"]!["sha"] = Oid('4');
+            if (coordination == "append") initial.Remote.Coordination.ForceCoordinationHead(advanced.State!.HeadOid);
+            if (coordination == "invalid") initial.Remote.Coordination.SeedRaw(
+                Encoding.UTF8.GetBytes("{}\n"), new string('a', 64), "claimed", Oid('1'));
+            if (coordination == "unavailable") initial.Remote.RepositoryReadError = HttpStatusCode.Forbidden;
+        };
+        var writes = initial.Remote.Coordination.ObjectMutationAttempts + initial.Remote.Coordination.RefMutationAttempts;
+        var requests = initial.Remote.Requests.Count;
+
+        var result = await observer.Store.ObserveAsync(observer.State, observer.Head);
+
+        Assert.Null(initial.Remote.BeforeGet);
+        Assert.Null(result.Observation);
+        Assert.Single(initial.Remote.Prs);
+        Assert.Equal(1, initial.Remote.Posts);
+        Assert.Equal(writes, initial.Remote.Coordination.ObjectMutationAttempts + initial.Remote.Coordination.RefMutationAttempts);
+        Assert.All(initial.Remote.Requests.Skip(requests), request => Assert.StartsWith("GET ", request));
+        if (coordination is "append" or "stable")
+        {
+            Assert.Equal(GitHubDelivery.Read, result.Delivery);
+            Assert.Equal(GitHubProposalOutcome.Conflict, result.Outcome);
+            Assert.Equal(coordination == "stable" ? GitHubCoordinationFailureKind.HumanChange : (GitHubCoordinationFailureKind?)null, result.Cause);
+            Assert.Null(result.Failure);
+            if (coordination == "append") Assert.Equal(advanced.State!.HeadOid,
+                (await observer.Coordination.ReadCurrentAsync()).State!.HeadOid);
+        }
+        else
+        {
+            var failed = await observer.Coordination.ReadCurrentAsync();
+            Assert.Null(failed.State);
+            Assert.NotNull(failed.Failure);
+            Assert.Equal(failed.Failure.Delivery, result.Delivery);
+            Assert.Equal(failed.Failure.Kind == GitHubCoordinationFailureKind.Transport ? GitHubProposalOutcome.Failed : GitHubProposalOutcome.Conflict, result.Outcome);
+            Assert.Equal(failed.Failure.Kind, result.Cause);
+            Assert.Equal(failed.Failure.ReadbackFailure ?? failed.Failure.TransportFailure, result.Failure);
+            if (coordination == "unavailable") Assert.Equal(403, result.Failure!.HttpStatus);
+            if (coordination == "invalid") Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Cause);
+        }
+    }
+
+    [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
@@ -514,8 +592,10 @@ public sealed class GitHubProposalPullRequestTests
         internal bool LoseResponse, HideCreated, Paginate, Duplicate, FailLastPage;
         internal bool DelayRecovery;
         internal HttpStatusCode? PostError, RecoveryReadError;
+        internal HttpStatusCode? RepositoryReadError;
         internal bool CreateBeforePostError;
         internal Action? BeforePost, AfterPost, AfterDetail;
+        internal Action<string>? BeforeGet;
         internal TaskCompletionSource? ConcurrentPosts;
         private readonly object gate = new();
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request, CancellationToken cancellationToken)
@@ -525,6 +605,9 @@ public sealed class GitHubProposalPullRequestTests
                 return Json(readError, new { message = "synthetic recovery error" });
             var path = request.RequestUri!.AbsolutePath;
             lock (gate) Requests.Add(request.Method + " " + path);
+            if (request.Method == HttpMethod.Get) BeforeGet?.Invoke(path);
+            if (path == "/repos/Owner/repo" && RepositoryReadError is { } repositoryError)
+                return Json(repositoryError, new { message = "synthetic repository error" });
             if (path == "/repos/Owner/repo/pulls" && request.Method == HttpMethod.Post)
             {
                 var count = Interlocked.Increment(ref Posts);
