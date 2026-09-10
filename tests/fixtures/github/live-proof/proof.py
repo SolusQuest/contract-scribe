@@ -311,13 +311,28 @@ def remote_snapshot(api):
                               'body_digest': sha((pr.get('body') or '').encode()), 'actor': pr['user']['id']} for pr in owned], key=lambda pr: pr['number'])}
 
 
+def trial_snapshot(config, snapshot):
+    lineage = 'campaign.issue166.' + config['activation']
+    current = 'refs/heads/contract-scribe/coordination/' + identity_hash(
+        'coordination-ref', 'solusquest', 'contract-scribe-sandbox', 'refs/heads/main', lineage)
+    refs = {ref['ref'] for ref in RETAINED_HISTORY['refs']}
+    pulls = {pr['number'] for pr in RETAINED_HISTORY['pulls']}
+    require(current not in refs, 'history-overlaps-trial')
+    history = {'refs': [ref for ref in snapshot['refs'] if ref['ref'] in refs],
+               'pulls': [pr for pr in snapshot['pulls'] if pr['number'] in pulls]}
+    require(history == RETAINED_HISTORY, 'retained-history-changed')
+    return {'refs': [ref for ref in snapshot['refs'] if ref['ref'] not in refs],
+            'pulls': [pr for pr in snapshot['pulls'] if pr['number'] not in pulls]}
+
+
 def published_facts(config, api, *, inspect_trees=False):
     snapshot = remote_snapshot(api)
-    require(len(snapshot['refs']) == 2 and len(snapshot['pulls']) == 1, 'published-resource-count')
+    current = trial_snapshot(config, snapshot)
+    require(len(current['refs']) == 2 and len(current['pulls']) == 1, 'published-resource-count')
     lineage = 'campaign.issue166.' + config['activation']
     key = identity_hash('coordination-ref', 'solusquest', 'contract-scribe-sandbox', 'refs/heads/main', lineage)
-    coordination = [ref for ref in snapshot['refs'] if ref['ref'] == 'refs/heads/contract-scribe/coordination/' + key]
-    proposals = [ref for ref in snapshot['refs'] if ref['ref'].startswith('refs/heads/contract-scribe/proposals/')]
+    coordination = [ref for ref in current['refs'] if ref['ref'] == 'refs/heads/contract-scribe/coordination/' + key]
+    proposals = [ref for ref in current['refs'] if ref['ref'].startswith('refs/heads/contract-scribe/proposals/')]
     require(len(coordination) == len(proposals) == 1, 'publication-refs')
     state = parse_json(api.content('.contract-scribe/coordination-state-v1.json', coordination[0]['oid']))
     require(state.get('stage') == 'published' and state.get('repositoryId') == REPOSITORY
@@ -326,7 +341,7 @@ def published_facts(config, api, *, inspect_trees=False):
             and state.get('generationId') == 'generation.issue166.' + config['activation']
             and state.get('transition') == 'initial' and state.get('expectedBaseOid') == state.get('observedBaseOid') == config['base_sha']
             and state.get('proposalRefOid') == state.get('proposalCommitOid') == state.get('contentCommitOid') == proposals[0]['oid'], 'coordination-state')
-    pr = api.get('pulls/' + str(snapshot['pulls'][0]['number']))
+    pr = api.get('pulls/' + str(current['pulls'][0]['number']))
     require(pr.get('number') == state.get('pullRequestNumber') and pr.get('state') == 'open' and pr.get('draft') is True
             and pr.get('merged') is False and all(pr.get('user', {}).get(k) == v for k, v in ACTOR.items())
             and pr.get('head', {}).get('sha') == proposals[0]['oid'] and 'refs/heads/' + pr['head']['ref'] == proposals[0]['ref']
@@ -381,7 +396,7 @@ def invoke(scenario):
     api = Api()  # Never receives the product token.
     if scenario == 'negative':
         before = remote_snapshot(api)
-        require(before == {'refs': [], 'pulls': []}, 'preexisting-work')
+        require(trial_snapshot(config, before) == {'refs': [], 'pulls': []}, 'preexisting-work')
         (root / 'before.json').write_bytes(canonical(before))
     elif scenario == 'positive':
         require((root / 'negative.ok').read_text() == 'stale', 'negative-not-complete')
@@ -411,8 +426,17 @@ def invoke(scenario):
                 '--snapshot', 'snapshot.issue166.' + config['activation'], '--state', str(checkpoint),
                 '--configuration', str(root / 'campaign.json'), '--github-configuration',
                 str(root / ('github-negative.json' if scenario == 'negative' else 'github-positive.json'))]
-        process = subprocess.run(args, env=environment, capture_output=True, timeout=180)
-        result = scenario_result(scenario, process.returncode, process.stdout)
+        try:
+            process = subprocess.run(args, env=environment, capture_output=True, timeout=360)
+        except subprocess.TimeoutExpired:
+            # subprocess.run kills and waits for its child before raising. Never
+            # emit the exception's command, partial stdout/stderr or credential.
+            raise ProofFailure('product-process-timeout') from None
+        try:
+            result = scenario_result(scenario, process.returncode, process.stdout)
+        except ProofFailure:
+            print('scenario-unexpected:' + canonical(unexpected_result_summary(process.returncode, process.stdout)).decode())
+            raise
         (root / (scenario + '-result.json')).write_bytes(canonical(result))
     finally:
         provider.terminate()

@@ -135,6 +135,45 @@ class GateTests(unittest.TestCase):
         with self.assertRaisesRegex(ProofFailure, 'duplicate-property'):
             workflow_document(b'jobs: {}\njobs: {}\n')
 
+    def test_offline_checkout_assertion_and_product_baseline_use_exact_pr_head(self):
+        document = workflow_document((proof.SOURCE / WORKFLOW).read_bytes())
+        job = document['jobs']['offline']
+        self.assertEqual({'contents': 'read'}, job['permissions'])
+        steps = job['steps']
+        checkout = next(step for step in steps if step.get('uses', '').startswith('actions/checkout@'))
+        expected = '${{ github.event.pull_request.head.sha }}'
+        self.assertEqual(expected, checkout['with'].get('ref'))
+        self.assertEqual('false', checkout['with']['persist-credentials'])
+        assertion = next(step for step in steps if step.get('name') == 'Assert exact PR head before building')
+        self.assertEqual(expected, assertion['env']['EXPECTED_SHA'])
+        self.assertEqual('bash', assertion['shell'])
+        build = next(step for step in steps if 'dotnet build ' in step.get('run', ''))
+        test = next(step for step in steps if 'M5_TEST_PRODUCT_SHA' in step.get('env', {}))
+        self.assertEqual(expected, test['env']['M5_TEST_PRODUCT_SHA'])
+        self.assertLess(steps.index(checkout), steps.index(assertion))
+        self.assertLess(steps.index(assertion), steps.index(build))
+        self.assertLess(steps.index(build), steps.index(test))
+        if sys.platform != 'linux':
+            return  # The hosted Linux job also executes its actual bash assertion below.
+        with tempfile.TemporaryDirectory(prefix='m5-head-') as temporary:
+            environment = dict(proof.clean_environment(), GIT_CONFIG_GLOBAL='/dev/null', GIT_CONFIG_NOSYSTEM='1',
+                               GIT_AUTHOR_NAME='Synthetic', GIT_AUTHOR_EMAIL='synthetic@example.invalid',
+                               GIT_COMMITTER_NAME='Synthetic', GIT_COMMITTER_EMAIL='synthetic@example.invalid')
+            def git(*args):
+                return subprocess.check_output(['git', *args], cwd=temporary, env=environment, stderr=subprocess.DEVNULL).decode().strip()
+            git('init', '--quiet')
+            git('commit', '--quiet', '--allow-empty', '-m', 'Expected PR head')
+            expected_sha = git('rev-parse', 'HEAD')
+            environment['EXPECTED_SHA'] = expected_sha
+            for mismatch in (False, True):
+                if mismatch:
+                    git('commit', '--quiet', '--allow-empty', '-m', 'Different checkout')
+                result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', assertion['run']],
+                                        cwd=temporary, env=environment, capture_output=True, text=True, timeout=15)
+                self.assertEqual(not mismatch, result.returncode == 0, result.stdout + result.stderr)
+                self.assertIn('expected=' + expected_sha, result.stdout)
+                self.assertIn('actual=' + git('rev-parse', 'HEAD'), result.stdout)
+
     def test_actual_workflow_token_attachments_and_native_transfer(self):
         document = workflow_document((proof.SOURCE / WORKFLOW).read_bytes())
         attachments = []
@@ -303,7 +342,7 @@ class ResultTests(unittest.TestCase):
             stack.enter_context(mock.patch.object(proof, 'context', return_value=ctx))
             stack.enter_context(mock.patch.object(proof, 'fresh_gate', return_value='manual'))
             stack.enter_context(mock.patch.object(proof, 'work', return_value=root))
-            stack.enter_context(mock.patch.object(proof, 'remote_snapshot', return_value={'refs': [], 'pulls': []}))
+            stack.enter_context(mock.patch.object(proof, 'remote_snapshot', return_value=RETAINED_HISTORY))
             stack.enter_context(mock.patch.object(proof.subprocess, 'Popen', side_effect=start_provider))
             stack.enter_context(mock.patch.object(proof.subprocess, 'run', side_effect=run_cli))
             stack.enter_context(mock.patch('provider.wait_ready'))

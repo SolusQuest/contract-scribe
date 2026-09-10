@@ -97,7 +97,7 @@ internal static class GitHubCoordinationObjects
             && commit.TreeOid == expected.RootTreeOid
             && commit.Parents.Length == 1
             && commit.Parents[0] == expected.ParentOid
-            && commit.Message == expected.Message
+            && commit.HasOwnedMessage(expected.Message)
             && Actor(commit.Author)
             && Actor(commit.Committer));
     }

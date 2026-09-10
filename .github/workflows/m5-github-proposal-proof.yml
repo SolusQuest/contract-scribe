@@ -36,6 +36,15 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact PR head before building
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          actual=$(git rev-parse HEAD)
+          printf 'H3 offline expected=%s actual=%s\n' "$EXPECTED_SHA" "$actual"
+          test "$actual" = "$EXPECTED_SHA"
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           dotnet-version: '10.0.x'
@@ -49,7 +58,7 @@ jobs:
         env:
           M5_TEST_CLI: ${{ github.workspace }}/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll
           M5_TEST_CHECKER: ${{ github.workspace }}/tests/fixtures/github/live-proof/CheckpointCheck/bin/Release/net10.0/CheckpointCheck.dll
-          M5_TEST_PRODUCT_SHA: ${{ github.sha }}
+          M5_TEST_PRODUCT_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           python3 -m venv "$RUNNER_TEMP/m5-tests"
           "$RUNNER_TEMP/m5-tests/bin/pip" install --disable-pip-version-check -r tests/fixtures/github/live-proof/requirements.txt

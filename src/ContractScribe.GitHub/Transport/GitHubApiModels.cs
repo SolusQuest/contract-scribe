@@ -65,7 +65,14 @@ internal sealed record GitHubTreeEntry(string Path, GitHubTreeMode Mode, string 
 internal sealed record GitHubTree(string Oid, ImmutableArray<GitHubTreeEntry> Entries) : GitHubValue;
 internal sealed record GitHubCommitActor(string Name, string Email, DateTimeOffset Date) : GitHubValue;
 internal sealed record GitHubCommit(string Oid, string TreeOid, ImmutableArray<string> Parents,
-    string Message, GitHubCommitActor Author, GitHubCommitActor Committer) : GitHubValue;
+    string Message, GitHubCommitActor Author, GitHubCommitActor Committer) : GitHubValue
+{
+    // Owners separately require the expected raw OID and all other commit fields.
+    // Accept the observed REST projection of their fixed LF-terminated message without changing raw bytes.
+    internal bool HasOwnedMessage(string expected) => Message == expected
+        || (expected.Length > 1 && expected[^1] == '\n' && expected[^2] is not ('\n' or '\r')
+            && Message.AsSpan().SequenceEqual(expected.AsSpan(0, expected.Length - 1)));
+}
 internal sealed record GitHubPullRequestHead(GitHubRepositoryIdentity? Repository, string? Ref, string? Oid) : GitHubValue;
 internal sealed record GitHubPullRequest(long Id, string NodeId, int Number, bool Open, bool Draft,
     bool? Merged, DateTimeOffset? MergedAt, DateTimeOffset? ClosedAt, DateTimeOffset CreatedAt,

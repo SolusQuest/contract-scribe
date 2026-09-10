@@ -5,7 +5,7 @@ using ContractScribe.GitHub.Transport;
 namespace ContractScribe.GitHub.Publication;
 
 internal sealed record GitHubPublicationObservation(
-    GitHubPublicationResult Result, string? OperationId, string? GenerationId, string? PullRequestUrl);
+    GitHubPublicationResult Result, string? OperationId, string? GenerationId, string? PullRequestUrl, GitHubPublicationDiagnostic? Diagnostic = null);
 
 internal static class GitHubPublicationFacade
 {
@@ -31,13 +31,13 @@ internal static class GitHubPublicationFacade
         {
             var reconciler = GitHubPublicationReconciler.Create(client,
                 new GitHubActor(41898282, "MDM6Qm90NDE4OTgyODI=", "github-actions[bot]", GitHubActorKind.Bot));
-            var result = await reconciler.PublishAsync(authority, payload, token).ConfigureAwait(false);
+            var result = await reconciler.PublishObservedAsync(authority, payload, token).ConfigureAwait(false);
             // Only this same lifetime can carry R6's private PR-create entitlement.
-            if (result.Kind == GitHubPublicationResultKind.RecoveredRefPartial)
+            if (result.Result.Kind == GitHubPublicationResultKind.RecoveredRefPartial)
             {
-                result = await reconciler.PublishAsync(authority, payload, token).ConfigureAwait(false);
+                result = await reconciler.PublishObservedAsync(authority, payload, token).ConfigureAwait(false);
             }
-            selected = Observe(authority, result, client.AuthenticatedRepository);
+            selected = Observe(authority, result.Result, client.AuthenticatedRepository, result.Diagnostic);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
@@ -51,7 +51,7 @@ internal static class GitHubPublicationFacade
 
     internal static GitHubPublicationObservation Observe(
         ValidatedGitHubPublicationAuthority authority, GitHubPublicationResult result,
-        GitHubRepositoryIdentity? repository)
+        GitHubRepositoryIdentity? repository, GitHubPublicationDiagnostic? diagnostic = null)
     {
         string? operation = null;
         string? generation = null;
@@ -84,6 +84,6 @@ internal static class GitHubPublicationFacade
             ? "https://github.com/" + repository.Owner + "/" + repository.Name + "/pull/"
                 + number.Value.ToString(CultureInfo.InvariantCulture)
             : null;
-        return new(result, operation, generation, url);
+        return new(result, operation, generation, url, diagnostic);
     }
 }

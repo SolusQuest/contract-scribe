@@ -1,6 +1,6 @@
 {
-  "product_sha": "11acc2f3fbd472a82b7fbdacd21af21b1f105c80",
-  "source_sha": "SET_AFTER_HUMAN_MERGE",
+  "product_sha": "22142cf04efc66b728e5cdb8951efa2d15934aca",
+  "source_sha": "SET_TO_REVIEWED_EXACT_PR_HEAD",
   "workflow_sha": "SET_AFTER_AUTHORIZED_INSTALLATION",
   "base_sha": "SET_AFTER_AUTHORIZED_INSTALLATION",
   "workflow_digest": "SHA256_OF_EXACT_INSTALLED_WORKFLOW_BYTES",

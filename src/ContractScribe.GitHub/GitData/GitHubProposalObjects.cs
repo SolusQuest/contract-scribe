@@ -69,7 +69,7 @@ internal static class GitHubProposalObjects
     internal static bool ExactCommit(GitHubCommit actual, GitHubCreateCommit expected) =>
         actual.Oid == expected.ExpectedOid && actual.TreeOid == expected.TreeOid
         && actual.Parents.Length == 1 && actual.Parents[0] == expected.ParentOid
-        && actual.Message == expected.Message && actual.Author == expected.Author
+        && actual.HasOwnedMessage(expected.Message) && actual.Author == expected.Author
         && actual.Committer == expected.Committer
         && actual.Author.Date.Offset == TimeSpan.Zero && actual.Committer.Date.Offset == TimeSpan.Zero;
 
