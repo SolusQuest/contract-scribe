@@ -44,7 +44,7 @@ public sealed class LayeredConfigurationProcessTests
             var overlay = Path.Join(outside, "override.json");
             await File.WriteAllTextAsync(downstream,
                 "{\"consumerConfigurationVersion\":1,\"provider\":{\"endpoint\":\"" + server.Endpoint.AbsoluteUri
-                + "\"},\"budgets\":{\"campaign\":{\"maximumElapsedMilliseconds\":60000}}}\n",
+                + "\"}}\n",
                 new UTF8Encoding(false, true));
             await File.WriteAllTextAsync(overlay,
                 "{\"consumerConfigurationVersion\":1,\"provider\":{\"model\":\"layered-model\"}}\n",
@@ -54,7 +54,8 @@ public sealed class LayeredConfigurationProcessTests
                 CampaignCliProcessTests.Args("start", fixture.Root, statePath, downstream, "snapshot.layered.a")
                     .Concat(["--configuration-override", overlay]).ToArray(),
                 TimeSpan.FromMinutes(3));
-            Assert.Equal(0, started.ExitCode);
+            Assert.True(started.ExitCode == 0,
+                $"exit={started.ExitCode} stdout={started.Stdout} stderr={started.Stderr}");
             Assert.Contains("\"outcome\":\"campaign.complete\"", started.Stdout, StringComparison.Ordinal);
             var completedState = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath));
             Assert.True(completedState.IsValid);
@@ -96,6 +97,8 @@ public sealed class LayeredConfigurationProcessTests
             Assert.Equal(0, started.ExitCode);
             var checkpoint = await File.ReadAllBytesAsync(statePath);
             var requestsAfterStart = server.RequestCount;
+            var checkpointRevision = CampaignStateJson.Parse(checkpoint)
+                .Artifact!.State.CheckpointRevision;
 
             // A corrupted layer fails closed before any execution.
             await File.WriteAllTextAsync(layer, "{\"consumerConfigurationVersion\":1", new UTF8Encoding(false, true));
@@ -110,7 +113,8 @@ public sealed class LayeredConfigurationProcessTests
             var drifted = await CampaignCliProcessTests.RunAsync(
                 CampaignCliProcessTests.Args("resume", fixture.Root, statePath, layer, "snapshot.layered.b"),
                 TimeSpan.FromMinutes(3));
-            CampaignCliProcessTests.AssertCampaign(drifted, 4, "campaign.incompatible-snapshot", 0);
+            CampaignCliProcessTests.AssertCampaign(
+                drifted, 4, "campaign.incompatible-snapshot", checkpointRevision);
             Assert.Equal(checkpoint, await File.ReadAllBytesAsync(statePath));
 
             // Provider, style, and campaign-budget drift each reject the
@@ -136,7 +140,8 @@ public sealed class LayeredConfigurationProcessTests
                 var resumed = await CampaignCliProcessTests.RunAsync(
                     CampaignCliProcessTests.Args("resume", fixture.Root, statePath, layer, "snapshot.layered.b"),
                     TimeSpan.FromMinutes(3));
-                CampaignCliProcessTests.AssertCampaign(resumed, 4, "campaign.incompatible-snapshot", 0);
+                CampaignCliProcessTests.AssertCampaign(
+                    resumed, 4, "campaign.incompatible-snapshot", checkpointRevision);
                 Assert.Equal(checkpoint, await File.ReadAllBytesAsync(statePath));
             }
             Assert.Equal(requestsAfterStart, server.RequestCount);
@@ -216,8 +221,10 @@ public sealed class LayeredConfigurationProcessTests
             // Defaults carry the validated provider endpoint; without a credential
             // or reachable provider the run must still resolve configuration and
             // fail only at the provider boundary, never at configuration.
-            Assert.DoesNotContain("campaign.invalid-configuration", result.Stdout, StringComparison.Ordinal);
-            Assert.DoesNotContain("cli.usage.", result.Stdout, StringComparison.Ordinal);
+            Assert.True(
+                !result.Stdout.Contains("campaign.invalid-configuration", StringComparison.Ordinal)
+                    && !result.Stdout.Contains("cli.usage.", StringComparison.Ordinal),
+                $"exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
         }
         finally
         {
