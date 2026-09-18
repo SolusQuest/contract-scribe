@@ -170,6 +170,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         var checkpoint = await File.ReadAllBytesAsync(fixture.State);
+        var providerRequests = fixture.Provider.RequestCount;
         var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         layer["provider"]!["model"] = "drifted-model";
         await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString(), new UTF8Encoding(false, true));
@@ -177,7 +178,7 @@ public sealed partial class GitHubProposalCliProcessTests
         AssertResult(result, 4, "stale");
         Assert.Equal("github proposal stopped before publication: campaign.incompatible-snapshot\n", result.Stderr);
         Assert.Equal(checkpoint, await File.ReadAllBytesAsync(fixture.State));
-        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(providerRequests, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.TokenReads());
         Assert.Empty(fixture.GitHub.Requests);
         await fixture.AssertSourceUnchanged();
