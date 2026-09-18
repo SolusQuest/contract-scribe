@@ -85,9 +85,30 @@
               "type": "string",
               "enum": ["allowed", "required", "forbidden"]
             },
-            "allowedLiterals": { "type": "array" },
-            "forbiddenLiterals": { "type": "array" },
-            "claimPolicies": { "type": "array" },
+            "allowedLiterals": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "forbiddenLiterals": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "claimPolicies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["claimCategoryId", "completeEvidenceRequired", "allowedAuthorities"],
+                "properties": {
+                  "claimCategoryId": { "type": "string" },
+                  "completeEvidenceRequired": { "type": "boolean" },
+                  "allowedAuthorities": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
+            },
             "maximumContentUnits": { "type": "integer", "minimum": 1 },
             "maximumEvidenceRefsPerUnit": { "type": "integer", "minimum": 1 }
           }

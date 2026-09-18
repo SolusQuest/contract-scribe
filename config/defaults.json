@@ -2,8 +2,8 @@
   "campaignConfigurationVersion": 1,
   "planning": {
     "targetProfile": "profile.external-api",
-    "proposalContractId": "proposal.v1",
-    "contextSelectionPolicyId": "context.current-m1.v1",
+    "proposalContractId": "proposal.documentation.v1",
+    "contextSelectionPolicyId": "context.m1.v1",
     "m2ProjectionPolicyId": "m2.projection.v1",
     "m2ProjectionVersion": 1,
     "maximumPatchElapsedMilliseconds": 60000,
@@ -40,14 +40,14 @@
     }
   },
   "retry": {
-    "retryPolicyId": "retry.v1",
+    "retryPolicyId": "retry.policy.v1",
     "retryPolicyVersion": 1
   },
   "scribeRequest": {
     "scribeRequestVersion": 1,
-    "agentProtocolId": "agent.protocol.v1",
-    "toolPolicyAndRegistryId": "tools.registry.v1",
-    "toolPolicyId": "tools.read-only.v1",
+    "agentProtocolId": "documentation-scribe.agent.v1",
+    "toolPolicyAndRegistryId": "tools.registry.read-only.v1",
+    "toolPolicyId": "tool-policy.read-only.v1",
     "styleProfileTemplate": {
       "styleProfileId": "style.public-api.v1",
       "outputLanguageId": "language.en",

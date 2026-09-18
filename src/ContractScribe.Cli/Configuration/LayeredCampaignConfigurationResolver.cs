@@ -21,6 +21,7 @@ internal static class LayeredCampaignConfigurationResolver
         AllowTrailingCommas = false,
         CommentHandling = JsonCommentHandling.Disallow,
         MaxDepth = MaximumLayerDepth,
+        AllowDuplicateProperties = false,
     };
 
     internal static string PayloadDefaultsPath =>
@@ -46,6 +47,17 @@ internal static class LayeredCampaignConfigurationResolver
         sources.Add(defaults);
         var resolved = ParseDefaults(defaults.Content);
 
+        var planning = (JsonObject?)resolved["planning"]
+            ?? throw new CampaignConfigurationException();
+        planning.Insert(0, "campaignLineage", arguments.CampaignLineage);
+        planning["productContractRevisionSha256"] =
+            CampaignCommandRunner.ProductRevisionSha256(identity);
+
+        // The payload defaults alone must already form a valid resolved
+        // document; an upper layer may never silently repair corrupted
+        // payload content.
+        _ = CampaignConfiguration.Parse(JsonSerializer.SerializeToUtf8Bytes(resolved));
+
         if (arguments.Configuration is { } downstreamPath)
         {
             var downstream = ReadSource(downstreamPath, currentDirectory);
@@ -58,12 +70,6 @@ internal static class LayeredCampaignConfigurationResolver
             sources.Add(overlay);
             ApplyLayer(resolved, ReadLayer(overlay.Content));
         }
-
-        var planning = (JsonObject?)resolved["planning"]
-            ?? throw new CampaignConfigurationException();
-        planning.Insert(0, "campaignLineage", arguments.CampaignLineage);
-        planning["productContractRevisionSha256"] =
-            CampaignCommandRunner.ProductRevisionSha256(identity);
 
         var bytes = JsonSerializer.SerializeToUtf8Bytes(resolved);
         return new CampaignResolvedConfigurationSnapshot(
@@ -200,20 +206,32 @@ internal static class LayeredCampaignConfigurationResolver
         JsonElement layer,
         bool skipVersion)
     {
-        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Collect and validate every layer property first, then apply in
+        // declared schema order so a materialized null-to-object transition
+        // produces the canonical resolved order regardless of layer
+        // enumeration order.
+        var properties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
         foreach (var property in layer.EnumerateObject())
         {
-            if (!seen.Add(property.Name))
-            {
-                throw new CampaignConfigurationException();
-            }
             if (skipVersion && property.NameEquals("consumerConfigurationVersion"))
             {
                 continue;
             }
-            var child = FindChild(schema, property.Name)
-                ?? throw new CampaignConfigurationException();
-            var value = property.Value;
+            if (!properties.TryAdd(property.Name, property.Value))
+            {
+                throw new CampaignConfigurationException();
+            }
+            if (FindChild(schema, property.Name) is null)
+            {
+                throw new CampaignConfigurationException();
+            }
+        }
+        foreach (var child in schema.Children)
+        {
+            if (!properties.TryGetValue(child.Name, out var value))
+            {
+                continue;
+            }
             if (child.Leaf is { } leaf)
             {
                 CheckLeaf(value, leaf, child.Nullable);

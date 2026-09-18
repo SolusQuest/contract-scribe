@@ -95,6 +95,7 @@ public sealed class LayeredConfigurationProcessTests
                 TimeSpan.FromMinutes(3));
             Assert.Equal(0, started.ExitCode);
             var checkpoint = await File.ReadAllBytesAsync(statePath);
+            var requestsAfterStart = server.RequestCount;
 
             // A corrupted layer fails closed before any execution.
             await File.WriteAllTextAsync(layer, "{\"consumerConfigurationVersion\":1", new UTF8Encoding(false, true));
@@ -111,6 +112,34 @@ public sealed class LayeredConfigurationProcessTests
                 TimeSpan.FromMinutes(3));
             CampaignCliProcessTests.AssertCampaign(drifted, 4, "campaign.incompatible-snapshot", 0);
             Assert.Equal(checkpoint, await File.ReadAllBytesAsync(statePath));
+
+            // Provider, style, and campaign-budget drift each reject the
+            // same-snapshot resume identically before any provider dispatch.
+            foreach (var mutation in new JsonObject[]
+            {
+                new() { ["provider"] = new JsonObject
+                    { ["model"] = "drifted-model", ["endpoint"] = server.Endpoint.AbsoluteUri } },
+                new() { ["provider"] = new JsonObject { ["endpoint"] = server.Endpoint.AbsoluteUri },
+                        ["scribeRequest"] = new JsonObject
+                            { ["styleProfileTemplate"] = new JsonObject { ["maximumContentUnits"] = 8 } } },
+                new() { ["provider"] = new JsonObject { ["endpoint"] = server.Endpoint.AbsoluteUri },
+                        ["budgets"] = new JsonObject
+                            { ["campaign"] = new JsonObject { ["maximumBlocks"] = 64 } } },
+            })
+            {
+                var driftLayer = new JsonObject { ["consumerConfigurationVersion"] = 1 };
+                foreach (var property in mutation)
+                {
+                    driftLayer[property.Key] = property.Value?.DeepClone();
+                }
+                await File.WriteAllTextAsync(layer, driftLayer.ToJsonString(), new UTF8Encoding(false, true));
+                var resumed = await CampaignCliProcessTests.RunAsync(
+                    CampaignCliProcessTests.Args("resume", fixture.Root, statePath, layer, "snapshot.layered.b"),
+                    TimeSpan.FromMinutes(3));
+                CampaignCliProcessTests.AssertCampaign(resumed, 4, "campaign.incompatible-snapshot", 0);
+                Assert.Equal(checkpoint, await File.ReadAllBytesAsync(statePath));
+            }
+            Assert.Equal(requestsAfterStart, server.RequestCount);
         }
         finally
         {

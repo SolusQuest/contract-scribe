@@ -98,6 +98,85 @@ public sealed class LayeredConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ExplicitFalseAndEmptyArray_AreRealOverrides()
+    {
+        var layer = Layer(
+            "scribeRequest", new JsonObject
+            {
+                ["styleProfileTemplate"] = new JsonObject
+                {
+                    ["allowedLiterals"] = new JsonArray(),
+                    ["claimPolicies"] = new JsonArray(
+                        new JsonObject
+                        {
+                            ["claimCategoryId"] = "claim.behavior",
+                            ["completeEvidenceRequired"] = false,
+                            ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                        }),
+                },
+            });
+        var resolved = Resolve(Defaults(), layer);
+        var style = resolved.Document.ScribeRequest.StyleProfileTemplate;
+        Assert.Empty(style.AllowedLiterals);
+        var claim = Assert.Single(style.ClaimPolicies);
+        Assert.False(claim.CompleteEvidenceRequired);
+        Assert.Equal(DocumentationScribeEvidenceAuthority.SourceDeclaration, Assert.Single(claim.AllowedAuthorities));
+    }
+
+    [Fact]
+    public void Resolve_LayerPropertyOrder_IsOrderIndependent()
+    {
+        var ordered = Write("ordered.json", """
+            {"consumerConfigurationVersion":1,"costPolicy":{
+                "currencyId":"currency.test","ratePolicyId":"rate.test",
+                "cachedInputMicrounitsPerMillion":1,"uncachedInputMicrounitsPerMillion":2,
+                "outputMicrounitsPerMillion":3,"reasoningMicrounitsPerMillion":4}}
+            """);
+        var reordered = Write("reordered.json", """
+            {"consumerConfigurationVersion":1,"costPolicy":{
+                "reasoningMicrounitsPerMillion":4,"outputMicrounitsPerMillion":3,
+                "uncachedInputMicrounitsPerMillion":2,"cachedInputMicrounitsPerMillion":1,
+                "ratePolicyId":"rate.test","currencyId":"currency.test"}}
+            """);
+        var first = Resolve(Defaults(), ordered);
+        var second = Resolve(Defaults(), reordered);
+        Assert.Equal(
+            JsonSerializer.SerializeToUtf8Bytes(first.Document),
+            JsonSerializer.SerializeToUtf8Bytes(second.Document));
+        Assert.NotNull(first.Document.CostPolicy);
+        Assert.Equal(4, first.Document.CostPolicy!.ReasoningMicrounitsPerMillion);
+    }
+
+    [Fact]
+    public void Resolve_RejectsDuplicatesInsideArraysAndDefaults()
+    {
+        var nestedDuplicates = Write("nested-dup.json",
+            "{\"consumerConfigurationVersion\":1,\"scribeRequest\":{\"styleProfileTemplate\":"
+            + "{\"claimPolicies\":[{\"claimCategoryId\":\"claim.behavior\","
+            + "\"claimCategoryId\":\"claim.purpose\",\"completeEvidenceRequired\":true,"
+            + "\"allowedAuthorities\":[\"authority.source-declaration\"]}]}}}");
+        AssertInvalid(Defaults(), nestedDuplicates);
+
+        var defaultsDuplicates = Write("defaults-dup.json",
+            File.ReadAllText(Path.Join(RepositoryRoot(), "config", "defaults.json")).Replace(
+                "\"providerConfigurationId\": \"provider.configured.v1\"",
+                "\"providerConfigurationId\": \"a.v1\",\"providerConfigurationId\":\"b.v1\""));
+        Assert.Throws<CampaignConfigurationException>(() => Resolve(defaultsDuplicates));
+    }
+
+    [Fact]
+    public void Resolve_CorruptDefaultsCannotBeRepairedByAnUpperLayer()
+    {
+        var corrupt = Defaults(root =>
+            ((JsonObject)((JsonObject)root["budgets"]!)["campaign"]!)["maximumBlocks"] = "corrupt");
+        var repairing = Layer("budgets", new JsonObject
+        {
+            ["campaign"] = new JsonObject { ["maximumBlocks"] = 128 },
+        });
+        AssertInvalid(corrupt, repairing);
+    }
+
+    [Fact]
     public void Resolve_ArraysReplaceRatherThanMerge()
     {
         var layer = Layer(
@@ -428,6 +507,34 @@ public sealed class LayeredConfigurationTests : IDisposable
             if (!matchesType)
             {
                 mismatches.Add(childPath + $" type expected {expected}{(child.Nullable ? " or null" : "")}");
+            }
+            if (child.Leaf == ConsumerValueKind.Array)
+            {
+                if (!published.TryGetProperty("items", out var items))
+                {
+                    mismatches.Add(childPath + " items missing");
+                }
+                else if (child.Name == "claimPolicies")
+                {
+                    var itemType = items.TryGetProperty("type", out var it) ? it.GetString() : null;
+                    if (itemType != "object")
+                    {
+                        mismatches.Add(childPath + " items must be objects");
+                    }
+                    foreach (var required in new[]
+                        { "claimCategoryId", "completeEvidenceRequired", "allowedAuthorities" })
+                    {
+                        if (!items.TryGetProperty("properties", out var itemProps)
+                            || !itemProps.TryGetProperty(required, out _))
+                        {
+                            mismatches.Add(childPath + " items missing " + required);
+                        }
+                    }
+                }
+                else if (!(items.TryGetProperty("type", out var itemType) && itemType.GetString() == "string"))
+                {
+                    mismatches.Add(childPath + " items must be strings");
+                }
             }
             if (child.Leaf is null && child.Children.Length > 0
                 && published.TryGetProperty("properties", out var nested))
