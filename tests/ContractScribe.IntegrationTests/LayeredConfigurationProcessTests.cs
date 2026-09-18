@@ -98,7 +98,7 @@ public sealed class LayeredConfigurationProcessTests
             var checkpoint = await File.ReadAllBytesAsync(statePath);
             var requestsAfterStart = server.RequestCount;
             var checkpointRevision = CampaignStateJson.Parse(checkpoint)
-                .Artifact!.State.CheckpointRevision;
+                .Artifact!.CheckpointRevision;
 
             // A corrupted layer fails closed before any execution.
             await File.WriteAllTextAsync(layer, "{\"consumerConfigurationVersion\":1", new UTF8Encoding(false, true));
