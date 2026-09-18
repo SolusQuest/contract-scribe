@@ -49,6 +49,14 @@ internal static class LayeredCampaignConfigurationResolver
 
         var planning = (JsonObject?)resolved["planning"]
             ?? throw new CampaignConfigurationException();
+        // Defaults are the resolved document minus the two injected fields;
+        // a payload already carrying either is mispackaged and must fail
+        // closed rather than be repaired or crash on duplicate insertion.
+        if (planning.ContainsKey("campaignLineage")
+            || planning.ContainsKey("productContractRevisionSha256"))
+        {
+            throw new CampaignConfigurationException();
+        }
         planning.Insert(0, "campaignLineage", arguments.CampaignLineage);
         planning["productContractRevisionSha256"] =
             CampaignCommandRunner.ProductRevisionSha256(identity);

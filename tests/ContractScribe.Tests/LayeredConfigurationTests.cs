@@ -177,6 +177,23 @@ public sealed class LayeredConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_DefaultsCarryingInjectedFields_AreRejectedBeforeInjection()
+    {
+        // A payload already carrying either injected field is mispackaged:
+        // lineage would crash duplicate insertion while a product sha would
+        // be silently repaired by the overwrite.
+        var withLineage = Defaults(root =>
+            ((JsonObject)root["planning"]!)["campaignLineage"] = "packaged.lineage");
+        Assert.Throws<CampaignConfigurationException>(
+            () => Resolve(withLineage, lineage: "campaign.layered"));
+
+        var withSha = Defaults(root =>
+            ((JsonObject)root["planning"]!)["productContractRevisionSha256"] = new string('0', 64));
+        Assert.Throws<CampaignConfigurationException>(
+            () => Resolve(withSha, lineage: "campaign.layered"));
+    }
+
+    [Fact]
     public void Resolve_ArraysReplaceRatherThanMerge()
     {
         var layer = Layer(
