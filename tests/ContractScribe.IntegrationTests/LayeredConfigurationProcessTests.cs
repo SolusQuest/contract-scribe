@@ -219,11 +219,13 @@ public sealed class LayeredConfigurationProcessTests
             await process.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
             var result = await process.CompleteAsync();
             // Defaults carry the validated provider endpoint; without a credential
-            // or reachable provider the run must still resolve configuration and
-            // fail only at the provider boundary, never at configuration.
+            // the run must still resolve configuration and fail only at the
+            // provider boundary (execution or later), never during configuration
+            // resolution itself.
+            using var envelope = JsonDocument.Parse(result.Stdout);
+            var terminalLayer = envelope.RootElement.GetProperty("terminalLayer").GetString();
             Assert.True(
-                !result.Stdout.Contains("campaign.invalid-configuration", StringComparison.Ordinal)
-                    && !result.Stdout.Contains("cli.usage.", StringComparison.Ordinal),
+                terminalLayer is "execution" or "campaign",
                 $"exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
         }
         finally
