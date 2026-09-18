@@ -219,16 +219,20 @@ public sealed class LayeredConfigurationProcessTests
             await process.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
             var result = await process.CompleteAsync();
             // Defaults carry the validated provider endpoint; the scrubbed
-            // environment guarantees no credential, so the run must stop at the
-            // provider boundary with exactly campaign.credential.invalid —
-            // proving configuration resolved and no authenticated request left.
+            // environment guarantees no credential, so the run must stop at
+            // the provider boundary. The runner maps the missing credential to
+            // the public campaign.invalid-configuration outcome at the
+            // execution layer — the layer, not the code, is what proves
+            // configuration resolved and no authenticated request left.
             using var envelope = JsonDocument.Parse(result.Stdout);
             var root = envelope.RootElement;
             var diagnostics = root.GetProperty("diagnosticCodes")
                 .EnumerateArray().Select(code => code.GetString());
             Assert.True(
-                string.Equals("execution", root.GetProperty("terminalLayer").GetString(), StringComparison.Ordinal)
-                    && diagnostics.Contains("campaign.credential.invalid"),
+                result.ExitCode == 4
+                    && string.Equals("execution", root.GetProperty("terminalLayer").GetString(), StringComparison.Ordinal)
+                    && string.Equals("campaign.invalid-configuration", root.GetProperty("outcome").GetString(), StringComparison.Ordinal)
+                    && diagnostics.SequenceEqual(new[] { "campaign.invalid-configuration" }),
                 $"exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
         }
         finally
