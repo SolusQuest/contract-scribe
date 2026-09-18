@@ -17,11 +17,10 @@ public sealed partial class GitHubProposalCliProcessTests
         AssertResult(await fixture.Run("resume"), 4, "closed-unmerged");
         var closed = fixture.GitHub.PullRequests[0];
         fixture.Snapshot = "snapshot.github.successor";
-        var config = JsonNode.Parse(await File.ReadAllTextAsync(fixture.GitHubConfiguration))!;
-        config["operationId"] = "operation.successor";
-        config["generationId"] = "generation.successor";
-        config["transition"] = "successor-after-closed-unmerged";
-        config["terminalPredecessor"] = new JsonObject
+        fixture.Publication["operationId"] = "operation.successor";
+        fixture.Publication["generationId"] = "generation.successor";
+        fixture.Publication["transition"] = "successor-after-closed-unmerged";
+        fixture.Publication["terminalPredecessor"] = new JsonObject
         {
             ["logicalPredecessorId"] = "predecessor.closed",
             ["pullRequestNumber"] = 1,
@@ -29,7 +28,6 @@ public sealed partial class GitHubProposalCliProcessTests
             ["headOid"] = closed["head"]!["sha"]!.DeepClone(),
             ["disposition"] = "closed-unmerged",
         };
-        await File.WriteAllTextAsync(fixture.GitHubConfiguration, config.ToJsonString());
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.Mutations;
         // A real fresh M4 candidate can be accepted locally, but absence of the explicit
@@ -38,7 +36,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(reads, fixture.TokenReads());
         Assert.Equal(writes, fixture.GitHub.Mutations);
         var fresh = fixture.Checkpoint();
-        config["closedUnmergedSuccessorAuthorization"] = new JsonObject
+        fixture.Publication["closedUnmergedSuccessorAuthorization"] = new JsonObject
         {
             ["authorizationId"] = "authorization.explicit",
             ["logicalPredecessorId"] = "predecessor.closed",
@@ -51,7 +49,6 @@ public sealed partial class GitHubProposalCliProcessTests
             ["newGenerationId"] = "generation.successor",
             ["operationId"] = "operation.successor",
         };
-        await File.WriteAllTextAsync(fixture.GitHubConfiguration, config.ToJsonString());
         AssertResult(await fixture.Run("resume"), 0, "published");
         Assert.Equal(2, fixture.GitHub.PullRequests.Count);
         Assert.Single(fixture.GitHub.PullRequests, pr => pr["state"]!.GetValue<string>() == "open");
@@ -68,11 +65,9 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         await ConfigureAppend(fixture);
-        var config = JsonNode.Parse(await File.ReadAllTextAsync(fixture.GitHubConfiguration))!;
-        config["policy"]!["maximumDocumentationBlocks"] = 127;
-        config["appendPredecessor"]!["policyCommitmentSha256"] = GitHubPublicationCommitments.CreatePolicy(
+        fixture.Publication["policy"]!["maximumDocumentationBlocks"] = 127;
+        fixture.Publication["appendPredecessor"]!["policyCommitmentSha256"] = GitHubPublicationCommitments.CreatePolicy(
             new(128, 128, 4194304), new(127, 128, 4194304));
-        await File.WriteAllTextAsync(fixture.GitHubConfiguration, config.ToJsonString());
         var writes = fixture.GitHub.Mutations;
         var result = await fixture.Run("resume");
         AssertResult(result, 0, "awaiting-review");

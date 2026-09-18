@@ -155,20 +155,39 @@ public sealed class GitHubProposalCliContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public void Seven_options_accept_both_forms_and_any_order(bool equals)
+    public void Options_accept_both_forms_and_any_order(bool equals)
     {
-        var values = new[] { "--repository-root", "--input", "--policy", "--snapshot", "--state", "--configuration", "--github-configuration" };
+        var required = new[] { "--repository-root", "--input", "--policy", "--request" };
         var args = new List<string> { "resume" };
-        foreach (var name in values.Reverse())
+        foreach (var name in required.Concat(["--configuration", "--configuration-override"]).Reverse())
             if (equals) args.Add(name + "=value");
             else args.AddRange([name, "value"]);
         var parsed = GitHubProposalCommandParser.Parse(args.ToArray());
         Assert.Null(parsed.Failure);
         Assert.NotNull(parsed.Arguments);
-        foreach (var name in values)
+        Assert.Equal("value", parsed.Arguments.Configuration);
+        Assert.Equal("value", parsed.Arguments.ConfigurationOverride);
+        foreach (var name in required.Concat(["--configuration", "--configuration-override"]))
         {
             var duplicate = args.Concat([name, "value"]).ToArray();
             Assert.Equal("duplicate-option", GitHubProposalCommandParser.Parse(duplicate).Failure!.UsageClass);
+        }
+    }
+
+    [Fact]
+    public void Configuration_layers_are_optional_while_the_request_is_required()
+    {
+        var required = new[] { "--repository-root", "r", "--input", "i", "--policy", "p", "--request", "request.json" };
+        var parsed = GitHubProposalCommandParser.Parse(new[] { "start" }.Concat(required).ToArray());
+        Assert.Null(parsed.Failure);
+        Assert.Null(parsed.Arguments!.Configuration);
+        Assert.Null(parsed.Arguments.ConfigurationOverride);
+        foreach (var name in new[] { "--repository-root", "--input", "--policy", "--request" })
+        {
+            var index = Array.IndexOf(required, name);
+            var missing = required.Take(index).Concat(required.Skip(index + 2)).ToArray();
+            Assert.Equal("missing-required-option",
+                GitHubProposalCommandParser.Parse(new[] { "start" }.Concat(missing).ToArray()).Failure!.UsageClass);
         }
     }
 
@@ -177,9 +196,13 @@ public sealed class GitHubProposalCliContractTests
     [InlineData("@response", "unknown-command")]
     [InlineData("start --wat x", "unknown-option")]
     [InlineData("start -r x", "unknown-option")]
+    [InlineData("start --snapshot s", "unknown-option")]
+    [InlineData("start --state s", "unknown-option")]
+    [InlineData("start --github-configuration g", "unknown-option")]
+    [InlineData("start --campaign-lineage l", "unknown-option")]
     [InlineData("start operand", "unexpected-operand")]
-    [InlineData("start --state=", "missing-option-value")]
-    [InlineData("start --help --state=x", "forbidden-combination")]
+    [InlineData("start --request=", "missing-option-value")]
+    [InlineData("start --help --request=x", "forbidden-combination")]
     public void Parser_is_ordinal_and_closed(string text, string usage) =>
         Assert.Equal(usage, GitHubProposalCommandParser.Parse(text.Split(' ')).Failure!.UsageClass);
 

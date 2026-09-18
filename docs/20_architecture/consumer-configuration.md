@@ -83,7 +83,7 @@ Every source is admitted through the same bounded regular-file, no-follow, size,
 
 ## github-proposal and validation disposition
 
-`github-proposal --configuration` remains a direct low-level runtime-authority input consuming this resolved document shape until the C2 follow-up. Its grammar, help, fixtures, and the M5 H3 producer are unchanged; the checked-in `tests/fixtures/campaign/cli/configuration-valid.json` remains a canonical example of the resolved authority document. `campaign-configuration-v1` keeps exactly one active draft role — the resolved authority representation — and does not become a competing public consumer contract.
+`github-proposal` consumes the same layered resolution: its optional `--configuration`/`--configuration-override` options carry the consumer layers while campaign lineage, snapshot binding, state location, and GitHub publication claims move into the separately validated `--request` invocation document (see [github-proposal-cli.md](github-proposal-cli.md)). The direct resolved-document input and its low-level runtime-authority reader are retired; `campaign-configuration-v1` keeps exactly one active draft role — the resolved authority representation produced by this resolver — and does not become a competing public consumer contract.
 
 ## Non-goals
 

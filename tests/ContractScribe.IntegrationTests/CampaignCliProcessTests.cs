@@ -523,35 +523,6 @@ public sealed class CampaignCliProcessTests
         "--configuration", configuration,
     ];
 
-    internal static async Task WriteConfigurationAsync(string destination, Uri? endpoint = null)
-        => await WriteConfigurationAsync(destination, endpoint, maximumPatchElapsedMilliseconds: null);
-
-    internal static async Task WriteConfigurationAsync(
-        string destination,
-        Uri? endpoint,
-        int? maximumPatchElapsedMilliseconds)
-    {
-        var fixture = await File.ReadAllBytesAsync(Path.Join(
-            RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"));
-        var root = JsonNode.Parse(fixture)!.AsObject();
-        var revision = CommandLineApplication.ApplicationVersion.Split('+') is [_, var value]
-            ? value
-            : throw new InvalidOperationException("CLI version has no source revision.");
-        var product = SHA256.HashData(Encoding.UTF8.GetBytes(
-            "contract-scribe/campaign-product-revision/v1\0" + revision));
-        root["planning"]!["productContractRevisionSha256"] =
-            Convert.ToHexString(product).ToLowerInvariant();
-        if (maximumPatchElapsedMilliseconds is { } maximumPatchElapsed)
-        {
-            root["planning"]!["maximumPatchElapsedMilliseconds"] = maximumPatchElapsed;
-        }
-        if (endpoint is not null)
-        {
-            root["provider"]!["endpoint"] = endpoint.AbsoluteUri;
-        }
-        await File.WriteAllTextAsync(destination, root.ToJsonString(), new UTF8Encoding(false, true));
-    }
-
     internal static async Task WriteConsumerLayerAsync(
         string destination,
         Uri? endpoint = null,

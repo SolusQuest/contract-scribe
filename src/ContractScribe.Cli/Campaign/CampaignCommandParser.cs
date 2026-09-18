@@ -8,16 +8,6 @@ internal enum CampaignOperation
     Resume,
 }
 
-// Selects how --configuration is interpreted. Layered is the public consumer
-// surface (payload defaults < --configuration < --configuration-override with
-// lineage supplied by --campaign-lineage). RuntimeAuthority is the low-level
-// authority input consumed directly by github-proposal until C2.
-internal enum CampaignConfigurationKind
-{
-    Layered,
-    RuntimeAuthority,
-}
-
 internal sealed record CampaignCommandArguments(
     CampaignOperation Operation,
     string RepositoryRoot,
@@ -27,33 +17,7 @@ internal sealed record CampaignCommandArguments(
     string State,
     string? Configuration,
     string? ConfigurationOverride,
-    string? CampaignLineage,
-    CampaignConfigurationKind Kind)
-{
-    // Preserves the existing construction used by the unchanged github-proposal
-    // projection: a single complete campaign-configuration-v1 authority input.
-    internal CampaignCommandArguments(
-        CampaignOperation operation,
-        string repositoryRoot,
-        string input,
-        string policy,
-        string snapshot,
-        string state,
-        string configuration)
-        : this(
-            operation,
-            repositoryRoot,
-            input,
-            policy,
-            snapshot,
-            state,
-            configuration,
-            null,
-            null,
-            CampaignConfigurationKind.RuntimeAuthority)
-    {
-    }
-}
+    string CampaignLineage);
 
 internal sealed record CampaignUsageFailure(string UsageClass, string Code, CampaignOperation? Operation);
 
@@ -219,8 +183,7 @@ internal static class CampaignCommandParser
                 values["--state"],
                 configuration,
                 configurationOverride,
-                values["--campaign-lineage"],
-                CampaignConfigurationKind.Layered),
+                values["--campaign-lineage"]),
             null,
             HelpRequested: false);
     }

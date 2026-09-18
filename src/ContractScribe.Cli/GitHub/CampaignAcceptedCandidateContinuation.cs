@@ -10,14 +10,14 @@ internal sealed record CampaignRunSelection(CampaignTerminal? Terminal, CliExecu
 
 internal sealed class CampaignAcceptedCandidateContinuation(
     CliBuildIdentity identity, CampaignPreflightResult preflight,
-    GitHubProposalConfigurationSnapshot githubConfiguration, Func<string, string?> credentialAccessor)
+    GitHubProposalRequestSnapshot request, Func<string, string?> credentialAccessor)
 {
     internal CliExecutionResult Present(CampaignTerminal terminal) => GitHubProposalPresentation.Campaign(identity, terminal);
 
     internal bool ReconstructAccepted(CampaignCheckpointState state)
     {
         if (state.CandidateObservation is null) return false;
-        var configuration = githubConfiguration.Configuration;
+        var configuration = request.Request.GitHub;
         return configuration.Transition != GitHubPublicationTransitionKind.SameSnapshotAppend
             || configuration.AppendPredecessor?.CandidateCommitmentSha256
                 != state.AcceptedCandidateOrigin?.CandidateObservation.PatchResultCommitmentSha256;
@@ -58,7 +58,7 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             || current.State.CandidateObservation is null
             || current.State.CumulativeOutcome?.Kind != CampaignCumulativeOutcomeKind.Accepted)
             return GitHubProposalPresentation.ContractError(identity, preflight.Operation, current.CheckpointRevision);
-        if (!preflight.Configuration.Revalidate() || !githubConfiguration.Revalidate())
+        if (!preflight.Configuration.Revalidate() || !request.Revalidate())
             return GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", current.CheckpointRevision);
         return null;
     }
@@ -71,14 +71,14 @@ internal sealed class CampaignAcceptedCandidateContinuation(
         try
         {
             context.CancellationToken.ThrowIfCancellationRequested();
-            if (!preflight.Configuration.Revalidate() || !githubConfiguration.Revalidate())
+            if (!preflight.Configuration.Revalidate() || !request.Revalidate())
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
-            var admitted = GitHubPublicationRequestFactory.Create(context, outcome, githubConfiguration.Configuration);
+            var admitted = GitHubPublicationRequestFactory.Create(context, outcome, request.Request.GitHub);
             if (!admitted.IsValid)
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
             context.CancellationToken.ThrowIfCancellationRequested();
             // Revalidate after candidate capture too; no ambient credential access occurs in H1.
-            if (!preflight.Configuration.Revalidate() || !githubConfiguration.Revalidate())
+            if (!preflight.Configuration.Revalidate() || !request.Revalidate())
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
             var observed = await GitHubPublicationFacade.PublishAsync(admitted.Authority!, admitted.Payload!,
                 () => credentialAccessor("CONTRACTSCRIBE_GITHUB_TOKEN"), context.CancellationToken).ConfigureAwait(false);

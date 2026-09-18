@@ -7,12 +7,22 @@ internal sealed record GitHubProposalCommandArguments(
     string RepositoryRoot,
     string Input,
     string Policy,
-    string Snapshot,
-    string State,
-    string Configuration,
-    string GitHubConfiguration)
+    string Request,
+    string? Configuration,
+    string? ConfigurationOverride)
 {
-    internal CampaignCommandArguments Campaign => new(Operation, RepositoryRoot, Input, Policy, Snapshot, State, Configuration);
+    // The request supplies the invocation authority the layered campaign
+    // consumer needs: snapshot binding, state location and campaign lineage.
+    internal CampaignCommandArguments Campaign(GitHubProposalRequestSnapshot request) => new(
+        Operation,
+        RepositoryRoot,
+        Input,
+        Policy,
+        request.Request.Snapshot,
+        request.Request.State,
+        Configuration,
+        ConfigurationOverride,
+        request.Request.CampaignLineage);
 }
 
 internal sealed record GitHubProposalParseResult(
@@ -30,10 +40,16 @@ internal static class GitHubProposalCommandParser
         "--repository-root",
         "--input",
         "--policy",
-        "--snapshot",
-        "--state",
+        "--request",
+    ];
+    private static readonly string[] KnownOptions =
+    [
+        "--repository-root",
+        "--input",
+        "--policy",
+        "--request",
         "--configuration",
-        "--github-configuration",
+        "--configuration-override",
     ];
 
     internal static GitHubProposalParseResult Parse(ReadOnlySpan<string> tokens)
@@ -88,7 +104,7 @@ internal static class GitHubProposalCommandParser
 
             var equals = token.IndexOf('=');
             var option = equals >= 0 ? token[..equals] : token;
-            if (!RequiredOptions.Contains(option, StringComparer.Ordinal))
+            if (!KnownOptions.Contains(option, StringComparer.Ordinal))
             {
                 unknownOption = true;
                 continue;
@@ -155,16 +171,17 @@ internal static class GitHubProposalCommandParser
             return Failure("missing-required-option", operation);
         }
 
+        values.TryGetValue("--configuration", out var configuration);
+        values.TryGetValue("--configuration-override", out var configurationOverride);
         return new GitHubProposalParseResult(
             new GitHubProposalCommandArguments(
                 operation.Value,
                 values["--repository-root"],
                 values["--input"],
                 values["--policy"],
-                values["--snapshot"],
-                values["--state"],
-                values["--configuration"],
-                values["--github-configuration"]),
+                values["--request"],
+                configuration,
+                configurationOverride),
             null,
             HelpRequested: false);
     }
@@ -192,12 +209,6 @@ internal static class GitHubProposalCommandParser
         {
             return false;
         }
-        if (option == "--snapshot")
-        {
-            return value.Length is >= 1 and <= 128
-                && IsSnapshotStart(value[0])
-                && value.All(character => IsSnapshotStart(character) || character is '.' or '_' or ':' or '-');
-        }
 
         try
         {
@@ -208,9 +219,6 @@ internal static class GitHubProposalCommandParser
             return false;
         }
     }
-
-    private static bool IsSnapshotStart(char character) =>
-        char.IsAsciiLetterOrDigit(character);
 
     private static GitHubProposalParseResult Failure(string usageClass, CampaignOperation? operation) =>
         new(null, new CampaignUsageFailure(usageClass, $"cli.usage.{usageClass}", operation), HelpRequested: false);

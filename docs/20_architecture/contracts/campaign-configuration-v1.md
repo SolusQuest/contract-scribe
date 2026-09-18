@@ -2,7 +2,7 @@
 
 ## Role
 
-This document defines the resolved campaign execution configuration: the complete, closed runtime-authority document that the campaign runner and checkpoint commitments consume. It is produced by the layered consumer-configuration resolver for `campaign` invocations (see `docs/20_architecture/consumer-configuration.md`), which injects invocation authority (`campaignLineage`) and product identity (`productContractRevisionSha256`) before this shape is validated. It is also supplied directly as a low-level runtime-authority input to `github-proposal --configuration` until the GitHub invocation follow-up replaces that surface. It is not the public consumer configuration shape; consumer layers are a distinct draft contract and cannot express the injected authority fields.
+This document defines the resolved campaign execution configuration: the complete, closed runtime-authority document that the campaign runner and checkpoint commitments consume. It is produced only by the layered consumer-configuration resolver (see `docs/20_architecture/consumer-configuration.md`), which injects invocation authority (`campaignLineage`) and product identity (`productContractRevisionSha256`) before this shape is validated; both `campaign` and `github-proposal` invocations reach the runner through that single producer path. It is not the public consumer configuration shape; consumer layers are a distinct draft contract and cannot express the injected authority fields.
 
 ## Format
 

@@ -99,6 +99,8 @@ public sealed partial class GitHubProposalCliProcessTests
     [Theory]
     [InlineData("unknown-property")]
     [InlineData("duplicate-property")]
+    [InlineData("request-token")]
+    [InlineData("request-corrupt")]
     [InlineData("missing-token")]
     [InlineData("no-work")]
     public async Task Local_rejections_and_no_work_do_not_read_the_GitHub_credential(string scenario)
@@ -106,16 +108,26 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync(required: scenario != "no-work");
         if (scenario == "unknown-property")
         {
-            var json = JsonNode.Parse(await File.ReadAllTextAsync(fixture.GitHubConfiguration))!;
-            json["token"] = "private-token-sentinel";
-            await File.WriteAllTextAsync(fixture.GitHubConfiguration, json.ToJsonString());
+            fixture.Publication["token"] = "private-token-sentinel";
         }
+        var arguments = fixture.Args("start");
         if (scenario == "duplicate-property")
         {
-            var json = await File.ReadAllTextAsync(fixture.GitHubConfiguration);
-            await File.WriteAllTextAsync(fixture.GitHubConfiguration, json[..^1] + ",\"operationId\":\"other\"}");
+            var json = await File.ReadAllTextAsync(fixture.Request);
+            await File.WriteAllTextAsync(fixture.Request, json[..^2] + ",\"operationId\":\"other\"}}");
         }
-        var result = await fixture.Run("start", token: scenario == "missing-token" ? null : Fixture.Placeholder);
+        if (scenario == "request-token")
+        {
+            var json = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Request))!;
+            json["token"] = "private-token-sentinel";
+            await File.WriteAllTextAsync(fixture.Request, json.ToJsonString());
+        }
+        if (scenario == "request-corrupt")
+        {
+            await File.WriteAllTextAsync(fixture.Request, "{");
+        }
+        var result = await fixture.RunArgs(arguments,
+            fixture.Environment(token: scenario == "missing-token" ? null : Fixture.Placeholder));
         if (scenario == "missing-token" && OperatingSystem.IsLinux())
         {
             AssertResult(result, 4, "permission");
@@ -130,6 +142,57 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         Assert.Empty(fixture.GitHub.Requests);
         Assert.DoesNotContain("private-token-sentinel", result.Stdout + result.Stderr);
+    }
+
+    [Theory]
+    [InlineData("campaignLineage")]
+    [InlineData("productContractRevisionSha256")]
+    public async Task Configuration_layers_cannot_smuggle_invocation_or_product_authority(string field)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync();
+        await File.WriteAllTextAsync(fixture.Configuration!,
+            "{\"consumerConfigurationVersion\":1,"
+            + "\"provider\":{\"endpoint\":\"https://provider.invalid/v1/chat/completions\"},"
+            + "\"planning\":{\"" + field + "\":\"smuggled.value\"}}\n", new UTF8Encoding(false, true));
+        var result = await fixture.Run("start");
+        AssertResult(result, 4, "local-invalid");
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(0, fixture.TokenReads());
+        Assert.Empty(fixture.GitHub.Requests);
+        Assert.False(File.Exists(fixture.State));
+    }
+
+    [Fact]
+    public async Task Defaults_only_resolution_stops_at_the_https_credential_boundary_without_dispatch()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync();
+        fixture.Configuration = null;
+        var result = await fixture.Run("start");
+        AssertResult(result, 4, "local-invalid");
+        using var json = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("execution", json.RootElement.GetProperty("terminalLayer").GetString());
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(0, fixture.TokenReads());
+        Assert.Empty(fixture.GitHub.Requests);
+        Assert.False(File.Exists(fixture.State));
+    }
+
+    [Fact]
+    public async Task Invocation_override_wins_over_the_consumer_layer_through_the_same_resolver()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync();
+        var wrong = Path.Join(fixture.Outside, "layer-wrong.json");
+        await File.WriteAllTextAsync(wrong,
+            "{\"consumerConfigurationVersion\":1,\"provider\":{\"endpoint\":\"http://127.0.0.1:1/v1/chat/completions\"}}\n",
+            new UTF8Encoding(false, true));
+        fixture.Configuration = wrong;
+        fixture.ConfigurationOverride = Path.Join(fixture.Outside, "layer-override.json");
+        await CampaignCliProcessTests.WriteConsumerLayerAsync(fixture.ConfigurationOverride, fixture.Provider.Endpoint);
+        AssertResult(await fixture.Run("start"), 0, "published");
+        Assert.Single(fixture.GitHub.PullRequests);
     }
 
     internal static void AssertResult(CampaignProcessResult result, int exit, string outcome)
@@ -154,10 +217,14 @@ public sealed partial class GitHubProposalCliProcessTests
     internal sealed class Fixture : IAsyncDisposable
     {
         internal const string Placeholder = "contract-scribe-synthetic-transport-only";
+        internal const string Lineage = "campaign.github";
         internal required LoaderFixture Repository;
         internal required CampaignCliProcessTests.ProposalLoopbackServer Provider;
         internal required GitHubProposalLoopbackServer GitHub;
-        internal required string Outside, State, Configuration, GitHubConfiguration, Observations;
+        internal required string Outside, State, Request, Observations;
+        internal required JsonObject Publication;
+        internal string? Configuration;
+        internal string? ConfigurationOverride;
         internal required byte[] Source;
         internal required Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)> GovernedFiles;
         internal string Snapshot = "snapshot.github";
@@ -192,24 +259,37 @@ public sealed partial class GitHubProposalCliProcessTests
                 governed.Add(Path.GetRelativePath(repository.Root, path).Replace('\\', '/'),
                     (await File.ReadAllBytesAsync(path), OperatingSystem.IsLinux() ? File.GetUnixFileMode(path) : null));
             var github = new GitHubProposalLoopbackServer(governed.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes));
-            var configuration = Path.Join(outside, "campaign.json");
-            await CampaignCliProcessTests.WriteConfigurationAsync(configuration, provider.Endpoint);
-            var campaign = JsonNode.Parse(await File.ReadAllTextAsync(configuration))!;
-            campaign["budgets"]!["campaign"]!["maximumCandidatesPerBlock"] = 30;
-            campaign["budgets"]!["campaign"]!["maximumElapsedMilliseconds"] = 3_600_000;
-            await File.WriteAllTextAsync(configuration, campaign.ToJsonString());
-            var githubConfiguration = Path.Join(outside, "github.json");
-            await File.WriteAllTextAsync(githubConfiguration, JsonSerializer.Serialize(new
+            var configuration = Path.Join(outside, "layer.json");
+            await File.WriteAllTextAsync(configuration, JsonSerializer.Serialize(new
             {
-                repositoryOwner = "Owner",
-                repositoryName = "repo",
-                targetRef = "refs/heads/main",
-                expectedBaseCommitOid = github.BaseOid,
-                operationId = "operation.initial",
-                generationId = "generation.initial",
-                policy = new { maximumDocumentationBlocks = 128, maximumDistinctChangedFiles = 128, maximumCumulativePatchBytes = 4194304 },
-                transition = "initial",
-            }));
+                consumerConfigurationVersion = 1,
+                provider = new
+                {
+                    endpoint = provider.Endpoint.AbsoluteUri,
+                    model = "fixture-model",
+                    requestProfile = new { toolChoice = "auto" },
+                },
+                budgets = new
+                {
+                    campaign = new { maximumCandidatesPerBlock = 30, maximumElapsedMilliseconds = 3_600_000 },
+                },
+            }), new UTF8Encoding(false, true));
+            var publication = new JsonObject
+            {
+                ["repositoryOwner"] = "Owner",
+                ["repositoryName"] = "repo",
+                ["targetRef"] = "refs/heads/main",
+                ["expectedBaseCommitOid"] = github.BaseOid,
+                ["operationId"] = "operation.initial",
+                ["generationId"] = "generation.initial",
+                ["policy"] = new JsonObject
+                {
+                    ["maximumDocumentationBlocks"] = 128,
+                    ["maximumDistinctChangedFiles"] = 128,
+                    ["maximumCumulativePatchBytes"] = 4194304,
+                },
+                ["transition"] = "initial",
+            };
             return new Fixture
             {
                 Repository = repository,
@@ -217,20 +297,36 @@ public sealed partial class GitHubProposalCliProcessTests
                 GitHub = github,
                 Outside = outside,
                 State = Path.Join(outside, "checkpoint.json"),
+                Request = Path.Join(outside, "request.json"),
+                Publication = publication,
                 Configuration = configuration,
-                GitHubConfiguration = githubConfiguration,
                 Observations = Path.Join(outside, "observations.txt"),
                 Source = source,
                 GovernedFiles = governed,
             };
         }
 
-        internal string[] Args(string operation, string? state = null) =>
-        [
-            "github-proposal", operation, "--repository-root", Repository.Root, "--input", "App/App.csproj",
-            "--policy", "policy.json", "--snapshot", Snapshot, "--state", state ?? State,
-            "--configuration", Configuration, "--github-configuration", GitHubConfiguration,
-        ];
+        internal string[] Args(string operation, string? state = null, string? requestPath = null)
+        {
+            var request = new JsonObject
+            {
+                ["githubProposalRequestVersion"] = 1,
+                ["campaignLineage"] = Lineage,
+                ["snapshot"] = Snapshot,
+                ["state"] = state ?? State,
+                ["github"] = Publication.DeepClone(),
+            };
+            var path = requestPath ?? Request;
+            File.WriteAllText(path, request.ToJsonString(), new UTF8Encoding(false));
+            var arguments = new List<string>
+            {
+                "github-proposal", operation, "--repository-root", Repository.Root, "--input", "App/App.csproj",
+                "--policy", "policy.json", "--request", path,
+            };
+            if (Configuration is not null) arguments.AddRange(["--configuration", Configuration]);
+            if (ConfigurationOverride is not null) arguments.AddRange(["--configuration-override", ConfigurationOverride]);
+            return arguments.ToArray();
+        }
         internal Dictionary<string, string?> Environment(string? token = Placeholder, string? fault = null) => new()
         {
             ["DOTNET_STARTUP_HOOKS"] = CampaignCliProcessTests.StartupHookPath,
@@ -239,9 +335,12 @@ public sealed partial class GitHubProposalCliProcessTests
             ["CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS"] = Observations,
             ["CONTRACTSCRIBE_TEST_GITHUB_FAULT"] = fault,
         };
-        internal async Task<CampaignProcessResult> Run(string operation, string? token = Placeholder, string? fault = null)
+        internal async Task<CampaignProcessResult> Run(string operation, string? token = Placeholder, string? fault = null) =>
+            await RunArgs(Args(operation), Environment(token, fault));
+
+        internal async Task<CampaignProcessResult> RunArgs(string[] arguments, Dictionary<string, string?> environment)
         {
-            using var process = CampaignCliProcessTests.Start(Args(operation), Environment(token, fault));
+            using var process = CampaignCliProcessTests.Start(arguments, environment);
             try
             {
                 await process.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));

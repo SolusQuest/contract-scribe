@@ -834,8 +834,7 @@ public sealed class LayeredConfigurationTests : IDisposable
             "state.json",
             downstream,
             overlay,
-            lineage,
-            CampaignConfigurationKind.Layered);
+            lineage);
 
     private static CliBuildIdentity Identity(string marker = "a") =>
         CliBuildIdentity.Create("0.1.0-test+" + marker + Revision[..^marker.Length]);

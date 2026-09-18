@@ -71,13 +71,14 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Invalid_escaped_configuration_is_local_invalid_before_campaign_or_token_access()
+    public async Task Invalid_escaped_request_is_local_invalid_before_campaign_or_token_access()
     {
         await using var fixture = await Fixture.CreateAsync();
-        var raw = await File.ReadAllTextAsync(fixture.GitHubConfiguration);
-        await File.WriteAllTextAsync(fixture.GitHubConfiguration,
+        var arguments = fixture.Args("start");
+        var raw = await File.ReadAllTextAsync(fixture.Request);
+        await File.WriteAllTextAsync(fixture.Request,
             raw.Replace("operation.initial", "\\uD800", StringComparison.Ordinal));
-        var result = await fixture.Run("start");
+        var result = await fixture.RunArgs(arguments, fixture.Environment());
         AssertResult(result, 4, "local-invalid");
         Assert.Equal("github proposal stopped before publication: github-proposal.local-invalid\n", result.Stderr);
         Assert.Equal(0, fixture.TokenReads());
@@ -95,9 +96,9 @@ public sealed partial class GitHubProposalCliProcessTests
         var reconstruction = await RealReconstruction(fixture, "accepted");
         await ConfigureAppend(fixture);
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
-        var preflight = CampaignPreflight.Run(arguments.Campaign, fixture.Repository.Root);
-        var github = GitHubProposalConfigurationReader.Read(arguments.GitHubConfiguration, fixture.Repository.Root);
-        var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, github,
+        var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root);
+        var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, request,
             _ => throw new InvalidOperationException("No credential is needed to classify append progress."));
         var current = fixture.Checkpoint();
         Assert.Equal(accepted.Sha256, current.State.AcceptedCandidateOrigin!.CheckpointSha256);
@@ -116,7 +117,8 @@ public sealed partial class GitHubProposalCliProcessTests
     private static async Task<DocumentationCampaignOutcome> RealReconstruction(Fixture fixture, string failure)
     {
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
-        var preflight = CampaignPreflight.Run(arguments.Campaign, fixture.Repository.Root);
+        var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root);
         var configuration = preflight.Configuration.Document;
         var sourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
         string? staging = null;

@@ -213,21 +213,31 @@ def preflight():
     print('gate:' + role)
 
 
-def write_configuration(config, directory, *, product_sha=None):
-    campaign = parse_json((HERE / 'campaign.json').read_bytes())
+def request_document(config, state, base):
     nonce = config['activation']
-    campaign['planning']['campaignLineage'] = 'campaign.issue166.' + nonce
-    campaign['planning']['productContractRevisionSha256'] = sha(('contract-scribe/campaign-product-revision/v1\0' + (product_sha or config['product_sha'])).encode())
-    # CampaignConfiguration.Expect admits the product's declared field order.
-    (directory / 'campaign.json').write_bytes(json.dumps(campaign, separators=(',', ':'), ensure_ascii=False).encode())
-    publication = {'repositoryOwner': 'SolusQuest', 'repositoryName': 'contract-scribe-sandbox',
-                   'targetRef': 'refs/heads/main', 'expectedBaseCommitOid': config['base_sha'],
-                   'operationId': 'operation.issue166.' + nonce, 'generationId': 'generation.issue166.' + nonce,
-                   'policy': {'maximumDocumentationBlocks': 1, 'maximumDistinctChangedFiles': 1, 'maximumCumulativePatchBytes': 4096},
-                   'transition': 'initial'}
-    (directory / 'github-positive.json').write_bytes(canonical(publication))
-    publication['expectedBaseCommitOid'] = BOOTSTRAP
-    (directory / 'github-negative.json').write_bytes(canonical(publication))
+    return {'githubProposalRequestVersion': 1,
+            'campaignLineage': 'campaign.issue166.' + nonce,
+            'snapshot': 'snapshot.issue166.' + nonce,
+            'state': str(state),
+            'github': {'repositoryOwner': 'SolusQuest', 'repositoryName': 'contract-scribe-sandbox',
+                       'targetRef': 'refs/heads/main', 'expectedBaseCommitOid': base,
+                       'operationId': 'operation.issue166.' + nonce, 'generationId': 'generation.issue166.' + nonce,
+                       'policy': {'maximumDocumentationBlocks': 1, 'maximumDistinctChangedFiles': 1, 'maximumCumulativePatchBytes': 4096},
+                       'transition': 'initial'}}
+
+
+def write_configuration(config, directory):
+    # The payload supplies campaign defaults and product identity; the consumer
+    # layer carries only the loopback endpoint/model and the trial budgets.
+    layer = {'consumerConfigurationVersion': 1,
+             'provider': {'endpoint': 'http://127.0.0.1:48265/v1/chat/completions',
+                          'model': 'fixture-model', 'requestProfile': {'toolChoice': 'auto'}},
+             'budgets': {'campaign': {'maximumCandidatesPerBlock': 30, 'maximumElapsedMilliseconds': 3600000}}}
+    (directory / 'layer.json').write_bytes(canonical(layer))
+    (directory / 'request-positive.json').write_bytes(
+        canonical(request_document(config, directory / 'positive/checkpoint.json', config['base_sha'])))
+    (directory / 'request-negative.json').write_bytes(
+        canonical(request_document(config, directory / 'negative/checkpoint.json', BOOTSTRAP)))
 
 
 def check_checkpoint(path, checker):
@@ -423,9 +433,8 @@ def invoke(scenario):
         cli = root / 'product/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll'
         args = ['dotnet', str(cli), 'github-proposal', 'resume' if scenario == 'replay' else 'start',
                 '--repository-root', str(root / 'target'), '--input', 'Synthetic.csproj', '--policy', 'policy.json',
-                '--snapshot', 'snapshot.issue166.' + config['activation'], '--state', str(checkpoint),
-                '--configuration', str(root / 'campaign.json'), '--github-configuration',
-                str(root / ('github-negative.json' if scenario == 'negative' else 'github-positive.json'))]
+                '--request', str(root / ('request-negative.json' if scenario == 'negative' else 'request-positive.json')),
+                '--configuration', str(root / 'layer.json')]
         try:
             process = subprocess.run(args, env=environment, capture_output=True, timeout=360)
         except subprocess.TimeoutExpired:

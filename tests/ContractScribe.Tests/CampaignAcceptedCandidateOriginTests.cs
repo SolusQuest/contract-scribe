@@ -27,7 +27,8 @@ public sealed partial class CampaignStateContractTests
             "append", "generation", new(128, 128, 4194304), GitHubPublicationTransitionKind.SameSnapshotAppend,
             new("previous", Hash('a'), basis.CandidateObservation!.PatchResultCommitmentSha256,
                 "generation", Hash('b'), Hash('c'), []));
-        var continuation = new CampaignAcceptedCandidateContinuation(null!, null!, new("unused", [], configuration),
+        var continuation = new CampaignAcceptedCandidateContinuation(null!, null!,
+            new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
             _ => throw new InvalidOperationException("Selection must not access credentials."));
         Assert.Equal(noWork, continuation.HasNoAppendWork(state));
     }
