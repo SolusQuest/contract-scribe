@@ -18,8 +18,8 @@ The resolved output is the complete `campaign-configuration-v1` runtime-authorit
 
 Some fields of the resolved document are never read from a consumer layer:
 
-- `planning.campaignLineage` is supplied by the required `--campaign-lineage <id>` option. It is a caller-attested durable identity consumed by campaign state and GitHub publication coordination, and uses the existing M4 opaque-identifier grammar `[A-Za-z0-9][A-Za-z0-9._:-]*` at 1–512 UTF-16 code units. A layer that carries it is rejected as an unknown field.
-- `planning.productContractRevisionSha256` is derived from the running payload build identity (`CliBuildIdentity`) and injected by the resolver. It is the same derivation the previous caller-pinned file used; consumers cannot express it.
+- `planning.campaignLineage` is caller-attested invocation authority: the `campaign` command supplies it through the required `--campaign-lineage <id>` option and `github-proposal` through the request document's `campaignLineage` field. It is a durable identity consumed by campaign state and GitHub publication coordination, and uses the existing M4 opaque-identifier grammar `[A-Za-z0-9][A-Za-z0-9._:-]*` at 1–512 UTF-16 code units. A layer that carries it is rejected as an unknown field.
+- `planning.productContractRevisionSha256` is derived from the running payload build identity (`CliBuildIdentity`) and injected by the resolver on both production paths; it is never caller-supplied and consumers cannot express it.
 - `planning.productContractRevisionId` and every protocol, contract, version, policy, registry, and source-marker identifier are product-owned authority values carried only by the payload defaults.
 
 ## Field disposition
@@ -27,7 +27,7 @@ Some fields of the resolved document are never read from a consumer layer:
 | Resolved field | Disposition |
 |---|---|
 | `campaignConfigurationVersion` | product-owned (`1`) |
-| `planning.campaignLineage` | invocation authority (`--campaign-lineage`) |
+| `planning.campaignLineage` | invocation authority (`--campaign-lineage` for `campaign`, request `campaignLineage` for `github-proposal`) |
 | `planning.targetProfile` | public |
 | `planning.proposalContractId` | product-owned |
 | `planning.contextSelectionPolicyId` | product-owned |

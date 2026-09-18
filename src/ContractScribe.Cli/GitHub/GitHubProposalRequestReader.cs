@@ -110,7 +110,8 @@ internal static class GitHubProposalRequestReader
         else if (value.ValueKind == JsonValueKind.String)
         {
             var text = DecodeString(value);
-            if (text.Length is 0 or > 4096 || text.Any(char.IsControl)) throw new JsonException();
+            if (text.Length is 0 || Encoding.UTF8.GetByteCount(text) > 4096 || text.Any(char.IsControl))
+                throw new JsonException();
         }
     }
 

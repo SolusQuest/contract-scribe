@@ -164,6 +164,40 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
+    public async Task Layer_drift_on_resume_rejects_as_incompatible_snapshot_without_remote_activity()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync();
+        AssertResult(await fixture.Run("start"), 0, "published");
+        var checkpoint = await File.ReadAllBytesAsync(fixture.State);
+        var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        layer["provider"]!["model"] = "drifted-model";
+        await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString(), new UTF8Encoding(false, true));
+        var result = await fixture.Run("resume");
+        AssertResult(result, 4, "stale");
+        Assert.Equal("github proposal stopped before publication: campaign.incompatible-snapshot\n", result.Stderr);
+        Assert.Equal(checkpoint, await File.ReadAllBytesAsync(fixture.State));
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(0, fixture.TokenReads());
+        Assert.Empty(fixture.GitHub.Requests);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [Fact]
+    public async Task Resume_with_missing_state_is_local_invalid_without_remote_activity()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync();
+        var result = await fixture.Run("resume");
+        AssertResult(result, 4, "local-invalid");
+        Assert.Equal("github proposal stopped before publication: campaign.state-missing\n", result.Stderr);
+        Assert.False(File.Exists(fixture.State));
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(0, fixture.TokenReads());
+        Assert.Empty(fixture.GitHub.Requests);
+    }
+
+    [Fact]
     public async Task Defaults_only_resolution_stops_at_the_https_credential_boundary_without_dispatch()
     {
         if (!OperatingSystem.IsLinux()) return;

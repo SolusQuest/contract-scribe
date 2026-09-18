@@ -45,6 +45,6 @@ The configuration derives immutable content authorities rather than trusting ide
 - provider/model request profile: the complete ordered non-secret provider object;
 - style: the complete validated style template;
 - cost rate: the complete non-null cost object;
-- product: the caller-pinned ID and SHA, independently matched to the current CLI product/contract revision.
+- product: the product-owned ID and the SHA derived from the running payload build identity, independently matched to the current CLI product/contract revision.
 
 These authorities, the complete validated limits, M1-derived snapshot facts, and opaque snapshot binding feed the C1 execution and C2 checkpoint commitments. A fresh process must derive the same values before a checkpoint can become execution authority. There is no compatibility or migration reader for another configuration shape in this pre-release contract.
