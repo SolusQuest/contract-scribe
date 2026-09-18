@@ -173,10 +173,12 @@ public sealed partial class GitHubProposalCliProcessTests
         AssertResult(result, 4, "local-invalid");
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal("campaign", json.RootElement.GetProperty("terminalLayer").GetString());
+        // Execution legitimately began: the checkpoint persisted its terminal
+        // before the HTTPS credential boundary stopped provider dispatch.
+        Assert.True(File.Exists(fixture.State));
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.TokenReads());
         Assert.Empty(fixture.GitHub.Requests);
-        Assert.False(File.Exists(fixture.State));
     }
 
     [Fact]
