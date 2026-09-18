@@ -218,14 +218,17 @@ public sealed class LayeredConfigurationProcessTests
             using var process = StartFrom(arbitraryCwd, arguments);
             await process.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
             var result = await process.CompleteAsync();
-            // Defaults carry the validated provider endpoint; without a credential
-            // the run must still resolve configuration and fail only at the
-            // provider boundary (execution or later), never during configuration
-            // resolution itself.
+            // Defaults carry the validated provider endpoint; the scrubbed
+            // environment guarantees no credential, so the run must stop at the
+            // provider boundary with exactly campaign.credential.invalid —
+            // proving configuration resolved and no authenticated request left.
             using var envelope = JsonDocument.Parse(result.Stdout);
-            var terminalLayer = envelope.RootElement.GetProperty("terminalLayer").GetString();
+            var root = envelope.RootElement;
+            var diagnostics = root.GetProperty("diagnosticCodes")
+                .EnumerateArray().Select(code => code.GetString());
             Assert.True(
-                terminalLayer is "execution" or "campaign",
+                string.Equals("execution", root.GetProperty("terminalLayer").GetString(), StringComparison.Ordinal)
+                    && diagnostics.Contains("campaign.credential.invalid"),
                 $"exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
         }
         finally
@@ -344,6 +347,12 @@ public sealed class LayeredConfigurationProcessTests
         {
             start.ArgumentList.Add(argument);
         }
+        // The defaults-only leg selects the payload's real HTTPS provider;
+        // an ambient key must never reach this subprocess or it could make a
+        // live authenticated request. Remove it from the child's environment
+        // only — the parent environment is shared with parallel tests.
+        start.Environment.Remove("CONTRACTSCRIBE_PROVIDER_API_KEY");
+        Assert.False(start.Environment.ContainsKey("CONTRACTSCRIBE_PROVIDER_API_KEY"));
         start.Environment["DOTNET_CLI_TELEMETRY_OPTOUT"] = "1";
         start.Environment["DOTNET_NOLOGO"] = "true";
         return new CampaignCliProcessTests.RunningProcess(Process.Start(start)

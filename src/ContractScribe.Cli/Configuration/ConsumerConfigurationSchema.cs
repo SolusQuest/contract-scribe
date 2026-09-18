@@ -19,19 +19,21 @@ internal sealed record ConsumerConfigurationNode(
     string Name,
     bool Nullable,
     ConsumerValueKind? Leaf,
+    ConsumerConfigurationNode? Item,
     ImmutableArray<ConsumerConfigurationNode> Children)
 {
     private static ConsumerConfigurationNode Obj(
         string name,
         bool nullable,
         params ConsumerConfigurationNode[] children) =>
-        new(name, nullable, null, children.ToImmutableArray());
+        new(name, nullable, null, null, children.ToImmutableArray());
 
     private static ConsumerConfigurationNode Field(
         string name,
         ConsumerValueKind kind,
-        bool nullable = false) =>
-        new(name, nullable, kind, ImmutableArray<ConsumerConfigurationNode>.Empty);
+        bool nullable = false,
+        ConsumerConfigurationNode? item = null) =>
+        new(name, nullable, kind, item, ImmutableArray<ConsumerConfigurationNode>.Empty);
 
     private static ConsumerConfigurationNode Integers(string name, params string[] fields) =>
         Obj(name, false, fields.Select(field => Field(field, ConsumerValueKind.Integer)).ToArray());
@@ -87,9 +89,15 @@ internal sealed record ConsumerConfigurationNode(
                     Field("disposition", ConsumerValueKind.Text),
                     Field("maximumScalars", ConsumerValueKind.Integer)),
                 Field("inheritDocDisposition", ConsumerValueKind.Text),
-                Field("allowedLiterals", ConsumerValueKind.Array),
-                Field("forbiddenLiterals", ConsumerValueKind.Array),
-                Field("claimPolicies", ConsumerValueKind.Array),
+                Field("allowedLiterals", ConsumerValueKind.Array,
+                    item: Field("item", ConsumerValueKind.Text)),
+                Field("forbiddenLiterals", ConsumerValueKind.Array,
+                    item: Field("item", ConsumerValueKind.Text)),
+                Field("claimPolicies", ConsumerValueKind.Array, item: Obj("item", false,
+                    Field("claimCategoryId", ConsumerValueKind.Text),
+                    Field("completeEvidenceRequired", ConsumerValueKind.Boolean),
+                    Field("allowedAuthorities", ConsumerValueKind.Array,
+                        item: Field("item", ConsumerValueKind.Text)))),
                 Field("maximumContentUnits", ConsumerValueKind.Integer),
                 Field("maximumEvidenceRefsPerUnit", ConsumerValueKind.Integer))),
         Obj("provider", false,

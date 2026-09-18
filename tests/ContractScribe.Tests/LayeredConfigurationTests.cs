@@ -194,6 +194,139 @@ public sealed class LayeredConfigurationTests : IDisposable
     }
 
     [Fact]
+    public void Resolve_ClaimPolicyItemPropertyOrder_IsNormalizedToDeclaredOrder()
+    {
+        // A reordered claim-policy row must resolve identically to the
+        // canonical-order row; Expect's strict sequence sees declared order.
+        var canonical = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray(new JsonObject
+                {
+                    ["claimCategoryId"] = "claim.behavior",
+                    ["completeEvidenceRequired"] = true,
+                    ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                }),
+            },
+        });
+        var reordered = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray(new JsonObject
+                {
+                    ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                    ["completeEvidenceRequired"] = true,
+                    ["claimCategoryId"] = "claim.behavior",
+                }),
+            },
+        });
+        var expected = Resolve(Defaults(), canonical).Document
+            .ScribeRequest.StyleProfileTemplate.ClaimPolicies;
+        var actual = Resolve(Defaults(), reordered).Document
+            .ScribeRequest.StyleProfileTemplate.ClaimPolicies;
+        Assert.Equal(expected.Length, actual.Length);
+        Assert.Equal(expected[0].ClaimCategoryId, actual[0].ClaimCategoryId);
+        Assert.Equal(expected[0].CompleteEvidenceRequired, actual[0].CompleteEvidenceRequired);
+        Assert.Equal(expected[0].AllowedAuthorities.ToArray(), actual[0].AllowedAuthorities.ToArray());
+        Assert.Single(actual);
+        Assert.Equal("claim.behavior", actual[0].ClaimCategoryId);
+    }
+
+    [Fact]
+    public void Resolve_InvalidArrayItems_AreRejectedBeforeAnyOverride()
+    {
+        // Every supplied layer's arrays are validated at admission; an
+        // override may never erase unknown fields or wrong item types from
+        // a lower layer before validation sees them.
+        var policyWithExtra = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray(new JsonObject
+                {
+                    ["claimCategoryId"] = "claim.behavior",
+                    ["completeEvidenceRequired"] = true,
+                    ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                    ["unexpected"] = true,
+                }),
+            },
+        });
+        var validPolicyOverride = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray(new JsonObject
+                {
+                    ["claimCategoryId"] = "claim.behavior",
+                    ["completeEvidenceRequired"] = true,
+                    ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                }),
+            },
+        });
+        Assert.Throws<CampaignConfigurationException>(
+            () => Resolve(Defaults(), policyWithExtra, validPolicyOverride));
+
+        var wrongItemType = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["allowedLiterals"] = new JsonArray(123),
+            },
+        });
+        var validLiteralOverride = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["allowedLiterals"] = new JsonArray("Only"),
+            },
+        });
+        Assert.Throws<CampaignConfigurationException>(
+            () => Resolve(Defaults(), wrongItemType, validLiteralOverride));
+    }
+
+    [Fact]
+    public void Resolve_ClaimPolicyItems_RejectMalformedRows()
+    {
+        var missingField = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray(new JsonObject
+                {
+                    ["claimCategoryId"] = "claim.behavior",
+                    ["completeEvidenceRequired"] = true,
+                }),
+            },
+        });
+        Assert.Throws<CampaignConfigurationException>(() => Resolve(Defaults(), missingField));
+
+        var nonObjectRow = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray("claim.behavior"),
+            },
+        });
+        Assert.Throws<CampaignConfigurationException>(() => Resolve(Defaults(), nonObjectRow));
+
+        var wrongNestedItem = Layer("scribeRequest", new JsonObject
+        {
+            ["styleProfileTemplate"] = new JsonObject
+            {
+                ["claimPolicies"] = new JsonArray(new JsonObject
+                {
+                    ["claimCategoryId"] = "claim.behavior",
+                    ["completeEvidenceRequired"] = true,
+                    ["allowedAuthorities"] = new JsonArray(42),
+                }),
+            },
+        });
+        Assert.Throws<CampaignConfigurationException>(() => Resolve(Defaults(), wrongNestedItem));
+    }
+
+    [Fact]
     public void Resolve_ArraysReplaceRatherThanMerge()
     {
         var layer = Layer(
@@ -531,26 +664,9 @@ public sealed class LayeredConfigurationTests : IDisposable
                 {
                     mismatches.Add(childPath + " items missing");
                 }
-                else if (child.Name == "claimPolicies")
+                else
                 {
-                    var itemType = items.TryGetProperty("type", out var it) ? it.GetString() : null;
-                    if (itemType != "object")
-                    {
-                        mismatches.Add(childPath + " items must be objects");
-                    }
-                    foreach (var required in new[]
-                        { "claimCategoryId", "completeEvidenceRequired", "allowedAuthorities" })
-                    {
-                        if (!items.TryGetProperty("properties", out var itemProps)
-                            || !itemProps.TryGetProperty(required, out _))
-                        {
-                            mismatches.Add(childPath + " items missing " + required);
-                        }
-                    }
-                }
-                else if (!(items.TryGetProperty("type", out var itemType) && itemType.GetString() == "string"))
-                {
-                    mismatches.Add(childPath + " items must be strings");
+                    CheckItemShape(items, child.Item, childPath + " items", mismatches);
                 }
             }
             if (child.Leaf is null && child.Children.Length > 0
@@ -561,6 +677,83 @@ public sealed class LayeredConfigurationTests : IDisposable
             else if (child.Leaf is null && child.Children.Length > 0)
             {
                 mismatches.Add(childPath + " properties missing");
+            }
+        }
+    }
+
+    private static void CheckItemShape(
+        JsonElement published,
+        ConsumerConfigurationNode? item,
+        string path,
+        List<string> mismatches)
+    {
+        if (item is null)
+        {
+            mismatches.Add(path + " undeclared");
+            return;
+        }
+        var typeName = item.Leaf switch
+        {
+            ConsumerValueKind.Integer => "integer",
+            ConsumerValueKind.Text => "string",
+            ConsumerValueKind.Boolean => "boolean",
+            ConsumerValueKind.Array => "array",
+            null => "object",
+            _ => "?",
+        };
+        if (!(published.TryGetProperty("type", out var type) && type.GetString() == typeName))
+        {
+            mismatches.Add(path + $" must be {typeName}");
+        }
+        if (item.Leaf == ConsumerValueKind.Array)
+        {
+            if (!published.TryGetProperty("items", out var nested))
+            {
+                mismatches.Add(path + " items missing");
+            }
+            else
+            {
+                CheckItemShape(nested, item.Item, path + " items", mismatches);
+            }
+        }
+        if (item.Leaf is null && item.Children.Length > 0)
+        {
+            var declared = item.Children.Select(child => child.Name).ToArray();
+            if (!published.TryGetProperty("properties", out var properties))
+            {
+                mismatches.Add(path + " properties missing");
+            }
+            else
+            {
+                foreach (var child in item.Children)
+                {
+                    if (!properties.TryGetProperty(child.Name, out var property))
+                    {
+                        mismatches.Add(path + " properties missing " + child.Name);
+                    }
+                    else if (child.Leaf == ConsumerValueKind.Array)
+                    {
+                        if (!property.TryGetProperty("items", out var nested))
+                        {
+                            mismatches.Add(path + " " + child.Name + " items missing");
+                        }
+                        else
+                        {
+                            CheckItemShape(nested, child.Item, path + " " + child.Name + " items", mismatches);
+                        }
+                    }
+                }
+                if (!properties.EnumerateObject().Select(property => property.Name).ToHashSet()
+                    .SetEquals(declared))
+                {
+                    mismatches.Add(path + " properties not closed");
+                }
+            }
+            if (!published.TryGetProperty("required", out var required)
+                || !required.EnumerateArray().Select(element => element.GetString()).ToHashSet()
+                    .SetEquals(declared))
+            {
+                mismatches.Add(path + " required mismatch");
             }
         }
     }

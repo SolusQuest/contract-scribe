@@ -240,10 +240,9 @@ internal static class LayeredCampaignConfigurationResolver
             {
                 continue;
             }
-            if (child.Leaf is { } leaf)
+            if (child.Leaf is { })
             {
-                CheckLeaf(value, leaf, child.Nullable);
-                target[child.Name] = JsonNode.Parse(value.GetRawText());
+                target[child.Name] = MaterializeLeaf(value, child);
                 continue;
             }
             if (value.ValueKind == JsonValueKind.Null)
@@ -263,6 +262,73 @@ internal static class LayeredCampaignConfigurationResolver
             ApplyObject(node, child, value, skipVersion: false);
             target[child.Name] = node;
         }
+    }
+
+    private static JsonNode? MaterializeLeaf(
+        JsonElement value,
+        ConsumerConfigurationNode schema)
+    {
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            if (!schema.Nullable)
+            {
+                throw new CampaignConfigurationException();
+            }
+            return null;
+        }
+        if (schema.Leaf is not { } leaf)
+        {
+            throw new CampaignConfigurationException();
+        }
+        if (leaf != ConsumerValueKind.Array)
+        {
+            CheckLeaf(value, leaf, schema.Nullable);
+            return JsonNode.Parse(value.GetRawText());
+        }
+        if (value.ValueKind != JsonValueKind.Array || schema.Item is not { } itemSchema)
+        {
+            throw new CampaignConfigurationException();
+        }
+        var items = new JsonArray();
+        foreach (var element in value.EnumerateArray())
+        {
+            items.Add(MaterializeArrayItem(element, itemSchema));
+        }
+        return items;
+    }
+
+    private static JsonNode? MaterializeArrayItem(
+        JsonElement element,
+        ConsumerConfigurationNode itemSchema)
+    {
+        if (itemSchema.Leaf is { } itemLeaf)
+        {
+            CheckLeaf(element, itemLeaf, nullable: false);
+            return JsonNode.Parse(element.GetRawText());
+        }
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            throw new CampaignConfigurationException();
+        }
+        var properties = new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+        foreach (var property in element.EnumerateObject())
+        {
+            if (!properties.TryAdd(property.Name, property.Value)
+                || FindChild(itemSchema, property.Name) is null)
+            {
+                throw new CampaignConfigurationException();
+            }
+        }
+        var item = new JsonObject();
+        foreach (var child in itemSchema.Children)
+        {
+            if (!properties.TryGetValue(child.Name, out var childValue))
+            {
+                throw new CampaignConfigurationException();
+            }
+            item[child.Name] = MaterializeLeaf(childValue, child);
+        }
+        return item;
     }
 
     private static ConsumerConfigurationNode? FindChild(
