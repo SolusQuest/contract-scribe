@@ -5,11 +5,11 @@
 ContractScribe exposes one pre-release durable campaign command through the production CLI:
 
 ```text
-contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
-contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
+contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]
+contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]
 ```
 
-`start` is an expected-absence create. It never adopts or overwrites an existing checkpoint. `resume` is an expected-presence read and exact-predecessor continuation. It never creates an absent checkpoint. All six options are required exactly once; names, subcommands, and values follow the ordinal, bounded grammar frozen by the CLI fixture tests. The caller supplies the immutable opaque snapshot binding and owns a pre-existing secure state directory outside the repository.
+`start` is an expected-absence create. It never adopts or overwrites an existing checkpoint. `resume` is an expected-presence read and exact-predecessor continuation. It never creates an absent checkpoint. The six authority options are required exactly once; `--configuration` and `--configuration-override` are optional bounded non-secret consumer configuration layers. Names, subcommands, and values follow the ordinal, bounded grammar frozen by the CLI fixture tests. The caller supplies the immutable opaque snapshot binding, the durable campaign lineage identity, and owns a pre-existing secure state directory outside the repository. The effective configuration resolves as payload defaults, then the optional `--configuration` layer, then the optional `--configuration-override` layer; invocation authority and product identity are never read from a layer (see `consumer-configuration.md`).
 
 The exact help bytes are stored in `tests/fixtures/campaign/cli/help-campaign.txt`. The top-level CLI advertises both forms while the existing audit, doctor, help, and version behavior remains unchanged.
 
@@ -21,7 +21,7 @@ The shared host's `total-audit-timeout` governs M1 only. After M1 result validat
 
 The runner then composes the existing boundaries in this order:
 
-1. Parse argv and validate repository, input, policy, configuration, snapshot, and state location.
+1. Parse argv and validate repository, input, policy, snapshot, state location, and campaign lineage; then resolve the layered consumer configuration (payload defaults, optional downstream layer, optional invocation override) into the complete current campaign execution configuration.
 2. Use the accepted X2A file adapter for one authoritative safety/lease/presence read.
 3. Validate the current product revision before M1. On resume, retain the accepted checkpoint and classify the caller's opaque snapshot as same-snapshot or changed-base without weakening state, lease, policy, configuration, input, target-profile, or product authority.
 4. Run one live M1 session and derive the complete current C1 authority. Same-snapshot resume revalidates the exact C2 context. Changed-base resume constructs a clean revision-zero C2 template, applies only the C3 `Supersede` transition, and conditionally replaces and exactly reads back the predecessor through X2A.

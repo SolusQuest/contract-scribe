@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "consumer-configuration/v1",
+  "title": "ContractScribe consumer configuration layer",
+  "description": "One consumer configuration layer for the campaign CLI. Layers merge over payload defaults and under an optional invocation override; only the declared fields may appear. Invocation authority (campaign lineage) and product-derived identity are never read from a layer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["consumerConfigurationVersion"],
+  "properties": {
+    "consumerConfigurationVersion": {
+      "type": "integer",
+      "const": 1
+    },
+    "planning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "targetProfile": {
+          "type": "string",
+          "enum": ["profile.external-api", "profile.assembly-visible"]
+        },
+        "maximumPatchElapsedMilliseconds": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "budgets": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "campaign": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maximumBlocks": { "type": "integer", "minimum": 1, "maximum": 16384 },
+            "maximumChangedFiles": { "type": "integer", "minimum": 1, "maximum": 16384 },
+            "maximumPatchBytes": { "type": "integer", "minimum": 1 },
+            "maximumProviderRequests": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+            "maximumAttemptsPerTarget": { "type": "integer", "minimum": 1, "maximum": 1000 },
+            "maximumInputTokens": { "type": "integer", "minimum": 1 },
+            "maximumUncachedInputTokens": { "type": "integer", "minimum": 0 },
+            "maximumOutputTokens": { "type": "integer", "minimum": 1 },
+            "maximumCostMicrounits": { "type": "integer", "minimum": 0 },
+            "maximumElapsedMilliseconds": { "type": "integer", "minimum": 1 },
+            "maximumCandidatesPerBlock": { "type": "integer", "minimum": 1, "maximum": 1000 }
+          }
+        },
+        "scribe": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maximumContextReferences": { "type": "integer", "minimum": 0, "maximum": 512 },
+            "maximumContextUtf8Bytes": { "type": "integer", "minimum": 0, "maximum": 4194304 },
+            "maximumEvidenceReferences": { "type": "integer", "minimum": 0, "maximum": 512 },
+            "maximumEvidenceUtf8Bytes": { "type": "integer", "minimum": 0, "maximum": 4194304 },
+            "maximumProviderRequests": { "type": "integer", "minimum": 1, "maximum": 128 },
+            "maximumToolRounds": { "type": "integer", "minimum": 0, "maximum": 128 },
+            "maximumToolCalls": { "type": "integer", "minimum": 0, "maximum": 1024 },
+            "maximumAttempts": { "type": "integer", "minimum": 1 },
+            "maximumInputTokens": { "type": "integer", "minimum": 1 },
+            "maximumUncachedInputTokens": { "type": "integer", "minimum": 0 },
+            "maximumOutputTokens": { "type": "integer", "minimum": 1 },
+            "maximumCostMicrounits": { "type": "integer", "minimum": 0 },
+            "maximumElapsedMilliseconds": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "scribeRequest": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "styleProfileTemplate": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "styleProfileId": { "type": "string" },
+            "outputLanguageId": { "type": "string" },
+            "summary": { "$ref": "#/$defs/textPolicy" },
+            "remarks": { "$ref": "#/$defs/textPolicy" },
+            "exceptions": { "$ref": "#/$defs/textPolicy" },
+            "componentPolicy": { "$ref": "#/$defs/textPolicy" },
+            "inheritDocDisposition": {
+              "type": "string",
+              "enum": ["allowed", "required", "forbidden"]
+            },
+            "allowedLiterals": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "forbiddenLiterals": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "claimPolicies": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["claimCategoryId", "completeEvidenceRequired", "allowedAuthorities"],
+                "properties": {
+                  "claimCategoryId": { "type": "string" },
+                  "completeEvidenceRequired": { "type": "boolean" },
+                  "allowedAuthorities": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
+            },
+            "maximumContentUnits": { "type": "integer", "minimum": 1 },
+            "maximumEvidenceRefsPerUnit": { "type": "integer", "minimum": 1 }
+          }
+        }
+      }
+    },
+    "provider": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "endpoint": { "type": "string" },
+        "model": { "type": "string" },
+        "requestProfile": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "thinkingMode": { "type": "string", "enum": ["enabled", "disabled"] },
+            "reasoningEffort": { "type": ["string", "null"], "enum": ["high", null] },
+            "toolChoice": { "type": "string", "enum": ["omitted", "auto", "required"] },
+            "continuationPolicy": { "type": "string", "enum": ["optional", "required-for-tool-calls"] },
+            "outputTokenField": { "type": "string", "enum": ["max_tokens", "max_completion_tokens"] }
+          }
+        }
+      }
+    },
+    "costPolicy": {
+      "type": ["object", "null"],
+      "additionalProperties": false,
+      "properties": {
+        "currencyId": { "type": "string" },
+        "ratePolicyId": { "type": "string" },
+        "cachedInputMicrounitsPerMillion": { "type": "integer", "minimum": 0 },
+        "uncachedInputMicrounitsPerMillion": { "type": "integer", "minimum": 0 },
+        "outputMicrounitsPerMillion": { "type": "integer", "minimum": 0 },
+        "reasoningMicrounitsPerMillion": { "type": "integer", "minimum": 0 }
+      }
+    }
+  },
+  "$defs": {
+    "textPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "disposition": { "type": "string", "enum": ["required", "optional", "forbidden"] },
+        "maximumScalars": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

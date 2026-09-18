@@ -288,7 +288,7 @@ See [Campaign and GitHub workflow](../20_architecture/campaign-and-github-workfl
 
 ### Goal
 
-Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound to a selected payload and release policy.
+Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound to a selected payload and release policy. The accepted execution plan and track routing are recorded in [m6-plan.md](m6-plan.md).
 
 ### Dependencies
 

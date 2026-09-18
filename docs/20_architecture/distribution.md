@@ -10,6 +10,8 @@ The first intended consumer experience is a GitHub Action that invokes the exact
 
 The production GitHub adapter and its Issue, branch, commit, and pull-request reconciliation remain in C#. Action-host language does not own or alter those rules.
 
+Consumer-facing campaign configuration is a declared-field JSON contract resolved inside the same C# CLI as payload defaults, an optional downstream file, and an optional invocation override ([consumer-configuration.md](consumer-configuration.md)). The Action wrapper exposes invocation inputs and paths to such files; it does not reimplement merge semantics, environment precedence, or one input per configuration field.
+
 ## Payload decision
 
 The payload-channel decision compares only candidates compatible with the framework-dependent, in-process baseline. Candidate definitions, install modes, artifact layout, SDK/MSBuild discovery, exact-version pinning, update, rollback, uninstall, offline post-acquisition execution, and supported matrices must be frozen before evidence is produced.

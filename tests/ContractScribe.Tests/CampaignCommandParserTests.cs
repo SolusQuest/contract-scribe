@@ -10,15 +10,17 @@ public sealed class CampaignCommandParserTests
     [
         "start", "--repository-root", "repo", "--input", "input.slnx",
         "--policy", "policy.json", "--snapshot", "snapshot.v1", "--state",
-        "state.json", "--configuration", "campaign.json",
+        "state.json", "--campaign-lineage", "campaign.tests",
+        "--configuration", "campaign.json",
     ];
 
     [Fact]
-    public void Parse_AcceptsOnlyTheSixRequiredOptionsInEitherFormAndAnyOrder()
+    public void Parse_AcceptsRequiredAndLayerOptionsInEitherFormAndAnyOrder()
     {
         var parsed = CampaignCommandParser.Parse(
         [
-            "resume", "--configuration=c", "--state=s", "--snapshot=snapshot:v1",
+            "resume", "--configuration-override=override.json", "--configuration=c",
+            "--campaign-lineage=lineage.tests", "--state=s", "--snapshot=snapshot:v1",
             "--policy=p", "--input=i.slnx", "--repository-root=r",
         ]);
 
@@ -26,6 +28,50 @@ public sealed class CampaignCommandParserTests
         Assert.Equal(CampaignOperation.Resume, parsed.Arguments!.Operation);
         Assert.Equal("r", parsed.Arguments.RepositoryRoot);
         Assert.Equal("snapshot:v1", parsed.Arguments.Snapshot);
+        Assert.Equal("lineage.tests", parsed.Arguments.CampaignLineage);
+        Assert.Equal("c", parsed.Arguments.Configuration);
+        Assert.Equal("override.json", parsed.Arguments.ConfigurationOverride);
+        Assert.Equal(CampaignConfigurationKind.Layered, parsed.Arguments.Kind);
+    }
+
+    [Fact]
+    public void Parse_LayerOptionsAreOptionalWhileLineageIsRequired()
+    {
+        var parsed = CampaignCommandParser.Parse(
+            Complete.Where(token =>
+                token is not "--configuration" and not "campaign.json").ToArray());
+        Assert.Null(parsed.Failure);
+        Assert.Null(parsed.Arguments!.Configuration);
+        Assert.Null(parsed.Arguments.ConfigurationOverride);
+
+        var withoutLineage = Complete.Where(token =>
+            token is not "--campaign-lineage" and not "campaign.tests").ToArray();
+        Assert.Equal("missing-required-option",
+            CampaignCommandParser.Parse(withoutLineage).Failure!.UsageClass);
+    }
+
+    [Theory]
+    [InlineData("campaign.lineage:v1", true)]
+    [InlineData("lineage", true)]
+    [InlineData(".leading-punctuation", false)]
+    [InlineData("-leading", false)]
+    [InlineData("has space", false)]
+    [InlineData("ünïcode", false)]
+    [InlineData("missing/slash", false)]
+    public void Parse_EnforcesTheFrozenLineageGrammar(string value, bool valid)
+    {
+        var parsed = CampaignCommandParser.Parse(ReplaceValue("--campaign-lineage", value));
+        Assert.Equal(valid, parsed.Failure is null);
+        if (!valid)
+        {
+            Assert.Equal("invalid-option-value", parsed.Failure!.UsageClass);
+        }
+
+        var exactBound = new string('a', 512);
+        Assert.Null(CampaignCommandParser.Parse(
+            ReplaceValue("--campaign-lineage", exactBound)).Failure);
+        Assert.Equal("invalid-option-value",
+            Failure(ReplaceValue("--campaign-lineage", exactBound + "a")));
     }
 
     [Theory]
@@ -53,7 +99,7 @@ public sealed class CampaignCommandParserTests
     public void Parse_MissingRequiredOptionIsLastInPrecedence()
     {
         var result = CampaignCommandParser.Parse(
-            Complete.Where(token => token is not "--configuration" and not "campaign.json").ToArray());
+            Complete.Where(token => token is not "--input" and not "input.slnx").ToArray());
 
         Assert.Equal("missing-required-option", result.Failure!.UsageClass);
     }

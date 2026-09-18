@@ -29,7 +29,7 @@ The exact release candidate must pass these gates on GitHub-hosted Ubuntu x64 ag
 
 Repository visibility does not by itself freeze a draft machine contract. Pre-release contract revisions follow [Contract lifecycle](../00_project/contract-lifecycle.md) and are identified by commit plus artifact version.
 
-The first downstream-consumable release establishes the external compatibility freeze for every contract it exposes. After that point, incompatible changes require new artifact versions and explicit compatibility or migration behavior.
+The first downstream-consumable release establishes the external compatibility freeze for every contract it exposes, including the public consumer configuration layer (`schemas/consumer-configuration/v1.schema.json`, documented in [Consumer configuration](../20_architecture/consumer-configuration.md)) and its payload defaults. The internal resolved `campaign-configuration-v1` authority document is an implementation boundary, not a released consumer contract. After that point, incompatible changes require new artifact versions and explicit compatibility or migration behavior.
 
 Milestone evidence before release remains meaningful for the exact revision that produced it, but is not an active compatibility or authorization state. A later draft change runs the checks affected by that change and does not create a successor baseline unless a real coexistence or external-consumer boundary requires one.
 

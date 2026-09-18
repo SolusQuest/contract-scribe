@@ -140,7 +140,7 @@ public sealed class CampaignChangedBaseProcessTests
     }
 
     [Fact]
-    public async Task DriftAndProductMismatch_LeaveThePredecessorByteIdenticalWithoutDispatch()
+    public async Task DriftAndUndeclaredAuthority_LeaveThePredecessorByteIdenticalWithoutDispatch()
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
@@ -173,7 +173,7 @@ public sealed class CampaignChangedBaseProcessTests
         await File.WriteAllTextAsync(
             Path.Join(fixture.Repository.Root, "policy.json"),
             CampaignCliProcessTests.RequiredPolicy);
-        await CampaignCliProcessTests.WriteConfigurationAsync(
+        await CampaignCliProcessTests.WriteConsumerLayerAsync(
             fixture.ConfigurationPath,
             fixture.Server.Endpoint,
             maximumPatchElapsedMilliseconds: 1);
@@ -184,7 +184,7 @@ public sealed class CampaignChangedBaseProcessTests
         Assert.Equal(0, fixture.Server.RequestCount);
 
         var invalidProduct = JsonNode.Parse(originalConfiguration)!.AsObject();
-        invalidProduct["planning"]!["productContractRevisionSha256"] = new string('0', 64);
+        ((JsonObject)(invalidProduct["planning"] ??= new JsonObject()))["productContractRevisionSha256"] = new string('0', 64);
         await File.WriteAllTextAsync(
             fixture.ConfigurationPath,
             invalidProduct.ToJsonString(),
@@ -709,17 +709,19 @@ public sealed class CampaignChangedBaseProcessTests
             File.SetUnixFileMode(stateDirectory,
                 UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var configurationPath = Path.Join(outside, "campaign.json");
-            await CampaignCliProcessTests.WriteConfigurationAsync(configurationPath, server.Endpoint);
+            await CampaignCliProcessTests.WriteConsumerLayerAsync(configurationPath, server.Endpoint);
             if (maximumCampaignElapsedMilliseconds is not null || maximumCandidatesPerBlock is not null)
             {
                 var configuration = JsonNode.Parse(await File.ReadAllBytesAsync(configurationPath))!.AsObject();
+                var budgets = (JsonObject)(configuration["budgets"] ??= new JsonObject());
+                var campaign = (JsonObject)(budgets["campaign"] ??= new JsonObject());
                 if (maximumCampaignElapsedMilliseconds is { } maximumElapsed)
                 {
-                    configuration["budgets"]!["campaign"]!["maximumElapsedMilliseconds"] = maximumElapsed;
+                    campaign["maximumElapsedMilliseconds"] = maximumElapsed;
                 }
                 if (maximumCandidatesPerBlock is { } maximumCandidates)
                 {
-                    configuration["budgets"]!["campaign"]!["maximumCandidatesPerBlock"] = maximumCandidates;
+                    campaign["maximumCandidatesPerBlock"] = maximumCandidates;
                 }
                 await File.WriteAllTextAsync(
                     configurationPath,

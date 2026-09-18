@@ -75,11 +75,13 @@ public sealed class CampaignCliProcessTests
                         policyBytes,
                         "snapshot.integration",
                         Path.Join(Path.GetTempPath(), "unused-checkpoint.json"),
-                        new CampaignConfigurationSnapshot(
-                            Path.Join(RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"),
-                            configurationBytes.Length,
-                            DateTime.UnixEpoch,
-                            new string('0', 64),
+                        new CampaignResolvedConfigurationSnapshot(
+                            [new CampaignConfigurationSource(
+                                Path.Join(RepositoryRoot, "tests", "fixtures", "campaign", "cli", "configuration-valid.json"),
+                                configurationBytes.Length,
+                                DateTime.UnixEpoch,
+                                new string('0', 64),
+                                configurationBytes)],
                             configuration));
                     var planning = CampaignCommandRunner.CreatePlanningInput(
                         preflight, configuration, policy, bundle, token);
@@ -181,7 +183,7 @@ public sealed class CampaignCliProcessTests
         File.SetUnixFileMode(stateDirectory,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var statePath = Path.Join(stateDirectory, "checkpoint.json");
-        await WriteConfigurationAsync(configurationPath);
+        await WriteConsumerLayerAsync(configurationPath);
 
         try
         {
@@ -240,7 +242,7 @@ public sealed class CampaignCliProcessTests
         var firstRelease = Path.Join(outside, "first.release");
         var secondAcknowledgement = Path.Join(outside, "second.ack");
         var secondRelease = Path.Join(outside, "second.release");
-        await WriteConfigurationAsync(configurationPath, server.Endpoint);
+        await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
 
         using var first = Start(
             Args("start", fixture.Root, statePath, configurationPath, "snapshot.concurrent"),
@@ -309,7 +311,7 @@ public sealed class CampaignCliProcessTests
         var statePath = Path.Join(stateDirectory, "checkpoint.json");
         var acknowledgement = Path.Join(outside, "hook.ack");
         var release = Path.Join(outside, "hook.release");
-        await WriteConfigurationAsync(configurationPath, server.Endpoint);
+        await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
         var configurationBytes = await File.ReadAllBytesAsync(configurationPath);
 
         using var running = Start(
@@ -373,7 +375,7 @@ public sealed class CampaignCliProcessTests
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var statePath = Path.Join(stateDirectory, "checkpoint.json");
         var acknowledgement = Path.Join(outside, "hook.ack");
-        await WriteConfigurationAsync(configurationPath);
+        await WriteConsumerLayerAsync(configurationPath);
 
         using var running = Start(
             Args("start", fixture.Root, statePath, configurationPath, "snapshot.crash"),
@@ -442,7 +444,7 @@ public sealed class CampaignCliProcessTests
         File.SetUnixFileMode(stateDirectory,
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var statePath = Path.Join(stateDirectory, "checkpoint.json");
-        await WriteConfigurationAsync(configurationPath, server.Endpoint);
+        await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
 
         try
         {
@@ -517,6 +519,7 @@ public sealed class CampaignCliProcessTests
         "--policy", "policy.json",
         "--snapshot", snapshot,
         "--state", state,
+        "--campaign-lineage", "campaign.integration",
         "--configuration", configuration,
     ];
 
@@ -545,6 +548,25 @@ public sealed class CampaignCliProcessTests
         if (endpoint is not null)
         {
             root["provider"]!["endpoint"] = endpoint.AbsoluteUri;
+        }
+        await File.WriteAllTextAsync(destination, root.ToJsonString(), new UTF8Encoding(false, true));
+    }
+
+    internal static async Task WriteConsumerLayerAsync(
+        string destination,
+        Uri? endpoint = null,
+        int? maximumPatchElapsedMilliseconds = null)
+    {
+        var root = new JsonObject { ["consumerConfigurationVersion"] = 1 };
+        if (maximumPatchElapsedMilliseconds is { } maximumPatchElapsed)
+        {
+            ((JsonObject)(root["planning"] ??= new JsonObject()))
+                ["maximumPatchElapsedMilliseconds"] = maximumPatchElapsed;
+        }
+        if (endpoint is not null)
+        {
+            ((JsonObject)(root["provider"] ??= new JsonObject()))
+                ["endpoint"] = endpoint.AbsoluteUri;
         }
         await File.WriteAllTextAsync(destination, root.ToJsonString(), new UTF8Encoding(false, true));
     }
@@ -578,7 +600,7 @@ public sealed class CampaignCliProcessTests
             UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var statePath = Path.Join(stateDirectory, "checkpoint.json");
         var acknowledgement = Path.Join(outside, "hook.ack");
-        await WriteConfigurationAsync(
+        await WriteConsumerLayerAsync(
             configurationPath,
             server.Endpoint,
             vector.Scenario == "closed-patch" ? 1 : null);

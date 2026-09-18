@@ -16,6 +16,10 @@
     <PackageReference Include="Microsoft.NET.StringTools" ExcludeAssets="runtime" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\..\config\defaults.json" Link="config\defaults.json" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net10.0</TargetFramework>
