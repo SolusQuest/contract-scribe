@@ -15,8 +15,8 @@ public static class CommandLineApplication
         "Usage:\n" +
         "  contract-scribe [--help | --version | doctor]\n" +
         "  contract-scribe audit --repository-root <path> --input <path> --policy <path> --output <path>\n" +
-        "  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
-        "  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
+        "  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]\n" +
+        "  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]\n" +
         "\n" +
         "Commands:\n" +
         "  audit       Run the deterministic XML documentation audit.\n" +
@@ -57,17 +57,19 @@ public static class CommandLineApplication
         "ContractScribe campaign\n" +
         "\n" +
         "Usage:\n" +
-        "  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
-        "  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>\n" +
+        "  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]\n" +
+        "  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]\n" +
         "\n" +
         "Options:\n" +
-        "  --repository-root <path>  Existing repository root.\n" +
-        "  --input <path>            Existing .sln, .slnx, or .csproj inside the repository.\n" +
-        "  --policy <path>           Existing M1 policy file inside the repository.\n" +
-        "  --snapshot <binding>      Caller-attested immutable snapshot binding.\n" +
-        "  --state <path>            Campaign checkpoint outside the repository.\n" +
-        "  --configuration <path>    Strict non-secret campaign configuration JSON.\n" +
-        "  -h, --help                Print this help.\n" +
+        "  --repository-root <path>         Existing repository root.\n" +
+        "  --input <path>                   Existing .sln, .slnx, or .csproj inside the repository.\n" +
+        "  --policy <path>                  Existing M1 policy file inside the repository.\n" +
+        "  --snapshot <binding>             Caller-attested immutable snapshot binding.\n" +
+        "  --state <path>                   Campaign checkpoint outside the repository.\n" +
+        "  --campaign-lineage <id>          Caller-attested durable campaign lineage identity.\n" +
+        "  --configuration <path>           Optional non-secret consumer configuration layer.\n" +
+        "  --configuration-override <path>  Optional invocation configuration layer; wins over --configuration.\n" +
+        "  -h, --help                       Print this help.\n" +
         "\n" +
         "Environment:\n" +
         "  CONTRACTSCRIBE_PROVIDER_API_KEY  Selected transport credential; never persisted or emitted.\n" +

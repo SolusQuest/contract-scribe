@@ -8,6 +8,16 @@ internal enum CampaignOperation
     Resume,
 }
 
+// Selects how --configuration is interpreted. Layered is the public consumer
+// surface (payload defaults < --configuration < --configuration-override with
+// lineage supplied by --campaign-lineage). RuntimeAuthority is the low-level
+// authority input consumed directly by github-proposal until C2.
+internal enum CampaignConfigurationKind
+{
+    Layered,
+    RuntimeAuthority,
+}
+
 internal sealed record CampaignCommandArguments(
     CampaignOperation Operation,
     string RepositoryRoot,
@@ -15,7 +25,35 @@ internal sealed record CampaignCommandArguments(
     string Policy,
     string Snapshot,
     string State,
-    string Configuration);
+    string? Configuration,
+    string? ConfigurationOverride,
+    string? CampaignLineage,
+    CampaignConfigurationKind Kind)
+{
+    // Preserves the existing construction used by the unchanged github-proposal
+    // projection: a single complete campaign-configuration-v1 authority input.
+    internal CampaignCommandArguments(
+        CampaignOperation operation,
+        string repositoryRoot,
+        string input,
+        string policy,
+        string snapshot,
+        string state,
+        string configuration)
+        : this(
+            operation,
+            repositoryRoot,
+            input,
+            policy,
+            snapshot,
+            state,
+            configuration,
+            null,
+            null,
+            CampaignConfigurationKind.RuntimeAuthority)
+    {
+    }
+}
 
 internal sealed record CampaignUsageFailure(string UsageClass, string Code, CampaignOperation? Operation);
 
@@ -36,7 +74,18 @@ internal static class CampaignCommandParser
         "--policy",
         "--snapshot",
         "--state",
+        "--campaign-lineage",
+    ];
+    private static readonly string[] KnownOptions =
+    [
+        "--repository-root",
+        "--input",
+        "--policy",
+        "--snapshot",
+        "--state",
+        "--campaign-lineage",
         "--configuration",
+        "--configuration-override",
     ];
 
     internal static CampaignParseResult Parse(ReadOnlySpan<string> tokens)
@@ -91,7 +140,7 @@ internal static class CampaignCommandParser
 
             var equals = token.IndexOf('=');
             var option = equals >= 0 ? token[..equals] : token;
-            if (!RequiredOptions.Contains(option, StringComparer.Ordinal))
+            if (!KnownOptions.Contains(option, StringComparer.Ordinal))
             {
                 unknownOption = true;
                 continue;
@@ -158,6 +207,8 @@ internal static class CampaignCommandParser
             return Failure("missing-required-option", operation);
         }
 
+        values.TryGetValue("--configuration", out var configuration);
+        values.TryGetValue("--configuration-override", out var configurationOverride);
         return new CampaignParseResult(
             new CampaignCommandArguments(
                 operation.Value,
@@ -166,7 +217,10 @@ internal static class CampaignCommandParser
                 values["--policy"],
                 values["--snapshot"],
                 values["--state"],
-                values["--configuration"]),
+                configuration,
+                configurationOverride,
+                values["--campaign-lineage"],
+                CampaignConfigurationKind.Layered),
             null,
             HelpRequested: false);
     }
@@ -199,6 +253,12 @@ internal static class CampaignCommandParser
             return value.Length is >= 1 and <= 128
                 && IsSnapshotStart(value[0])
                 && value.All(character => IsSnapshotStart(character) || character is '.' or '_' or ':' or '-');
+        }
+        if (option == "--campaign-lineage")
+        {
+            return ContractScribe.Core.CampaignStateFactory.IsOpaqueId(
+                value,
+                ContractScribe.Core.CampaignStateContract.MaximumIdentifierScalars);
         }
 
         try

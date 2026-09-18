@@ -8,40 +8,6 @@ internal sealed class CampaignPreflightException(string outcome) : Exception(out
     internal string Outcome { get; } = outcome;
 }
 
-internal sealed record CampaignConfigurationSnapshot(
-    string Path,
-    long Length,
-    DateTime LastWriteUtc,
-    string Sha256,
-    CampaignConfigurationDocument Document)
-{
-    internal bool Revalidate()
-    {
-        try
-        {
-            if (!CliPreflight.IsRegularFileNoFollow(Path))
-            {
-                return false;
-            }
-            var info = new FileInfo(Path);
-            if (info.Length != Length || info.LastWriteTimeUtc != LastWriteUtc)
-            {
-                return false;
-            }
-            var bytes = File.ReadAllBytes(Path);
-            return bytes.LongLength == Length
-                && string.Equals(
-                    Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
-                    Sha256,
-                    StringComparison.Ordinal);
-        }
-        catch (Exception exception) when (CliPreflight.IsPathFailure(exception))
-        {
-            return false;
-        }
-    }
-}
-
 internal sealed record CampaignPreflightResult(
     CampaignOperation Operation,
     string RepositoryRoot,
@@ -50,13 +16,19 @@ internal sealed record CampaignPreflightResult(
     byte[] PolicyBytes,
     string SnapshotBinding,
     string StatePath,
-    CampaignConfigurationSnapshot Configuration);
+    CampaignResolvedConfigurationSnapshot Configuration);
 
 internal static class CampaignPreflight
 {
     internal static CampaignPreflightResult Run(
         CampaignCommandArguments arguments,
-        string currentDirectory)
+        string currentDirectory) =>
+        Run(arguments, currentDirectory, CliBuildIdentity.Current);
+
+    internal static CampaignPreflightResult Run(
+        CampaignCommandArguments arguments,
+        string currentDirectory,
+        CliBuildIdentity identity)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentException.ThrowIfNullOrEmpty(currentDirectory);
@@ -68,7 +40,16 @@ internal static class CampaignPreflight
                 arguments.Policy,
                 currentDirectory);
             var state = ResolveState(arguments.State, currentDirectory, inputs.RepositoryRoot);
-            var configuration = ReadConfiguration(arguments.Configuration, currentDirectory);
+            var configuration = arguments.Kind switch
+            {
+                CampaignConfigurationKind.RuntimeAuthority =>
+                    ReadConfiguration(arguments.Configuration, currentDirectory),
+                _ => LayeredCampaignConfigurationResolver.Resolve(
+                    arguments,
+                    currentDirectory,
+                    LayeredCampaignConfigurationResolver.PayloadDefaultsPath,
+                    identity),
+            };
             var inputIdentity = Path.GetRelativePath(inputs.RepositoryRoot, inputs.InputPath)
                 .Replace(Path.DirectorySeparatorChar, '/');
             return new CampaignPreflightResult(
@@ -111,11 +92,13 @@ internal static class CampaignPreflight
         return state;
     }
 
-    private static CampaignConfigurationSnapshot ReadConfiguration(
-        string value,
+    private static CampaignResolvedConfigurationSnapshot ReadConfiguration(
+        string? value,
         string currentDirectory)
     {
-        var lexical = Path.GetFullPath(value, currentDirectory);
+        var lexical = Path.GetFullPath(
+            value ?? throw new CampaignPreflightException("campaign.invalid-configuration"),
+            currentDirectory);
         var path = CliPreflight.ResolveExistingPath(lexical);
         if (!CliPreflight.IsRegularFileNoFollow(path))
         {
@@ -135,11 +118,13 @@ internal static class CampaignPreflight
             throw new CampaignPreflightException("campaign.invalid-configuration");
         }
         var document = CampaignConfiguration.Parse(bytes);
-        return new CampaignConfigurationSnapshot(
-            path,
-            bytes.LongLength,
-            infoAfter.LastWriteTimeUtc,
-            Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+        return new CampaignResolvedConfigurationSnapshot(
+            [new CampaignConfigurationSource(
+                path,
+                bytes.LongLength,
+                infoAfter.LastWriteTimeUtc,
+                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
+                bytes)],
             document);
     }
 }

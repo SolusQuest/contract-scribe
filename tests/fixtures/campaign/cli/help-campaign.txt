@@ -1,17 +1,19 @@
 ContractScribe campaign
 
 Usage:
-  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
-  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path>
+  contract-scribe campaign start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]
+  contract-scribe campaign resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --campaign-lineage <id> [--configuration <path>] [--configuration-override <path>]
 
 Options:
-  --repository-root <path>  Existing repository root.
-  --input <path>            Existing .sln, .slnx, or .csproj inside the repository.
-  --policy <path>           Existing M1 policy file inside the repository.
-  --snapshot <binding>      Caller-attested immutable snapshot binding.
-  --state <path>            Campaign checkpoint outside the repository.
-  --configuration <path>    Strict non-secret campaign configuration JSON.
-  -h, --help                Print this help.
+  --repository-root <path>         Existing repository root.
+  --input <path>                   Existing .sln, .slnx, or .csproj inside the repository.
+  --policy <path>                  Existing M1 policy file inside the repository.
+  --snapshot <binding>             Caller-attested immutable snapshot binding.
+  --state <path>                   Campaign checkpoint outside the repository.
+  --campaign-lineage <id>          Caller-attested durable campaign lineage identity.
+  --configuration <path>           Optional non-secret consumer configuration layer.
+  --configuration-override <path>  Optional invocation configuration layer; wins over --configuration.
+  -h, --help                       Print this help.
 
 Environment:
   CONTRACTSCRIBE_PROVIDER_API_KEY  Selected transport credential; never persisted or emitted.

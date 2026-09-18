@@ -54,6 +54,8 @@ The target is built in **Debug before its first load**, while the product is bui
 
 The original synthetic provider uses the accepted production HTTP transport at fixed numeric loopback `http://127.0.0.1:48265/v1/chat/completions`, with no key. It returns only the fixed summary using the real current target/evidence reference. Campaign/provider/snapshot/operation/policy configuration remains identical between positive start and scheduled resume. There is no GitHub fake, startup hook, induced transport loss, or fabricated local admission.
 
+The producer's `campaign.json` is a complete `campaign-configuration-v1` runtime-authority document consumed directly by `github-proposal --configuration`. M6-C1 layered consumer configuration does not change this input contract: `github-proposal` remains a runtime-authority consumer until the C2 follow-up, so the producer, workflow, and this protocol require no migration from that change. Live reauthorization remains governed by the topic switch alone.
+
 ## Exactly three scenarios and one temporary state transfer
 
 1. **Manual wrong-base start:** require no current-trial proposal/coordination work beside the exact retained history, keep target at B, and use the real bootstrap commit as expected base in a separate private state directory. Require exit 4 and publication-layer `github-proposal.stale`, then unchanged remote refs/PR observations. Any other result halts the sequence.

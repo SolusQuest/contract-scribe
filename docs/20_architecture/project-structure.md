@@ -195,7 +195,7 @@ The adapter does not select audit targets, generate documentation, validate patc
 
 Issue #108 adds the internal, one-target Scribe-to-patch composition seam and the current CLI edges to Agent and Patching. The seam consumes an opaque selected-audit capability bound to the exact current classified and observed repository session, materializes only accepted context and evidence, injects a closed repository/semantic read registry plus a typed model exchange into Agent, and maps only a revalidated structured proposal into the existing M2 engine. Agent never receives the session, Patching, Roslyn concrete types, source writers, or ambient filesystem/network capabilities. Skip, stale, invalid, failed, cancelled, timed-out, and exhausted outcomes return no candidate. No public command, output envelope, live-provider invocation, or original-checkout write-back is added.
 
-It may reference every production project because it composes them. It must not become the home of product rules, provider-specific policy, GitHub reconciliation, Roslyn analysis, or patch semantics.
+It may reference every production project because it composes them. It must not become the home of product rules, provider-specific policy, GitHub reconciliation, Roslyn analysis, or patch semantics. Its `Configuration/` directory resolves the layered consumer configuration (payload defaults, optional downstream file, optional invocation override) into the complete campaign execution document; layering is CLI composition, not a new product rule home.
 
 The same CLI is the payload invoked locally, from validation workflows, and by a future GitHub Action wrapper.
 

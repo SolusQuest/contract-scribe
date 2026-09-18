@@ -1,5 +1,9 @@
 # Campaign configuration v1
 
+## Role
+
+This document defines the resolved campaign execution configuration: the complete, closed runtime-authority document that the campaign runner and checkpoint commitments consume. It is produced by the layered consumer-configuration resolver for `campaign` invocations (see `docs/20_architecture/consumer-configuration.md`), which injects invocation authority (`campaignLineage`) and product identity (`productContractRevisionSha256`) before this shape is validated. It is also supplied directly as a low-level runtime-authority input to `github-proposal --configuration` until the GitHub invocation follow-up replaces that surface. It is not the public consumer configuration shape; consumer layers are a distinct draft contract and cannot express the injected authority fields.
+
 ## Format
 
 The campaign configuration is a credential-free UTF-8 JSON document no larger than 262,144 bytes. UTF-8 BOM, comments, trailing commas, duplicate properties, unknown properties, reordered properties, non-integer numbers, and unpaired surrogates are invalid. Every object has a closed property order and no defaults or aliases.
