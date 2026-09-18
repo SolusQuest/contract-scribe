@@ -172,7 +172,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var result = await fixture.Run("start");
         AssertResult(result, 4, "local-invalid");
         using var json = JsonDocument.Parse(result.Stdout);
-        Assert.Equal("execution", json.RootElement.GetProperty("terminalLayer").GetString());
+        Assert.Equal("campaign", json.RootElement.GetProperty("terminalLayer").GetString());
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.TokenReads());
         Assert.Empty(fixture.GitHub.Requests);
