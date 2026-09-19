@@ -157,9 +157,16 @@ _payload_install_impl() {
     # window deterministically.
     [ -n "${PAYLOAD_TEST_PUBLISH_READY:-}" ] && touch "$PAYLOAD_TEST_PUBLISH_READY"
     [ -n "${PAYLOAD_TEST_STALL:-}" ] && sleep "$PAYLOAD_TEST_STALL"
-    if ! mv -T "$extract_dir/$top" "$dest"; then
+    # mv -T -n is an atomic no-replace rename on the Ubuntu target: it
+    # declines — successfully — whenever the destination exists, so an
+    # unconsumed source proves expected-absence was violated.
+    if ! mv -T -n -- "$extract_dir/$top" "$dest"; then
         _payload_cleanup "$staging" "$root" "$created_root"
         _payload_log publish fail rename-failed; return 1
+    fi
+    if [ -e "$extract_dir/$top" ]; then
+        _payload_cleanup "$staging" "$root" "$created_root"
+        _payload_log publish fail destination-exists; return 1
     fi
     rm -rf "$staging"
     _payload_log publish ok -

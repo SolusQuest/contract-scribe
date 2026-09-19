@@ -969,13 +969,39 @@ case_publish_appearing() {
     compgen -G "$root/.install-staging.*" >/dev/null && {
         echo "staging residue after publish-window rejection"; return 1; }
 
-    # The publication primitive itself: mv -T never merges into a live dir.
+    # An EMPTY appearing destination must also reject: expected-absence is
+    # violated regardless of whether the appearing directory has content.
+    rm -rf "$root" "$marker"
+    (
+        PAYLOAD_TEST_STALL=3 PAYLOAD_TEST_PUBLISH_READY="$marker"
+        payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null
+    ) &
+    pid=$!
+    for i in $(seq 1 600); do
+        [ -f "$marker" ] && break
+        sleep 0.1
+    done
+    [ -f "$marker" ] || {
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        echo "publish window never reached (empty case)"; return 1; }
+    mkdir -p "$root/$top"
+    wait "$pid" && { echo "install into empty appearing destination succeeded"; return 1; }
+    [ -d "$root/$top" ] || { echo "appearing empty directory destroyed"; return 1; }
+    [ -z "$(ls -A "$root/$top")" ] || {
+        echo "appearing empty directory gained payload content"; return 1; }
+    compgen -G "$root/.install-staging.*" >/dev/null && {
+        echo "staging residue after empty-destination rejection"; return 1; }
+
+    # The publication primitive itself: mv -T -n never replaces a live dir.
     mkdir -p "$WORK/mv-src" "$WORK/mv-dest"
     echo x > "$WORK/mv-dest/x"
-    mv -T "$WORK/mv-src" "$WORK/mv-dest" 2>/dev/null && {
-        echo "mv -T merged into an existing directory"; return 1; }
-    [ -f "$WORK/mv-dest/x" ] || { echo "mv -T clobbered destination"; return 1; }
-    rm -rf "$root" "$WORK/mv-src" "$WORK/mv-dest"
+    mv -T -n "$WORK/mv-src" "$WORK/mv-dest" 2>/dev/null
+    [ -d "$WORK/mv-src" ] || { echo "mv -n replaced a non-empty destination"; return 1; }
+    [ -f "$WORK/mv-dest/x" ] || { echo "mv -n clobbered destination"; return 1; }
+    mv -T -n "$WORK/mv-src" "$WORK/mv-new" 2>/dev/null
+    [ -d "$WORK/mv-src" ] && { echo "mv -n declined an absent destination"; return 1; }
+    [ -d "$WORK/mv-new" ] || { echo "mv -n lost the moved directory"; return 1; }
+    rm -rf "$root" "$WORK/mv-src" "$WORK/mv-dest" "$WORK/mv-new"
 }
 
 case_install_sigterm() {
