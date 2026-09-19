@@ -161,8 +161,7 @@ netns_exec() {
     local lo_up="$1"; shift
     if [ "$NETNS_MODE" = "userns" ]; then
         if [ "$lo_up" = 1 ]; then
-            unshare --user --net --map-root-user \
-                bash -c 'ip link set lo up; exec "$@"' _ "$@"
+            unshare --user --net --map-root-user bash -c 'ip link set lo up; exec "$@"' _ "$@"
         else
             unshare --user --net --map-root-user "$@"
         fi
@@ -172,11 +171,9 @@ netns_exec() {
         local uid gid
         uid="$(id -u)"; gid="$(id -g)"
         if [ "$lo_up" = 1 ]; then
-            sudo -n unshare -n bash -c \
-                'ip link set lo up; exec env PATH="'"$PATH"'" setpriv --reuid='"$uid"' --regid='"$gid"' --clear-groups "$@"' _ "$@"
+            sudo -n unshare -n bash -c 'ip link set lo up; exec env PATH="'"$PATH"'" HOME="'"$HOME"'" setpriv --reuid='"$uid"' --regid='"$gid"' --clear-groups "$@"' _ "$@"
         else
-            sudo -n unshare -n \
-                env PATH="$PATH" setpriv --reuid="$uid" --regid="$gid" --clear-groups "$@"
+            sudo -n unshare -n env PATH="$PATH" HOME="$HOME" setpriv --reuid="$uid" --regid="$gid" --clear-groups "$@"
         fi
         return
     fi
