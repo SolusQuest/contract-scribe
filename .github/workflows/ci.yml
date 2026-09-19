@@ -547,12 +547,12 @@ jobs:
       # Deliberately no actions/checkout: the packed payload must install and
       # execute without the ContractScribe source tree.
       - name: Download D2 payload artifact
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        uses: actions/download-artifact@fa0a91b0d4ee9e49f0e75984d2ab765445aa77be
         with:
           name: d2-payload-attempt-${{ github.run_attempt }}
           path: payload
       - name: Download packaging test kit
-        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        uses: actions/download-artifact@fa0a91b0d4ee9e49f0e75984d2ab765445aa77be
         with:
           name: packaging-test-kit-attempt-${{ github.run_attempt }}
           path: kit
@@ -585,8 +585,7 @@ jobs:
         with:
           name: packed-verify-logs-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: |
-            verify-work/logs/
-            verify-work/TestResults/
+            verify-work/
           if-no-files-found: error
       - name: Aggregate packed payload outcomes
         if: always()
