@@ -325,8 +325,7 @@ public sealed class LayeredConfigurationProcessTests
             statePath,
             layer,
             null,
-            lineage,
-            CampaignConfigurationKind.Layered);
+            lineage);
 
     private static string Outcome(CliExecutionResult result)
     {

@@ -31,7 +31,6 @@ public sealed class CampaignCommandParserTests
         Assert.Equal("lineage.tests", parsed.Arguments.CampaignLineage);
         Assert.Equal("c", parsed.Arguments.Configuration);
         Assert.Equal("override.json", parsed.Arguments.ConfigurationOverride);
-        Assert.Equal(CampaignConfigurationKind.Layered, parsed.Arguments.Kind);
     }
 
     [Fact]

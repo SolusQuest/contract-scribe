@@ -40,16 +40,11 @@ internal static class CampaignPreflight
                 arguments.Policy,
                 currentDirectory);
             var state = ResolveState(arguments.State, currentDirectory, inputs.RepositoryRoot);
-            var configuration = arguments.Kind switch
-            {
-                CampaignConfigurationKind.RuntimeAuthority =>
-                    ReadConfiguration(arguments.Configuration, currentDirectory),
-                _ => LayeredCampaignConfigurationResolver.Resolve(
-                    arguments,
-                    currentDirectory,
-                    LayeredCampaignConfigurationResolver.PayloadDefaultsPath,
-                    identity),
-            };
+            var configuration = LayeredCampaignConfigurationResolver.Resolve(
+                arguments,
+                currentDirectory,
+                LayeredCampaignConfigurationResolver.PayloadDefaultsPath,
+                identity);
             var inputIdentity = Path.GetRelativePath(inputs.RepositoryRoot, inputs.InputPath)
                 .Replace(Path.DirectorySeparatorChar, '/');
             return new CampaignPreflightResult(
@@ -90,41 +85,5 @@ internal static class CampaignPreflight
             throw new CampaignPreflightException("campaign.invalid-configuration");
         }
         return state;
-    }
-
-    private static CampaignResolvedConfigurationSnapshot ReadConfiguration(
-        string? value,
-        string currentDirectory)
-    {
-        var lexical = Path.GetFullPath(
-            value ?? throw new CampaignPreflightException("campaign.invalid-configuration"),
-            currentDirectory);
-        var path = CliPreflight.ResolveExistingPath(lexical);
-        if (!CliPreflight.IsRegularFileNoFollow(path))
-        {
-            throw new CampaignPreflightException("campaign.invalid-configuration");
-        }
-        var infoBefore = new FileInfo(path);
-        if (infoBefore.Length is <= 0 or > 262_144)
-        {
-            throw new CampaignPreflightException("campaign.invalid-configuration");
-        }
-        var bytes = File.ReadAllBytes(path);
-        var infoAfter = new FileInfo(path);
-        if (infoBefore.Length != bytes.LongLength
-            || infoBefore.Length != infoAfter.Length
-            || infoBefore.LastWriteTimeUtc != infoAfter.LastWriteTimeUtc)
-        {
-            throw new CampaignPreflightException("campaign.invalid-configuration");
-        }
-        var document = CampaignConfiguration.Parse(bytes);
-        return new CampaignResolvedConfigurationSnapshot(
-            [new CampaignConfigurationSource(
-                path,
-                bytes.LongLength,
-                infoAfter.LastWriteTimeUtc,
-                Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant(),
-                bytes)],
-            document);
     }
 }

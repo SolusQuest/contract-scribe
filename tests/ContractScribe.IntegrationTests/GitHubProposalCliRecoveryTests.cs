@@ -179,14 +179,13 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!append) fixture.GitHub.Reset();
         var copy = Path.Join(fixture.Outside, "independent.json");
         await WriteCheckpointCopy(copy, await File.ReadAllBytesAsync(fixture.State));
-        var otherArgs = fixture.Args("resume", copy);
+        var otherRequest = Path.Join(fixture.Outside, "other-request.json");
+        var otherArgs = fixture.Args("resume", copy, otherRequest);
         if (differentOperation)
         {
-            var alternate = Path.Join(fixture.Outside, "other-github.json");
-            var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.GitHubConfiguration))!;
-            configuration["operationId"] = "operation.other";
-            await File.WriteAllTextAsync(alternate, configuration.ToJsonString());
-            otherArgs[^1] = alternate;
+            var request = JsonNode.Parse(await File.ReadAllTextAsync(otherRequest))!;
+            request["github"]!["operationId"] = "operation.other";
+            await File.WriteAllTextAsync(otherRequest, request.ToJsonString());
         }
         fixture.GitHub.Barrier("/git/ref/heads/contract-scribe/");
         using var first = CampaignCliProcessTests.Start(fixture.Args("resume"), fixture.Environment());
@@ -213,13 +212,12 @@ public sealed partial class GitHubProposalCliProcessTests
         if (OperatingSystem.IsLinux()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
-    private static async Task ConfigureAppend(Fixture fixture)
+    private static Task ConfigureAppend(Fixture fixture)
     {
         var previous = fixture.GitHub.Coordination();
-        var config = JsonNode.Parse(await File.ReadAllTextAsync(fixture.GitHubConfiguration))!;
-        config["operationId"] = "operation.append";
-        config["transition"] = "same-snapshot-append";
-        config["appendPredecessor"] = new JsonObject
+        fixture.Publication["operationId"] = "operation.append";
+        fixture.Publication["transition"] = "same-snapshot-append";
+        fixture.Publication["appendPredecessor"] = new JsonObject
         {
             ["operationId"] = previous["operationId"]!.DeepClone(),
             ["authorityCommitmentSha256"] = previous["authorityCommitmentSha256"]!.DeepClone(),
@@ -233,6 +231,6 @@ public sealed partial class GitHubProposalCliProcessTests
                 ["candidateFileSha256"] = file["candidateSha256"]!.DeepClone(),
             }).ToArray()),
         };
-        await File.WriteAllTextAsync(fixture.GitHubConfiguration, config.ToJsonString());
+        return Task.CompletedTask;
     }
 }

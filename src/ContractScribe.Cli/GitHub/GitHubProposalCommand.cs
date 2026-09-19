@@ -5,18 +5,18 @@ internal static class GitHubProposalCommand
     internal const string Help =
         "ContractScribe github-proposal\n\n" +
         "Usage:\n" +
-        "  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>\n" +
-        "  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>\n\n" +
+        "  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]\n" +
+        "  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]\n\n" +
         "Options:\n" +
         "  --repository-root <path>       Existing repository root.\n" +
         "  --input <path>                 Existing .sln, .slnx, or .csproj inside the repository.\n" +
         "  --policy <path>                Existing M1 policy file inside the repository.\n" +
-        "  --snapshot <binding>           Caller-attested immutable snapshot binding.\n" +
-        "  --state <path>                 Campaign checkpoint outside the repository.\n" +
-        "  --configuration <path>         Strict non-secret campaign configuration JSON.\n" +
-        "  --github-configuration <path>  Strict non-secret GitHub publication configuration JSON.\n" +
+        "  --request <path>               Strict non-secret github-proposal invocation request JSON.\n" +
+        "  --configuration <path>         Optional consumer configuration layer.\n" +
+        "  --configuration-override <path>  Optional invocation configuration layer.\n" +
         "  -h, --help                     Print this help.\n\n" +
-        "All seven options are required exactly once. Both --option value and --option=value forms are accepted in any order.\n\n" +
+        "The four required options must appear exactly once; the two configuration layers are optional.\n" +
+        "Both --option value and --option=value forms are accepted in any order.\n\n" +
         "Environment:\n" +
         "  CONTRACTSCRIBE_PROVIDER_API_KEY  Existing campaign provider credential.\n" +
         "  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local publication admission.\n\n" +
@@ -36,12 +36,12 @@ internal static class GitHubProposalCommand
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var preflight = CampaignPreflight.Run(arguments.Campaign, currentDirectory);
-            var github = GitHubProposalConfigurationReader.Read(arguments.GitHubConfiguration, currentDirectory);
+            var request = GitHubProposalRequestReader.Read(arguments.Request, currentDirectory);
+            var preflight = CampaignPreflight.Run(arguments.Campaign(request), currentDirectory);
             if (GitHubProposalProcessHooks.Terminal(arguments.Operation) is { } selectedTerminal)
                 return GitHubProposalPresentation.Campaign(identity, selectedTerminal);
             var accessor = credentialAccessor ?? Environment.GetEnvironmentVariable;
-            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, github, name =>
+            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request, name =>
             {
                 GitHubProposalProcessHooks.Reach("token-read");
                 return accessor(name);

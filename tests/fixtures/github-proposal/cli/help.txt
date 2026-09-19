@@ -1,20 +1,20 @@
 ContractScribe github-proposal
 
 Usage:
-  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>
-  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>
+  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
+  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
 
 Options:
   --repository-root <path>       Existing repository root.
   --input <path>                 Existing .sln, .slnx, or .csproj inside the repository.
   --policy <path>                Existing M1 policy file inside the repository.
-  --snapshot <binding>           Caller-attested immutable snapshot binding.
-  --state <path>                 Campaign checkpoint outside the repository.
-  --configuration <path>         Strict non-secret campaign configuration JSON.
-  --github-configuration <path>  Strict non-secret GitHub publication configuration JSON.
+  --request <path>               Strict non-secret github-proposal invocation request JSON.
+  --configuration <path>         Optional consumer configuration layer.
+  --configuration-override <path>  Optional invocation configuration layer.
   -h, --help                     Print this help.
 
-All seven options are required exactly once. Both --option value and --option=value forms are accepted in any order.
+The four required options must appear exactly once; the two configuration layers are optional.
+Both --option value and --option=value forms are accepted in any order.
 
 Environment:
   CONTRACTSCRIBE_PROVIDER_API_KEY  Existing campaign provider credential.

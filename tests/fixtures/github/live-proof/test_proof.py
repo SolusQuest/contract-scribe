@@ -370,11 +370,10 @@ class GenuineCheckpointTests(unittest.TestCase):
     def test_actual_debug_preparation_provider_core_parse_and_fresh_copied_checkpoint(self):
         config = inputs()[0]
         cli, checker = Path(os.environ['M5_TEST_CLI']), Path(os.environ['M5_TEST_CHECKER'])
-        product_sha = os.environ['M5_TEST_PRODUCT_SHA']
         environment = proof.clean_environment()
         with tempfile.TemporaryDirectory(prefix='m5-h3-local-') as temporary:
             root = Path(temporary)
-            proof.write_configuration(config, root, product_sha=product_sha)
+            proof.write_configuration(config, root)
             first_revision = None
             for index, operation in enumerate(('start', 'resume')):
                 target = root / ('target-' + str(index))
@@ -389,15 +388,16 @@ class GenuineCheckpointTests(unittest.TestCase):
                 else:
                     state.mkdir(mode=0o700)
                     checkpoint = state / 'checkpoint.json'
+                request = root / ('request-' + str(index) + '.json')
+                request.write_bytes(canonical(proof.request_document(config, checkpoint, config['base_sha'])))
                 provider = subprocess.Popen([sys.executable, str(proof.HERE / 'provider.py')], env=environment,
                                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 try:
                     from provider import wait_ready
                     wait_ready(provider)
                     args = ['dotnet', str(cli), 'github-proposal', operation, '--repository-root', str(target),
-                            '--input', 'Synthetic.csproj', '--policy', 'policy.json', '--snapshot', 'snapshot.issue166.' + config['activation'],
-                            '--state', str(checkpoint), '--configuration', str(root / 'campaign.json'),
-                            '--github-configuration', str(root / 'github-positive.json')]
+                            '--input', 'Synthetic.csproj', '--policy', 'policy.json',
+                            '--request', str(request), '--configuration', str(root / 'layer.json')]
                     result = subprocess.run(args, env=environment, capture_output=True, timeout=180)
                 finally:
                     provider.terminate()

@@ -3,17 +3,52 @@
 `github-proposal` composes the existing campaign runner, live H1 admission, and the GitHub publication adapter. The two ordinal, case-sensitive command forms are:
 
 ```text
-contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>
-contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --snapshot <binding> --state <path> --configuration <path> --github-configuration <path>
+contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
+contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
 ```
 
-All seven options are required exactly once, in any order after the operation. Both `--name value` and `--name=value` are accepted. There are no defaults, short option aliases, response files, extra operands, or unknown options. Standalone family/operation `--help` or `-h` is supported; combining help with work options is invalid. The exact UTF-8/LF help is [the fixture](../../tests/fixtures/github-proposal/cli/help.txt).
+The four required options must appear exactly once, in any order after the operation; the two configuration layers are optional. Both `--name value` and `--name=value` are accepted. There are no defaults, short option aliases, response files, extra operands, or unknown options. Standalone family/operation `--help` or `-h` is supported; combining help with work options is invalid. The exact UTF-8/LF help is [the fixture](../../tests/fixtures/github-proposal/cli/help.txt).
 
-`--configuration` retains the existing campaign JSON. Repository/input/policy/snapshot/state resolution retains the [campaign contract](campaign-cli.md). The state remains outside the source repository. The separate GitHub configuration is bounded to 262,144 UTF-8 bytes, has no BOM, comments, duplicate or unknown properties, and uses exact camel-case property names and lowercase kebab-case enum values. Missing required fields, null required values, invalid types and non-object authorization fail locally. Neither configuration contains a GitHub token, source/candidate bytes, or an alternate GitHub endpoint.
+`--configuration` and `--configuration-override` carry the ordinary [consumer configuration](consumer-configuration.md) layers, resolved as payload defaults < `--configuration` < `--configuration-override`. Repository/input/policy resolution retains the [campaign contract](campaign-cli.md). The campaign lineage, snapshot binding, state location, and GitHub publication claims are caller-owned invocation authority carried by the separately validated `--request` document — never by option values or configuration layers. The state remains outside the source repository. The request is bounded to 262,144 UTF-8 bytes, has no BOM, comments, duplicate or unknown properties, and uses exact camel-case property names and lowercase kebab-case enum values. Missing required fields, null required values, invalid types and non-object authorization fail locally. Neither the request nor a configuration layer contains a GitHub token, source/candidate bytes, or an alternate GitHub endpoint.
 
-## GitHub configuration
+## Invocation request
 
-An initial publication supplies the following shape. All illustrated fields are required; the three optional predecessor/authorization fields below may be omitted or null.
+`github-proposal-request-v1` is one bounded JSON object:
+
+```json
+{
+  "githubProposalRequestVersion": 1,
+  "campaignLineage": "campaign.example",
+  "snapshot": "snapshot.example",
+  "state": "/absolute/path/checkpoint.json",
+  "github": {
+    "repositoryOwner": "Owner",
+    "repositoryName": "repo",
+    "targetRef": "refs/heads/main",
+    "expectedBaseCommitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "operationId": "operation.initial",
+    "generationId": "generation.initial",
+    "policy": {
+      "maximumDocumentationBlocks": 128,
+      "maximumDistinctChangedFiles": 128,
+      "maximumCumulativePatchBytes": 4194304
+    },
+    "transition": "initial"
+  }
+}
+```
+
+All illustrated fields are required exactly once.
+
+- `githubProposalRequestVersion` — the integer `1`.
+- `campaignLineage` — the caller-attested campaign lineage under the frozen opaque-identifier grammar. This is the single lineage source; no `--campaign-lineage` option exists on this command.
+- `snapshot` — the caller-attested immutable snapshot binding under the grammar the retired `--snapshot` option enforced (1–128 opaque-identifier characters).
+- `state` — the campaign checkpoint location as a path string, resolved against the process working directory exactly as the retired `--state` option; absolute paths are the documented caller convention.
+- `github` — the GitHub publication configuration below.
+
+## GitHub publication claims
+
+An initial publication supplies the `github` shape illustrated above. All illustrated `github` fields are required; the three optional predecessor/authorization fields below may be omitted or null.
 
 ```json
 {
@@ -46,7 +81,23 @@ For initial/successor resume, accepted work is reconstructed before advancing re
 
 The [campaign origin](contracts/campaign-state-v1.md) retains the first accepted checkpoint and historical M2 identity. Every fresh reconstruction still executes, validates current evidence and candidate bytes, settles its budget, and conditionally accepts/readbacks a new checkpoint. H1 proves full correspondence with the retained origin before using that original checkpoint/request/result identity in unchanged R1 commitment framing. This makes a real fresh-process resume the same publication operation without reusing stale current-candidate authority. The displayed revision is always the current checkpoint, not the origin revision.
 
-Both configuration snapshots are revalidated before H1 and again after payload capture. Only successful credential-free H1 admission permits one read of `CONTRACTSCRIBE_GITHUB_TOKEN`; the value passes directly into the adapter factory. The existing provider credential channel remains separate. Help, usage, preflight/state/admission failures, no-work, and pre-admission stop perform zero GitHub token reads and zero GitHub calls.
+The request snapshot and every admitted configuration source are revalidated before H1 and again after payload capture. Only successful credential-free H1 admission permits one read of `CONTRACTSCRIBE_GITHUB_TOKEN`; the value passes directly into the adapter factory. The existing provider credential channel remains separate. Help, usage, preflight/request/state/admission failures, no-work, and pre-admission stop perform zero GitHub token reads and zero GitHub calls.
+
+## Caller contract
+
+A downstream caller — the composite Action or a shell step — invokes the complete path with file locations and options only. It must not merge JSON, derive product or publication policy, choose predecessors, inspect GitHub state, manage provider behavior, or implement retries:
+
+```bash
+dotnet <payload>/ContractScribe.Cli.dll github-proposal <start|resume> \
+  --repository-root <path> \
+  --input <path> \
+  --policy <path> \
+  --request <path> \
+  [--configuration <path>] \
+  [--configuration-override <path>]
+```
+
+The caller materializes the invocation request and any override to bounded files and passes their locations. Product policy, campaign resolution, runtime authority and publication admission all stay inside the production CLI.
 
 The GitHub facade pins the trusted publisher independently of inspected PRs: `github-actions[bot]`, numeric ID `41898282`, node ID `MDM6Qm90NDE4OTgyODI=`, type `Bot`. This is expected ownership identity, not token-kind proof. One lifetime retains the same authority, payload, HTTP client and reconciler for at most two calls. A first `RecoveredRefPartial` may spend its retained private PR-create entitlement in the second call. A new process reconstructs observations and never reconstructs a lost remote write entitlement.
 
