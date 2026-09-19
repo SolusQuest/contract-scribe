@@ -152,6 +152,10 @@ _payload_install_impl() {
         _payload_cleanup "$staging" "$root" "$created_root"
         _payload_log publish fail destination-exists; return 1
     fi
+    # Test seam: signal readiness immediately before publication so a
+    # regression can land a destination inside the checked-but-not-yet-moved
+    # window deterministically.
+    [ -n "${PAYLOAD_TEST_PUBLISH_READY:-}" ] && touch "$PAYLOAD_TEST_PUBLISH_READY"
     [ -n "${PAYLOAD_TEST_STALL:-}" ] && sleep "$PAYLOAD_TEST_STALL"
     if ! mv -T "$extract_dir/$top" "$dest"; then
         _payload_cleanup "$staging" "$root" "$created_root"

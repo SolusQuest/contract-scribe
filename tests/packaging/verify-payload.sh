@@ -944,25 +944,24 @@ case_publish_failure() {
 case_publish_appearing() {
     # A destination appearing inside the publish window must reject — never
     # nest, never clobber the appearing content.
-    local root="$WORK/appear-root" top pid
+    local root="$WORK/appear-root" top pid marker="$WORK/appear-ready"
     top="contract-scribe-$(manifest_get "['toolVersion']")-$(manifest_get "['runtimeIdentifier']")"
     (
-        PAYLOAD_TEST_STALL=3
+        PAYLOAD_TEST_STALL=3 PAYLOAD_TEST_PUBLISH_READY="$marker"
         payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null
     ) &
     pid=$!
     local i
-    for i in $(seq 1 60); do
-        compgen -G "$root/.install-staging.*" >/dev/null && break
+    # The publish-ready marker fires after the destination check and inside
+    # the pre-mv stall — the appearing destination lands exactly in the
+    # checked-but-not-yet-moved window regardless of runner speed.
+    for i in $(seq 1 600); do
+        [ -f "$marker" ] && break
         sleep 0.1
     done
-    compgen -G "$root/.install-staging.*" >/dev/null || {
+    [ -f "$marker" ] || {
         kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
-        echo "staging never appeared"; return 1; }
-    # Land inside the pre-publish stall: post-staging stall (3s) plus the
-    # extract/inventory/prereq work puts the existence check behind us and
-    # the destination appears inside the mv window itself.
-    sleep 7
+        echo "publish window never reached"; return 1; }
     mkdir -p "$root/$top" && echo concurrent > "$root/$top/occupant"
     wait "$pid" && { echo "install into appearing destination succeeded"; return 1; }
     [ -f "$root/$top/occupant" ] || { echo "appearing destination destroyed"; return 1; }
