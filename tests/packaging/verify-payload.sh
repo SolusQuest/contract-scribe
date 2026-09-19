@@ -138,15 +138,53 @@ expect_install_reject() {
     return 0
 }
 
-NETNS=""
-if [ "$SKIP_NETNS" -eq 0 ] && unshare --user --net --map-root-user true 2>/dev/null; then
-    NETNS="unshare --user --net --map-root-user"
+# Network isolation: prefer an unprivileged user-namespace netns; Ubuntu
+# 24.04's default AppArmor policy blocks those, so fall back to a sudo root
+# netns that drops privileges before running the command (runner users have
+# passwordless sudo). NETNS_MODE records which mechanism netns_exec must use.
+NETNS_MODE=""
+if [ "$SKIP_NETNS" -eq 0 ]; then
+    if unshare --user --net --map-root-user true 2>/dev/null; then
+        NETNS_MODE="userns"
+    elif command -v sudo >/dev/null 2>&1 && sudo -n unshare -n true 2>/dev/null; then
+        NETNS_MODE="sudo"
+    fi
 fi
 
-# PATH with the directory containing the selected dotnet removed — private
+# netns_exec <loopback:0|1> <cmd...> — run cmd inside ONE isolated network
+# namespace; loopback=1 brings `lo` up first (as root where required). All
+# non-root work runs as the invoking user so created files stay owned.
+netns_exec() {
+    local lo_up="$1"; shift
+    if [ "$NETNS_MODE" = "userns" ]; then
+        if [ "$lo_up" = 1 ]; then
+            unshare --user --net --map-root-user \
+                bash -c 'ip link set lo up; exec "$@"' _ "$@"
+        else
+            unshare --user --net --map-root-user "$@"
+        fi
+        return
+    fi
+    if [ "$NETNS_MODE" = "sudo" ]; then
+        local uid gid
+        uid="$(id -u)"; gid="$(id -g)"
+        if [ "$lo_up" = 1 ]; then
+            sudo -n unshare -n bash -c \
+                'ip link set lo up; exec env PATH="'"$PATH"'" setpriv --reuid='"$uid"' --regid='"$gid"' --clear-groups "$@"' _ "$@"
+        else
+            sudo -n unshare -n \
+                env PATH="$PATH" setpriv --reuid="$uid" --regid="$gid" --clear-groups "$@"
+        fi
+        return
+    fi
+    return 2
+}
+
+# PATH with every directory that can resolve `dotnet` removed — private
 # toolchain layouts prepend their own dir so every other tool stays usable.
-DOTNET_BIN_DIR="$(dirname "$(command -v dotnet)")"
-HOSTLESS_PATH="$(echo "$PATH" | tr ':' '\n' | grep -vx "$DOTNET_BIN_DIR" | paste -sd:)"
+HOSTLESS_PATH="$(echo "$PATH" | tr ':' '\n' | while read -r d; do
+    [ -x "$d/dotnet" ] || echo "$d"
+done | paste -sd:)"
 
 INSTALL_ROOT="$WORK/install root"
 INSTALL_DIR=""
@@ -176,7 +214,7 @@ materialize_fixture() {
 
 case_toolchain() {
     command -v dotnet; command -v python3; command -v tar; command -v sha256sum
-    command -v unshare
+    command -v unshare; command -v ip; command -v sudo; command -v setpriv
     tar --version | head -1
     dotnet --list-sdks
     dotnet --list-runtimes | grep '^Microsoft\.NETCore\.App'
@@ -470,18 +508,27 @@ case_audit_equivalence() {
 }
 
 case_offline_audit() {
-    [ -n "$NETNS" ] || { echo "unshare network namespace unavailable"; return 1; }
+    [ -n "$NETNS_MODE" ] || { echo "no usable network namespace mechanism"; return 1; }
     local fx="$WORK/fx-offline"
     materialize_fixture "$fx"
-    # Control: outbound connectivity must fail inside the namespace.
-    if $NETNS python3 -c 'import socket,sys; s=socket.create_connection(("1.1.1.1",443),3); sys.exit(0)' 2>/dev/null; then
+    local out="$WORK/audit-offline.json"
+    cat > "$WORK/offline-audit-inner.sh" <<'INNER'
+#!/usr/bin/env bash
+set -u
+# Control: outbound connectivity must fail inside this namespace.
+if python3 -c 'import socket,sys; s=socket.create_connection(("1.1.1.1",443),3); sys.exit(0)' 2>/dev/null; then
+    exit 90
+fi
+exec dotnet "$1" audit \
+    --repository-root "$2" --input Fixture.slnx --policy policy.json \
+    --output "$3" >/dev/null 2>&1
+INNER
+    local rc=0
+    netns_exec 0 bash "$WORK/offline-audit-inner.sh" \
+        "$INSTALL_DIR/ContractScribe.Cli.dll" "$fx" "$out" || rc=$?
+    if [ "$rc" -eq 90 ]; then
         echo "network namespace is NOT isolated"; return 1
     fi
-    local out="$WORK/audit-offline.json"
-    local rc=0
-    $NETNS dotnet "$INSTALL_DIR/ContractScribe.Cli.dll" audit \
-        --repository-root "$fx" --input Fixture.slnx --policy policy.json \
-        --output "$out" >/dev/null 2>&1 || rc=$?
     [ -f "$EXPECTED/audit-exit.txt" ] && [ "$(cat "$EXPECTED/audit-exit.txt")" != "$rc" ] && {
         echo "offline audit exit $rc"; return 1; }
     cmp "$EXPECTED/audit-result.json" "$out" || {
@@ -495,22 +542,31 @@ case_packed_tests() {
     local results="$WORK/TestResults"
     mkdir -p "$results"
     local rc=0
-    if [ -n "$NETNS" ]; then
-        $NETNS bash -c '
-            ip link set lo up
-            cd "'"$WORK"'"
-            env \
-                CONTRACTSCRIBE_PACKAGED_MODE=verify \
-                CONTRACTSCRIBE_PACKAGED_CLI="'"$INSTALL_DIR/ContractScribe.Cli.dll"'" \
-                CONTRACTSCRIBE_PACKAGED_CLI_IDENTITY="'"$TOOL_VERSION"'" \
-                CONTRACTSCRIBE_PACKAGING_EXPECTED="'"$EXPECTED"'" \
-                CONTRACTSCRIBE_PACKAGING_FIXTURE="'"$FIXTURE"'" \
-                CONTRACTSCRIBE_STARTUP_HOOK_PATH="'"$HOOK"'" \
-                dotnet vstest "'"$TESTBIN/ContractScribe.IntegrationTests.dll"'" \
-                    --TestCaseFilter:FullyQualifiedName~PackagedCli \
-                    --logger:"trx;LogFileName=packed.trx" \
-                    --logger:"console;verbosity=normal"
-        ' || rc=$?
+    if [ -n "$NETNS_MODE" ]; then
+        # Loopback up inside the same namespace; control proves external
+        # connectivity absent; fake services and the packed client share it.
+        cat > "$WORK/packed-tests-inner.sh" <<'INNER'
+#!/usr/bin/env bash
+set -u
+if python3 -c 'import socket,sys; s=socket.create_connection(("1.1.1.1",443),3); sys.exit(0)' 2>/dev/null; then
+    exit 90
+fi
+cd "$6"
+export CONTRACTSCRIBE_PACKAGED_MODE=verify
+export CONTRACTSCRIBE_PACKAGED_CLI="$1"
+export CONTRACTSCRIBE_PACKAGED_CLI_IDENTITY="$2"
+export CONTRACTSCRIBE_PACKAGING_EXPECTED="$3"
+export CONTRACTSCRIBE_PACKAGING_FIXTURE="$4"
+export CONTRACTSCRIBE_STARTUP_HOOK_PATH="$5"
+exec dotnet vstest "$7" \
+    --TestCaseFilter:FullyQualifiedName~PackagedCli \
+    --logger:"trx;LogFileName=packed.trx" \
+    --logger:"console;verbosity=normal"
+INNER
+        netns_exec 1 bash "$WORK/packed-tests-inner.sh" \
+            "$INSTALL_DIR/ContractScribe.Cli.dll" "$TOOL_VERSION" "$EXPECTED" \
+            "$FIXTURE" "$HOOK" "$WORK" "$TESTBIN/ContractScribe.IntegrationTests.dll" || rc=$?
+        [ "$rc" -ne 90 ] || { echo "network namespace is NOT isolated"; return 1; }
     else
         (cd "$WORK" && env \
             CONTRACTSCRIBE_PACKAGED_MODE=verify \
@@ -664,7 +720,7 @@ case_uninstall_sentinel() {
 echo "verify-payload: archive=$ARCHIVE"
 echo "verify-payload: expected sha=$EXPECTED_SHA"
 echo "verify-payload: fixture=$FIXTURE expected=$EXPECTED"
-echo "verify-payload: netns=${NETNS:-unavailable}"
+echo "verify-payload: netns=${NETNS_MODE:-unavailable}"
 
 run_case toolchain case_toolchain
 
