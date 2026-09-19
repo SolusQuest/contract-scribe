@@ -585,7 +585,8 @@ jobs:
         with:
           name: packed-verify-logs-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: |
-            verify-work/
+            verify-work/*/logs/
+            verify-work/*/TestResults/
           if-no-files-found: error
       - name: Aggregate packed payload outcomes
         if: always()
