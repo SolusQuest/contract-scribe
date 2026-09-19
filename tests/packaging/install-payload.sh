@@ -187,14 +187,15 @@ _payload_install_kill() {
 # dispositions are restored on every normal return.
 payload_install() {
     PAYLOAD_INSTALL_DIR=""
-    local _out_f impl_pid rc _prev
+    local _out_f impl_pid rc _prev_int _prev_term
     _out_f="$(mktemp)" || return 1
     _payload_install_impl "$@" >"$_out_f" 2>&1 &
     impl_pid=$!
-    _prev="$(trap -p INT)"; _prev="$_prev$(trap -p TERM)"
+    _prev_int="$(trap -p INT)"; _prev_term="$(trap -p TERM)"
     trap '_payload_install_kill "$impl_pid"' INT TERM
     wait "$impl_pid"; rc=$?
-    if [ -n "$_prev" ]; then eval "$_prev"; else trap - INT TERM; fi
+    if [ -n "$_prev_int" ]; then eval "$_prev_int"; else trap - INT; fi
+    if [ -n "$_prev_term" ]; then eval "$_prev_term"; else trap - TERM; fi
     local out
     out="$(cat "$_out_f")"
     printf '%s
@@ -350,9 +351,27 @@ payload_select() {
     if [ -e "$root/current" ] && [ ! -L "$root/current" ]; then
         return 1
     fi
-    local tmp="$root/.current.tmp.$$"
+    local tmp="$root/.current.tmp.$$" swap="$root/.current.swap.$$"
     ln -sfn "$version" "$tmp" || return 1
-    mv -T "$tmp" "$root/current"
+    # Move an existing owned symlink aside, then install with no-clobber:
+    # a foreign `current` racing into the window is declined, never
+    # clobbered, and the moved-aside link is restored.
+    if [ -L "$root/current" ]; then
+        mv -T "$root/current" "$swap" || { rm -f "$tmp"; return 1; }
+        if [ ! -L "$swap" ]; then
+            # It was not a symlink after all — put it back and refuse.
+            mv -T -n "$swap" "$root/current" 2>/dev/null
+            rm -f "$tmp"; return 1
+        fi
+    fi
+    mv -T -n -- "$tmp" "$root/current" 2>/dev/null
+    if [ -e "$tmp" ]; then
+        # Declined — a destination raced in; restore the moved-aside link
+        # (no-clobber too: the racing entry is never clobbered).
+        [ -L "$swap" ] && mv -T -n "$swap" "$root/current" 2>/dev/null
+        rm -f "$tmp"; return 1
+    fi
+    rm -f "$swap"
 }
 
 # payload_remove <install-root> <version-dir-name>
