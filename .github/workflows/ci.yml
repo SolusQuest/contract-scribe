@@ -394,12 +394,218 @@ jobs:
             throw "Unfiltered-integration evidence failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
           }
 
+  payload_producer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact workflow head
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Expected workflow head $env:EXPECTED_SHA but checked out $actual."
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Record runner, toolchain, and concurrency facts
+        shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: ${{ github.event_name == 'pull_request' }}
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
+          dotnet --info
+          dotnet msbuild -version
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Build D2 payload archive
+        id: payload_build
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        run: bash scripts/release/build-payload.sh --output artifacts/payload
+      - name: Record source-oracle expected outputs
+        id: source_oracle
+        if: always() && steps.payload_build.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          SRC="src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll"
+          EXP="kit/expected"
+          mkdir -p "$EXP"
+          dotnet "$SRC" --version > "$EXP/version.txt"
+          dotnet "$SRC" --help > "$EXP/help-top.txt"
+          dotnet "$SRC" audit --help > "$EXP/help-audit.txt"
+          dotnet "$SRC" campaign --help > "$EXP/help-campaign.txt"
+          dotnet "$SRC" github-proposal --help > "$EXP/help-github-proposal.txt"
+          cp config/defaults.json "$EXP/config-defaults.json"
+          cp global.json kit/global.json
+          FX="$(mktemp -d)/fx"
+          cp -r tests/packaging/fixture/. "$FX/"
+          dotnet restore "$FX/Fixture.slnx" --nologo
+          dotnet build "$FX/Fixture.slnx" --no-restore --nologo
+          rc=0
+          dotnet "$SRC" audit --repository-root "$FX" --input Fixture.slnx \
+            --policy policy.json --output "$EXP/audit-result.json" \
+            > "$EXP/audit-stdout.json" 2> "$EXP/audit-stderr.txt" || rc=$?
+          echo "$rc" > "$EXP/audit-exit.txt"
+      - name: Record packed-test expected projections
+        id: record_mode
+        if: always() && steps.source_oracle.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          CONTRACTSCRIBE_PACKAGED_MODE: record
+          CONTRACTSCRIBE_PACKAGED_CLI: ${{ github.workspace }}/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll
+          CONTRACTSCRIBE_PACKAGING_EXPECTED: ${{ github.workspace }}/kit/expected
+          CONTRACTSCRIBE_PACKAGING_FIXTURE: ${{ github.workspace }}/tests/packaging/fixture
+          CONTRACTSCRIBE_STARTUP_HOOK_PATH: ${{ github.workspace }}/tests/ContractScribe.CampaignStartupHook/bin/Release/net10.0/ContractScribe.CampaignStartupHook.dll
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --filter "FullyQualifiedName~PackagedCli"
+          --logger "trx;LogFilePrefix=packaged-record-${{ runner.os }}"
+          --results-directory TestResults/ci/packaged-record
+      - name: Assemble packaging test kit
+        id: assemble_kit
+        if: always() && steps.record_mode.outcome == 'success'
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p kit/tests kit/testbin kit/hook
+          cp -r tests/packaging kit/tests/packaging
+          mv kit/tests/packaging/fixture kit/fixture
+          cp -r tests/ContractScribe.IntegrationTests/bin/Release/net10.0/. kit/testbin/
+          cp tests/ContractScribe.CampaignStartupHook/bin/Release/net10.0/ContractScribe.CampaignStartupHook.dll kit/hook/
+          test -f kit/expected/audit-result.json
+          for f in campaign-lifecycle campaign-nowork layered identity github-publish-replay github-missing-token; do
+            test -f "kit/expected/$f.expected.json" || { echo "missing expected projection: $f"; exit 1; }
+          done
+      - name: Upload D2 payload artifact
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: d2-payload-attempt-${{ github.run_attempt }}
+          path: artifacts/payload/
+          if-no-files-found: error
+      - name: Upload packaging test kit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaging-test-kit-attempt-${{ github.run_attempt }}
+          path: kit/
+          if-no-files-found: error
+      - name: Upload packaged-record TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packaged-record-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/packaged-record/*.trx
+          if-no-files-found: error
+      - name: Aggregate payload producer outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          PAYLOAD_BUILD_OUTCOME: ${{ steps.payload_build.outcome }}
+          SOURCE_ORACLE_OUTCOME: ${{ steps.source_oracle.outcome }}
+          RECORD_OUTCOME: ${{ steps.record_mode.outcome }}
+          KIT_OUTCOME: ${{ steps.assemble_kit.outcome }}
+        run: |
+          $outcomes = @{
+            build = $env:BUILD_OUTCOME
+            payload_build = $env:PAYLOAD_BUILD_OUTCOME
+            source_oracle = $env:SOURCE_ORACLE_OUTCOME
+            record = $env:RECORD_OUTCOME
+            kit = $env:KIT_OUTCOME
+          }
+          $failures = @($outcomes.GetEnumerator() | Where-Object Value -ne 'success' | ForEach-Object { "$($_.Key)=$($_.Value)" })
+          if ($failures.Count -gt 0) {
+            throw "Payload producer failure: $($failures -join ', ')."
+          }
+
+  packed_payload:
+    needs: payload_producer
+    runs-on: ubuntu-latest
+    steps:
+      # Deliberately no actions/checkout: the packed payload must install and
+      # execute without the ContractScribe source tree.
+      - name: Download D2 payload artifact
+        uses: actions/download-artifact@fa0a91b0d4ee9e49f0e75984d2ab765445aa77be
+        with:
+          name: d2-payload-attempt-${{ github.run_attempt }}
+          path: payload
+      - name: Download packaging test kit
+        uses: actions/download-artifact@fa0a91b0d4ee9e49f0e75984d2ab765445aa77be
+        with:
+          name: packaging-test-kit-attempt-${{ github.run_attempt }}
+          path: kit
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: kit/global.json
+      - name: Verify packed payload
+        id: packed_verify
+        continue-on-error: true
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t archives < <(find "$PWD/payload" -name 'contract-scribe-*-linux-x64.tar.gz' | sort)
+          if [ "${#archives[@]}" -ne 1 ]; then
+            echo "expected exactly one payload archive, found ${#archives[@]}"
+            exit 1
+          fi
+          archive="${archives[0]}"
+          sha_file="${archive%.tar.gz}.sha256"
+          test -f "$sha_file"
+          bash kit/tests/packaging/verify-payload.sh \
+            --kit "$PWD/kit" \
+            --archive "$archive" \
+            --sha256-file "$sha_file" \
+            --work "$PWD/verify-work" --keep
+      - name: Upload packed verification logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: packed-verify-logs-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: |
+            verify-work/logs/
+            verify-work/TestResults/
+          if-no-files-found: error
+      - name: Aggregate packed payload outcomes
+        if: always()
+        shell: pwsh
+        env:
+          VERIFY_OUTCOME: ${{ steps.packed_verify.outcome }}
+        run: |
+          if ($env:VERIFY_OUTCOME -ne 'success') {
+            throw "Packed payload verification failure: verify=$env:VERIFY_OUTCOME."
+          }
+
   validate:
     if: always()
     needs:
       - fast_and_static
       - integration_campaign_crash
       - integration_remaining
+      - payload_producer
+      - packed_payload
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate required CI jobs
@@ -408,11 +614,15 @@ jobs:
           FAST_AND_STATIC_RESULT: ${{ needs.fast_and_static.result }}
           CAMPAIGN_CRASH_RESULT: ${{ needs.integration_campaign_crash.result }}
           REMAINING_INTEGRATION_RESULT: ${{ needs.integration_remaining.result }}
+          PAYLOAD_PRODUCER_RESULT: ${{ needs.payload_producer.result }}
+          PACKED_PAYLOAD_RESULT: ${{ needs.packed_payload.result }}
         run: |
           $results = @{
             fast_and_static = $env:FAST_AND_STATIC_RESULT
             integration_campaign_crash = $env:CAMPAIGN_CRASH_RESULT
             integration_remaining = $env:REMAINING_INTEGRATION_RESULT
+            payload_producer = $env:PAYLOAD_PRODUCER_RESULT
+            packed_payload = $env:PACKED_PAYLOAD_RESULT
           }
           $failures = @($results.GetEnumerator() | Where-Object Value -ne 'success' | ForEach-Object { "$($_.Key)=$($_.Value)" })
           if ($failures.Count -gt 0) {

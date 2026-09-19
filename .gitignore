@@ -12,5 +12,9 @@
 TestResults/
 tests/fixtures/m1-host-validation/runtime/
 coverage/
+__pycache__/
+artifacts/
+kit/
+verify-work/
 
 .tmp/
