@@ -84,6 +84,8 @@ The wrapper is not a second product runtime. It is a thin, non-authoritative hos
 
 [ADR 0004](decisions/0004-initial-runner-platform-support.md) selects GitHub-hosted Ubuntu x64 as the sole required M1-M5 pre-release runner and the planned initial M6 target, not as a released support claim. The initial repository boundary requires caller-prepared prerequisites and design-time MSBuild/Roslyn loading to succeed on that runner. Native-Windows-only workloads, targets, tooling, filesystem behavior, process behavior, and host assumptions are outside the boundary.
 
+[ADR 0005](decisions/0005-d2-dll-payload-archive.md) selects D2 — a framework-dependent portable-DLL archive invoked as `dotnet <dll>` — as the payload channel for pre-release validation, and freezes its publish, archive, manifest, safe-install, pinning, update, rollback, and cleanup contract plus the producer/consumer packed-evidence path. It remains test-only output: no public release or installable support claim.
+
 ## Capability and authority matrix
 
 | Component | Provider network | GitHub credential handling | Source write | Canonical output |
