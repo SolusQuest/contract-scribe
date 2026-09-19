@@ -52,14 +52,24 @@ while [ $# -gt 0 ]; do
 done
 
 # --work supplies a PARENT for a fresh owned child; a pre-existing caller
-# directory's contents are never deleted by the cleanup trap.
+# directory's contents are never deleted by the cleanup trap. Every
+# allocation step must succeed before the cleanup trap is installed — a
+# failed allocation can never assign an unowned directory to $WORK.
 if [ -z "$WORK" ]; then
-    WORK="$(mktemp -d "${TMPDIR:-/tmp}/contract-scribe-verify.XXXXXX")"
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/contract-scribe-verify.XXXXXX")" || {
+        echo "verify-payload: cannot allocate work dir" >&2; exit 1; }
 else
-    mkdir -p "$WORK"
-    WORK="$(mktemp -d "$WORK/payload-verify.XXXXXX")"
+    mkdir -p -- "$WORK" 2>/dev/null || {
+        echo "verify-payload: --work parent unusable: $WORK" >&2; exit 1; }
+    [ -d "$WORK" ] || {
+        echo "verify-payload: --work parent is not a directory: $WORK" >&2; exit 1; }
+    WORK="$(mktemp -d "$WORK/payload-verify.XXXXXX")" || {
+        echo "verify-payload: cannot allocate work dir under: $WORK" >&2; exit 1; }
 fi
-WORK="$(cd "$WORK" && pwd)"
+WORK="$(cd "$WORK" && pwd)" || {
+    echo "verify-payload: cannot normalize work dir" >&2; exit 1; }
+[ -n "$WORK" ] && [ -d "$WORK" ] || {
+    echo "verify-payload: work dir invalid after allocation" >&2; exit 1; }
 LOGDIR="$WORK/logs"
 mkdir -p "$LOGDIR"
 if [ "$KEEP" -eq 0 ]; then
@@ -67,6 +77,7 @@ if [ "$KEEP" -eq 0 ]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_SELF="$SCRIPT_DIR/$(basename "${BASH_SOURCE[0]}")"
 
 if [ -n "$KIT" ]; then
     KIT="$(cd "$KIT" && pwd)"
@@ -213,6 +224,10 @@ if ln -s "$WORK" "$_probe" 2>/dev/null && [ -L "$_probe" ]; then
 fi
 rm -rf "$_probe"
 
+# The declared/actual mode comparison is meaningful only on POSIX hosts.
+POSIX_MODE=0
+[ "$(uname -s 2>/dev/null)" = "Linux" ] && POSIX_MODE=1
+
 INSTALL_ROOT="$WORK/install root"
 INSTALL_DIR=""
 MANIFEST=""
@@ -316,6 +331,8 @@ case_hazard_paxsparse()   { hazard_case paxsparse   "hazard:paxsparse"; }
 case_hazard_duplicate()   { hazard_case duplicate   "hazard:duplicate"; }
 case_hazard_collision()   { hazard_case collision   "hazard:collision"; }
 case_hazard_secondtop()   { hazard_case secondtop   "hazard:secondtop"; }
+case_hazard_paxbomb()     { hazard_case paxbomb     "hazard:paxbomb"; }
+case_hazard_longnamebomb() { hazard_case longnamebomb "hazard:longnamebomb"; }
 
 case_install_happy() {
     local log="$LOGDIR/_install-happy.markers"
@@ -560,6 +577,35 @@ json.dump(m, open(sys.argv[1], "w", encoding="utf-8", newline="\n"), indent=2)
 PYEOF
     payload_verify_inventory "$dir" && { echo "version/revision disagreement not detected"; failure=1; }
     cp "$WORK/manifest.orig.json" "$manifest"
+
+    # The manifest itself must be a regular no-follow file.
+    if [ "$CAN_SYMLINK" -eq 1 ]; then
+        cp "$manifest" "$WORK/manifest-outside.json"
+        rm "$manifest"
+        ln -s "$WORK/manifest-outside.json" "$manifest"
+        payload_verify_inventory "$dir" && {
+            echo "linked manifest not detected"; failure=1; }
+        rm "$manifest"
+        cp "$WORK/manifest.orig.json" "$manifest"
+    fi
+
+    # The runtime identifier is the frozen linux-x64 value, not any RID.
+    python3 - "$manifest" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["runtimeIdentifier"] = "linux-arm64"
+json.dump(m, open(sys.argv[1], "w", encoding="utf-8", newline="\n"), indent=2)
+PYEOF
+    payload_verify_inventory "$dir" && { echo "foreign RID accepted"; failure=1; }
+    cp "$WORK/manifest.orig.json" "$manifest"
+
+    # An installed file's actual mode must equal its declared mode.
+    if [ "$POSIX_MODE" -eq 1 ]; then
+        chmod 0666 "$dir/config/defaults.json"
+        payload_verify_inventory "$dir" && {
+            echo "actual/declared mode drift not detected"; failure=1; }
+        chmod 0644 "$dir/config/defaults.json"
+    fi
 
     # A linked directory inside the installed tree must reject.
     mkdir -p "$WORK/link-target" && echo x > "$WORK/link-target/x"
@@ -895,6 +941,82 @@ case_publish_failure() {
     rm -rf "$root"
 }
 
+case_publish_appearing() {
+    # A destination appearing inside the publish window must reject — never
+    # nest, never clobber the appearing content.
+    local root="$WORK/appear-root" top pid
+    top="contract-scribe-$(manifest_get "['toolVersion']")-$(manifest_get "['runtimeIdentifier']")"
+    (
+        PAYLOAD_TEST_STALL=3
+        payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null
+    ) &
+    pid=$!
+    local i
+    for i in $(seq 1 60); do
+        compgen -G "$root/.install-staging.*" >/dev/null && break
+        sleep 0.1
+    done
+    compgen -G "$root/.install-staging.*" >/dev/null || {
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        echo "staging never appeared"; return 1; }
+    # Land inside the pre-publish stall: post-staging stall (3s) plus the
+    # extract/inventory/prereq work puts the existence check behind us and
+    # the destination appears inside the mv window itself.
+    sleep 7
+    mkdir -p "$root/$top" && echo concurrent > "$root/$top/occupant"
+    wait "$pid" && { echo "install into appearing destination succeeded"; return 1; }
+    [ -f "$root/$top/occupant" ] || { echo "appearing destination destroyed"; return 1; }
+    [ ! -d "$root/$top/$top" ] || { echo "nested publication occurred"; return 1; }
+    compgen -G "$root/.install-staging.*" >/dev/null && {
+        echo "staging residue after publish-window rejection"; return 1; }
+
+    # The publication primitive itself: mv -T never merges into a live dir.
+    mkdir -p "$WORK/mv-src" "$WORK/mv-dest"
+    echo x > "$WORK/mv-dest/x"
+    mv -T "$WORK/mv-src" "$WORK/mv-dest" 2>/dev/null && {
+        echo "mv -T merged into an existing directory"; return 1; }
+    [ -f "$WORK/mv-dest/x" ] || { echo "mv -T clobbered destination"; return 1; }
+    rm -rf "$root" "$WORK/mv-src" "$WORK/mv-dest"
+}
+
+case_install_sigterm() {
+    # Controlled interruption reclaims owned staging; SIGKILL is out of
+    # contract scope by definition.
+    local root="$WORK/term-root" pid i
+    (
+        PAYLOAD_TEST_STALL=5
+        payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null
+    ) &
+    pid=$!
+    for i in $(seq 1 100); do
+        compgen -G "$root/.install-staging.*" >/dev/null && break
+        sleep 0.05
+    done
+    compgen -G "$root/.install-staging.*" >/dev/null || {
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        echo "staging never appeared"; return 1; }
+    kill -TERM "$pid"
+    wait "$pid" && { echo "install returned success after SIGTERM"; return 1; }
+    compgen -G "$root/.install-staging.*" >/dev/null && {
+        echo "staging left after SIGTERM"; return 1; }
+    rm -rf "$root"
+}
+
+case_work_parent_file() {
+    # --work naming an existing regular file must reject; the invocation
+    # directory and every caller-owned entry must survive.
+    local d="$WORK/work-parent"
+    mkdir -p "$d"
+    echo sentinel > "$d/keep.txt"
+    echo occupied > "$d/parentfile"
+    (
+        cd "$d" && bash "$SCRIPT_SELF"             --archive "$ARCHIVE" --sha256-file "$SHA_FILE"             ${REPO:+--repo "$REPO"} ${KIT:+--kit "$KIT"}             ${EXPECTED:+--expected "$EXPECTED"}             --work "$d/parentfile" --only "definitely-not-a-case"             >"$WORK/work-parent-run.txt" 2>&1
+    ) && { echo "file work-parent accepted"; return 1; }
+    [ -f "$d/keep.txt" ] || { echo "invocation dir content deleted"; return 1; }
+    [ -f "$d/parentfile" ] || { echo "work parent file deleted"; return 1; }
+    rm -rf "$d"
+}
+
 # ---------- run matrix ----------
 
 echo "verify-payload: archive=$ARCHIVE"
@@ -931,6 +1053,8 @@ run_case hazard-paxsparse case_hazard_paxsparse
 run_case hazard-duplicate case_hazard_duplicate
 run_case hazard-collision case_hazard_collision
 run_case hazard-secondtop case_hazard_secondtop
+run_case hazard-paxbomb case_hazard_paxbomb
+run_case hazard-longnamebomb case_hazard_longnamebomb
 run_case selector-pinning case_selector_pinning
 run_case identity-version case_identity_version
 run_case identity-help case_identity_help
@@ -948,6 +1072,9 @@ run_case pin-update-rollback case_pin_update_rollback
 run_case uninstall-sentinel case_uninstall_sentinel
 run_case cleanup-confinement case_cleanup_confinement
 run_case publish-failure case_publish_failure
+run_case publish-appearing case_publish_appearing
+run_case install-sigterm case_install_sigterm
+run_case work-parent-file case_work_parent_file
 
 echo "verify-payload: $CASES_RUN cases, $CASES_FAILED failed"
 if [ "$CASES_FAILED" -gt 0 ]; then

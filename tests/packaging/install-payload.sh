@@ -47,9 +47,23 @@ _payload_cleanup() {
 
 # payload_install <archive> <expected-sha256> <install-root>
 # Sets PAYLOAD_INSTALL_DIR on success; returns non-zero on rejection.
-payload_install() {
+_PAYLOAD_STAGING=""
+_PAYLOAD_ROOT=""
+_PAYLOAD_CREATED_ROOT=0
+
+_payload_install_abort() {
+    # Controlled interruption (SIGINT/SIGTERM): reclaim the owned staging
+    # before the process exits; SIGKILL is not trappable by contract.
+    _payload_cleanup "$_PAYLOAD_STAGING" "$_PAYLOAD_ROOT" "$_PAYLOAD_CREATED_ROOT"
+    exit 130
+}
+
+_payload_install_impl() {
     local archive="$1" expected_sha="$2" root="$3"
-    PAYLOAD_INSTALL_DIR=""
+
+    # Runs inside a command-substitution subshell (see payload_install):
+    # this trap and disposition never escape to the caller.
+    trap '_payload_install_abort' INT TERM
 
     if [ ! -f "$archive" ]; then
         _payload_log acquire fail missing-artifact; return 1
@@ -74,6 +88,12 @@ payload_install() {
     staging="$(mktemp -d "$root/.install-staging.XXXXXX")" || {
         _payload_cleanup "" "$root" "$created_root"
         _payload_log acquire fail staging-failed; return 1; }
+    _PAYLOAD_STAGING="$staging"
+    _PAYLOAD_ROOT="$root"
+    _PAYLOAD_CREATED_ROOT="$created_root"
+    # Test-only stall seam: lets regressions reach the exposed windows
+    # deterministically (post-staging and pre-publish boundaries).
+    [ -n "${PAYLOAD_TEST_STALL:-}" ] && sleep "$PAYLOAD_TEST_STALL"
     local private_archive="$staging/archive.tar.gz"
     # Cap while copying — the source may grow after the stat above.
     if ! head -c $((256 * 1024 * 1024 + 1)) -- "$archive" > "$private_archive"; then
@@ -132,14 +152,48 @@ payload_install() {
         _payload_cleanup "$staging" "$root" "$created_root"
         _payload_log publish fail destination-exists; return 1
     fi
-    if ! mv "$extract_dir/$top" "$dest"; then
+    [ -n "${PAYLOAD_TEST_STALL:-}" ] && sleep "$PAYLOAD_TEST_STALL"
+    if ! mv -T "$extract_dir/$top" "$dest"; then
         _payload_cleanup "$staging" "$root" "$created_root"
         _payload_log publish fail rename-failed; return 1
     fi
     rm -rf "$staging"
     _payload_log publish ok -
-    PAYLOAD_INSTALL_DIR="$dest"
+    echo "PAYLOAD_DIR=$dest"
     return 0
+}
+
+_payload_install_kill() {
+    # Forward the interruption to the impl child so its own trap reclaims
+    # staging, then let the signal's semantics take the process down.
+    kill -TERM "$1" 2>/dev/null
+    wait "$1" 2>/dev/null
+    exit 130
+}
+
+# Public contract: stage logs forwarded; PAYLOAD_INSTALL_DIR set on success.
+# The impl runs as a child job with its own INT/TERM trap — the caller's
+# dispositions are restored on every normal return.
+payload_install() {
+    PAYLOAD_INSTALL_DIR=""
+    local _out_f impl_pid rc _prev
+    _out_f="$(mktemp)" || return 1
+    _payload_install_impl "$@" >"$_out_f" 2>&1 &
+    impl_pid=$!
+    _prev="$(trap -p INT)"; _prev="$_prev$(trap -p TERM)"
+    trap '_payload_install_kill "$impl_pid"' INT TERM
+    wait "$impl_pid"; rc=$?
+    if [ -n "$_prev" ]; then eval "$_prev"; else trap - INT TERM; fi
+    local out
+    out="$(cat "$_out_f")"
+    printf '%s
+' "$out" | grep -v '^PAYLOAD_DIR='
+    out="${out##*PAYLOAD_DIR=}"
+    out="${out%%$'
+'*}"
+    [ "$rc" -eq 0 ] && PAYLOAD_INSTALL_DIR="$out"
+    rm -f "$_out_f"
+    return "$rc"
 }
 
 # _payload_verify_inventory <installed-top-dir>
@@ -161,7 +215,11 @@ import hashlib, json, os, re, sys
 root = sys.argv[1]
 if os.name == "nt":
     root = "\\\\?\\" + os.path.abspath(root)
-with open(os.path.join(root, "payload.json"), encoding="utf-8") as fh:
+manifest_path = os.path.join(root, "payload.json")
+if os.path.islink(manifest_path) or not os.path.isfile(manifest_path):
+    print("inventory: linked-or-special-manifest", file=sys.stderr)
+    sys.exit(1)
+with open(manifest_path, encoding="utf-8") as fh:
     manifest = json.load(fh)
 
 def fail(reason):
@@ -175,7 +233,7 @@ if manifest.get("tool") != "contract-scribe":
 if manifest.get("distributionChannel") != "d2-framework-dependent-dll":
     fail("distributionChannel")
 rid = manifest.get("runtimeIdentifier")
-if not isinstance(rid, str) or not re.fullmatch(r"[a-z0-9]+-[a-z0-9]+", rid):
+if rid != "linux-x64":
     fail("runtimeIdentifier")
 if manifest.get("targetFramework") != "net10.0":
     fail("targetFramework")
@@ -234,6 +292,10 @@ for rel, entry in expected.items():
             h.update(chunk)
     if h.hexdigest() != entry["sha256"]:
         fail(f"sha256:{rel}")
+    if os.name == "posix":
+        actual_mode = os.stat(full).st_mode & 0o777
+        if actual_mode != int(entry["mode"], 8):
+            fail(f"mode-mismatch:{rel}")
 sys.exit(0)
 PYEOF
 }

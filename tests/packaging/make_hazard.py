@@ -50,7 +50,7 @@ def main(argv):
 
     # PAX format is required for pax_headers to be written; GNU format is
     # required for the GNUTYPE_SPARSE member type.
-    fmt = tarfile.PAX_FORMAT if hazard == "paxsparse" else tarfile.GNU_FORMAT
+    fmt = tarfile.PAX_FORMAT if hazard in ("paxsparse", "paxbomb") else tarfile.GNU_FORMAT
     with tarfile.open(out, "w:gz", format=fmt) as archive:
         _base(archive)
         if hazard == "traversal":
@@ -110,6 +110,21 @@ def main(argv):
         elif hazard == "secondtop":
             info, data = _file("other-root/payload/evil.txt")
             _add(archive, info, data)
+        elif hazard == "paxbomb":
+            # PAX extension body far beyond the metadata bound — must reject
+            # without the body ever being decoded/allocated.
+            info, data = _file(f"{TOP}/payload/padded.txt")
+            info.pax_headers = {"x" * 200: "y" * (5 * 1024 * 1024)}
+            _add(archive, info, data)
+        elif hazard == "longnamebomb":
+            # GNU longname continuation beyond the metadata bound — the raw
+            # size field alone must trigger rejection before any body read.
+            long_top = "contract-scribe-9.9.9-hazard-linux-x64"
+            info = tarfile.TarInfo(long_top + "/" + "n" * 200)
+            info.type = tarfile.GNUTYPE_LONGNAME
+            info.name = "././@LongLink"
+            info.size = 5 * 1024 * 1024
+            archive.addfile(info, io.BytesIO(b"n" * (5 * 1024 * 1024)))
         else:
             print(f"make_hazard: unknown hazard {hazard}", file=sys.stderr)
             return 2
