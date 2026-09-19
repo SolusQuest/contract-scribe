@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Runtime.Versioning;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -93,6 +94,7 @@ public sealed class PackagedCliProcessTests
             : throw new InvalidOperationException($"{name} is required in packaged mode.");
 
     [Fact]
+    [SupportedOSPlatform("linux")]
     public async Task PackedCampaign_StartCompleteAndResumeLifecycle()
     {
         if (!Activated()) return;
@@ -100,6 +102,8 @@ public sealed class PackagedCliProcessTests
         var outside = CampaignCliProcessTests.CreatePrivateDirectory("contract-scribe-packed-campaign");
         var stateDirectory = Path.Join(outside, "state");
         Directory.CreateDirectory(stateDirectory);
+        File.SetUnixFileMode(stateDirectory,
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
         var state = Path.Join(stateDirectory, "checkpoint.json");
         var missing = Path.Join(stateDirectory, "missing.json");
         var layer = Path.Join(outside, "consumer.json");
@@ -132,15 +136,12 @@ public sealed class PackagedCliProcessTests
     {
         if (!Activated()) return;
         var fixture = await MaterializeFixtureAsync("nowork");
+        // Optional policy: findings are advisory, so the campaign has no
+        // required work even though the audit still reports violations.
         await File.WriteAllTextAsync(
-            Path.Join(fixture, "Library", "Library.cs"),
-            "namespace Fixture;\n"
-            + "/// <summary>Provides fixture values.</summary>\n"
-            + "public static class Library\n"
-            + "{\n"
-            + "    /// <summary>Gets the fixture value.</summary>\n"
-            + "    public static string Value => \"ok\";\n"
-            + "}\n",
+            Path.Join(fixture, "policy.json"),
+            "{\"defaultDecision\":\"optional\",\"schemaVersion\":1,"
+            + "\"targetProfile\":\"profile.external-api\"}\n",
             new UTF8Encoding(false, true));
         var outside = CampaignCliProcessTests.CreatePrivateDirectory("contract-scribe-packed-nowork");
         var state = Path.Join(outside, "checkpoint.json");
@@ -175,13 +176,18 @@ public sealed class PackagedCliProcessTests
             4, "campaign.invalid-configuration");
         Assert.Equal(0, server.RequestCount);
 
-        // Consumer layer selects the loopback endpoint; invocation override
-        // wins through the same resolver for its own fields.
+        // Consumer layer selects the loopback endpoint; the invocation
+        // override layer wins through the same resolver for its own fields.
         await WriteLayerAsync(layer, server.Endpoint);
+        var overridePath = Path.Join(outside, "override.json");
+        await File.WriteAllTextAsync(
+            overridePath,
+            "{\"consumerConfigurationVersion\":1,"
+            + "\"provider\":{\"model\":\"override-model\"}}\n",
+            new UTF8Encoding(false, true));
         projection["layer"] = await CampaignStepAsync(
             "start", fixture, Path.Join(outside, "s2.json"), layer, server,
-            0, "campaign.complete", "--configuration-override",
-            "{\"provider\":{\"model\":\"override-model\"}}");
+            0, "campaign.complete", "--configuration-override", overridePath);
 
         // A product-owned field inside a consumer layer is rejected at
         // admission before any execution.
