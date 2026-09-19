@@ -1,0 +1,167 @@
+name: contract-scribe
+description: >-
+  Acquire, verify, install, and invoke the authorized ContractScribe CLI
+  payload (github-proposal start|resume). See
+  docs/20_architecture/contracts/action-interface-v1.md for the contract.
+author: SolusQuest
+branding:
+  icon: play
+  color: blue
+
+inputs:
+  operation:
+    description: "github-proposal-start | github-proposal-resume"
+    required: true
+  repository-root:
+    description: "Existing repository root (relative paths resolve from the workspace)"
+    required: true
+  input:
+    description: "Existing .sln/.slnx/.csproj inside the repository"
+    required: true
+  policy:
+    description: "Existing M1 policy file inside the repository"
+    required: true
+  request:
+    description: "github-proposal invocation request JSON object (inline; <=64 KiB UTF-8)"
+    required: true
+  configuration:
+    description: "Optional consumer configuration layer path"
+    required: false
+  configuration-override:
+    description: "Optional invocation configuration JSON object (inline; <=64 KiB UTF-8)"
+    required: false
+  provider-api-key:
+    description: "Campaign provider credential (CONTRACTSCRIBE_PROVIDER_API_KEY)"
+    required: false
+  github-token:
+    description: "Product GitHub credential (CONTRACTSCRIBE_GITHUB_TOKEN); never the acquisition credential"
+    required: false
+  acquisition-token:
+    description: "Optional release-asset acquisition credential (read-only release scope); must differ from github-token"
+    required: false
+
+outputs:
+  result:
+    description: "Complete product github-proposal envelope (verbatim compact JSON; empty when none was produced)"
+    value: ${{ steps.emit.outputs.result }}
+  outcome:
+    description: "Product outcome (github-proposal.*; empty when no valid envelope)"
+    value: ${{ steps.emit.outputs.outcome }}
+  exit-code:
+    description: "CLI process exit code as digits"
+    value: ${{ steps.emit.outputs.exit_code }}
+  terminal-layer:
+    description: "Product envelope terminalLayer"
+    value: ${{ steps.emit.outputs.terminal_layer }}
+  diagnostic-codes:
+    description: "Product diagnosticCodes, comma-joined"
+    value: ${{ steps.emit.outputs.diagnostic_codes }}
+  checkpoint-revision:
+    description: "Product checkpointRevision"
+    value: ${{ steps.emit.outputs.checkpoint_revision }}
+  pull-request-url:
+    description: "Product pullRequestUrl"
+    value: ${{ steps.emit.outputs.pull_request_url }}
+  tool-version:
+    description: "Product toolVersion"
+    value: ${{ steps.emit.outputs.tool_version }}
+  campaign-operation:
+    description: "Product campaignOperation"
+    value: ${{ steps.emit.outputs.campaign_operation }}
+  publication-operation-id:
+    description: "Product publicationOperationId"
+    value: ${{ steps.emit.outputs.publication_operation_id }}
+  generation-id:
+    description: "Product generationId"
+    value: ${{ steps.emit.outputs.generation_id }}
+  publication-diagnostic:
+    description: "Product publicationDiagnostic (compact JSON or empty)"
+    value: ${{ steps.emit.outputs.publication_diagnostic }}
+  action-status:
+    description: "Wrapper status: ok | action.<stage>-<reason> (never a product outcome)"
+    value: ${{ steps.emit.outputs.action_status }}
+  payload-version:
+    description: "Authorized payload toolVersion from the checked-in map"
+    value: ${{ steps.emit.outputs.payload_version }}
+  payload-sha256:
+    description: "Authorized payload archive SHA-256"
+    value: ${{ steps.emit.outputs.payload_sha256 }}
+  install-dir:
+    description: "Installed payload directory"
+    value: ${{ steps.emit.outputs.install_dir }}
+
+runs:
+  using: composite
+  steps:
+    # Credential separation guard: acquisition and product write credentials
+    # are different trust channels; identical values are rejected by a
+    # runner expression so no script ever sees both for comparison.
+    - name: credential-separation
+      id: guard
+      shell: bash
+      if: ${{ inputs.acquisition-token != '' && inputs.acquisition-token == inputs.github-token }}
+      run: |
+        echo "::error::acquisition-token must differ from github-token (action.credential-shared)"
+        echo "action-status=action.credential-shared" >> "$GITHUB_OUTPUT"
+        exit 1
+
+    - name: prepare
+      id: prepare
+      shell: bash
+      env:
+        CS_INPUT_OPERATION: ${{ inputs.operation }}
+        CS_INPUT_REPOSITORY_ROOT: ${{ inputs.repository-root }}
+        CS_INPUT_INPUT: ${{ inputs.input }}
+        CS_INPUT_POLICY: ${{ inputs.policy }}
+        CS_INPUT_REQUEST: ${{ inputs.request }}
+        CS_INPUT_CONFIGURATION: ${{ inputs.configuration }}
+        CS_INPUT_CONFIGURATION_OVERRIDE: ${{ inputs.configuration-override }}
+      run: exec python3 "${{ github.action_path }}/scripts/action/prepare.py"
+
+    - name: acquire
+      id: acquire
+      shell: bash
+      env:
+        CONTRACTSCRIBE_ACQUISITION_TOKEN: ${{ inputs.acquisition-token }}
+      run: exec python3 "${{ github.action_path }}/scripts/action/acquire.py"
+
+    - name: install
+      id: install
+      shell: bash
+      run: exec python3 "${{ github.action_path }}/scripts/action/install.py"
+
+    - name: invoke
+      id: invoke
+      shell: bash
+      env:
+        CONTRACTSCRIBE_PROVIDER_API_KEY: ${{ inputs.provider-api-key }}
+        CONTRACTSCRIBE_GITHUB_TOKEN: ${{ inputs.github-token }}
+      run: exec python3 "${{ github.action_path }}/scripts/action/invoke.py"
+
+    - name: emit
+      id: emit
+      shell: bash
+      if: always()
+      env:
+        CS_STATUS_GUARD: ${{ steps.guard.outputs.action_status }}
+        CS_STATUS_PREPARE: ${{ steps.prepare.outputs.action_status }}
+        CS_STATUS_ACQUIRE: ${{ steps.acquire.outputs.action_status }}
+        CS_STATUS_INSTALL: ${{ steps.install.outputs.action_status }}
+        CS_STATUS_INVOKE: ${{ steps.invoke.outputs.action_status }}
+        CS_OUT_RESULT: ${{ steps.invoke.outputs.result }}
+        CS_OUT_OUTCOME: ${{ steps.invoke.outputs.outcome }}
+        CS_OUT_EXIT_CODE: ${{ steps.invoke.outputs.exit_code }}
+        CS_OUT_TERMINAL_LAYER: ${{ steps.invoke.outputs.terminal_layer }}
+        CS_OUT_DIAGNOSTIC_CODES: ${{ steps.invoke.outputs.diagnostic_codes }}
+        CS_OUT_CHECKPOINT_REVISION: ${{ steps.invoke.outputs.checkpoint_revision }}
+        CS_OUT_PULL_REQUEST_URL: ${{ steps.invoke.outputs.pull_request_url }}
+        CS_OUT_TOOL_VERSION: ${{ steps.invoke.outputs.tool_version }}
+        CS_OUT_CAMPAIGN_OPERATION: ${{ steps.invoke.outputs.campaign_operation }}
+        CS_OUT_PUBLICATION_OPERATION_ID: ${{ steps.invoke.outputs.publication_operation_id }}
+        CS_OUT_GENERATION_ID: ${{ steps.invoke.outputs.generation_id }}
+        CS_OUT_PUBLICATION_DIAGNOSTIC: ${{ steps.invoke.outputs.publication_diagnostic }}
+        CS_OUT_PAYLOAD_VERSION: ${{ steps.acquire.outputs.payload_version }}
+        CS_OUT_PAYLOAD_SHA256: ${{ steps.acquire.outputs.payload_sha256 }}
+        CS_OUT_INSTALL_DIR: ${{ steps.install.outputs.install_dir }}
+        CS_INPUT_OPERATION: ${{ inputs.operation }}
+      run: exec python3 "${{ github.action_path }}/scripts/action/emit.py"
