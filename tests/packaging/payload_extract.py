@@ -32,6 +32,10 @@ BOUND_FILE = 128 * 1024 * 1024
 BOUND_COUNT = 4096
 BOUND_PATH = 1024
 BOUND_DEPTH = 16
+# Cumulative decoded PAX/GNU extension metadata (key+value bytes). A
+# legitimate payload carries none; this bound stops metadata amplification
+# before member-policy evaluation continues.
+BOUND_METADATA = 4 * 1024 * 1024
 
 REGULAR_TYPES = (tarfile.REGTYPE, tarfile.AREGTYPE)
 ACCEPTED_TYPES = REGULAR_TYPES + (tarfile.DIRTYPE,)
@@ -58,6 +62,7 @@ def _inspect(path, expected_top):
     expanded = 0
     seen = set()
     file_paths = set()
+    metadata_bytes = 0
 
     try:
         compressed = os.path.getsize(path)
@@ -65,7 +70,9 @@ def _inspect(path, expected_top):
         return {"ok": False, "errors": [f"archive unreadable: {exc}"],
                 "top": top, "expandedBytes": 0, "members": []}
     if compressed > BOUND_COMPRESSED:
-        errors.append(f"compressed size {compressed} exceeds bound {BOUND_COMPRESSED}")
+        return {"ok": False,
+                "errors": [f"compressed size {compressed} exceeds bound {BOUND_COMPRESSED}"],
+                "top": top, "expandedBytes": 0, "members": []}
 
     try:
         archive = tarfile.open(path, "r:gz")
@@ -73,68 +80,81 @@ def _inspect(path, expected_top):
         return {"ok": False, "errors": [f"archive not a readable gzip tar: {exc}"],
                 "top": top, "expandedBytes": 0, "members": []}
 
+    # Iterate members incrementally — never materialize the whole list — and
+    # stop at every consumer-owned bound rather than consuming the input
+    # first and reporting afterwards.
     with archive:
-        for member in archive.getmembers():
+        member = archive.next()
+        while member is not None:
             canonical = _canonical(member.name)
             if canonical is None:
                 errors.append(f"unsafe member name: {member.name!r}")
-                continue
+                break
             parts = canonical.split("/")
             if top is None:
                 top = parts[0]
             if parts[0] != top:
                 errors.append(f"member outside top directory: {canonical}")
-                continue
+                break
             if canonical == top and member.type != tarfile.DIRTYPE:
                 errors.append(f"top directory member is not a directory: {canonical}")
-                continue
+                break
             if len(parts) < 2 and canonical != top:
                 errors.append(f"member at top level but not the top dir: {canonical}")
-                continue
+                break
             if canonical in seen:
                 errors.append(f"duplicate member: {canonical}")
-                continue
+                break
             if member.type not in ACCEPTED_TYPES:
                 errors.append(
                     f"rejected member type {member.type!r}: {canonical}")
-                continue
+                break
             if member.sparse is not None or member.type == b"S":
                 errors.append(f"sparse member rejected: {canonical}")
-                continue
+                break
             pax = member.pax_headers or {}
             if any(k.lower().startswith("gnu.sparse") for k in pax):
                 errors.append(f"sparse (pax) member rejected: {canonical}")
-                continue
+                break
+            metadata_bytes += sum(len(k) + len(v) for k, v in pax.items())
+            if metadata_bytes > BOUND_METADATA:
+                errors.append(
+                    f"extension metadata exceeds bound {BOUND_METADATA}: {canonical}")
+                break
             kind = "dir" if member.type == tarfile.DIRTYPE else "file"
             if kind == "file":
                 if member.size > BOUND_FILE:
                     errors.append(
                         f"member exceeds file bound {BOUND_FILE}: {canonical}")
-                    continue
+                    break
                 expanded += member.size
+                if expanded > BOUND_EXPANDED:
+                    errors.append(
+                        f"expanded size exceeds bound {BOUND_EXPANDED}: {canonical}")
+                    break
                 file_paths.add(canonical)
             seen.add(canonical)
+            if len(seen) > BOUND_COUNT:
+                errors.append(f"member count exceeds bound {BOUND_COUNT}")
+                break
             members.append({
                 "name": canonical,
                 "kind": kind,
                 "size": member.size if kind == "file" else 0,
                 "mode": "0755" if (member.mode & 0o111) else "0644",
             })
+            member = archive.next()
 
-    for canonical in sorted(seen):
-        ancestor = canonical
-        while "/" in ancestor:
-            ancestor = ancestor.rsplit("/", 1)[0]
-            if ancestor in file_paths:
-                errors.append(f"path under a file member: {canonical}")
-                break
-
-    if len(seen) > BOUND_COUNT:
-        errors.append(f"member count {len(seen)} exceeds bound {BOUND_COUNT}")
-    if expanded > BOUND_EXPANDED:
-        errors.append(f"expanded size {expanded} exceeds bound {BOUND_EXPANDED}")
-    if top is None and not errors:
-        errors.append("archive contains no members")
+    if not errors:
+        for canonical in sorted(seen):
+            ancestor = canonical
+            while "/" in ancestor:
+                ancestor = ancestor.rsplit("/", 1)[0]
+                if ancestor in file_paths:
+                    errors.append(f"path under a file member: {canonical}")
+                    break
+        if top is None:
+            errors.append("archive contains no members")
 
     return {"ok": not errors, "errors": errors, "top": top,
             "expandedBytes": expanded, "members": members}
@@ -145,6 +165,10 @@ def _extract(path, dest, expected_top):
     if not report["ok"]:
         return report
     top = report["top"]
+    if os.name == "nt":
+        # Member names are deep enough to exceed the legacy 260-char limit
+        # on Windows development hosts; extended paths keep local runs honest.
+        dest = "\\\\?\\" + os.path.abspath(dest)
     try:
         archive = tarfile.open(path, "r:gz")
     except (tarfile.TarError, OSError, EOFError) as exc:

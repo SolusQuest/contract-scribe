@@ -51,10 +51,13 @@ while [ $# -gt 0 ]; do
     esac
 done
 
+# --work supplies a PARENT for a fresh owned child; a pre-existing caller
+# directory's contents are never deleted by the cleanup trap.
 if [ -z "$WORK" ]; then
     WORK="$(mktemp -d "${TMPDIR:-/tmp}/contract-scribe-verify.XXXXXX")"
 else
     mkdir -p "$WORK"
+    WORK="$(mktemp -d "$WORK/payload-verify.XXXXXX")"
 fi
 WORK="$(cd "$WORK" && pwd)"
 LOGDIR="$WORK/logs"
@@ -180,11 +183,38 @@ netns_exec() {
     return 2
 }
 
-# PATH with every directory that can resolve `dotnet` removed — private
-# toolchain layouts prepend their own dir so every other tool stays usable.
-HOSTLESS_PATH="$(echo "$PATH" | tr ':' '\n' | while read -r d; do
-    [ -x "$d/dotnet" ] || echo "$d"
-done | paste -sd:)"
+# PATH with no usable dotnet host: dirs that resolve `dotnet` are replaced
+# by a private link-farm of their other contents, so /usr/bin's coreutils
+# stay available while every dotnet alias (binary or symlink) disappears.
+HOSTLESS_BIN="$WORK/hostless-bin"
+mkdir -p "$HOSTLESS_BIN"
+HOSTLESS_PATH=""
+_old_ifs="$IFS"; IFS=':'
+read -ra _path_dirs <<< "$PATH"
+IFS="$_old_ifs"
+for _d in "${_path_dirs[@]}"; do
+    [ -n "$_d" ] && [ -d "$_d" ] || continue
+    if [ -x "$_d/dotnet" ] || [ -x "$_d/dotnet.exe" ]; then
+        for _f in "$_d"/*; do
+            [ -e "$_f" ] || continue
+            _b="$(basename "$_f")"
+            case "$_b" in dotnet|dotnet.exe) continue ;; esac
+            ln -sfn "$_f" "$HOSTLESS_BIN/$_b"
+        done
+    else
+        HOSTLESS_PATH="$HOSTLESS_PATH:$_d"
+    fi
+done
+HOSTLESS_PATH="$HOSTLESS_BIN$HOSTLESS_PATH"
+
+# Real symlinks are unavailable on some development hosts (MSYS copies
+# instead); Linux CI always has them. Legs needing a link check this probe.
+CAN_SYMLINK=0
+_probe="$WORK/.symlink-probe"
+if ln -s "$WORK" "$_probe" 2>/dev/null && [ -L "$_probe" ]; then
+    CAN_SYMLINK=1
+fi
+rm -rf "$_probe"
 
 INSTALL_ROOT="$WORK/install root"
 INSTALL_DIR=""
@@ -337,14 +367,16 @@ case_identity_version() {
     got="$(cat "$WORK/version.txt")"
     [ "$got" = "ContractScribe $TOOL_VERSION" ] || {
         echo "version mismatch: '$got' != 'ContractScribe $TOOL_VERSION'"; return 1; }
-    [ -f "$EXPECTED/version.txt" ] || return 0
+    [ -f "$EXPECTED/version.txt" ] || {
+        echo "missing required oracle: version.txt"; return 1; }
     diff -u "$EXPECTED/version.txt" "$WORK/version.txt" || return 1
 }
 
 case_identity_help() {
     local name
     for name in help-top help-audit help-campaign help-github-proposal; do
-        [ -f "$EXPECTED/$name.txt" ] || continue
+        [ -f "$EXPECTED/$name.txt" ] || {
+            echo "missing required oracle: $name.txt"; return 1; }
         case "$name" in
             help-top)             packed "$WORK/$name.txt" --help ;;
             help-audit)           packed "$WORK/$name.txt" audit --help ;;
@@ -372,11 +404,22 @@ case_location_doctor() {
 }
 
 case_defaults_exact_bytes() {
-    [ -f "$EXPECTED/config-defaults.json" ] || return 0
+    [ -f "$EXPECTED/config-defaults.json" ] || {
+        echo "missing required oracle: config-defaults.json"; return 1; }
     cmp "$EXPECTED/config-defaults.json" "$INSTALL_DIR/config/defaults.json"
 }
 
 case_prereq_no_host() {
+    # The constructed PATH must genuinely lack every dotnet alias while the
+    # installer's own utilities stay resolvable.
+    if PATH="$HOSTLESS_PATH" command -v dotnet >/dev/null 2>&1; then
+        echo "hostless PATH still resolves dotnet: $(PATH="$HOSTLESS_PATH" command -v dotnet)"
+        return 1
+    fi
+    PATH="$HOSTLESS_PATH" command -v sha256sum >/dev/null 2>&1 || {
+        echo "hostless PATH lost sha256sum"; return 1; }
+    PATH="$HOSTLESS_PATH" command -v python3 >/dev/null 2>&1 || {
+        echo "hostless PATH lost python3"; return 1; }
     PATH="$HOSTLESS_PATH" expect_install_reject prereq \
         "$ARCHIVE" "$EXPECTED_SHA" "$WORK/prereq-nohost"
 }
@@ -482,6 +525,53 @@ case_inventory_negative() {
     payload_verify_inventory "$dir" && { echo "extra file not detected"; failure=1; }
     rm "$dir/injected.txt"
 
+    # Manifest identity tampering — each mutation must reject.
+    local manifest="$dir/payload.json"
+    cp "$manifest" "$WORK/manifest.orig.json"
+    python3 - "$manifest" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["defaultsJsonSha256"] = "0" * 64
+json.dump(m, open(sys.argv[1], "w", encoding="utf-8", newline="\n"), indent=2)
+PYEOF
+    payload_verify_inventory "$dir" && { echo "defaults-digest mismatch not detected"; failure=1; }
+    cp "$WORK/manifest.orig.json" "$manifest"
+
+    python3 - "$manifest" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["files"].append(dict(m["files"][0]))
+json.dump(m, open(sys.argv[1], "w", encoding="utf-8", newline="\n"), indent=2)
+PYEOF
+    payload_verify_inventory "$dir" && { echo "duplicate inventory path not detected"; failure=1; }
+    cp "$WORK/manifest.orig.json" "$manifest"
+
+    python3 - "$manifest" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["files"][0]["mode"] = "0777"
+json.dump(m, open(sys.argv[1], "w", encoding="utf-8", newline="\n"), indent=2)
+PYEOF
+    payload_verify_inventory "$dir" && { echo "invalid mode not detected"; failure=1; }
+    cp "$WORK/manifest.orig.json" "$manifest"
+
+    python3 - "$manifest" <<'PYEOF'
+import json, sys
+m = json.load(open(sys.argv[1]))
+m["sourceRevision"] = "f" * 40
+json.dump(m, open(sys.argv[1], "w", encoding="utf-8", newline="\n"), indent=2)
+PYEOF
+    payload_verify_inventory "$dir" && { echo "version/revision disagreement not detected"; failure=1; }
+    cp "$WORK/manifest.orig.json" "$manifest"
+
+    # A linked directory inside the installed tree must reject.
+    mkdir -p "$WORK/link-target" && echo x > "$WORK/link-target/x"
+    if [ "$CAN_SYMLINK" -eq 1 ]; then
+        ln -s "$WORK/link-target" "$dir/linked-dir"
+        payload_verify_inventory "$dir" && { echo "linked directory not detected"; failure=1; }
+        rm -rf "$dir/linked-dir"
+    fi
+
     payload_verify_inventory "$dir" || { echo "restored inventory should verify"; failure=1; }
     rm -rf "$tamper_root"
     return "$failure"
@@ -496,15 +586,17 @@ case_audit_equivalence() {
     (cd / && dotnet "$INSTALL_DIR/ContractScribe.Cli.dll" audit \
         --repository-root "$fx" --input Fixture.slnx --policy policy.json \
         --output "$out" > "$stdout_file") || rc=$?
-    if [ -f "$EXPECTED/audit-exit.txt" ] && [ "$(cat "$EXPECTED/audit-exit.txt")" != "$rc" ]; then
+    for oracle in audit-exit.txt audit-result.json audit-stdout.json; do
+        [ -f "$EXPECTED/$oracle" ] || {
+            echo "missing required oracle: $oracle"; return 1; }
+    done
+    if [ "$(cat "$EXPECTED/audit-exit.txt")" != "$rc" ]; then
         echo "audit exit $rc != expected $(cat "$EXPECTED/audit-exit.txt")"; return 1
     fi
     cmp "$EXPECTED/audit-result.json" "$out" || {
         echo "canonical audit output differs from source oracle"; return 1; }
-    if [ -f "$EXPECTED/audit-stdout.json" ]; then
-        cmp "$EXPECTED/audit-stdout.json" "$stdout_file" || {
-            echo "audit stdout differs from source oracle"; return 1; }
-    fi
+    cmp "$EXPECTED/audit-stdout.json" "$stdout_file" || {
+        echo "audit stdout differs from source oracle"; return 1; }
 }
 
 case_offline_audit() {
@@ -529,7 +621,11 @@ INNER
     if [ "$rc" -eq 90 ]; then
         echo "network namespace is NOT isolated"; return 1
     fi
-    [ -f "$EXPECTED/audit-exit.txt" ] && [ "$(cat "$EXPECTED/audit-exit.txt")" != "$rc" ] && {
+    for oracle in audit-exit.txt audit-result.json; do
+        [ -f "$EXPECTED/$oracle" ] || {
+            echo "missing required oracle: $oracle"; return 1; }
+    done
+    [ "$(cat "$EXPECTED/audit-exit.txt")" != "$rc" ] && {
         echo "offline audit exit $rc"; return 1; }
     cmp "$EXPECTED/audit-result.json" "$out" || {
         echo "offline audit bytes differ"; return 1; }
@@ -616,6 +712,10 @@ PYEOF
 
 make_variant_b() {
     # Repack the same payload under a second identity for update/rollback.
+    # B is a STORAGE/SELECTOR fixture only: its manifest identity is
+    # internally consistent (so the stricter inventory accepts it), but its
+    # binaries still carry A's embedded version — it is never used as
+    # version-binding evidence.
     local staging="$1" archive="$2"
     mkdir -p "$staging/content"
     python3 "$PAYLOAD_EXTRACT_PY" extract "$ARCHIVE" "$staging/content" >/dev/null
@@ -664,7 +764,9 @@ case_pin_update_rollback() {
     expect_install_reject digest "$bad_b" "$b_sha" "$root" || return 1
     [ "$(readlink "$root/current")" = "$top_a" ] || {
         echo "selector moved after failed update"; return 1; }
-    dotnet "$root/$top_a/ContractScribe.Cli.dll" --version | grep -q ContractScribe || {
+    dotnet "$root/$top_a/ContractScribe.Cli.dll" --version >"$WORK/a-after-bad.txt" 2>&1 || {
+        echo "A unusable after failed update"; return 1; }
+    grep -q ContractScribe "$WORK/a-after-bad.txt" || {
         echo "A unusable after failed update"; return 1; }
 
     # Update: B installs side-by-side; selector moves to B.
@@ -674,7 +776,9 @@ case_pin_update_rollback() {
         echo "side-by-side install missing"; return 1; }
     payload_select "$root" "$btop"
     [ "$(readlink "$root/current")" = "$btop" ] || return 1
-    dotnet "$root/current/ContractScribe.Cli.dll" --version | grep -q ContractScribe || {
+    dotnet "$root/current/ContractScribe.Cli.dll" --version >"$WORK/b-version.txt" 2>&1 || {
+        echo "current/B unusable"; return 1; }
+    grep -q ContractScribe "$WORK/b-version.txt" || {
         echo "current/B unusable"; return 1; }
 
     # Rollback: repoint the selector to A; A's files were never merged.
@@ -713,6 +817,85 @@ case_uninstall_sentinel() {
     payload_install "$ARCHIVE" "$EXPECTED_SHA" "$empty" >/dev/null || return 1
     payload_uninstall "$empty"
     [ ! -e "$empty" ] || { echo "empty root not removed"; return 1; }
+}
+
+case_cleanup_confinement() {
+    local root="$WORK/cleanup-root"
+    local victim="$WORK/victim"
+    mkdir -p "$victim"
+    echo precious > "$victim/payload.json"
+    payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null || {
+        echo "baseline install failed"; return 1; }
+    local top
+    top="$(basename "$(echo "$root"/contract-scribe-*/)")"
+
+    # A name containing traversal must reject before any removal; the
+    # sibling victim survives.
+    payload_remove "$root" "contract-scribe-a/../../victim" && {
+        echo "traversal version name accepted"; return 1; }
+    [ -f "$victim/payload.json" ] || { echo "traversal deleted the victim"; return 1; }
+    [ -d "$root/$top" ] || { echo "traversal removed the real install"; return 1; }
+
+    # A linked contract-scribe-* entry is not an owned directory — uninstall
+    # must leave the link and its outside target untouched.
+    local outside="$WORK/outside-target"
+    mkdir -p "$outside"
+    echo keep > "$outside/keep.txt"
+    if [ "$CAN_SYMLINK" -eq 1 ]; then
+        ln -s "$outside" "$root/contract-scribe-link"
+    fi
+    payload_uninstall "$root"
+    [ -f "$outside/keep.txt" ] || { echo "linked outside content deleted"; return 1; }
+    if [ "$CAN_SYMLINK" -eq 1 ]; then
+        [ -L "$root/contract-scribe-link" ] || { echo "foreign link removed"; return 1; }
+        rm "$root/contract-scribe-link"
+    fi
+
+    # A caller-owned regular file at `current` must never be overwritten by
+    # the selector.
+    payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null || {
+        echo "reinstall failed"; return 1; }
+    top="$(basename "$(echo "$root"/contract-scribe-*/)")"
+    echo caller-file > "$root/current"
+    payload_select "$root" "$top" && {
+        echo "foreign current was overwritten"; return 1; }
+    [ "$(cat "$root/current")" = "caller-file" ] || {
+        echo "caller-owned current was destroyed"; return 1; }
+    rm "$root/current"
+    payload_uninstall "$root"
+    rm -rf "$root" "$victim" "$outside"
+}
+
+case_publish_failure() {
+    # Occupied destination → checked publish rejection with no staging
+    # residue and no damage to the existing installation.
+    local root="$WORK/pub-root"
+    payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >/dev/null || {
+        echo "baseline install failed"; return 1; }
+    local top
+    top="$(basename "$(echo "$root"/contract-scribe-*/)")"
+    payload_install "$ARCHIVE" "$EXPECTED_SHA" "$root" >"$WORK/pub2.txt" 2>&1 && {
+        echo "install into occupied destination succeeded"; return 1; }
+    grep -q "stage=publish result=fail" "$WORK/pub2.txt" || {
+        cat "$WORK/pub2.txt"; return 1; }
+    if ls -d "$root"/.install-staging.* >/dev/null 2>&1; then
+        echo "staging residue left after failed publish"; return 1
+    fi
+    [ -d "$root/$top" ] || { echo "existing installation damaged"; return 1; }
+    dotnet "$root/$top/ContractScribe.Cli.dll" --version >"$WORK/pub-existing.txt" 2>&1 || {
+        echo "existing installation broken by failed publish"; return 1; }
+    grep -q ContractScribe "$WORK/pub-existing.txt" || {
+        echo "existing installation broken by failed publish"; return 1; }
+
+    # An invalid (regular-file) installation root rejects at acquire and the
+    # file survives.
+    echo file > "$WORK/pub-file"
+    payload_install "$ARCHIVE" "$EXPECTED_SHA" "$WORK/pub-file" >"$WORK/pub3.txt" 2>&1 && {
+        echo "install into file root succeeded"; return 1; }
+    grep -q "stage=acquire result=fail" "$WORK/pub3.txt" || {
+        cat "$WORK/pub3.txt"; return 1; }
+    [ "$(cat "$WORK/pub-file")" = "file" ] || { echo "file root destroyed"; return 1; }
+    rm -rf "$root"
 }
 
 # ---------- run matrix ----------
@@ -766,6 +949,8 @@ run_case offline-audit case_offline_audit
 run_case packed-tests case_packed_tests
 run_case pin-update-rollback case_pin_update_rollback
 run_case uninstall-sentinel case_uninstall_sentinel
+run_case cleanup-confinement case_cleanup_confinement
+run_case publish-failure case_publish_failure
 
 echo "verify-payload: $CASES_RUN cases, $CASES_FAILED failed"
 if [ "$CASES_FAILED" -gt 0 ]; then

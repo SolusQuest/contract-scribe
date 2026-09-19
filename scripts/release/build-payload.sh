@@ -45,6 +45,9 @@ if [ -z "$WORK_DIR" ]; then
 else
     mkdir -p "$WORK_DIR"
 fi
+# Staging is always a fresh owned child — a reused --work directory can
+# carry stale trees that would otherwise contaminate the new inventory.
+STAGE="$(mktemp -d "$WORK_DIR/stage.XXXXXX")"
 mkdir -p "$OUT_DIR"
 OUT_DIR="$(cd "$OUT_DIR" && pwd)"
 
@@ -74,8 +77,8 @@ BOUND_FILE=$((128 * 1024 * 1024))
 BOUND_COUNT=4096
 BOUND_PATH=1024
 BOUND_DEPTH=16
+BOUND_METADATA=$((4 * 1024 * 1024))
 
-STAGE="$WORK_DIR/stage"
 CONTENT="$STAGE/content"
 mkdir -p "$CONTENT"
 
@@ -124,11 +127,11 @@ DEFAULTS_SHA="$(sha256sum "$STAGE/$TOP_DIR/config/defaults.json" | cut -d' ' -f1
 # self-hash). Paths are archive-relative; mode is the permitted install mode.
 python3 - "$STAGE/$TOP_DIR" "$TOOL_VERSION" "$HEAD" "$DEFAULTS_SHA" \
         "$BOUND_COMPRESSED" "$BOUND_EXPANDED" "$BOUND_FILE" "$BOUND_COUNT" \
-        "$BOUND_PATH" "$BOUND_DEPTH" <<'PYEOF'
+        "$BOUND_PATH" "$BOUND_DEPTH" "$BOUND_METADATA" <<'PYEOF'
 import hashlib, json, os, sys
 
 top, tool_version, head, defaults_sha = sys.argv[1:5]
-b_compressed, b_expanded, b_file, b_count, b_path, b_depth = map(int, sys.argv[5:11])
+b_compressed, b_expanded, b_file, b_count, b_path, b_depth, b_meta = map(int, sys.argv[5:12])
 
 entries = []
 total = 0
@@ -182,6 +185,7 @@ manifest = {
         "fileCount": b_count,
         "memberPathBytes": b_path,
         "memberDepth": b_depth,
+        "extensionMetadataBytes": b_meta,
     },
     "files": entries,
 }
