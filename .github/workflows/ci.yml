@@ -744,7 +744,7 @@ jobs:
                "maximumCumulativePatchBytes":4194304},
              "transition":"initial"}}
           EOFX
-      - name: E2E happy path through uses:
+      - name: "E2E happy path through uses"
         id: e2e_ok
         uses: ./action-src
         env:
