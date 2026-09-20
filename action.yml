@@ -87,7 +87,7 @@ outputs:
     description: "Authorized payload archive SHA-256"
     value: ${{ steps.emit.outputs['payload-sha256'] }}
   install-dir:
-    description: "Installed payload directory"
+    description: "Versioned payload directory this invocation published/verified (job-scoped root; the CLI runs via the current selector)"
     value: ${{ steps.emit.outputs['install-dir'] }}
 
 runs:

@@ -59,7 +59,7 @@ wrapper's own closed vocabulary and never replaces the product outcome.
 | `tool-version` | envelope `toolVersion` |
 | `campaign-operation` / `publication-operation-id` / `generation-id` / `publication-diagnostic` | envelope projections |
 | `payload-version` / `payload-sha256` | the authorized map pair actually executed |
-| `install-dir` | job-scoped install root under `RUNNER_TEMP/contract-scribe-action/payloads`; reused within a job only after digest + inventory re-verification |
+| `install-dir` | versioned payload directory (`contract-scribe-<toolVersion>-linux-x64`) this invocation published or re-verified, under the job-scoped install root `RUNNER_TEMP/contract-scribe-action/payloads`; an existing tree is reused only after digest + inventory re-verification |
 | `action-status` | `ok` or `action.<stage>-<reason>` (closed vocabulary) |
 
 Outputs are always emitted where definable: a wrapper failure yields
@@ -158,6 +158,15 @@ dotnet host/SDK prerequisite → atomic publish → `current` selector repoint.
 Cache reuse re-verifies the retained archive digest and the installed tree
 against the archive manifest; poisoned or foreign state fails rather than
 self-repairing. See [ADR 0006](../decisions/0006-composite-action-host.md).
+
+The install root is shared by every invocation in the same job (hosted
+runners wipe `RUNNER_TEMP` per job, so nothing survives the job). `invoke`
+resolves the entrypoint through the installer-owned `current` symlink, not
+through `install-dir`: the two are equal for a normal invocation, but a
+later invocation in the same job may repoint `current` to a newer versioned
+directory. Callers that need the exact tree a run verified should read
+`install-dir`/`payload-version`/`payload-sha256`, not resolve `current`
+themselves.
 
 ## Cancellation and timeouts
 
