@@ -40,7 +40,6 @@ import re
 import socket
 import stat
 import subprocess
-import sys
 import time
 import urllib.error
 import urllib.parse

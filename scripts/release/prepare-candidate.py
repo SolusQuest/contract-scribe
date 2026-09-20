@@ -30,7 +30,6 @@ import stat
 import subprocess
 import sys
 import tarfile
-import urllib.parse
 
 BOUND_METADATA_JSON = 2 * 1024 * 1024
 BOUND_FILE_TEXT = 512 * 1024
