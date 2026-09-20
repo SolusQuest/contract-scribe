@@ -321,7 +321,9 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
         if not sep:
             fail_envelope("stderr-form")
         if code not in envelope["diagnosticCodes"]:
-            fail_envelope("stderr-code")
+            # The rejected leading token is a code-form identifier, not
+            # message content — safe to surface in the marker.
+            fail_envelope("stderr-code-" + code[:64])
         if len(line) > 512:
             fail_envelope("stderr-bound")
         if any(ord(c) < 0x20 or ord(c) == 0x7F for c in line):
