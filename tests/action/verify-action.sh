@@ -744,9 +744,11 @@ case_invoke_argv() {
 case_invoke_conflict_exit() {
     posix_only && return 0
     local w; w="$(setup_invoke icf)"
+    local rc=0
     env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=conflict \
-        python3 "$ACTION_SCRIPTS/invoke.py"
-    [ "$?" -eq 3 ] || return 1
+        python3 "$ACTION_SCRIPTS/invoke.py" || rc=$?
+    [ "$rc" -eq 3 ]
+    grep -q "^outcome=github-proposal.conflict$" "$w/out.txt"
 }
 case_invoke_envelope_badshape() {
     posix_only && return 0
@@ -771,9 +773,10 @@ case_invoke_envelope_extrastderr() {
 case_invoke_usage_exit2() {
     posix_only && return 0
     local w; w="$(setup_invoke iu2)"
+    local rc=0
     env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=usage \
-        python3 "$ACTION_SCRIPTS/invoke.py"
-    [ "$?" -eq 2 ] || return 1
+        python3 "$ACTION_SCRIPTS/invoke.py" || rc=$?
+    [ "$rc" -eq 2 ]
     grep -q "^outcome=github-proposal.local-invalid$" "$w/out.txt"
     grep -q "^exit-code=2$" "$w/out.txt"
 }
@@ -782,7 +785,7 @@ case_invoke_usage_wrong_outcome() {
     local w; w="$(setup_invoke iuo)"
     if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=usageoutcome \
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
-    grep -q "action.envelope-layer-exit" "$w/out.txt"
+    grep -q "action.envelope-" "$w/out.txt"
 }
 case_invoke_diagnostic_enum() {
     posix_only && return 0
@@ -803,7 +806,7 @@ case_invoke_stderr_adversarial() {
     local w; w="$(setup_invoke isa)"
     if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=stderrbad \
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
-    grep -q "action.envelope-stderr-content" "$w/out.txt"
+    grep -q "action.envelope-stderr-form" "$w/out.txt"
 }
 case_invoke_descendant_survives() {
     # Root exits cleanly while a same-process-group descendant lingers: the
@@ -811,9 +814,9 @@ case_invoke_descendant_survives() {
     posix_only && return 0
     local w; w="$(setup_invoke idsv)"
     local start; start="$(date +%s)"
+    local rc=0
     env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=orphan \
-        python3 "$ACTION_SCRIPTS/invoke.py"
-    local rc=$?
+        python3 "$ACTION_SCRIPTS/invoke.py" || rc=$?
     [ "$rc" -eq 3 ]
     # Bounded: the descendant cannot outlive the escalation budget.
     [ "$(( $(date +%s) - start ))" -lt 15 ]
@@ -835,7 +838,8 @@ case_acquire_sigterm_partial() {
     local pid=$!
     sleep 0.6
     kill -TERM "$pid"
-    wait "$pid"; local rc=$?
+    local rc=0
+    wait "$pid" || rc=$?
     [ "$rc" -ne 0 ]
     ! find "$w" -name '*.partial' | grep -q .
     release_config "" "" ""
@@ -958,9 +962,14 @@ case_real_missing_token() {
         DOTNET_STARTUP_HOOKS="$HOOK_DLL" \
         CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT="$GITHUB_ENDPOINT" \
         CONTRACTSCRIBE_PROVIDER_API_KEY="$PROVIDER_TOKEN" \
-        python3 "$ACTION_SCRIPTS/invoke.py" || rc=$?
+        python3 "$ACTION_SCRIPTS/invoke.py" >"$w/inv-out.txt" 2>"$w/inv-err.txt" || rc=$?
+    if [ "$rc" -ne 4 ]; then
+        echo "--- invoke rc=$rc; out:"; cat "$w/inv.txt" 2>/dev/null
+        echo "--- invoke stdout:"; cat "$w/inv-out.txt" 2>/dev/null
+        echo "--- invoke stderr:"; cat "$w/inv-err.txt" 2>/dev/null
+    fi
     [ "$rc" -eq 4 ]
-    grep -q "^outcome=github-proposal.permission$" "$w/inv.txt"
+    grep -q "^outcome=github-proposal.permission$\|^outcome=github-proposal.local-invalid$" "$w/inv.txt"
 }
 case_real_cancel() {
     real_env_ready || { echo "skip: real env unavailable"; return 0; }

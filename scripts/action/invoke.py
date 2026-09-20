@@ -313,14 +313,19 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
         fail_envelope("stderr-shape")
     # A controlled stderr diagnostic is one bounded line whose leading code
     # is one of the envelope's declared diagnostic codes — never raw product
-    # bytes, never arbitrary text.
+    # bytes, never arbitrary text. The message may carry arbitrary printable
+    # content; only the line shape and declared code are contract.
     if stderr_bytes:
         line = stderr_bytes[:-1].decode("utf-8", "strict")
-        code, sep, message = line.partition(": ")
-        if not sep or code not in envelope["diagnosticCodes"] \
-                or len(line) > 512 or not all(0x20 <= ord(c) <= 0x7E
-                                              for c in message):
-            fail_envelope("stderr-content")
+        code, sep, _message = line.partition(": ")
+        if not sep:
+            fail_envelope("stderr-form")
+        if code not in envelope["diagnosticCodes"]:
+            fail_envelope("stderr-code")
+        if len(line) > 512:
+            fail_envelope("stderr-bound")
+        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in line):
+            fail_envelope("stderr-control")
     return envelope
 
 
