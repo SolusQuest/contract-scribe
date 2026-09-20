@@ -12,11 +12,12 @@ through human-reviewed PR merge.
 
 Issue #185 (M6-A2) requires a GitHub Action that acquires the D2 payload
 selected under ADR 0005 and invokes the production CLI, without reimplementing
-product authority. The payload is a compiled artifact that cannot live inside
-the Action ref itself (a `uses:` ref pins repository bytes, and the ~12 MiB
-publish tree is deliberately not committed). The executable bytes therefore
-arrive through a separate channel — Release assets — and the Action needs an
-explicit trust anchor for them.
+product authority. Production payload bytes reach the Action only through a
+separate channel — Release assets — and the Action needs an explicit trust
+anchor for them. (The ~12 MiB publish tree is deliberately not executed from
+the checkout; a durable evidence copy of the one authorized archive is kept
+under `tests/action/payload/` for pair verification and R1 handoff, never as
+the production acquisition path.)
 
 ## Decision
 
@@ -47,25 +48,26 @@ acyclic.
 same source produce different bytes (measured: 11779218 vs 11779257 bytes).
 The pinned SHA-256 therefore identifies *produced* bytes, not a rebuild
 expectation: it comes from an authoritative ubuntu build of the bound revision
-(the `payload_producer` artifact of the CI run on main). The `action_packaged`
-job validates the pair two ways: (1) exact pair — the preserved authoritative
-artifact's digest and manifest identity equal the map; (2) bound-source
-identity — a fixed-source rebuild of the mapped revision carries the same
-`toolVersion`, `sourceRevision`, and file inventory, proving the bound source
-genuinely produced the authorized payload.
+(the `payload_producer` run on main). Those authoritative bytes are durably
+committed under `tests/action/payload/` — the checked-in copy is the handoff
+evidence; production acquisition still comes only from the Release channel.
+The `action_packaged` job validates the pair two ways: (1) exact pair — the
+committed archive's digest and manifest identity equal the map; (2)
+bound-source identity — a fixed-source rebuild of the mapped revision carries
+the same `toolVersion`, `sourceRevision`, and file inventory, proving the
+bound source genuinely produced the authorized payload.
 
 ## R1 handoff rule
 
 R1 (#187) consumes the exact A2-mapped bytes. Permitted outcomes:
 
-- promote the artifact bytes whose SHA-256 already equals the map value; or
+- promote the committed bytes under `tests/action/payload/` whose SHA-256
+  already equals the map value; or
 - rebuild the bound source revision and promote only if byte-identical.
 
 A digest mismatch on reconstruction is a **stop condition**: the changed pair
 routes back through the A2-owned mapping update and exact-pair validation
-boundary. R1 never edits `payload-map.json` inside its own promotion. The
-mapped archive is preserved via the existing Actions artifact; if it expires
-and a rebuild does not reproduce the digest, R1 stops rather than rebinding.
+boundary. R1 never edits `payload-map.json` inside its own promotion.
 
 ## Consequences
 

@@ -162,7 +162,8 @@ def serve_asset(handler, release, asset, overrides, cdn_origin):
         handler.end_headers()
         return None
     if overrides.get("asset_200", False):
-        return send_bytes(handler, asset["file"], overrides)
+        send_bytes(handler, asset["file"], overrides)
+        return None
     handler.send_response(302)
     handler.send_header("Location", f"{cdn_origin}/cdn/{asset['id']}")
     handler.send_header("Content-Length", "0")
@@ -207,7 +208,8 @@ def make_cdn_handler(server):
             for release in config["releases"]:
                 for asset in release["assets"]:
                     if asset["id"] == asset_id:
-                        return send_bytes(self, asset["file"], overrides)
+                        send_bytes(self, asset["file"], overrides)
+                        return None
             self.send_response(404)
             self.send_header("Content-Length", "2")
             self.end_headers()
