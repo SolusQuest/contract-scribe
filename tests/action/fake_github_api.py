@@ -17,8 +17,6 @@ Protocol violations append "FAIL <detail>" to <fail-file>.
 import base64
 import hashlib
 import json
-import os
-import re
 import socket
 import sys
 import threading

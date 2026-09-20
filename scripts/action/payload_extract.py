@@ -25,7 +25,6 @@ Both commands exit 0 only when the archive satisfies the whole policy.
 import gzip
 import json
 import os
-import stat
 import sys
 import tarfile
 

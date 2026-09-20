@@ -16,7 +16,6 @@ import json
 import os
 import re
 import stat
-import sys
 import urllib.error
 import urllib.parse
 import urllib.request

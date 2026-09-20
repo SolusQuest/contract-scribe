@@ -160,7 +160,7 @@ def serve_asset(handler, release, asset, overrides, cdn_origin):
         handler.send_header("Location", overrides["asset_location"])
         handler.send_header("Content-Length", "0")
         handler.end_headers()
-        return
+        return None
     if overrides.get("asset_200", False):
         return send_bytes(handler, asset["file"], overrides)
     handler.send_response(302)
@@ -212,6 +212,7 @@ def make_cdn_handler(server):
             self.send_header("Content-Length", "2")
             self.end_headers()
             self.wfile.write(b"{}")
+            return None
 
     return Handler
 
