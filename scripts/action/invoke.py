@@ -311,23 +311,23 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
         fail_envelope("diagnostic-on-success")
     if rc == 0 and stderr_bytes:
         fail_envelope("stderr-shape")
-    # A controlled stderr diagnostic is one bounded line whose leading code
-    # is one of the envelope's declared diagnostic codes — never raw product
-    # bytes, never arbitrary text. The message may carry arbitrary printable
-    # content; only the line shape and declared code are contract.
+    # A controlled stderr diagnostic is one bounded line that carries a
+    # declared diagnostic code in the production grammar — usage-layer
+    # diagnostics render 'cli.usage.<code>: <message>'; every other layer
+    # renders the bare message, which always ends '...: <declared code>'.
+    # Anything else is raw product bytes and must not be re-emitted.
     if stderr_bytes:
         line = stderr_bytes[:-1].decode("utf-8", "strict")
-        code, sep, _message = line.partition(": ")
-        if not sep:
-            fail_envelope("stderr-form")
-        if code not in envelope["diagnosticCodes"]:
-            # The rejected leading token is a code-form identifier, not
-            # message content — safe to surface in the marker.
-            fail_envelope("stderr-code-" + code[:64])
         if len(line) > 512:
             fail_envelope("stderr-bound")
         if any(ord(c) < 0x20 or ord(c) == 0x7F for c in line):
             fail_envelope("stderr-control")
+        codes = envelope["diagnosticCodes"]
+        declared = any(
+            line == c or line.startswith(c + ": ") or line.endswith(": " + c)
+            for c in codes)
+        if not declared:
+            fail_envelope("stderr-code")
     return envelope
 
 

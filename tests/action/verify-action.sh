@@ -806,7 +806,7 @@ case_invoke_stderr_adversarial() {
     local w; w="$(setup_invoke isa)"
     if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=stderrbad \
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
-    grep -q "action.envelope-stderr-form" "$w/out.txt"
+    grep -q "action.envelope-stderr-code" "$w/out.txt"
 }
 case_invoke_descendant_survives() {
     # Root exits cleanly while a same-process-group descendant lingers: the
