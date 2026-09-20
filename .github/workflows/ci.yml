@@ -632,7 +632,19 @@ jobs:
           git -C payload-src checkout -q --detach FETCH_HEAD
           bash payload-src/scripts/release/build-payload.sh --output payload-build
           find payload-build -name '*.tar.gz' -o -name '*.sha256' -o -name '*.payload.json'
-      - name: Assert produced archive identity equals the checked-in map
+      - name: Fetch the authoritative artifact for the bound revision
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          # Authoritative ubuntu build of the map-bound sourceRevision, produced
+          # by the CI workflow_dispatch run on main (35453891838). .NET builds
+          # embed a random MVID, so bytes are never reproduced across runs —
+          # the checked-in pair pins produced bytes, not rebuild expectations.
+          repository: SolusQuest/contract-scribe
+          run-id: "35453891838"
+          name: d2-payload-attempt-1
+          path: authoritative-payload
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Assert exact pair and bound-source identity
         id: pair_check
         shell: bash
         env:
@@ -642,17 +654,29 @@ jobs:
           python3 - "$MAP" <<'PYEOF'
           import glob, hashlib, json, sys
           m = json.load(open(sys.argv[1]))["payload"]
-          archives = glob.glob("payload-build/**/*.tar.gz", recursive=True)
-          assert len(archives) == 1, archives
-          archive = archives[0]
+          # Exact pair: the preserved authoritative bytes must equal the map.
+          authoritative = glob.glob("authoritative-payload/**/*.tar.gz", recursive=True)
+          assert len(authoritative) == 1, authoritative
+          archive = authoritative[0]
           sha = hashlib.sha256(open(archive, "rb").read()).hexdigest()
           manifest = json.load(open(archive[:-7] + ".payload.json"))
+          # Bound-source proof: the fixed-source rebuild must carry the same
+          # logical identity (same source revision, same file inventory) even
+          # though its bytes differ (random MVID per build).
+          rebuilt = glob.glob("payload-build/**/*.tar.gz", recursive=True)
+          assert len(rebuilt) == 1, rebuilt
+          rmanifest = json.load(open(rebuilt[0][:-7] + ".payload.json"))
+          inv = lambda mm: sorted(e["path"] for e in mm["files"])
           checks = {
               "assetName": m["assetName"] == archive.rsplit("/", 1)[-1],
               "sha256": m["sha256"] == sha,
               "toolVersion": m["toolVersion"] == manifest["toolVersion"],
               "sourceRevision": m["sourceRevision"] == manifest["sourceRevision"],
               "releaseTag": m["releaseTag"] == "payload-" + manifest["toolVersion"],
+              "rebuilt-identity": (rmanifest["toolVersion"], rmanifest["sourceRevision"],
+                                   inv(rmanifest)) ==
+                                  (manifest["toolVersion"], manifest["sourceRevision"],
+                                   inv(manifest)),
           }
           print(json.dumps(checks, indent=1))
           assert all(checks.values()), "map/archive pair mismatch"

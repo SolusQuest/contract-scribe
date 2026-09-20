@@ -42,13 +42,17 @@ The pinned pair is bound to a main-reachable source revision
 wrapper's own HEAD — the archive does not contain the map, so the binding is
 acyclic.
 
-**Authoritative bytes:** the archive is not byte-reproducible across build
-hosts (measured: a Windows build and the ubuntu CI build of the same source
-differ in both gzip framing and tar payload). The pinned SHA-256 therefore
-comes from an authoritative ubuntu build of the bound revision (CI
-`payload_producer` artifact), not from a local reconstruction. The
-`action_packaged` CI job rebuilds the bound source on ubuntu and asserts the
-produced archive equals the map — exact-pair validation on every change.
+**Authoritative bytes:** the archive is not byte-reproducible across builds —
+.NET embeds a random MVID per compilation, so even two ubuntu CI builds of the
+same source produce different bytes (measured: 11779218 vs 11779257 bytes).
+The pinned SHA-256 therefore identifies *produced* bytes, not a rebuild
+expectation: it comes from an authoritative ubuntu build of the bound revision
+(the `payload_producer` artifact of the CI run on main). The `action_packaged`
+job validates the pair two ways: (1) exact pair — the preserved authoritative
+artifact's digest and manifest identity equal the map; (2) bound-source
+identity — a fixed-source rebuild of the mapped revision carries the same
+`toolVersion`, `sourceRevision`, and file inventory, proving the bound source
+genuinely produced the authorized payload.
 
 ## R1 handoff rule
 
