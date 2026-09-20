@@ -26,7 +26,6 @@ appends one line per request to <log-file>.
 """
 
 import json
-import socket
 import sys
 import threading
 import time
@@ -104,7 +103,7 @@ def serve(config_path, ready_path, log_path):
                     return self._reject(404, "artifact-not-found")
                 return self._json(record)
 
-            self._reject(404, "unmatched")
+            return self._reject(404, "unmatched")
 
         def log_message(self, *_args):
             pass

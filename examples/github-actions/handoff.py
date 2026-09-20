@@ -301,7 +301,6 @@ def cmd_select(workdir):
     require(ctx["event"] == CONSUMER_EVENT, "consumer-event")
     api = _Api()
     run, expected_branch = own_run(api, ctx)
-    wpath = workflow_path(ctx, run)
     activation = parse_activation()
     require(activation["consumer"]["runNumber"] == ctx["runNumber"],
             "activation-slot")
@@ -658,7 +657,8 @@ def write_private(path, data):
     try:
         os.chmod(path, 0o600)
     except OSError:
-        pass
+        pass  # platform without POSIX modes; the store remains private
+
 
 
 def output(name, value, multiline=False):

@@ -29,7 +29,6 @@ import re
 import subprocess
 import sys
 import time
-import urllib.request
 import zipfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -472,7 +471,7 @@ def register(r):
                 handoff_mut=lambda h: h["checkpoint"]
                 .update({"sha256": "f" * 64}))
     verify_case("verify_extra_member", "zip-count",
-                zip_mut=lambda h, c: _zip_with_extra(h, c))
+                zip_mut=_zip_with_extra)
 
     @leg("verify_duplicate_member")
     def _():
