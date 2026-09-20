@@ -969,6 +969,8 @@ if [ "$REAL" -eq 1 ]; then
     cat > "$WORK/github-config.json" <<'EOF'
 {"files":{"README.md":"# synthetic\n","src/App.cs":"class A {}\n"}}
 EOF
+    touch "$WORK/provider-requests.log" "$WORK/hang-requests.log" \
+        "$WORK/github-requests.log" "$WORK/github-failures.log"
     python3 "$SCRIPT_DIR/fake_github_api.py" "$WORK/github-config.json" \
         "$WORK/github-ready.json" "$WORK/github-requests.log" \
         "$WORK/github-failures.log" &
