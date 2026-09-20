@@ -300,7 +300,7 @@ def serve(config_path, ready_file, log_file, fail_file):
                 try:
                     self._send(500, {"message": "fake failure"})
                 except OSError:
-                    pass
+                    pass  # connection already broken; the log has the detail
             return None
 
         def _read(self, path):

@@ -412,13 +412,15 @@ def _now():
 
 def cmd_verify(archive, selection_path, state_dir):
     ctx = context()
-    selection = strict_json(open(selection_path, "rb").read(),
-                            BOUND_HANDOFF_JSON * 4, "selection")
+    with open(selection_path, "rb") as fh:
+        selection = strict_json(fh.read(),
+                                BOUND_HANDOFF_JSON * 4, "selection")
     require(set(selection) == {"artifactId", "artifactDigest", "producerRunId",
                                "producer", "consumer", "activation"},
             "selection-fields")
 
-    data = open(archive, "rb").read(BOUND_ARTIFACT + 1)
+    with open(archive, "rb") as fh:
+        data = fh.read(BOUND_ARTIFACT + 1)
     require(len(data) <= BOUND_ARTIFACT, "archive-oversize")
     actual = "sha256:" + hashlib.sha256(data).hexdigest()
     require(actual == selection["artifactDigest"], "archive-digest")
@@ -490,7 +492,8 @@ def cmd_emit(checkpoint_path, handoff_dir):
 
     st = os.stat(checkpoint_path)
     require(stat.S_ISREG(st.st_mode), "checkpoint-not-file")
-    data = open(checkpoint_path, "rb").read(BOUND_CHECKPOINT + 1)
+    with open(checkpoint_path, "rb") as fh:
+        data = fh.read(BOUND_CHECKPOINT + 1)
     require(len(data) <= BOUND_CHECKPOINT, "checkpoint-oversize")
 
     handoff = {
@@ -532,9 +535,9 @@ def cmd_emit(checkpoint_path, handoff_dir):
 # ---------------------------------------------------------------------------
 
 def cmd_activation(handoff_dir, artifact_id, artifact_digest):
-    handoff = strict_json(
-        open(os.path.join(handoff_dir, "handoff.json"), "rb").read(),
-        BOUND_HANDOFF_JSON, "handoff")
+    with open(os.path.join(handoff_dir, "handoff.json"), "rb") as fh:
+        handoff = strict_json(
+            fh.read(), BOUND_HANDOFF_JSON, "handoff")
     require(set(handoff) == {"producer", "checkpoint", "consumer"},
             "handoff-fields")
     producer, consumer = handoff["producer"], handoff["consumer"]

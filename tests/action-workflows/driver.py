@@ -254,7 +254,9 @@ class Runner:
         path = os.path.join(self.workdir, "gh-output.txt")
         if not os.path.exists(path):
             return None
-        for line in open(path, encoding="utf-8").read().splitlines():
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+        for line in lines:
             if line.startswith(name + "="):
                 return line.split("=", 1)[1]
         return None
@@ -674,14 +676,15 @@ def register(r):
             fh.write(b'{"campaign":1}')
         out = os.path.join(r.workdir, "hand")
         r.run_helper(["emit", "--checkpoint", cp, "--handoff-dir", out], env)
-        handoff = json.load(open(os.path.join(out, "handoff.json")))
+        with open(os.path.join(out, "handoff.json")) as fh:
+            handoff = json.load(fh)
         assert handoff["consumer"]["runNumber"] == 501
         assert handoff["consumer"]["event"] == "schedule"
         assert handoff["producer"]["runNumber"] == 500
         assert handoff["producer"]["event"] == "workflow_dispatch"
         assert "campaignLineage" not in handoff
-        assert open(os.path.join(out, "checkpoint.json"),
-                    "rb").read() == b'{"campaign":1}'
+        with open(os.path.join(out, "checkpoint.json"), "rb") as fh:
+            assert fh.read() == b'{"campaign":1}'
 
     @leg("emit_attempt2")
     def _():
@@ -746,7 +749,8 @@ def register(r):
         r.run_helper(["request", "--base-oid", SHA_A,
                       "--state", os.path.join(r.workdir, "state.json"),
                       "--out", out], env)
-        req = json.load(open(out))
+        with open(out) as fh:
+            req = json.load(fh)
         gh = req["github"]
         assert req["githubProposalRequestVersion"] == 1
         assert gh["expectedBaseCommitOid"] == SHA_A
