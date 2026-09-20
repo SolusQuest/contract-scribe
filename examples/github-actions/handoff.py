@@ -32,6 +32,9 @@ Inputs arrive only through explicit arguments and the documented environment:
                   repositoryId/workflowRef). The workflow maps github.*; tests
                   supply synthetic values.
   GITHUB_API_URL  REST API root (the runner value in production).
+  CS_ACTIONS_API_URL  Test seam override for the API root. GITHUB_* names
+                  are reserved on hosted runners — their env overrides are
+                  ignored — so tests must use this name instead.
   GITHUB_TOKEN    read-only Actions API authority (the job's github.token).
   CS_ACTIVATION   the caller-owned activation JSON (select only).
   CS_CAMPAIGN     the caller-owned campaign claims JSON (request only).
@@ -164,7 +167,8 @@ class _Api:
     redirects and never echo response bodies."""
 
     def __init__(self):
-        root = os.environ.get("GITHUB_API_URL", "")
+        root = (os.environ.get("CS_ACTIONS_API_URL")
+                or os.environ.get("GITHUB_API_URL", ""))
         require(root.startswith("http://127.0.0.1")
                 or root.startswith("http://[::1]")
                 or root == "https://api.github.com"

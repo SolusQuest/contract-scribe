@@ -216,7 +216,7 @@ class Runner:
         env.update({
             "CS_RUN_CONTEXT": ctx if ctx is not None else context_json(
                 CONSUMER_RUN, 501, "schedule"),
-            "GITHUB_API_URL": self.api,
+            "CS_ACTIONS_API_URL": self.api,
             "GITHUB_TOKEN": token,
             "CS_CAMPAIGN_LINEAGE": "campaign.example",
         })

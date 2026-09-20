@@ -1114,7 +1114,7 @@ jobs:
           PYEOF
       - name: Producer admission gate
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: python3 action-src/examples/github-actions/handoff.py gate
@@ -1151,7 +1151,7 @@ jobs:
           acquisition-token: contract-scribe-synthetic-acquisition-only
       - name: Emit sealed handoff
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
@@ -1170,7 +1170,7 @@ jobs:
       - name: Render next activation
         id: activation
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
@@ -1376,7 +1376,7 @@ jobs:
       - name: "Consumer leg 1 — authenticate activation"
         id: select
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_ACTIVATION: ${{ needs.action_examples_producer.outputs.activation_json }}
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
@@ -1438,7 +1438,7 @@ jobs:
           acquisition-token: contract-scribe-synthetic-acquisition-only
       - name: "Consumer leg 1 — emit successor handoff"
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
@@ -1475,7 +1475,7 @@ jobs:
       - name: "Consumer leg 2 — consume the successor (synthetic K+2)"
         id: leg2
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
         run: |
           set -euo pipefail
@@ -1511,7 +1511,7 @@ jobs:
       - name: "Consumer leg 2 — authenticate activation"
         id: select2
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_ACTIVATION: ${{ steps.activation1.outputs.activation-json }}
           CS_RUN_CONTEXT: '{"runId":93003,"runNumber":502,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
@@ -1586,7 +1586,7 @@ jobs:
       - name: "Invalid-checkpoint leg — corrupt state rejects before credentials"
         id: bad_leg
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
         run: |
           set -euo pipefail
@@ -1625,7 +1625,7 @@ jobs:
           overwrite: false
       - name: "Invalid-checkpoint leg — configure metadata"
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
         run: |
           set -euo pipefail
@@ -1670,7 +1670,7 @@ jobs:
       - name: "Invalid-checkpoint leg — authenticate activation"
         id: select_bad
         env:
-          GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":95005,"runNumber":504,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: |
