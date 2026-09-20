@@ -159,9 +159,9 @@ def find_bash():
     return candidates[0] if candidates else "bash"
 
 
-def command_line(argv):
+def command_line(argv, cwd=None):
     try:
-        proc = subprocess.run(argv, stdout=subprocess.PIPE,
+        proc = subprocess.run(argv, cwd=cwd, stdout=subprocess.PIPE,
                               stderr=subprocess.DEVNULL,
                               stdin=subprocess.DEVNULL, timeout=30)
     except OSError:
@@ -171,7 +171,12 @@ def command_line(argv):
     return proc.stdout.decode("utf-8", "replace").splitlines()[0].strip()
 
 
-def dotnet_runtime():
+def dotnet_runtimes():
+    """Sorted inventory of installed Microsoft.NETCore.App runtimes.
+
+    --list-runtimes enumerates every installed runtime rather than 'the'
+    build runtime, so the honest frozen observation is the complete
+    inventory, not an arbitrarily selected row."""
     try:
         proc = subprocess.run(["dotnet", "--list-runtimes"],
                               stdout=subprocess.PIPE,
@@ -179,10 +184,13 @@ def dotnet_runtime():
                               stdin=subprocess.DEVNULL, timeout=30)
     except OSError:
         return None
-    for line in proc.stdout.decode("utf-8", "replace").splitlines():
-        if line.startswith("Microsoft.NETCore.App "):
-            return line.split()[1]
-    return None
+    if proc.returncode != 0:
+        return None
+    runtimes = sorted(
+        line.split()[1]
+        for line in proc.stdout.decode("utf-8", "replace").splitlines()
+        if line.startswith("Microsoft.NETCore.App "))
+    return runtimes or None
 
 
 def dependency_inventory(archive_path):
@@ -309,6 +317,7 @@ def main():
         env["GIT_TERMINAL_PROMPT"] = "0"
         proc = subprocess.run(builder_cmd, cwd=source_dir, env=env)
         check(stage, proc.returncode == 0, "builder-failed")
+        dotnet_sdk = command_line(["dotnet", "--version"], cwd=source_dir)
     finally:
         run_git(args.repo, "worktree", "remove", "--force", source_dir)
 
@@ -376,8 +385,8 @@ def main():
         "releaseBodySha256": sha256_bytes(release_body.encode("utf-8")),
         "prerelease": False,
         "toolchain": {
-            "dotnetSdk": command_line(["dotnet", "--version"]),
-            "dotnetRuntime": dotnet_runtime(),
+            "dotnetSdk": dotnet_sdk,
+            "dotnetRuntimes": dotnet_runtimes(),
             "python": command_line(
                 [sys.executable, "--version"]),
             "tar": command_line(["tar", "--version"]),

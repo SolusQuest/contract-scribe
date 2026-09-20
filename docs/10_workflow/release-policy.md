@@ -33,6 +33,10 @@ The first downstream-consumable release establishes the external compatibility f
 
 Milestone evidence before release remains meaningful for the exact revision that produced it, but is not an active compatibility or authorization state. A later draft change runs the checks affected by that change and does not create a successor baseline unless a real coexistence or external-consumer boundary requires one.
 
+## Scheduling and provider cost
+
+The GitHub Action may be invoked by a caller-owned schedule, manual dispatch, or another workflow. The repository does not promise that any wall-clock period has lower provider pricing. Provider batch modes, pricing inputs, deadlines, and cost ceilings are adapter configuration and recorded run provenance.
+
 ## Release control plane (M6-R1)
 
 The release control plane lives in `.github/workflows/release.yml` and is manually initiated (`workflow_dispatch`) only. Ordinary push and pull-request CI has no publication path: no push-triggered job can hold a publication credential, and the operational jobs additionally require a dispatch on `refs/heads/main`.

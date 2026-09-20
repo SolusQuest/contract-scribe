@@ -16,12 +16,23 @@ Before `stage-draft` or `promote` can run, a maintainer must provision:
 2. Environment `release-publication` with the same protections; add the
    same `RELEASE_PUBLICATION_TOKEN` secret to it.
 3. Repository variables `RELEASE_DRAFT_ENABLED=true` and
-   `RELEASE_PROMOTION_ENABLED=true`. Remove or set false to freeze the
-   control plane instantly.
+   `RELEASE_PROMOTION_ENABLED=true`. Remove or set false to refuse all
+   future job admission.
 
 The workflow never creates or assumes these: without them the jobs either
-do not run or fail closed without a credential. To revoke publication
-capability, delete the secret or disable the environment.
+do not run or fail closed without a credential.
+
+## Stopping and revoking
+
+- Repository variables and environment configuration gate **future**
+  admission only; they do not terminate a pending or running job.
+- To stop an in-flight operation, explicitly cancel the workflow run
+  (Actions UI or `gh run cancel`).
+- If `RELEASE_PUBLICATION_TOKEN` may already have been delivered to a
+  running step, revoke/rotate it at its authority source.
+- After any stop, reconcile actual state per the recovery matrix below
+  before dispatching again — partial states are adopted by exact match
+  or fail closed.
 
 ## Operation 1: prepare — build and freeze a candidate
 

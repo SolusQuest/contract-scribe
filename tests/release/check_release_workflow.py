@@ -58,6 +58,17 @@ def step_envs(job):
             yield mark.group(1).strip(), env.group(1)
 
 
+def run_bodies(job):
+    """Yield the text following each step's `run:` key — the region where
+    ${{ }} expressions are pre-evaluated and handed to the shell."""
+    if not job:
+        return
+    for part in re.split(r"^      - ", job, flags=re.M)[1:]:
+        match = re.search(r"^        run:", part, re.M)
+        if match:
+            yield part[match.end():]
+
+
 def main():
     try:
         with open(WORKFLOW, encoding="utf-8") as fh:
@@ -158,6 +169,9 @@ def main():
             fail(name, "run_attempt == 1 assertion required")
         if 'github.actor }}" = "${{ github.triggering_actor' not in job:
             fail(name, "actor == triggering_actor assertion required")
+        for body in run_bodies(job):
+            if re.search(r"\$\{\{\s*inputs\.", body):
+                fail(name, "dispatch inputs must reach run steps via env")
         if "persist-credentials: false" not in job:
             fail(name, "checkout must not persist credentials")
         if "digest-mismatch: error" not in job:

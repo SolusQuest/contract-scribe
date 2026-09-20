@@ -141,13 +141,17 @@ jobs:
         shell: bash
         env:
           GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
         run: >-
           python3 scripts/release/prepare-candidate.py
           --repo . --output "$RUNNER_TEMP/release-candidate"
-          --source-revision "${{ inputs.source_revision }}"
-          --payload-source-revision "${{ inputs.payload_source_revision }}"
-          --release-version "${{ inputs.release_version }}"
-          --wrapper "${{ inputs.wrapper }}"
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
       - name: Upload the candidate bundle
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -206,9 +210,10 @@ jobs:
         shell: bash
         env:
           CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
         run: >-
           python3 scripts/release/promote-candidate.py resolve-artifact
-          --candidate-run-id "${{ inputs.candidate_run_id }}"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
       - name: Download the exact candidate artifact
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
         with:
@@ -221,29 +226,41 @@ jobs:
         shell: bash
         env:
           CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
         run: >-
           python3 scripts/release/promote-candidate.py verify-candidate
           --candidate "$RUNNER_TEMP/release-candidate" --repo .
-          --source-revision "${{ inputs.source_revision }}"
-          --payload-source-revision "${{ inputs.payload_source_revision }}"
-          --release-version "${{ inputs.release_version }}"
-          --wrapper "${{ inputs.wrapper }}"
-          --candidate-digest "${{ inputs.candidate_digest }}"
-          --candidate-run-id "${{ inputs.candidate_run_id }}"
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
       - name: Stage the unpublished draft candidate
         shell: bash
         env:
           CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
           CONTRACTSCRIBE_RELEASE_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
         run: >-
           python3 scripts/release/promote-candidate.py stage-draft
           --candidate "$RUNNER_TEMP/release-candidate" --repo .
-          --source-revision "${{ inputs.source_revision }}"
-          --payload-source-revision "${{ inputs.payload_source_revision }}"
-          --release-version "${{ inputs.release_version }}"
-          --wrapper "${{ inputs.wrapper }}"
-          --candidate-digest "${{ inputs.candidate_digest }}"
-          --candidate-run-id "${{ inputs.candidate_run_id }}"
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
       - name: Upload the staged receipt
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
@@ -291,9 +308,10 @@ jobs:
         shell: bash
         env:
           CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
         run: >-
           python3 scripts/release/promote-candidate.py resolve-artifact
-          --candidate-run-id "${{ inputs.candidate_run_id }}"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
       - name: Download the exact candidate artifact
         uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
         with:
@@ -307,19 +325,29 @@ jobs:
         env:
           CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
           CONTRACTSCRIBE_RELEASE_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CS_QUALIFIED_RELEASE_ID: ${{ inputs.qualified_release_id }}
+          CS_QUALIFIED_ASSET_ID: ${{ inputs.qualified_asset_id }}
+          CS_APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+          CS_GOVERNANCE_REFERENCE: ${{ inputs.governance_reference }}
         run: >-
           python3 scripts/release/promote-candidate.py promote
           --candidate "$RUNNER_TEMP/release-candidate" --repo .
-          --source-revision "${{ inputs.source_revision }}"
-          --payload-source-revision "${{ inputs.payload_source_revision }}"
-          --release-version "${{ inputs.release_version }}"
-          --wrapper "${{ inputs.wrapper }}"
-          --candidate-digest "${{ inputs.candidate_digest }}"
-          --candidate-run-id "${{ inputs.candidate_run_id }}"
-          --qualified-release-id "${{ inputs.qualified_release_id }}"
-          --qualified-asset-id "${{ inputs.qualified_asset_id }}"
-          --approval-reference "${{ inputs.approval_reference }}"
-          --governance-reference "${{ inputs.governance_reference }}"
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+          --qualified-release-id "$CS_QUALIFIED_RELEASE_ID"
+          --qualified-asset-id "$CS_QUALIFIED_ASSET_ID"
+          --approval-reference "$CS_APPROVAL_REFERENCE"
+          --governance-reference "$CS_GOVERNANCE_REFERENCE"
       - name: Upload the promotion evidence
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:

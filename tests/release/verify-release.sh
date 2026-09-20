@@ -931,7 +931,12 @@ c = json.load(open(sys.argv[1] + "/candidate.json"))
 i = c["identity"]
 assert i["archiveSha256"] and i["manifestSha256"]
 assert i["dependencyInventory"], "deps.json inventory must be non-empty"
+# B010 regression: SDK resolved in the payload worktree, and the runtime
+# observation is the honest sorted inventory — a net10.0 payload requires
+# a compatible installed 10.x runtime on this runner.
 assert i["toolchain"]["dotnetSdk"]
+runtimes = i["toolchain"]["dotnetRuntimes"]
+assert runtimes and any(r.startswith("10.") for r in runtimes),     "net10.0 payload requires an installed Microsoft.NETCore.App 10.x"
 m = json.load(open(sys.argv[1] + "/payload-map.json"))
 assert m["payload"]["sha256"] == i["archiveSha256"]
 PY
