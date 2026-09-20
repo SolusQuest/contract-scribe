@@ -94,7 +94,12 @@ run_case() {
         return 0
     fi
     CASES_RUN=$((CASES_RUN + 1))
-    if "$@" >"$LOGDIR/$name.log" 2>&1; then
+    # Each case runs in its own errexit subshell: the function's status is the
+    # subshell's, and any failed assertion aborts it — a case can no longer
+    # PASS on the strength of its last command alone.
+    ( set -e; "$@" ) >"$LOGDIR/$name.log" 2>&1
+    local rc=$?
+    if [ "$rc" -eq 0 ]; then
         echo "PASS $name"
     else
         echo "FAIL $name (log: $LOGDIR/$name.log)"
@@ -126,6 +131,12 @@ case "${STUB_MODE:-ok}" in
     badshape) echo '{"unexpected":1}'; exit 0 ;;
     extraline) echo '{"a":1}'; echo '{"b":2}'; exit 0 ;;
     extrastderr) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo "one" >&2; echo "two" >&2; exit 0 ;;
+    usage) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"b","toolVersion":"t","campaignOperation":null,"publicationOperationId":null,"generationId":null,"outcome":"github-proposal.local-invalid","diagnosticCodes":["cli.usage.missing-option-value"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'cli.usage.missing-option-value: a required option is missing' >&2; exit 2 ;;
+    usageoutcome) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"b","toolVersion":"t","campaignOperation":null,"publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["cli.usage.missing-option-value"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'cli.usage.missing-option-value: a required option is missing' >&2; exit 2 ;;
+    diagbad) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":{"boundary":"Anything","owner":"GitData","coordinationFailure":null,"proposalFailure":null,"pullRequestOutcome":null,"transportCode":null,"transportHttpStatus":null,"delivery":"NotDispatched","recoveryCode":null,"recoveryHttpStatus":null,"objectKind":null,"predicate":null}}'; exit 4 ;;
+    diagonsuccess) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":{"boundary":"GitInspect","owner":"GitData","coordinationFailure":null,"proposalFailure":null,"pullRequestOutcome":null,"transportCode":null,"transportHttpStatus":null,"delivery":"NotDispatched","recoveryCode":null,"recoveryHttpStatus":null,"objectKind":null,"predicate":null}}'; exit 0 ;;
+    stderrbad) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'raw credential dump hunter2 hunter2' >&2; exit 4 ;;
+    orphan) bash -c 'sleep 45' & echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
     *) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"v1","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":7,"pullRequestUrl":"https://github.com/Owner/repo/pull/1","publicationDiagnostic":null}'; exit 0 ;;
 esac
 EOF
@@ -149,7 +160,7 @@ release_config() {
     # $1 = extra releases JSON fragment (appended after the primary), $2 =
     # overrides fragment, $3 = extra assets fragment, $4 = "draft" to mark
     # the primary release draft, $5 = require_auth true
-    # Atomic replace: the server reloads the config per request.
+    # Atomic replace (os.replace retries while the server holds the file).
     cat > "$RELEASE_CFG.$$.tmp" <<EOF
 {"repository":"SolusQuest/contract-scribe",
  "expected_token":"$SYNTHETIC_TOKEN",
@@ -158,7 +169,21 @@ release_config() {
    "assets":[{"id":1,"name":"$ARCHIVE_BASE.tar.gz","file":"$ARCHIVE"}$3]}$1],
  "overrides":{$2}}
 EOF
-    mv -f "$RELEASE_CFG.$$.tmp" "$RELEASE_CFG"
+    python3 - "$RELEASE_CFG.$$.tmp" "$RELEASE_CFG" <<'PY'
+import os, sys, time
+src, dst = sys.argv[1], sys.argv[2]
+for attempt in range(50):
+    try:
+        os.replace(src, dst)
+        break
+    except OSError:
+        if attempt == 49:
+            raise
+        time.sleep(0.05)
+# Settle: on hosts where the replace is not instant (AV indexing, locked
+# reads), give the server's next load a clean file to see.
+time.sleep(0.15)
+PY
 }
 release_config "" "" ""
 
@@ -259,7 +284,10 @@ case_prepare_dotnet_missing() {
     # under /usr/bin, so restricting PATH to /usr/bin cannot hide it.
     local sb="$WORK/nobin"
     mkdir -p "$sb"
-    ln -sf "$(command -v python3)" "$sb/python3"
+    if ! ln -sf "$(command -v python3)" "$sb/python3" 2>/dev/null; then
+        echo "skip: cannot create the isolated PATH entry on this host" >&2
+        return 0
+    fi
     expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$sb" HOME="$HOME" \
         RUNNER_OS=Linux RUNNER_ARCH=X64 RUNNER_TEMP="$WORK" \
         GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
@@ -412,7 +440,8 @@ case_acquire_draft_authenticated() {
     write_map "$ARCHIVE_SHA" "payload-$ARCHIVE_VERSION" "$w/map.json"
     release_config "" "" "" true true
     env CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
-        CONTRACTSCRIBE_ACTION_TEST=1 driver acquire "$w" "$w/map.json" "$API_ROOT"
+        CONTRACTSCRIBE_ACTION_TEST=1 \
+        python3 "$DRIVER" acquire "$w" "$w/map.json" "$API_ROOT"
     release_config "" "" ""
 }
 case_acquire_redirect_foreign() {
@@ -449,7 +478,7 @@ case_acquire_oversize_declared() {
     local big="$WORK/big-sparse.tar.gz"
     truncate -s 300M "$big"
     write_map "$ARCHIVE_SHA" "payload-$ARCHIVE_VERSION" "$w/map.json"
-    release_config "" "" '"asset_200":true' ',{"id":9,"name":"x","file":"'"$big"'"}'
+    release_config "" '"asset_200":true' ',{"id":9,"name":"x","file":"'"$big"'"}'
     # repoint asset id 1 at the sparse file
     python3 - "$RELEASE_CFG" "$big" <<'PY'
 import json,os,sys
@@ -552,6 +581,7 @@ PY
     release_config "" "" ""
 }
 case_canary_no_credentials() {
+    posix_only && return 0
     local w; w="$(setup_invoke canary)"
     env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" \
         CONTRACTSCRIBE_PROVIDER_API_KEY="$PROVIDER_TOKEN" \
@@ -638,9 +668,20 @@ case_install_staging_residue() {
     driver install "$w"
     ! ls "$w/install" | grep -q '^\.install-staging\.'
 }
+make_hazard_corpus() {
+    local corpus="$WORK/hazard-corpus"
+    if [ ! -d "$corpus" ]; then
+        mkdir -p "$corpus"
+        for hazard in traversal absolute dotdot symlink hardlink device \
+                paxsparse paxbomb; do
+            python3 "$HAZARD_PY" "$corpus/$hazard.tar.gz" \
+                "hazard:$hazard" >/dev/null
+        done
+    fi
+}
 case_install_hazard_corpus() {
     local corpus="$WORK/hazard-corpus"
-    python3 "$HAZARD_PY" "$ARCHIVE" "$corpus" >/dev/null
+    make_hazard_corpus
     local fail=0
     for hazard in "$corpus"/*.tar.gz; do
         local w; w="$(new_work "hz-$(basename "$hazard" .tar.gz)")"
@@ -660,7 +701,7 @@ case_install_hazard_corpus() {
 }
 case_differential_extractor() {
     local corpus="$WORK/hazard-corpus"
-    [ -d "$corpus" ] || python3 "$HAZARD_PY" "$ARCHIVE" "$corpus" >/dev/null
+    make_hazard_corpus
     local fail=0
     for arc in "$ARCHIVE" "$corpus"/*.tar.gz; do
         local a b
@@ -726,6 +767,78 @@ case_invoke_envelope_extrastderr() {
     local w; w="$(setup_invoke ies)"
     if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=extrastderr \
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+}
+case_invoke_usage_exit2() {
+    posix_only && return 0
+    local w; w="$(setup_invoke iu2)"
+    env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=usage \
+        python3 "$ACTION_SCRIPTS/invoke.py"
+    [ "$?" -eq 2 ] || return 1
+    grep -q "^outcome=github-proposal.local-invalid$" "$w/out.txt"
+    grep -q "^exit-code=2$" "$w/out.txt"
+}
+case_invoke_usage_wrong_outcome() {
+    posix_only && return 0
+    local w; w="$(setup_invoke iuo)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=usageoutcome \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-layer-exit" "$w/out.txt"
+}
+case_invoke_diagnostic_enum() {
+    posix_only && return 0
+    local w; w="$(setup_invoke ide)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=diagbad \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-publication-diagnostic" "$w/out.txt"
+}
+case_invoke_diagnostic_on_success() {
+    posix_only && return 0
+    local w; w="$(setup_invoke ids)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=diagonsuccess \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-diagnostic-on-success" "$w/out.txt"
+}
+case_invoke_stderr_adversarial() {
+    posix_only && return 0
+    local w; w="$(setup_invoke isa)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=stderrbad \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-stderr-content" "$w/out.txt"
+}
+case_invoke_descendant_survives() {
+    # Root exits cleanly while a same-process-group descendant lingers: the
+    # wrapper must bound the group (TERM then KILL), not just reap the root.
+    posix_only && return 0
+    local w; w="$(setup_invoke idsv)"
+    local start; start="$(date +%s)"
+    env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=orphan \
+        python3 "$ACTION_SCRIPTS/invoke.py"
+    local rc=$?
+    [ "$rc" -eq 3 ]
+    # Bounded: the descendant cannot outlive the escalation budget.
+    [ "$(( $(date +%s) - start ))" -lt 15 ]
+    grep -q "^outcome=github-proposal.conflict$" "$w/out.txt"
+}
+case_acquire_sigterm_partial() {
+    # A signal mid-download must remove the .partial staging file and exit
+    # through the bounded failure path, never leaving bytes behind. The real
+    # entrypoint (not the driver import) is the cancellation surface.
+    posix_only && return 0
+    local w; w="$(new_work acancel)"
+    python3 "$DRIVER" init "$w"
+    release_config "" '"asset_delay_seconds":0.2' ""
+    env CONTRACTSCRIBE_ACTION_TEST=1 \
+        CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
+        CS_WORK_DIR="$w" GITHUB_OUTPUT=/dev/null \
+        python3 "$ACTION_SCRIPTS/acquire.py" &
+    local pid=$!
+    sleep 0.6
+    kill -TERM "$pid"
+    wait "$pid"; local rc=$?
+    [ "$rc" -ne 0 ]
+    ! find "$w" -name '*.partial' | grep -q .
+    release_config "" "" ""
 }
 case_invoke_cancel() {
     posix_only && return 0
@@ -948,6 +1061,13 @@ run_case invoke-envelope-badshape case_invoke_envelope_badshape
 run_case invoke-envelope-extraline case_invoke_envelope_extraline
 run_case invoke-envelope-extrastderr case_invoke_envelope_extrastderr
 run_case invoke-cancel case_invoke_cancel
+run_case invoke-usage-exit2 case_invoke_usage_exit2
+run_case invoke-usage-wrong-outcome case_invoke_usage_wrong_outcome
+run_case invoke-diagnostic-enum case_invoke_diagnostic_enum
+run_case invoke-diagnostic-on-success case_invoke_diagnostic_on_success
+run_case invoke-stderr-adversarial case_invoke_stderr_adversarial
+run_case invoke-descendant-survives case_invoke_descendant_survives
+run_case acquire-sigterm-partial case_acquire_sigterm_partial
 run_case invoke-missing-install case_invoke_missing_install
 case_emit_annotation_counts() {
     # Frozen annotation contract: success emits no ::error::; a wrapper
@@ -963,9 +1083,27 @@ case_emit_annotation_counts() {
     grep -q "github-proposal.permission (exit 4)" "$w/prod.log"
     grep -q "^action-status=ok" "$w/o1.txt"
     grep -q "^action-status=action.prepare-operation" "$w/o2.txt"
+    # Exact annotation bytes including the fixed-format parentheses.
+    grep -q '::error::contract-scribe: github-proposal.permission (exit 4)' \
+        "$w/prod.log"
+}
+case_emit_summary_sanitizes() {
+    # A hostile caller operation must never reach the summary verbatim —
+    # emit renders only the closed operation names or a placeholder.
+    local w; w="$(new_work esum)"
+    env GITHUB_OUTPUT="$w/o.txt" GITHUB_STEP_SUMMARY="$w/summary.md" \
+        CS_STATUS_GUARD="" CS_STATUS_PREPARE="action.prepare-operation" \
+        CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE="" \
+        CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="" \
+        CS_INPUT_OPERATION=$'evil\n| `rm -rf` |' \
+        python3 "$ACTION_SCRIPTS/emit.py" >"$w/log.txt" 2>&1
+    grep -q "(invalid operation)" "$w/summary.md"
+    ! grep -q "rm -rf" "$w/summary.md"
+    ! grep -q 'evil' "$w/summary.md"
 }
 
 run_case emit-annotation-counts case_emit_annotation_counts
+run_case emit-summary-sanitizes case_emit_summary_sanitizes
 
 if [ "$REAL" -eq 1 ]; then
     # Loopback provider + GitHub fakes for the real-CLI legs.

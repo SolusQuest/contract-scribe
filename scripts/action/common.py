@@ -67,6 +67,24 @@ class ActionFailure(Exception):
         self.exit_code = exit_code
 
 
+def http_class(code):
+    """HTTP status → the closed action.<stage>-<reason> vocabulary. Raw
+    numeric codes are observations, not contract vocabulary."""
+    if code in (401, 403):
+        return "http-auth"
+    if code == 404:
+        return "http-not-found"
+    if code in (409, 410, 422):
+        return "http-conflict"
+    if code == 429:
+        return "http-rate-limit"
+    if 500 <= code <= 599:
+        return "http-server"
+    if 400 <= code <= 499:
+        return "http-client"
+    return "http-error"
+
+
 def marker(kind, stage, result, reason="-"):
     print(f"{kind} {stage} result={result} reason={reason}", flush=True)
 
@@ -246,7 +264,7 @@ def get_json(url, token=None, what="metadata"):
         with _opener().open(request, timeout=BOUND_CONNECT_SECONDS) as response:
             data = response.read(BOUND_METADATA_JSON + 1)
     except urllib.error.HTTPError as error:
-        raise ActionFailure(f"http-{error.code}") from None
+        raise ActionFailure(http_class(error.code)) from None
     except (urllib.error.URLError, TimeoutError, OSError):
         raise ActionFailure("http-unreachable") from None
     if len(data) > BOUND_METADATA_JSON:
@@ -282,7 +300,7 @@ def download_asset(url, token, origin_root, sink, limit=BOUND_COMPRESSED):
                     raise ActionFailure("redirect-origin") from None
                 current = location
                 continue
-            raise ActionFailure(f"http-{error.code}") from None
+            raise ActionFailure(http_class(error.code)) from None
         except (urllib.error.URLError, TimeoutError, OSError):
             raise ActionFailure("http-unreachable") from None
         break
@@ -359,8 +377,9 @@ def write_env(name, value):
 
 
 def annotate_error(text):
-    """One bounded ::error:: annotation; closed characters only."""
-    clean = "".join(c for c in text if c.isascii() and (c.isalnum() or c in " ._:-"))
+    """One bounded ::error:: annotation; closed characters only. The two
+    parentheses are part of the frozen '<outcome> (exit <code>)' format."""
+    clean = "".join(c for c in text if c.isascii() and (c.isalnum() or c in " ._:-()"))
     print(f"::error::{clean[:512]}", flush=True)
 
 

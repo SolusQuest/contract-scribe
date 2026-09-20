@@ -71,11 +71,19 @@ The single test hook is private, reflection-only and default-inert. It accepts o
 
 ## Action-wrapper boundary
 
-The Action wrapper is a thin, non-authoritative host around the .NET CLI, not an alternative GitHub adapter.
+The Action wrapper is a thin, non-authoritative host around the .NET CLI, not an alternative GitHub adapter. Three delivery components carry distinct authority and must not be conflated:
 
-- It does not call the model provider or GitHub API directly.
+- **.NET product publication.** The CLI's `ContractScribe.GitHub` adapter is the only component that may use the product GitHub token to mutate GitHub (branches, commits, pull requests). The M5 transport rules above apply unchanged to that path.
+- **Bounded release-asset acquisition (this host).** The wrapper itself performs exactly one GitHub interaction: resolving and downloading the authorized release asset named by the checked-in `payload-map.json`. It uses the public by-tag route or bounded authenticated enumeration for approved draft candidates, validates each redirect hop, forwards acquisition credentials only to the API origin — never across redirect origins — and enforces the map's expected version/SHA-256 before any byte is trusted. This acquisition channel has its own redirect and credential rules; it does not inherit the M5 transport's fixed-route policy (different component, different protocol) and does not relax it (the product adapter is untouched). The acquisition token is a distinct least-privilege channel: it is never the product token, never reaches the CLI or the install tree, and public acquisition needs none.
+- **Checkpoint/state transport.** Campaign state is read and written only by the CLI under its own contract; the wrapper passes the path as data and never interprets the bytes.
+
+Separately authorized maintainer release operations (creating tags, releases, or Marketplace entries) are out of scope for the Action and retain their own authority; the wrapper performs no release mutation.
+
+Within those channels the wrapper remains thin:
+
+- It does not call the model provider directly.
 - It receives and forwards only documented, explicitly allowlisted inputs and credentials to the selected CLI command.
-- It does not interpret, persist, log, or independently use forwarded credentials.
+- It does not interpret, persist, log, or independently use forwarded credentials; credential inputs must arrive from runner-masked secrets contexts.
 - It does not parse repository source, audit evidence, provider responses, campaign checkpoints, or Issue ledger content.
 - It does not decide whether a mutation is safe.
 - It never logs tokens, provider secrets, raw event payloads, or complete child-process environments.

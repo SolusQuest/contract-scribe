@@ -65,6 +65,13 @@ wrapper's own closed vocabulary and never replaces the product outcome.
 Outputs are always emitted where definable: a wrapper failure yields
 `action-status` plus empty product fields.
 
+The `action-status` vocabulary is closed: `<stage>` is one of `guard`,
+`prepare`, `acquire`, `install`, `invoke`, `envelope`, `emit`, and HTTP
+transport failures surface only as the fixed classes `http-auth`,
+`http-not-found`, `http-conflict`, `http-rate-limit`, `http-server`,
+`http-client`, `http-error`, and `http-unreachable` — raw numeric status codes
+never enter the public output.
+
 ## Annotations
 
 Exactly one `::error::` annotation per failed run; none on success.
@@ -86,6 +93,14 @@ usage, 3 bounded-resumable, 4 invalid-state/authority, 5 host, 6 cancelled,
 
 ## Credentials
 
+- **Interface precondition:** every credential input must be supplied from a
+  GitHub masked context — `${{ secrets.* }}` or an equivalent
+  runner-registered secret. The runner's secret masker is what prevents an
+  input from being rendered in the workflow log; the composite steps'
+  `::add-mask::` is defense in depth only and cannot protect a value that was
+  never registered. A caller that passes a literal token as an input has
+  already leaked it before the Action runs — the contract therefore requires
+  secrets contexts, and every example under A3 must use them.
 - `provider-api-key` and `github-token` are visible only to the `invoke` step's
   process environment. They never appear in argv, files, `GITHUB_ENV`,
   `GITHUB_OUTPUT`, annotations, or request/plan JSON.

@@ -38,14 +38,23 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+_last_good = {"value": None}
+
+
 def load_config(path):
-    # Legs rewrite the config between requests; tolerate a torn read once.
-    for attempt in range(20):
+    # Legs rewrite the config between requests; on platforms where the
+    # replace is not atomic the torn/absent window is real, so serve the
+    # last fully-parsed document rather than failing the request.
+    for attempt in range(40):
         try:
             with open(path, encoding="utf-8") as fh:
-                return json.load(fh)
+                config = json.load(fh)
+            _last_good["value"] = config
+            return config
         except (json.JSONDecodeError, OSError):
-            if attempt == 19:
+            if attempt == 39:
+                if _last_good["value"] is not None:
+                    return _last_good["value"]
                 raise
             time.sleep(0.05)
 

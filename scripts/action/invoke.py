@@ -38,19 +38,63 @@ TERMINAL_LAYERS = ("usage", "preflight", "campaign", "publication",
                    "presentation")
 CAMPAIGN_OPERATIONS = ("start", "resume")
 
-# outcome suffix (github-proposal.<suffix>) -> permitted exit codes.
+# outcome suffix (github-proposal.<suffix>) -> permitted exit codes,
+# taken verbatim from GitHubProposalPresentation.Exit. usage-layer failures
+# emit outcome local-invalid with exit 2; admitted and recovered-*-partial
+# are diagnostic codes, never outcome values.
 OUTCOME_EXIT = {
     "published": (0,), "replayed": (0,), "no-op": (0,),
     "awaiting-review": (0,), "merged": (0,),
-    "usage": (2,),
     "stale-base-after-create": (3,), "rate-limit": (3,), "conflict": (3,),
-    "admitted": (3,), "recovered-content-partial": (3,),
-    "recovered-ref-partial": (3,),
-    "local-invalid": (4,), "stale": (4,), "human-change": (4,),
+    "local-invalid": (2, 4), "stale": (4,), "human-change": (4,),
     "permission": (4,), "closed-unmerged": (4,),
     "host-failure": (5,),
     "cancelled": (6,),
     "timeout": (7,),
+}
+
+# Closed publication-diagnostic vocabularies (C# enum member names are the
+# wire values verbatim). An undefined member suppresses the whole diagnostic
+# upstream; the wrapper enforces the same closed sets.
+DIAG_BOUNDARY = {
+    "Reconcile", "Repository", "CoordinationRead", "CoordinationClaim",
+    "CoordinationRecord", "CoordinationAdvanceStale",
+    "CoordinationAdvanceContent", "CoordinationAdvanceRef", "GitInspect",
+    "GitInspectPredecessor", "GitPrepare", "GitCreateContent",
+    "GitAdvanceRef", "PullRequestPreflight", "PullRequestObserve",
+    "PullRequestCreate", "PullRequestRecover",
+}
+DIAG_OWNER = {
+    "Reconciler", "Transport", "Coordination", "GitData", "PullRequests",
+}
+DIAG_COORDINATION_FAILURE = {
+    "InvalidInput", "MissingPredecessor", "DifferentOperation",
+    "StageConflict", "TargetMoved", "HumanChange", "Conflict",
+    "ObjectMismatch", "Bounds", "Unresolved", "Transport",
+}
+DIAG_PROPOSAL_FAILURE = {
+    "InvalidInput", "Integrity", "Bounds", "Conflict", "Unresolved",
+    "Transport",
+}
+DIAG_PR_OUTCOME = {
+    "Absent", "Appendable", "HeldDraft", "Ready", "Merged",
+    "ClosedUnmerged", "StaleDraft", "Conflict", "Unresolved", "Failed",
+}
+DIAG_TRANSPORT_CODE = {
+    "InvalidRequest", "Authentication", "Permission", "NotFound",
+    "Conflict", "Validation", "RateLimit", "Cancelled", "Timeout",
+    "ResponseLost", "InvalidResponse", "HostFailure",
+}
+DIAG_DELIVERY = {"NotDispatched", "Read", "NeedsReadback", "Ambiguous"}
+DIAG_OBJECT_KIND = {"Blob", "Tree", "Commit"}
+DIAG_PREDICATE = {
+    "InvalidCorrelation", "Cancelled", "UnhandledException",
+    "RepositoryUnavailable", "DifferentOperation", "TargetMoved",
+    "SuccessorMismatch", "AppendMismatch", "TransitionMismatch",
+    "UnexpectedProposalRef", "ClaimMismatch", "CurrentMismatch",
+    "ClaimedRefPresent", "StaleStage", "UnexpectedStage",
+    "AppendCreateForbidden", "CompletionHeadChanged", "ObservationLimit",
+    "LifecycleOutcome", "MissingOrUnexpectedComponent",
 }
 
 _PR_URL = re.compile(
@@ -157,12 +201,22 @@ def run_cli(argv, env, cwd):
         signal.signal(signal.SIGTERM, previous_term)
     for thread in threads:
         thread.join(timeout=5)
-    # No owned process group may survive the wrapper.
-    try:
-        os.killpg(child.pid, 0)
-        orphan = True
-    except (ProcessLookupError, PermissionError):
-        orphan = False
+    # Supervise the whole owned process group, not just the root: a
+    # descendant that survives the root's exit is still bounded — TERM
+    # once, then KILL — before the orphan verdict is reported.
+    orphan = False
+    group_deadline = time.monotonic() + 4.0
+    while True:
+        try:
+            os.killpg(child.pid, 0)
+        except (ProcessLookupError, PermissionError):
+            break
+        if time.monotonic() > group_deadline:
+            orphan = True
+            break
+        _kill_group(signal.SIGTERM if time.monotonic()
+                    < group_deadline - 2.0 else signal.SIGKILL)
+        time.sleep(0.05)
     return (rc, bytes(out_buf), bytes(err_buf), state["signalled"], orphan,
             out_state["overflow"], err_state["overflow"])
 
@@ -216,9 +270,22 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
     if diag is not None:
         if not isinstance(diag, dict) \
                 or list(diag.keys()) != list(PUBLICATION_DIAGNOSTIC_FIELDS) \
-                or not isinstance(diag["boundary"], str) \
-                or not isinstance(diag["owner"], str):
+                or diag["boundary"] not in DIAG_BOUNDARY \
+                or diag["owner"] not in DIAG_OWNER:
             fail_envelope("publication-diagnostic-shape")
+        enum_fields = (
+            ("coordinationFailure", DIAG_COORDINATION_FAILURE),
+            ("proposalFailure", DIAG_PROPOSAL_FAILURE),
+            ("pullRequestOutcome", DIAG_PR_OUTCOME),
+            ("transportCode", DIAG_TRANSPORT_CODE),
+            ("delivery", DIAG_DELIVERY),
+            ("recoveryCode", DIAG_TRANSPORT_CODE),
+            ("objectKind", DIAG_OBJECT_KIND),
+            ("predicate", DIAG_PREDICATE),
+        )
+        for field, vocabulary in enum_fields:
+            if diag[field] is not None and diag[field] not in vocabulary:
+                fail_envelope("publication-diagnostic-enum")
         for status_key in ("transportHttpStatus", "recoveryHttpStatus"):
             status = diag[status_key]
             if status is not None and (not isinstance(status, int)
@@ -233,8 +300,27 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
     permitted = OUTCOME_EXIT[outcome[len("github-proposal."):]]
     if rc not in permitted:
         fail_envelope("exit-mismatch")
+    # usage-layer results are the only exit-2 producers and always carry
+    # local-invalid; publicationDiagnostic exists only on failure paths.
+    if (envelope["terminalLayer"] == "usage") != (rc == 2):
+        fail_envelope("layer-exit")
+    if envelope["terminalLayer"] == "usage" \
+            and outcome != "github-proposal.local-invalid":
+        fail_envelope("layer-exit")
+    if rc == 0 and diag is not None:
+        fail_envelope("diagnostic-on-success")
     if rc == 0 and stderr_bytes:
         fail_envelope("stderr-shape")
+    # A controlled stderr diagnostic is one bounded line whose leading code
+    # is one of the envelope's declared diagnostic codes — never raw product
+    # bytes, never arbitrary text.
+    if stderr_bytes:
+        line = stderr_bytes[:-1].decode("utf-8", "strict")
+        code, sep, message = line.partition(": ")
+        if not sep or code not in envelope["diagnosticCodes"] \
+                or len(line) > 512 or not all(0x20 <= ord(c) <= 0x7E
+                                              for c in message):
+            fail_envelope("stderr-content")
     return envelope
 
 

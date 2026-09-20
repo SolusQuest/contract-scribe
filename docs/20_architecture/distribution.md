@@ -30,27 +30,20 @@ The GitHub adapter and workflow may be exercised in synthetic test repositories 
 
 ## Action host decision
 
-TypeScript is not required for M1 through M5 and is not required to create GitHub branches, commits, Issues, or pull requests. Those operations are implemented by `ContractScribe.GitHub` and invoked through the production CLI.
+[ADR 0006](decisions/0006-composite-action-host.md) selects the **composite**
+host: `action.yml` plus `scripts/action/` acquire the authorized D2 payload,
+verify its pinned SHA-256, install it under the frozen A1 semantics, and invoke
+the production CLI — the product GitHub adapter stays in C# and the wrapper
+owns only host/transport/security concerns. The interface contract is frozen
+in [action-interface.md](action-interface.md); the passed matrix is
+`tests/action/verify-action.sh` plus the `action_packaged` CI job, which runs
+the real `uses:` path end-to-end against loopback fakes.
 
-The payload-distribution gate compares two initial host candidates:
-
-1. a composite action that acquires or configures the selected framework-dependent payload and invokes the CLI;
-2. a JavaScript action built from a small TypeScript source package when payload download, verification, caching, cancellation, supported-runner invocation, or unsupported-runner rejection cannot remain maintainable in a composite action.
-
-The comparison must freeze:
-
-- the GitHub-hosted Ubuntu x64 supported-runner target and clear failure on unsupported runners;
-- payload acquisition and integrity verification;
-- required preinstalled runtimes and setup steps;
-- input, environment, output, annotation, summary, cancellation, and exit-code mapping;
-- wrapper and payload identities;
-- package and bundled-dependency inventory;
-- runner behavior when acquisition is offline, partial, stale, or corrupted;
-- exact permissions and secret pass-through behavior.
-
-A TypeScript wrapper, if selected, is an Action host only. It may acquire the payload, invoke the CLI, mask secrets, and translate the stable CLI run envelope into Action outputs. It must not call the provider directly, interpret audit targets, implement campaign transitions, reconcile the ledger, or publish GitHub changes.
-
-The Action host choice requires an ADR under the Release Gate — Payload Distribution. Source development does not select a host by convention.
+The TypeScript fallback was not needed: acquisition, bounded download and
+redirect validation, digest verification, cache handling, cancellation
+escalation, and unsupported-runner rejection all remain maintainable as small
+Python steps inside the composite Action. No JavaScript/TypeScript product
+host exists.
 
 ## Release composition
 

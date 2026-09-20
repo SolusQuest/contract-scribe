@@ -46,7 +46,13 @@ def main():
         value = os.environ.get("CS_OUT_" + name.upper().replace("-", "_"), "")
         C.write_output(name, value, limit=C.BOUND_ENVELOPE)
 
-    operation = os.environ.get("CS_INPUT_OPERATION", "-")
+    # Only closed validated values reach the summary: the raw caller input
+    # may carry Markdown/control bytes, so it is mapped to the two legal
+    # operation names or a fixed placeholder.
+    operation = {
+        "github-proposal-start": "github-proposal-start",
+        "github-proposal-resume": "github-proposal-resume",
+    }.get(os.environ.get("CS_INPUT_OPERATION", ""), "(invalid operation)")
     outcome = os.environ.get("CS_OUT_OUTCOME", "") or "-"
     exit_code = os.environ.get("CS_OUT_EXIT_CODE", "") or "-"
     payload = os.environ.get("CS_OUT_PAYLOAD_VERSION", "") or "-"

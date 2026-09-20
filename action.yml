@@ -2,7 +2,7 @@ name: contract-scribe
 description: >-
   Acquire, verify, install, and invoke the authorized ContractScribe CLI
   payload (github-proposal start|resume). See
-  docs/20_architecture/contracts/action-interface-v1.md for the contract.
+  docs/20_architecture/action-interface.md for the contract.
 author: SolusQuest
 branding:
   icon: play
@@ -31,13 +31,13 @@ inputs:
     description: "Optional invocation configuration JSON object (inline; <=64 KiB UTF-8)"
     required: false
   provider-api-key:
-    description: "Campaign provider credential (CONTRACTSCRIBE_PROVIDER_API_KEY)"
+    description: "Campaign provider credential (CONTRACTSCRIBE_PROVIDER_API_KEY); supply from secrets.* — a literal value renders in the workflow log"
     required: false
   github-token:
-    description: "Product GitHub credential (CONTRACTSCRIBE_GITHUB_TOKEN); never the acquisition credential"
+    description: "Product GitHub credential (CONTRACTSCRIBE_GITHUB_TOKEN); supply from secrets.*; never the acquisition credential"
     required: false
   acquisition-token:
-    description: "Optional release-asset acquisition credential (read-only release scope); must differ from github-token"
+    description: "Optional release-asset acquisition credential (read-only release scope); supply from secrets.*; must differ from github-token"
     required: false
 
 outputs:

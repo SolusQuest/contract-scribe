@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import re
+import signal
 import sys
 import urllib.parse
 
@@ -207,6 +208,13 @@ def main():
     os.environ["CS_ACTION_STAGE"] = "acquire"
     """Production entry: the checked-in map and the fixed/gated API root are
     the only authorities — no argument surface exists to override either."""
+    # SIGTERM/SIGINT arrive as exceptions so the .partial staging cleanup in
+    # acquire_archive's finally runs; the bounded cancellation class then
+    # exits through the shared failure path.
+    def _cancelled(signum, _frame):
+        raise C.ActionFailure("cancelled", 130)
+    signal.signal(signal.SIGTERM, _cancelled)
+    signal.signal(signal.SIGINT, _cancelled)
     token = os.environ.get("CONTRACTSCRIBE_ACQUISITION_TOKEN") or None
     C.mask(token)
     if C.test_mode_enabled() and token is not None \
