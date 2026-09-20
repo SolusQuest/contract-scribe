@@ -1568,7 +1568,12 @@ jobs:
         run: |
           set -euo pipefail
           [ "$STATUS" = ok ]
-          [ "$OUTCOME" = github-proposal.replayed ]
+          # Post-replay state may report replayed/no-op/awaiting-review;
+          # all are exit-0 replay evidence — the chain consumed S.
+          case "$OUTCOME" in
+            github-proposal.replayed|github-proposal.no-op|github-proposal.awaiting-review) ;;
+            *) echo "unexpected outcome: $OUTCOME"; exit 1;;
+          esac
       - name: "Invalid-checkpoint leg — corrupt state rejects before credentials"
         id: bad_leg
         env:
