@@ -159,6 +159,12 @@ write_map() {
 EOF
 }
 
+# Shared gated test map for legs that drive the production acquire.py
+# entrypoint: the committed map carries payload:null pre-release, so those
+# legs authorize the supplied archive through the TEST_MAP seam instead.
+TEST_MAP_FILE="$WORK/test-map.json"
+write_map "$ARCHIVE_SHA" "payload-$ARCHIVE_VERSION" "$TEST_MAP_FILE"
+
 RELEASE_CFG="$WORK/release-config.json"
 release_config() {
     # $1 = extra releases JSON fragment (appended after the primary), $2 =
@@ -927,6 +933,7 @@ case_acquire_sigterm_partial() {
     release_config "" '"asset_delay_seconds":0.2' ""
     env CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$TEST_MAP_FILE" \
         CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
         CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" \
         python3 "$ACTION_SCRIPTS/acquire.py" &
@@ -1022,6 +1029,7 @@ case_real_chain() {
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/acq-out.txt" \
         CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$TEST_MAP_FILE" \
         CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
         python3 "$ACTION_SCRIPTS/acquire.py"
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/inst-out.txt" \
@@ -1049,6 +1057,7 @@ case_real_missing_token() {
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/acq.txt" \
         CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$TEST_MAP_FILE" \
         CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
         python3 "$ACTION_SCRIPTS/acquire.py"
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT=/dev/null \
@@ -1080,6 +1089,7 @@ PY
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT=/dev/null \
         CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$TEST_MAP_FILE" \
         CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
         python3 "$ACTION_SCRIPTS/acquire.py"
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT=/dev/null \
