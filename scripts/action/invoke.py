@@ -188,7 +188,7 @@ def run_cli(argv, env, cwd):
         try:
             os.killpg(child.pid, sig)
         except (ProcessLookupError, PermissionError):
-            pass
+            pass  # process group already gone — nothing to signal
 
     def _group_alive():
         try:
@@ -409,10 +409,9 @@ def emit_outputs(envelope, stdout_bytes, rc):
 def main():
     os.environ["CS_ACTION_STAGE"] = "invoke"
     plan = C.load_plan()
-    acquired = C.load_json_file(C.work_file("acquired.json"),
-                                C.BOUND_METADATA_JSON, "acquired")
-    version = "contract-scribe-" + acquired["payload"]["toolVersion"] \
-        + "-linux-x64"
+    # The acquisition record must exist and parse before invocation.
+    C.load_json_file(C.work_file("acquired.json"),
+                     C.BOUND_METADATA_JSON, "acquired")
     root = plan["installRoot"]
     current = os.path.join(root, "current")
     entry = os.path.join(current, "ContractScribe.Cli.dll")

@@ -55,7 +55,6 @@ _SAFE_OUTPUT_NAME = re.compile(r"[a-z][a-z0-9_-]*")
 _SAFE_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 _SAFE_ENV_VALUE = re.compile(r"[^\x00-\x1f\x7f]{1,4096}")
 _HEX40 = re.compile(r"[0-9a-f]{40}")
-_HEX64 = re.compile(r"[0-9a-f]{64}")
 
 
 class ActionFailure(Exception):
@@ -108,7 +107,6 @@ def marker_kv(kind, fields, result, reason="-"):
 # Private filesystem helpers
 # ---------------------------------------------------------------------------
 
-_O_DIRECTORY = getattr(os, "O_DIRECTORY", 0)
 _O_NOFOLLOW = getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -445,7 +443,7 @@ def run_owned(argv, timeout=30):
         try:
             os.killpg(child.pid, signum)
         except (ProcessLookupError, PermissionError):
-            pass
+            pass  # group already gone
         state["deadline"] = time.monotonic() + 4.0
 
     previous = {}
@@ -459,13 +457,13 @@ def run_owned(argv, timeout=30):
                 try:
                     os.killpg(child.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
-                    pass
+                    pass  # group already gone
                 state["deadline"] = None
             if time.monotonic() > deadline:
                 try:
                     os.killpg(child.pid, signal.SIGKILL)
                 except (ProcessLookupError, PermissionError):
-                    pass
+                    pass  # group already gone
                 break
             time.sleep(0.05)
         out, err = child.communicate()

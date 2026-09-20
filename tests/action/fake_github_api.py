@@ -126,7 +126,8 @@ class State:
 
 
 def serve(config_path, ready_file, log_file, fail_file):
-    config = json.loads(open(config_path, encoding="utf-8").read())
+    with open(config_path, encoding="utf-8") as fh:
+        config = json.load(fh)
     state = State(config.get("files", {}))
     log_lock = threading.Lock()
 
@@ -191,7 +192,8 @@ def serve(config_path, ready_file, log_file, fail_file):
                 try:
                     self._send(500, {"message": "fake failure"})
                 except OSError:
-                    pass
+                    pass  # client already gone — recording the failure is enough
+            return None
 
         def _read(self, path):
             if path == "/repos/Owner/repo":

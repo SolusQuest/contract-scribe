@@ -123,6 +123,14 @@ one matching asset, rejects additional payload-shaped assets, verifies the
 downloaded bytes against the pinned SHA-256, and retains the verified archive
 under the install root.
 
+The map's pinned bytes are the authoritative Ubuntu-produced build of the
+bound `sourceRevision`; a copy is committed under `tests/action/payload/` so
+CI verifies the exact pair durably (workflow artifacts expire and releases
+are maintainer authority). The `action_packaged` job asserts that committed
+archive's SHA-256 equals the map and that a fresh fixed-source rebuild
+carries the same logical identity — a byte mismatch halts release work until
+a separately reviewed map change; CI never edits the map.
+
 Install follows the frozen A1 semantics (`payload-install` stage markers):
 bounded copy → digest → member-policy scan → extraction of validated regular
 files only → exact inventory check against the archive's own `payload.json` →

@@ -1,0 +1,2 @@
+# Authorized payload bytes must never be line-ending converted.
+payload/** binary

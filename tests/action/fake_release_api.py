@@ -57,6 +57,7 @@ def load_config(path):
                     return _last_good["value"]
                 raise
             time.sleep(0.05)
+    return _last_good["value"]
 
 
 def free_port():
@@ -166,6 +167,7 @@ def serve_asset(handler, release, asset, overrides, cdn_origin):
     handler.send_header("Location", f"{cdn_origin}/cdn/{asset['id']}")
     handler.send_header("Content-Length", "0")
     handler.end_headers()
+    return None
 
 
 def send_bytes(handler, path, overrides):
