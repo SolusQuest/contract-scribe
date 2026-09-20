@@ -201,8 +201,10 @@ class State:
         return oid
 
     def tree_response(self, oid):
+        # Git objects store the directory mode unpadded (40000); the REST
+        # API surface pads to six chars (040000), which the CLI requires.
         return {"sha": oid, "truncated": False, "tree": [
-            {"path": p, "mode": m, "sha": o,
+            {"path": p, "mode": m.zfill(6), "sha": o,
              "type": "tree" if m in ("040000", "40000")
              else "commit" if m == "160000" else "blob"}
             for p, m, o in self.trees[oid]]}
