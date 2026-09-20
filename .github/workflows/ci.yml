@@ -759,7 +759,7 @@ jobs:
           cat > action-inputs/request.json <<EOFX
           {"githubProposalRequestVersion":1,
            "campaignLineage":"campaign.action.e2e","snapshot":"snapshot.action.e2e",
-           "state":"$PWD/action-inputs/state.bin",
+           "state":"$PWD/checkpoint-state/state.bin",
            "github":{"repositoryOwner":"Owner","repositoryName":"repo",
              "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
              "operationId":"operation.e2e","generationId":"generation.e2e",

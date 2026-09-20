@@ -255,7 +255,12 @@ case_prepare_ok() {
     [ -n "$wd" ] && [ -f "$wd/plan.json" ]
 }
 case_prepare_dotnet_missing() {
-    expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="/usr/bin" HOME="$HOME" \
+    # A dedicated bin dir containing only python3: hosted runners ship dotnet
+    # under /usr/bin, so restricting PATH to /usr/bin cannot hide it.
+    local sb="$WORK/nobin"
+    mkdir -p "$sb"
+    ln -sf "$(command -v python3)" "$sb/python3"
+    expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$sb" HOME="$HOME" \
         RUNNER_OS=Linux RUNNER_ARCH=X64 RUNNER_TEMP="$WORK" \
         GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
         CS_INPUT_OPERATION=github-proposal-start CS_INPUT_REPOSITORY_ROOT=/r \
@@ -775,7 +780,7 @@ EOF
     cat > "$w/request.json" <<EOF
 {"githubProposalRequestVersion":1,
  "campaignLineage":"campaign.action.test","snapshot":"snapshot.action.test",
- "state":"$w/state.bin",
+ "state":"$w/checkpoint/state.bin",
  "github":{"repositoryOwner":"Owner","repositoryName":"repo",
    "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
    "operationId":"operation.action","generationId":"generation.action",
