@@ -127,16 +127,19 @@ echo "$@" > "${STUB_ARGV:-/dev/null}"
 env | sort > "${STUB_ENV:-/dev/null}"
 case "${STUB_MODE:-ok}" in
     sleep) sleep 3600 ;;
-    conflict) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
+    conflict) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'github proposal stopped before publication: github-proposal.conflict' >&2; exit 3 ;;
     badshape) echo '{"unexpected":1}'; exit 0 ;;
     extraline) echo '{"a":1}'; echo '{"b":2}'; exit 0 ;;
     extrastderr) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo "one" >&2; echo "two" >&2; exit 0 ;;
     usage) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"b","toolVersion":"t","campaignOperation":null,"publicationOperationId":null,"generationId":null,"outcome":"github-proposal.local-invalid","diagnosticCodes":["cli.usage.missing-option-value"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'cli.usage.missing-option-value: a required option is missing' >&2; exit 2 ;;
     usageoutcome) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"b","toolVersion":"t","campaignOperation":null,"publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["cli.usage.missing-option-value"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'cli.usage.missing-option-value: a required option is missing' >&2; exit 2 ;;
-    diagbad) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":{"boundary":"Anything","owner":"GitData","coordinationFailure":null,"proposalFailure":null,"pullRequestOutcome":null,"transportCode":null,"transportHttpStatus":null,"delivery":"NotDispatched","recoveryCode":null,"recoveryHttpStatus":null,"objectKind":null,"predicate":null}}'; exit 4 ;;
+    diagbad) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":{"boundary":"Anything","owner":"GitData","coordinationFailure":null,"proposalFailure":null,"pullRequestOutcome":null,"transportCode":null,"transportHttpStatus":null,"delivery":"NotDispatched","recoveryCode":null,"recoveryHttpStatus":null,"objectKind":null,"predicate":null}}'; echo 'github proposal publication stopped: github-proposal.permission' >&2; exit 4 ;;
+    diagwronglayer) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":{"boundary":"GitInspect","owner":"GitData","coordinationFailure":null,"proposalFailure":null,"pullRequestOutcome":null,"transportCode":null,"transportHttpStatus":null,"delivery":"NotDispatched","recoveryCode":null,"recoveryHttpStatus":null,"objectKind":null,"predicate":null}}'; echo 'github proposal stopped before publication: github-proposal.conflict' >&2; exit 3 ;;
     diagonsuccess) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":{"boundary":"GitInspect","owner":"GitData","coordinationFailure":null,"proposalFailure":null,"pullRequestOutcome":null,"transportCode":null,"transportHttpStatus":null,"delivery":"NotDispatched","recoveryCode":null,"recoveryHttpStatus":null,"objectKind":null,"predicate":null}}'; exit 0 ;;
     stderrbad) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'raw credential dump hunter2 hunter2' >&2; exit 4 ;;
-    orphan) bash -c 'sleep 45' & echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
+    stderrsuffix) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'SECRET_OR_RAW_PRODUCT_BYTES: github-proposal.permission' >&2; exit 4 ;;
+    missingstderr) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
+    orphan) bash -c 'sleep 45' & echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'github proposal stopped before publication: github-proposal.conflict' >&2; exit 3 ;;
     *) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"v1","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":7,"pullRequestUrl":"https://github.com/Owner/repo/pull/1","publicationDiagnostic":null}'; exit 0 ;;
 esac
 EOF
@@ -808,6 +811,30 @@ case_invoke_stderr_adversarial() {
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
     grep -q "action.envelope-stderr-code" "$w/out.txt"
 }
+case_invoke_stderr_suffix() {
+    # A valid declared code at the end of an arbitrary prefix is not the
+    # product grammar — the fixed layer prefix is required, not a suffix.
+    posix_only && return 0
+    local w; w="$(setup_invoke isx)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=stderrsuffix \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-stderr-code" "$w/out.txt"
+}
+case_invoke_stderr_missing() {
+    # Every nonzero controlled result carries exactly one diagnostic line.
+    posix_only && return 0
+    local w; w="$(setup_invoke ims)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=missingstderr \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-stderr-missing" "$w/out.txt"
+}
+case_invoke_diagnostic_wrong_layer() {
+    posix_only && return 0
+    local w; w="$(setup_invoke idl)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=diagwronglayer \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-diagnostic-layer" "$w/out.txt"
+}
 case_invoke_descendant_survives() {
     # Root exits cleanly while a same-process-group descendant lingers: the
     # wrapper must bound the group (TERM then KILL), not just reap the root.
@@ -1074,7 +1101,10 @@ run_case invoke-usage-exit2 case_invoke_usage_exit2
 run_case invoke-usage-wrong-outcome case_invoke_usage_wrong_outcome
 run_case invoke-diagnostic-enum case_invoke_diagnostic_enum
 run_case invoke-diagnostic-on-success case_invoke_diagnostic_on_success
+run_case invoke-diagnostic-wrong-layer case_invoke_diagnostic_wrong_layer
 run_case invoke-stderr-adversarial case_invoke_stderr_adversarial
+run_case invoke-stderr-suffix case_invoke_stderr_suffix
+run_case invoke-stderr-missing case_invoke_stderr_missing
 run_case invoke-descendant-survives case_invoke_descendant_survives
 run_case acquire-sigterm-partial case_acquire_sigterm_partial
 run_case invoke-missing-install case_invoke_missing_install

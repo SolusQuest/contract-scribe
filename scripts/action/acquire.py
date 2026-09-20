@@ -161,12 +161,12 @@ def acquire_archive(plan, map_path, api_root, token):
     if os.path.lexists(retained):
         if os.path.islink(retained) or not os.path.isfile(retained):
             C.marker("action-cache", "check=hit", "fail", "poisoned")
-            C.write_output("action-status", "action.cache-poisoned")
+            C.write_output("action-status", "action.acquire-cache-poisoned")
             raise SystemExit(1)
         actual = sha256_file(retained)
         if actual != payload["sha256"]:
             C.marker("action-cache", "check=hit", "fail", "poisoned")
-            C.write_output("action-status", "action.cache-poisoned")
+            C.write_output("action-status", "action.acquire-cache-poisoned")
             raise SystemExit(1)
         C.marker("action-cache", "check=hit", "ok")
         return retained, payload

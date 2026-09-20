@@ -156,8 +156,10 @@ def run_cli(argv, env, cwd):
         thread.daemon = True
         thread.start()
 
-    # Escalation budget inside the runner's 7.5s (INT) + 2.5s (TERM) grace:
-    # forward the received signal, wait <=4s, then TERM, then KILL at ~5.5s.
+    # One absolute escalation budget from first signal: forward INT/TERM,
+    # TERM at +4s, KILL at +5.5s. The same deadline governs a descendant
+    # that survives the root's exit — the handlers stay installed and the
+    # group is supervised until it is gone, before any pipe-drain join.
     state = {"signalled": False, "phase": 0, "deadline": None}
 
     def _kill_group(sig):
@@ -166,57 +168,71 @@ def run_cli(argv, env, cwd):
         except (ProcessLookupError, PermissionError):
             pass
 
+    def _group_alive():
+        try:
+            os.killpg(child.pid, 0)
+            return True
+        except (ProcessLookupError, PermissionError):
+            return False
+
     def on_signal(signum, _frame):
-        now = time.monotonic()
         if state["phase"] == 0:
             state["signalled"] = True
             state["phase"] = 1
             _kill_group(signum)
-            state["deadline"] = now + 4.0
+            state["deadline"] = time.monotonic() + 4.0
         elif state["phase"] == 1:
             state["phase"] = 2
             _kill_group(signal.SIGTERM)
-            state["deadline"] = now + 1.5
+            state["deadline"] = time.monotonic() + 1.5
         else:
             _kill_group(signal.SIGKILL)
 
     previous_int = signal.signal(signal.SIGINT, on_signal)
     previous_term = signal.signal(signal.SIGTERM, on_signal)
+    orphan = False
+    rc = None
     try:
-        while child.poll() is None:
+        while True:
+            # Escalate on the single shared deadline: TERM at expiry, then
+            # KILL 1.5s later, then a 1s verdict window. One timeline covers
+            # both the live root and any descendant holding the group.
             if state["deadline"] is not None \
                     and time.monotonic() > state["deadline"]:
                 if state["phase"] == 1:
                     state["phase"] = 2
                     _kill_group(signal.SIGTERM)
                     state["deadline"] = time.monotonic() + 1.5
-                else:
-                    _kill_group(signal.SIGKILL)
+                elif state["phase"] == 2:
                     state["phase"] = 3
-                    state["deadline"] = None
+                    _kill_group(signal.SIGKILL)
+                    state["deadline"] = time.monotonic() + 1.0
+                else:
+                    orphan = True
+                    break
+            if child.poll() is None:
+                time.sleep(0.05)
+                continue
+            if rc is None:
+                rc = child.wait()
+            if not _group_alive():
+                break
+            # Root exited but a descendant holds the group: bound it on the
+            # same escalation timeline rather than waiting on held pipes.
+            if state["phase"] == 0:
+                state["phase"] = 1
+                _kill_group(signal.SIGTERM)
+                state["deadline"] = time.monotonic() + 2.0
             time.sleep(0.05)
-        rc = child.wait()
     finally:
         signal.signal(signal.SIGINT, previous_int)
         signal.signal(signal.SIGTERM, previous_term)
+    if rc is None:
+        rc = child.poll()
+        if rc is None:
+            rc = -signal.SIGKILL  # unkillable root: bounded verdict only
     for thread in threads:
         thread.join(timeout=5)
-    # Supervise the whole owned process group, not just the root: a
-    # descendant that survives the root's exit is still bounded — TERM
-    # once, then KILL — before the orphan verdict is reported.
-    orphan = False
-    group_deadline = time.monotonic() + 4.0
-    while True:
-        try:
-            os.killpg(child.pid, 0)
-        except (ProcessLookupError, PermissionError):
-            break
-        if time.monotonic() > group_deadline:
-            orphan = True
-            break
-        _kill_group(signal.SIGTERM if time.monotonic()
-                    < group_deadline - 2.0 else signal.SIGKILL)
-        time.sleep(0.05)
     return (rc, bytes(out_buf), bytes(err_buf), state["signalled"], orphan,
             out_state["overflow"], err_state["overflow"])
 
@@ -301,31 +317,42 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
     if rc not in permitted:
         fail_envelope("exit-mismatch")
     # usage-layer results are the only exit-2 producers and always carry
-    # local-invalid; publicationDiagnostic exists only on failure paths.
+    # local-invalid; publicationDiagnostic exists only on failed publication
+    # paths — never on success, never on any other layer.
     if (envelope["terminalLayer"] == "usage") != (rc == 2):
         fail_envelope("layer-exit")
     if envelope["terminalLayer"] == "usage" \
             and outcome != "github-proposal.local-invalid":
         fail_envelope("layer-exit")
-    if rc == 0 and diag is not None:
-        fail_envelope("diagnostic-on-success")
+    if diag is not None and (envelope["terminalLayer"] != "publication"
+                             or rc == 0):
+        fail_envelope("diagnostic-layer")
     if rc == 0 and stderr_bytes:
         fail_envelope("stderr-shape")
-    # A controlled stderr diagnostic is one bounded line that carries a
-    # declared diagnostic code in the production grammar — usage-layer
-    # diagnostics render 'cli.usage.<code>: <message>'; every other layer
-    # renders the bare message, which always ends '...: <declared code>'.
-    # Anything else is raw product bytes and must not be re-emitted.
+    # Controlled stderr is exactly one line in the layer's own Write()
+    # grammar — usage renders 'cli.usage.<code>: <message>'; every other
+    # failed layer renders the fixed prefix ending in the declared code.
+    # A missing or arbitrary line is malformed product output.
+    codes = envelope["diagnosticCodes"]
+    if rc != 0 and not stderr_bytes:
+        fail_envelope("stderr-missing")
     if stderr_bytes:
         line = stderr_bytes[:-1].decode("utf-8", "strict")
         if len(line) > 512:
             fail_envelope("stderr-bound")
         if any(ord(c) < 0x20 or ord(c) == 0x7F for c in line):
             fail_envelope("stderr-control")
-        codes = envelope["diagnosticCodes"]
-        declared = any(
-            line == c or line.startswith(c + ": ") or line.endswith(": " + c)
-            for c in codes)
+        layer = envelope["terminalLayer"]
+        if layer == "usage":
+            declared = any(line.startswith(c + ": ")
+                           for c in codes if c.startswith("cli.usage."))
+        elif layer == "publication":
+            declared = any(line == "github proposal publication stopped: " + c
+                           for c in codes)
+        else:
+            declared = any(
+                line == "github proposal stopped before publication: " + c
+                for c in codes)
         if not declared:
             fail_envelope("stderr-code")
     return envelope

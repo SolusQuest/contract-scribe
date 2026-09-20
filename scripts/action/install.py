@@ -38,7 +38,7 @@ def fail_install(stage, reason):
 
 def fail_cache(reason):
     C.marker_kv("action-cache", ("check=hit",), "fail", reason)
-    C.write_output("action-status", f"action.cache-{reason}")
+    C.write_output("action-status", f"action.install-cache-{reason}")
     raise SystemExit(1)
 
 

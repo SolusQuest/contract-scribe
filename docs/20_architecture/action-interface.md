@@ -87,7 +87,7 @@ by the runner.
 ## Exit semantics
 
 The Action step exits with the CLI's exit code unchanged. CLI exit codes are
-product semantics (0 published/replayed/no-work/awaiting-review/merged, 2
+product semantics (0 published/replayed/no-op/awaiting-review/merged, 2
 usage, 3 bounded-resumable, 4 invalid-state/authority, 5 host, 6 cancelled,
 7 timeout). A wrapper failure exits 1 with `action-status` set.
 

@@ -105,7 +105,7 @@ runs:
         CONTRACTSCRIBE_GITHUB_TOKEN: ""
         CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
       run: |
-        echo "action-status=action.credential-shared" >> "$GITHUB_OUTPUT"
+        echo "action-status=action.guard-credential-shared" >> "$GITHUB_OUTPUT"
         exit 1
 
     - name: prepare
