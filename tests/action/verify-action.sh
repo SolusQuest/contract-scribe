@@ -820,6 +820,9 @@ case_real_chain() {
         CONTRACTSCRIBE_GITHUB_TOKEN="$PRODUCT_TOKEN" \
         CONTRACTSCRIBE_PROVIDER_API_KEY="$PROVIDER_TOKEN" \
         python3 "$ACTION_SCRIPTS/invoke.py"
+    local invoke_rc=$?
+    cat "$w/inv-out.txt" 2>/dev/null || true
+    [ "$invoke_rc" -eq 0 ]
     grep -q "^outcome=github-proposal.published$" "$w/inv-out.txt"
     grep -q "^exit-code=0$" "$w/inv-out.txt"
     grep -q "POST /repos/Owner/repo/pulls" "$WORK/github-requests.log"
