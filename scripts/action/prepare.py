@@ -14,6 +14,7 @@ caller bytes never pass through argv or $GITHUB_ENV.
 
 import os
 import platform
+import signal
 import shutil
 import sys
 import uuid
@@ -70,8 +71,16 @@ def materialize(name, value):
 
 def main():
     os.environ["CS_ACTION_STAGE"] = "prepare"
+    # Cancellation is a bounded, marked outcome like any stage failure.
+    def _cancelled(_signum, _frame):
+        C.write_output("action-status", "action.prepare-cancelled")
+        C.marker("action-prepare", "stage=cancel", "fail", "cancelled")
+        raise SystemExit(130)
+    signal.signal(signal.SIGINT, _cancelled)
+    signal.signal(signal.SIGTERM, _cancelled)
     # Validate the test-seam gate before anything else can act on it.
     C.test_api_root()
+    C.test_map_path()
 
     runner_os = os.environ.get("RUNNER_OS") or platform.system()
     runner_arch = os.environ.get("RUNNER_ARCH") or platform.machine()

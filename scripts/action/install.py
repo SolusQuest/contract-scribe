@@ -246,6 +246,8 @@ def install(archive, expected_sha, root, dotnet, staging):
     """The frozen stage sequence. `archive` is the verified retained file."""
     def abort(_signum, _frame):
         staging.cleanup()
+        C.write_output("action-status", "action.install-cancelled")
+        C.marker(_STAGE_MARK, "stage=cancel", "fail", "cancelled")
         raise SystemExit(130)
 
     signal.signal(signal.SIGINT, abort)
@@ -367,10 +369,10 @@ def install_from_verified(plan, archive, payload):
 
 
 def main():
-    os.environ["CS_ACTION_STAGE"] = "install"
     """Production entry: installs only the archive that acquire.py verified
     against the checked-in map — no argument surface exists to substitute
     either."""
+    os.environ["CS_ACTION_STAGE"] = "install"
     plan = C.load_plan()
     acquired = C.load_json_file(C.work_file("acquired.json"),
                                 C.BOUND_METADATA_JSON, "acquired")

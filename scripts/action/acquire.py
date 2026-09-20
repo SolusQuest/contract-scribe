@@ -9,10 +9,11 @@ oracle. Emits `action-acquire` and `action-cache` markers; the frozen
 `payload-install` stages run in install.py.
 
 The checked-in map file is the only authority for repository/version/hash —
-this script has no argument surface that could replace it. Direct tests
-inject alternate maps/api roots by importing acquire_archive() from
-tests/action/driver.py (a test-only launcher), never through this entrypoint.
-The env API-root seam applies the strict test gate in common.py.
+this script has no argument surface that could replace it. Tests may inject
+an alternate map through the CONTRACTSCRIBE_ACTION_TEST_MAP env seam, which
+is honored only under the strict test gate (test mode + gated loopback API
+root, enforced in common.py), or by importing acquire_archive() from
+tests/action/driver.py (a test-only launcher) for direct legs.
 """
 
 import hashlib
@@ -92,6 +93,8 @@ def resolve_release(root, repository, tag, token):
                     f"{base}/releases?per_page=100&page={page}", token,
                     "releases")
             except C.ActionFailure as error:
+                if error.marker_line == "cancelled":
+                    raise
                 fail_acquire("resolve", str(error))
             if not isinstance(rows, list):
                 fail_acquire("resolve", "releases-shape")
@@ -110,6 +113,8 @@ def resolve_release(root, repository, tag, token):
             f"{base}/releases/tags/{urllib.parse.quote(tag, safe='')}",
             None, "release")
     except C.ActionFailure as error:
+        if error.marker_line == "cancelled":
+            raise
         fail_acquire("resolve", str(error))
     if release.get("draft") is True:
         fail_acquire("resolve", "draft-needs-credential")
@@ -189,6 +194,8 @@ def acquire_archive(plan, map_path, api_root, token):
             try:
                 C.download_asset(asset_url, token, api_root, sink)
             except C.ActionFailure as error:
+                if error.marker_line == "cancelled":
+                    raise
                 fail_acquire("download", str(error))
         if sha256_file(staging) != payload["sha256"]:
             fail_acquire("download", "sha256-mismatch")
@@ -205,9 +212,10 @@ DEFAULT_MAP = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def main():
+    """Production entry: the checked-in map (or the strictly gated test-map
+    seam) and the fixed/gated API root are the only authorities — no
+    argument surface exists to override either."""
     os.environ["CS_ACTION_STAGE"] = "acquire"
-    """Production entry: the checked-in map and the fixed/gated API root are
-    the only authorities — no argument surface exists to override either."""
     # SIGTERM/SIGINT arrive as exceptions so the .partial staging cleanup in
     # acquire_archive's finally runs; the bounded cancellation class then
     # exits through the shared failure path.
@@ -222,7 +230,8 @@ def main():
         fail_acquire("credential", "test-credential")
 
     plan = C.load_plan()
-    archive, payload = acquire_archive(plan, DEFAULT_MAP, C.api_root(), token)
+    map_path = C.test_map_path() or DEFAULT_MAP
+    archive, payload = acquire_archive(plan, map_path, C.api_root(), token)
     C.write_private(C.work_file("acquired.json"),
                     json.dumps({"archive": archive, "payload": payload},
                                ensure_ascii=False).encode("utf-8"))
@@ -235,6 +244,12 @@ if __name__ == "__main__":
         main()
     except SystemExit:
         raise
+    except C.ActionFailure as error:
+        if error.marker_line != "cancelled":
+            fail_acquire("internal", "exception")
+        C.marker("action-acquire", "stage=cancel", "fail", "cancelled")
+        C.write_output("action-status", "action.acquire-cancelled")
+        raise SystemExit(130)
     except Exception:
         try:
             fail_acquire("internal", "exception")

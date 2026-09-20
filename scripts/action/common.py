@@ -197,6 +197,22 @@ def test_api_root():
     return root.rstrip("/")
 
 
+def test_map_path():
+    """Return the test-only map override under the strict test gate.
+
+    Honored only when the API-root seam is also active (a test map can never
+    aim at the production API); the path must be absolute and a regular file.
+    Outside test mode any presence fails closed (see test_api_root)."""
+    path = os.environ.get("CONTRACTSCRIBE_ACTION_TEST_MAP")
+    if not test_mode_enabled() or path is None:
+        return None
+    if test_api_root() is None:
+        fail("action-prepare", "stage=test-gate", "test-map-without-api-root")
+    if not os.path.isabs(path) or os.path.islink(path) or not os.path.isfile(path):
+        fail("action-prepare", "stage=test-gate", "test-map-invalid")
+    return path
+
+
 def api_root():
     return test_api_root() or API_ROOT_PRODUCTION
 

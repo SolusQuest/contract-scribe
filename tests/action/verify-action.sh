@@ -233,16 +233,19 @@ case_static_pycompile() {
 }
 case_static_map_schema() {
     python3 - "$MAP_FILE" <<'PY'
-import json,sys
+import json,re,sys
 doc = json.load(open(sys.argv[1]))
 assert doc["mapVersion"] == 1 and doc["wrapper"] == "contract-scribe-action"
 p = doc["payload"]
-assert p["repository"] == "SolusQuest/contract-scribe"
-assert p["sourceRevision"] == "a960b29db78e41de4aa9df34c9141b5ec2e13fdf"
-assert p["toolVersion"].endswith("+" + p["sourceRevision"])
-assert p["assetName"] == "contract-scribe-%s-linux-x64.tar.gz" % p["toolVersion"]
-assert p["assets"] == [p["assetName"]]
-assert len(p["sha256"]) == 64
+if p is not None:
+    # Pre-release the map carries payload:null; once a pair is recorded the
+    # full pinned shape is asserted.
+    assert p["repository"] == "SolusQuest/contract-scribe"
+    assert re.fullmatch(r"[0-9a-f]{40}", p["sourceRevision"])
+    assert p["toolVersion"].endswith("+" + p["sourceRevision"])
+    assert p["assetName"] == "contract-scribe-%s-linux-x64.tar.gz" % p["toolVersion"]
+    assert p["assets"] == [p["assetName"]]
+    assert len(p["sha256"]) == 64
 PY
 }
 case_static_action_yml() {
@@ -561,8 +564,27 @@ case_acquire_map_malformed() {
     expect_fail acquire_leg "$w" "$w/map.json"
 }
 case_acquire_committed_map() {
-    # The production acquire entrypoint reads only the checked-in map; this
-    # leg exercises it end-to-end when the supplied archive is the mapped one.
+    # The production acquire entrypoint reads only the checked-in map. While
+    # the committed map carries payload:null (pre-release) it must fail
+    # closed; once a pair is recorded this leg exercises it end-to-end when
+    # the supplied archive is the mapped one.
+    local nullmap
+    nullmap="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["payload"] is None)' "$MAP_FILE")"
+    local w; w="$(new_work cmap)"
+    if [ "$nullmap" = "True" ]; then
+        release_config "" "" "" true true
+        local rc=0
+        env CONTRACTSCRIBE_ACTION_TEST=1 GITHUB_ACTIONS=true \
+            GITHUB_REPOSITORY=SolusQuest/contract-scribe \
+            CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+            CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
+            CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" \
+            python3 "$ACTION_SCRIPTS/acquire.py" >"$w/acq.log" 2>&1 || rc=$?
+        release_config "" "" ""
+        [ "$rc" -ne 0 ]
+        grep -q "action.acquire-no-authorized-payload" "$w/out.txt"
+        return 0
+    fi
     python3 - "$MAP_FILE" "$ARCHIVE_SHA" <<'PY' || { echo "archive != committed map; skipped"; return 0; }
 import json,os,sys
 m=json.load(open(sys.argv[1]))
@@ -575,7 +597,6 @@ import json,os,sys
 c=json.load(open(sys.argv[1])); c["releases"][0]["tag"]=sys.argv[2]
 json.dump(c,open(sys.argv[1]+".tmp","w"));os.replace(sys.argv[1]+".tmp",sys.argv[1])
 PY
-    local w; w="$(new_work cmap)"
     env CONTRACTSCRIBE_ACTION_TEST=1 GITHUB_ACTIONS=true \
         GITHUB_REPOSITORY=SolusQuest/contract-scribe \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
@@ -583,6 +604,44 @@ PY
         CS_WORK_DIR="$w" GITHUB_OUTPUT=/dev/null \
         python3 "$ACTION_SCRIPTS/acquire.py"
     release_config "" "" ""
+}
+case_acquire_test_map_seam() {
+    # The TEST_MAP env seam swaps the committed map only under the full test
+    # gate; every partial combination fails closed.
+    local w; w="$(new_work tmap)"
+    write_map "$ARCHIVE_SHA" "payload-$ARCHIVE_VERSION" "$w/map.json"
+    # (a) full gate + TEST_MAP -> the injected map authorizes the archive.
+    env CONTRACTSCRIBE_ACTION_TEST=1 GITHUB_ACTIONS=true \
+        GITHUB_REPOSITORY=SolusQuest/contract-scribe \
+        CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$w/map.json" \
+        CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
+        CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" \
+        python3 "$ACTION_SCRIPTS/acquire.py" >"$w/acq.log" 2>&1
+    grep -q "^payload-sha256=$ARCHIVE_SHA$" "$w/out.txt"
+    # (b) TEST_MAP without the API-root seam -> closed test-gate failure.
+    local w2; w2="$(new_work tmap2)"
+    local rc=0
+    env CONTRACTSCRIBE_ACTION_TEST=1 GITHUB_ACTIONS=true \
+        GITHUB_REPOSITORY=SolusQuest/contract-scribe \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$w/map.json" \
+        CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
+        CS_WORK_DIR="$w2" GITHUB_OUTPUT=/dev/null \
+        python3 "$ACTION_SCRIPTS/acquire.py" >"$w2/acq.log" 2>&1 || rc=$?
+    [ "$rc" -ne 0 ]
+    grep -q "test-map-without-api-root" "$w2/acq.log"
+    # (c) TEST_MAP pointing at a nonexistent path -> closed invalid failure.
+    local w3; w3="$(new_work tmap3)"
+    rc=0
+    env CONTRACTSCRIBE_ACTION_TEST=1 GITHUB_ACTIONS=true \
+        GITHUB_REPOSITORY=SolusQuest/contract-scribe \
+        CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$w3/no-such-map.json" \
+        CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
+        CS_WORK_DIR="$w3" GITHUB_OUTPUT=/dev/null \
+        python3 "$ACTION_SCRIPTS/acquire.py" >"$w3/acq.log" 2>&1 || rc=$?
+    [ "$rc" -ne 0 ]
+    grep -q "test-map-invalid" "$w3/acq.log"
 }
 case_canary_no_credentials() {
     posix_only && return 0
@@ -869,14 +928,15 @@ case_acquire_sigterm_partial() {
     env CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
         CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
-        CS_WORK_DIR="$w" GITHUB_OUTPUT=/dev/null \
+        CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" \
         python3 "$ACTION_SCRIPTS/acquire.py" &
     local pid=$!
     sleep 0.6
     kill -TERM "$pid"
     local rc=0
     wait "$pid" || rc=$?
-    [ "$rc" -ne 0 ]
+    [ "$rc" -eq 130 ]
+    grep -q "action.acquire-cancelled" "$w/out.txt"
     ! find "$w" -name '*.partial' | grep -q .
     release_config "" "" ""
 }
@@ -1086,6 +1146,7 @@ run_case acquire-proxy-off case_acquire_proxy_off
 run_case acquire-gate-env-without-test case_acquire_gate_env_without_test
 run_case acquire-gate-nonloopback case_acquire_gate_nonloopback
 run_case acquire-gate-foreign-repo case_acquire_gate_foreign_repo
+run_case acquire-test-map-seam case_acquire_test_map_seam
 run_case acquire-map-null case_acquire_map_null_payload
 run_case acquire-map-malformed case_acquire_map_malformed
 run_case acquire-committed-map case_acquire_committed_map

@@ -93,6 +93,7 @@ dotnet publish "$CLI_PROJ" \
     -p:PublishSingleFile=false \
     -p:PublishTrimmed=false \
     -p:PublishAot=false \
+    -p:ContinuousIntegrationBuild=true \
     -o "$CONTENT"
 
 # Debug symbols are not part of the executable payload.

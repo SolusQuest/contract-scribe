@@ -7,8 +7,8 @@
 ## What the Action is
 
 `action.yml` at the repository root declares a **composite** Action that
-acquires the authorized D2 payload, verifies it, installs it under an
-invocation-private root, and invokes the production CLI. The Action contains
+acquires the authorized D2 payload, verifies it, installs it under a
+job-scoped root, and invokes the production CLI. The Action contains
 no product logic: every semantic decision stays inside the CLI; the wrapper
 owns only host/transport/security concerns.
 
@@ -59,7 +59,7 @@ wrapper's own closed vocabulary and never replaces the product outcome.
 | `tool-version` | envelope `toolVersion` |
 | `campaign-operation` / `publication-operation-id` / `generation-id` / `publication-diagnostic` | envelope projections |
 | `payload-version` / `payload-sha256` | the authorized map pair actually executed |
-| `install-dir` | invocation-private install root |
+| `install-dir` | job-scoped install root under `RUNNER_TEMP/contract-scribe-action/payloads`; reused within a job only after digest + inventory re-verification |
 | `action-status` | `ok` or `action.<stage>-<reason>` (closed vocabulary) |
 
 Outputs are always emitted where definable: a wrapper failure yields
@@ -70,7 +70,9 @@ The `action-status` vocabulary is closed: `<stage>` is one of `guard`,
 transport failures surface only as the fixed classes `http-auth`,
 `http-not-found`, `http-conflict`, `http-rate-limit`, `http-server`,
 `http-client`, `http-error`, and `http-unreachable` — raw numeric status codes
-never enter the public output.
+never enter the public output. Runner cancellation reports
+`action.<stage>-cancelled` (stages `prepare`, `acquire`, `install`, `invoke`)
+with exit 130.
 
 ## Annotations
 
@@ -123,13 +125,16 @@ one matching asset, rejects additional payload-shaped assets, verifies the
 downloaded bytes against the pinned SHA-256, and retains the verified archive
 under the install root.
 
-The map's pinned bytes are the authoritative Ubuntu-produced build of the
-bound `sourceRevision`; a copy is committed under `tests/action/payload/` so
-CI verifies the exact pair durably (workflow artifacts expire and releases
-are maintainer authority). The `action_packaged` job asserts that committed
-archive's SHA-256 equals the map and that a fresh fixed-source rebuild
-carries the same logical identity — a byte mismatch halts release work until
-a separately reviewed map change; CI never edits the map.
+The payload archive is byte-reproducible: `build-payload.sh` publishes with
+`ContinuousIntegrationBuild=true`, so a clean ubuntu build of a given
+revision always produces the same bytes and the pinned `sha256` is a rebuild
+expectation. Pre-release the map carries `payload: null` and acquisition
+fails closed with `no-authorized-payload`; `action_packaged` proves
+reproducibility every run (producer artifact vs. independent clean rebuild)
+and exercises the Action through a strictly gated test map. Once a pair is
+recorded, the same job rebuilds the mapped `sourceRevision` and requires
+byte equality — a mismatch halts release work until a separately reviewed
+map change; CI never edits the map.
 
 Install follows the frozen A1 semantics (`payload-install` stage markers):
 bounded copy → digest → member-policy scan → extraction of validated regular
@@ -160,5 +165,13 @@ require an SDK (the CLI performs semantic MSBuild work).
 loopback URL>` redirect acquisition to a test server. The seam requires
 `GITHUB_ACTIONS=true` and `GITHUB_REPOSITORY=SolusQuest/contract-scribe` (both
 runner-controlled), a loopback HTTP URL, and a synthetic credential when a
-token is supplied. It cannot alter the checked-in map. Production runs leave
-these unset; any partial or violating combination fails closed.
+token is supplied. Production runs leave these unset; any partial or
+violating combination fails closed.
+
+`CONTRACTSCRIBE_ACTION_TEST_MAP=<absolute path>` substitutes the checked-in
+map for acquisition. It is honored only together with the API-root seam
+under the same runner-identity gate — a test map can never aim at the
+production API — and must name an absolute path to a regular file (no
+symlink). The substituted map still passes through the full `load_map`
+validation; `payload: null` and malformed maps fail closed exactly as the
+committed map would.

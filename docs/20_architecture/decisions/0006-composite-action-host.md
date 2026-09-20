@@ -15,9 +15,7 @@ selected under ADR 0005 and invokes the production CLI, without reimplementing
 product authority. Production payload bytes reach the Action only through a
 separate channel — Release assets — and the Action needs an explicit trust
 anchor for them. (The ~12 MiB publish tree is deliberately not executed from
-the checkout; a durable evidence copy of the one authorized archive is kept
-under `tests/action/payload/` for pair verification and R1 handoff, never as
-the production acquisition path.)
+the checkout.)
 
 ## Decision
 
@@ -38,43 +36,44 @@ provider credential and a GitHub write token in its environment, and a Release
 asset can be replaced by any `contents:write` token without review — the
 checked-in map anchors authorization to reviewed Git history.
 
-The pinned pair is bound to a main-reachable source revision
-(`a960b29db78e41de4aa9df34c9141b5ec2e13fdf`, the A1 merge), never to the
+A recorded pair is bound to a main-reachable source revision, never to the
 wrapper's own HEAD — the archive does not contain the map, so the binding is
 acyclic.
 
-**Authoritative bytes:** the archive is not byte-reproducible across builds —
-.NET embeds a random MVID per compilation, so even two ubuntu CI builds of the
-same source produce different bytes (measured: 11779218 vs 11779257 bytes).
-The pinned SHA-256 therefore identifies *produced* bytes, not a rebuild
-expectation: it comes from an authoritative ubuntu build of the bound revision
-(the `payload_producer` run on main). Those authoritative bytes are durably
-committed under `tests/action/payload/` — the checked-in copy is the handoff
-evidence; production acquisition still comes only from the Release channel.
-The `action_packaged` job validates the pair two ways: (1) exact pair — the
-committed archive's digest and manifest identity equal the map; (2)
-bound-source identity — a fixed-source rebuild of the mapped revision carries
-the same `toolVersion`, `sourceRevision`, and file inventory, proving the
-bound source genuinely produced the authorized payload.
+**Authoritative bytes:** the archive *is* byte-reproducible —
+`build-payload.sh` publishes with `ContinuousIntegrationBuild=true`
+(PathMap), and two builds of the same revision from different checkout paths
+were shown byte-identical. The earlier byte drift came from embedded
+absolute paths (the PDB path in the PE debug directory and Regex
+source-generator `<RegexGenerator_g>HASH__` name hashes); MVIDs are
+deterministic content hashes, not random. The property must be present for a
+clean build — incremental publish does not invalidate on it, and CI builds
+are clean. The pinned `sha256` is therefore a rebuild expectation that anyone
+can verify on ubuntu.
+
+Pre-release the map carries `payload: null` — the production path fails
+closed with `no-authorized-payload`. `action_packaged` proves
+reproducibility every run (the `payload_producer` artifact vs. an
+independent clean rebuild on a second runner, byte-equal) and exercises the
+Action through a strictly gated test map. Once a pair is recorded, the same
+job rebuilds the mapped `sourceRevision` and requires byte equality with the
+map.
 
 ## R1 handoff rule
 
-R1 (#187) consumes the exact A2-mapped bytes. Permitted outcomes:
-
-- promote the committed bytes under `tests/action/payload/` whose SHA-256
-  already equals the map value; or
-- rebuild the bound source revision and promote only if byte-identical.
-
-A digest mismatch on reconstruction is a **stop condition**: the changed pair
-routes back through the A2-owned mapping update and exact-pair validation
-boundary. R1 never edits `payload-map.json` inside its own promotion.
+R1 (#187) records the first authorized pair as a reviewed change to
+`payload-map.json` during candidate preparation: `sourceRevision` must be
+main-reachable and `sha256` taken from a clean ubuntu build of that
+revision. `action_packaged` must pass its byte-equality rebuild on that
+change; a digest mismatch is a **stop condition** — no promotion, and R1
+never edits `payload-map.json` inside the promotion itself.
 
 ## Consequences
 
 - A changed wrapper/payload pair requires re-running the Action verification
   (`action_packaged`); this is the "affected exact-pair validation" clause.
-- Pre-release, no published Release exists, so production acquisition fails
-  closed (`release-not-found`) until R1 publishes the mapped asset — expected
+- Pre-release the map carries `payload: null`, so production acquisition
+  fails closed (`no-authorized-payload`) until R1 records a pair — expected
   and safe.
 - The map file is the per-release update point: promotion to a new payload
   revision is a reviewed one-line-class change, not a contract amendment.
