@@ -196,7 +196,8 @@ class Runner:
             if os.path.exists(self.ready_path):
                 break
             time.sleep(0.05)
-        ready = json.load(open(self.ready_path))
+        with open(self.ready_path, encoding="utf-8") as fh:
+            ready = json.load(fh)
         self.api = ready["endpoint"]
 
     def stop(self):
@@ -280,8 +281,9 @@ def register(r):
         env = select_env(activation=activation_json())
         r.run_helper(select_args(r.workdir), env)
         assert r.read_output("artifact-id") == str(ARTIFACT_ID)
-        sel = json.load(open(os.path.join(r.workdir, "sel",
-                                          "selection.json")))
+        with open(os.path.join(r.workdir, "sel", "selection.json"),
+                  encoding="utf-8") as fh:
+            sel = json.load(fh)
         assert sel["producer"]["runNumber"] == 500
 
     def select_case(name, mutate_cfg=None, mutate_act=None,
@@ -422,6 +424,7 @@ def register(r):
             fh.write(archive)
         return env, os.path.join(sel_dir, "selection.json"), arch
 
+
     def verify_args(sel, arch, wd):
         return ["verify", "--archive", arch, "--selection", sel,
                 "--state-dir", os.path.join(wd, "state")]
@@ -496,7 +499,8 @@ def register(r):
         sel = os.path.join(r.workdir, "sel")
         r.run_helper(["select", "--workdir", sel], env)
         arch = os.path.join(r.workdir, "in.zip")
-        open(arch, "wb").write(archive)
+        with open(arch, "wb") as fh:
+            fh.write(archive)
         r.run_helper(verify_args(os.path.join(sel, "selection.json"),
                                  arch, r.workdir), env, ok=False,
                      reason="zip-member")
@@ -516,7 +520,8 @@ def register(r):
         sel = os.path.join(r.workdir, "sel")
         r.run_helper(["select", "--workdir", sel], env)
         arch = os.path.join(r.workdir, "in.zip")
-        open(arch, "wb").write(archive)
+        with open(arch, "wb") as fh:
+            fh.write(archive)
         r.run_helper(verify_args(os.path.join(sel, "selection.json"),
                                  arch, r.workdir), env, ok=False,
                      reason="zip-member")
@@ -538,7 +543,8 @@ def register(r):
         sel = os.path.join(r.workdir, "sel")
         r.run_helper(["select", "--workdir", sel], env)
         arch = os.path.join(r.workdir, "in.zip")
-        open(arch, "wb").write(archive)
+        with open(arch, "wb") as fh:
+            fh.write(archive)
         r.run_helper(verify_args(os.path.join(sel, "selection.json"),
                                  arch, r.workdir), env, ok=False,
                      reason="zip-member-size")
@@ -569,7 +575,8 @@ def register(r):
         sel = os.path.join(r.workdir, "sel")
         r.run_helper(["select", "--workdir", sel], env)
         arch = os.path.join(r.workdir, "in.zip")
-        open(arch, "wb").write(archive)
+        with open(arch, "wb") as fh:
+            fh.write(archive)
         r.run_helper(verify_args(os.path.join(sel, "selection.json"),
                                  arch, r.workdir), env, ok=False,
                      reason="handoff-seal")
@@ -589,7 +596,8 @@ def register(r):
     @leg("verify_archive_digest")
     def _():
         env, sel, arch = verify_setup(r)
-        open(arch, "wb").write(b"corrupted-bytes")
+        with open(arch, "wb") as fh:
+            fh.write(b"corrupted-bytes")
         r.run_helper(verify_args(sel, arch, r.workdir), env, ok=False,
                      reason="archive-digest")
 
@@ -610,7 +618,8 @@ def register(r):
     def _():
         env = emit_env()
         cp = os.path.join(r.workdir, "cp.json")
-        open(cp, "wb").write(b'{"campaign":1}')
+        with open(cp, "wb") as fh:
+            fh.write(b'{"campaign":1}')
         out = os.path.join(r.workdir, "hand")
         r.run_helper(["emit", "--checkpoint", cp, "--handoff-dir", out], env)
         handoff = json.load(open(os.path.join(out, "handoff.json")))
@@ -626,7 +635,8 @@ def register(r):
     def _():
         env = emit_env(attempt=2)
         cp = os.path.join(r.workdir, "cp.json")
-        open(cp, "wb").write(b"{}")
+        with open(cp, "wb") as fh:
+            fh.write(b"{}")
         r.run_helper(["emit", "--checkpoint", cp,
                       "--handoff-dir", os.path.join(r.workdir, "h")], env,
                      ok=False, reason="own-run-attempt-one")
@@ -635,7 +645,8 @@ def register(r):
     def _():
         env = emit_env(branch="topic")
         cp = os.path.join(r.workdir, "cp.json")
-        open(cp, "wb").write(b"{}")
+        with open(cp, "wb") as fh:
+            fh.write(b"{}")
         r.run_helper(["emit", "--checkpoint", cp,
                       "--handoff-dir", os.path.join(r.workdir, "h")], env,
                      ok=False, reason="own-run-branch")
@@ -644,7 +655,8 @@ def register(r):
     def _():
         env = emit_env()
         cp = os.path.join(r.workdir, "cp.json")
-        open(cp, "wb").write(b"x" * (4 * 1024 * 1024 + 1))
+        with open(cp, "wb") as fh:
+            fh.write(b"x" * (4 * 1024 * 1024 + 1))
         r.run_helper(["emit", "--checkpoint", cp,
                       "--handoff-dir", os.path.join(r.workdir, "h")], env,
                      ok=False, reason="checkpoint-oversize")
@@ -722,7 +734,8 @@ def register(r):
     def _():
         env = emit_env()
         cp = os.path.join(r.workdir, "cp.json")
-        open(cp, "wb").write(b'{"campaign":1}')
+        with open(cp, "wb") as fh:
+            fh.write(b'{"campaign":1}')
         out = os.path.join(r.workdir, "hand")
         r.run_helper(["emit", "--checkpoint", cp, "--handoff-dir", out], env)
         env2 = dict(env)
