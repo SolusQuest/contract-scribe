@@ -5,9 +5,9 @@ Runs as the step entry process (action.yml execs it), so the runner's
 cancellation signals land here directly. The CLI runs in its own process
 group (start_new_session); INT/TERM forward to that group, wait briefly,
 then SIGKILL — inside the runner's 7.5s+2.5s grace window. The CLI's exit
-code is preserved verbatim; its stdout is validated as the documented
-single-envelope contract before any output is written. A malformed product
-stream is a wrapper failure (action.envelope-*), never repaired or rerun.
+code is preserved verbatim; its stdout is validated for the physical
+envelope shape before any output is written. A malformed product stream is
+a wrapper failure (action.envelope-*), never repaired or rerun.
 
 The acquisition credential is scrubbed from the child environment; the
 product credentials are masked before the child starts.
@@ -26,109 +26,21 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
 
-# Envelope contract per docs/20_architecture/github-proposal-cli.md:
-# exactly these fields, in this order; explicit nulls where unavailable.
+# Envelope keys per docs/20_architecture/github-proposal-cli.md. The
+# wrapper validates physical shape only — these keys must be present so the
+# outputs can be projected, but their values' product semantics are never
+# re-judged here; extra keys are tolerated and pass through in `result`.
 ENVELOPE_FIELDS = (
     "githubProposalEnvelopeVersion", "terminalLayer", "cliContractBaseline",
     "toolVersion", "campaignOperation", "publicationOperationId",
     "generationId", "outcome", "diagnosticCodes", "checkpointRevision",
     "pullRequestUrl", "publicationDiagnostic",
 )
-TERMINAL_LAYERS = ("usage", "preflight", "campaign", "publication",
-                   "presentation")
-CAMPAIGN_OPERATIONS = ("start", "resume")
-
-# outcome suffix (github-proposal.<suffix>) -> permitted exit codes,
-# taken verbatim from GitHubProposalPresentation.Exit. usage-layer failures
-# emit outcome local-invalid with exit 2; admitted and recovered-*-partial
-# are diagnostic codes, never outcome values.
-OUTCOME_EXIT = {
-    "published": (0,), "replayed": (0,), "no-op": (0,),
-    "awaiting-review": (0,), "merged": (0,),
-    "stale-base-after-create": (3,), "rate-limit": (3,), "conflict": (3,),
-    "local-invalid": (2, 4), "stale": (4,), "human-change": (4,),
-    "permission": (4,), "closed-unmerged": (4,),
-    "host-failure": (5,),
-    "cancelled": (6,),
-    "timeout": (7,),
-}
-
-# Closed publication-diagnostic vocabularies (C# enum member names are the
-# wire values verbatim). An undefined member suppresses the whole diagnostic
-# upstream; the wrapper enforces the same closed sets.
-DIAG_BOUNDARY = {
-    "Reconcile", "Repository", "CoordinationRead", "CoordinationClaim",
-    "CoordinationRecord", "CoordinationAdvanceStale",
-    "CoordinationAdvanceContent", "CoordinationAdvanceRef", "GitInspect",
-    "GitInspectPredecessor", "GitPrepare", "GitCreateContent",
-    "GitAdvanceRef", "PullRequestPreflight", "PullRequestObserve",
-    "PullRequestCreate", "PullRequestRecover",
-}
-DIAG_OWNER = {
-    "Reconciler", "Transport", "Coordination", "GitData", "PullRequests",
-}
-DIAG_COORDINATION_FAILURE = {
-    "InvalidInput", "MissingPredecessor", "DifferentOperation",
-    "StageConflict", "TargetMoved", "HumanChange", "Conflict",
-    "ObjectMismatch", "Bounds", "Unresolved", "Transport",
-}
-DIAG_PROPOSAL_FAILURE = {
-    "InvalidInput", "Integrity", "Bounds", "Conflict", "Unresolved",
-    "Transport",
-}
-DIAG_PR_OUTCOME = {
-    "Absent", "Appendable", "HeldDraft", "Ready", "Merged",
-    "ClosedUnmerged", "StaleDraft", "Conflict", "Unresolved", "Failed",
-}
-DIAG_TRANSPORT_CODE = {
-    "InvalidRequest", "Authentication", "Permission", "NotFound",
-    "Conflict", "Validation", "RateLimit", "Cancelled", "Timeout",
-    "ResponseLost", "InvalidResponse", "HostFailure",
-}
-DIAG_DELIVERY = {"NotDispatched", "Read", "NeedsReadback", "Ambiguous"}
-DIAG_OBJECT_KIND = {"Blob", "Tree", "Commit"}
-
-# Closed cli.usage.* -> message mapping (CliDiagnostics.Messages, verbatim).
-# The usage-layer stderr line is exactly '<code>: <message>'.
-USAGE_LINES = {
-    "cli.usage.unknown-command":
-        "the command is not recognized; run 'contract-scribe --help' for usage",
-    "cli.usage.unknown-option":
-        "the option is not recognized for this command",
-    "cli.usage.missing-required-option":
-        "a required option is missing",
-    "cli.usage.duplicate-option":
-        "an option was specified more than once",
-    "cli.usage.missing-option-value":
-        "an option is missing its required value",
-    "cli.usage.invalid-option-value":
-        "an option value is not permitted",
-    "cli.usage.unexpected-operand":
-        "positional operands are not supported",
-    "cli.usage.forbidden-combination":
-        "the argument combination is not permitted",
-}
-
-DIAG_PREDICATE = {
-    "InvalidCorrelation", "Cancelled", "UnhandledException",
-    "RepositoryUnavailable", "DifferentOperation", "TargetMoved",
-    "SuccessorMismatch", "AppendMismatch", "TransitionMismatch",
-    "UnexpectedProposalRef", "ClaimMismatch", "CurrentMismatch",
-    "ClaimedRefPresent", "StaleStage", "UnexpectedStage",
-    "AppendCreateForbidden", "CompletionHeadChanged", "ObservationLimit",
-    "LifecycleOutcome", "MissingOrUnexpectedComponent",
-}
 
 _PR_URL = re.compile(
     r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*\Z")
 _DIAG_CODE = re.compile(r"[a-z0-9]+([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+")
-
-PUBLICATION_DIAGNOSTIC_FIELDS = (
-    "boundary", "owner", "coordinationFailure", "proposalFailure",
-    "pullRequestOutcome", "transportCode", "transportHttpStatus",
-    "delivery", "recoveryCode", "recoveryHttpStatus", "objectKind",
-    "predicate",
-)
+_OUTCOME = re.compile(r"github-proposal\.[a-z0-9]+(-[a-z0-9]+)*\Z")
 
 
 def fail_invoke(reason):
@@ -260,124 +172,75 @@ def run_cli(argv, env, cwd):
 
 
 def parse_envelope(stdout_bytes, stderr_bytes, rc):
-    """Validate the documented physical output shape; return the envelope."""
+    """Validate only the physical envelope shape the wrapper depends on to
+    project outputs. Product semantics (outcome/exit/layer/diagnostic
+    consistency, message texts) are the CLI's contract and are never
+    re-judged here; extra keys are tolerated and pass through in `result`."""
     if not stdout_bytes:
         fail_envelope("missing")
     if len(stdout_bytes) > C.BOUND_ENVELOPE:
         fail_envelope("oversize")
     if not stdout_bytes.endswith(b"\n") or stdout_bytes.count(b"\n") != 1:
         fail_envelope("multiple-objects")
-    if stderr_bytes and (stderr_bytes.count(b"\n") != 1
-                         or not stderr_bytes.endswith(b"\n")):
-        fail_envelope("stderr-shape")
     try:
         envelope = json.loads(stdout_bytes[:-1].decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         fail_envelope("malformed")
     if not isinstance(envelope, dict) \
-            or list(envelope.keys()) != list(ENVELOPE_FIELDS):
+            or not set(ENVELOPE_FIELDS) <= set(envelope):
         fail_envelope("shape")
     v = envelope["githubProposalEnvelopeVersion"]
     if not isinstance(v, int) or isinstance(v, bool) or v != 1:
         fail_envelope("version")
-    if envelope["terminalLayer"] not in TERMINAL_LAYERS:
-        fail_envelope("layer")
-    for name in ("cliContractBaseline", "toolVersion"):
-        if not isinstance(envelope[name], str) or not envelope[name]:
+
+    def _clean(text):
+        return len(text) <= 512 and not any(
+            ord(c) < 0x20 or ord(c) == 0x7F for c in text)
+
+    def _str(name, optional=False):
+        value = envelope[name]
+        if value is None and optional:
+            return
+        if not isinstance(value, str) or (not value and not optional) \
+                or not _clean(value):
             fail_envelope("field-" + name)
-    op = envelope["campaignOperation"]
-    if op is not None and op not in CAMPAIGN_OPERATIONS:
-        fail_envelope("field-campaignOperation")
-    for name in ("publicationOperationId", "generationId"):
-        if envelope[name] is not None \
-                and not isinstance(envelope[name], str):
-            fail_envelope("field-" + name)
+
+    for name in ("terminalLayer", "cliContractBaseline", "toolVersion"):
+        _str(name)
+    for name in ("campaignOperation", "publicationOperationId", "generationId"):
+        _str(name, optional=True)
+    outcome = envelope["outcome"]
+    if not isinstance(outcome, str) or not _OUTCOME.fullmatch(outcome):
+        fail_envelope("outcome-shape")
     codes = envelope["diagnosticCodes"]
     if not isinstance(codes, list) or len(codes) > 16 \
             or not all(isinstance(c, str) and len(c) <= 96
                        and _DIAG_CODE.fullmatch(c) for c in codes):
         fail_envelope("diagnostic-codes")
     rev = envelope["checkpointRevision"]
-    if rev is not None and (not isinstance(rev, int) or isinstance(rev, bool)):
+    if rev is not None and (isinstance(rev, bool) or not isinstance(rev, int)):
         fail_envelope("field-checkpointRevision")
     url = envelope["pullRequestUrl"]
     if url is not None \
             and (not isinstance(url, str) or not _PR_URL.fullmatch(url)):
         fail_envelope("pull-request-url")
     diag = envelope["publicationDiagnostic"]
-    if diag is not None:
-        if not isinstance(diag, dict) \
-                or list(diag.keys()) != list(PUBLICATION_DIAGNOSTIC_FIELDS) \
-                or diag["boundary"] not in DIAG_BOUNDARY \
-                or diag["owner"] not in DIAG_OWNER:
-            fail_envelope("publication-diagnostic-shape")
-        enum_fields = (
-            ("coordinationFailure", DIAG_COORDINATION_FAILURE),
-            ("proposalFailure", DIAG_PROPOSAL_FAILURE),
-            ("pullRequestOutcome", DIAG_PR_OUTCOME),
-            ("transportCode", DIAG_TRANSPORT_CODE),
-            ("delivery", DIAG_DELIVERY),
-            ("recoveryCode", DIAG_TRANSPORT_CODE),
-            ("objectKind", DIAG_OBJECT_KIND),
-            ("predicate", DIAG_PREDICATE),
-        )
-        for field, vocabulary in enum_fields:
-            if diag[field] is not None and diag[field] not in vocabulary:
-                fail_envelope("publication-diagnostic-enum")
-        for status_key in ("transportHttpStatus", "recoveryHttpStatus"):
-            status = diag[status_key]
-            if status is not None and (not isinstance(status, int)
-                                       or isinstance(status, bool)
-                                       or not 100 <= status <= 599):
-                fail_envelope("publication-diagnostic")
-    outcome = envelope["outcome"]
-    if not isinstance(outcome, str) \
-            or not outcome.startswith("github-proposal.") \
-            or OUTCOME_EXIT.get(outcome[len("github-proposal."):]) is None:
-        fail_envelope("outcome-unknown")
-    permitted = OUTCOME_EXIT[outcome[len("github-proposal."):]]
-    if rc not in permitted:
-        fail_envelope("exit-mismatch")
-    # usage-layer results are the only exit-2 producers and always carry
-    # local-invalid; publicationDiagnostic exists only on failed publication
-    # paths — never on success, never on any other layer.
-    if (envelope["terminalLayer"] == "usage") != (rc == 2):
-        fail_envelope("layer-exit")
-    if envelope["terminalLayer"] == "usage" \
-            and outcome != "github-proposal.local-invalid":
-        fail_envelope("layer-exit")
-    if diag is not None and (envelope["terminalLayer"] != "publication"
-                             or rc == 0):
-        fail_envelope("diagnostic-layer")
-    if rc == 0 and stderr_bytes:
-        fail_envelope("stderr-shape")
-    # Controlled stderr is exactly one line in the layer's own Write()
-    # grammar — usage renders 'cli.usage.<code>: <message>'; every other
-    # failed layer renders the fixed prefix ending in the declared code.
-    # A missing or arbitrary line is malformed product output.
-    codes = envelope["diagnosticCodes"]
-    if rc != 0 and not stderr_bytes:
-        fail_envelope("stderr-missing")
+    if diag is not None and not isinstance(diag, dict):
+        fail_envelope("publication-diagnostic-shape")
+
+    # stderr: physical shape only — success is silent, a controlled failure
+    # carries at most one bounded control-free line whose text is
+    # product-owned and never interpreted here.
     if stderr_bytes:
-        line = stderr_bytes[:-1].decode("utf-8", "strict")
-        if len(line) > 512:
+        if rc == 0 or stderr_bytes.count(b"\n") != 1 \
+                or not stderr_bytes.endswith(b"\n"):
+            fail_envelope("stderr-shape")
+        try:
+            line = stderr_bytes[:-1].decode("utf-8")
+        except UnicodeDecodeError:
+            fail_envelope("stderr-encoding")
+        if not _clean(line):
             fail_envelope("stderr-bound")
-        if any(ord(c) < 0x20 or ord(c) == 0x7F for c in line):
-            fail_envelope("stderr-control")
-        layer = envelope["terminalLayer"]
-        if layer == "usage":
-            # The exact '<code>: <closed message>' form — not any suffix.
-            declared = any(line == c + ": " + USAGE_LINES[c]
-                           for c in codes if c in USAGE_LINES)
-        elif layer == "publication":
-            declared = any(line == "github proposal publication stopped: " + c
-                           for c in codes)
-        else:
-            declared = any(
-                line == "github proposal stopped before publication: " + c
-                for c in codes)
-        if not declared:
-            fail_envelope("stderr-code")
     return envelope
 
 
@@ -468,11 +331,10 @@ def main():
     C.write_output("action-status", "ok")
     C.marker("action-invoke", "stage=invoke", "ok")
 
-    # Cancellation semantics: the product's own cancelled envelope (exit 6)
-    # is preserved verbatim; a signal that killed the child after it emitted
-    # a valid non-cancelled result maps to 130.
-    if signalled and rc != 6:
-        raise SystemExit(130)
+    # Cancellation semantics: a validly emitted envelope is preserved
+    # verbatim — the CLI's exit code is returned regardless of whether the
+    # step was signalled. `signalled` maps to 130 only when no valid
+    # envelope exists (the except-SystemExit branch above).
     raise SystemExit(rc)
 
 

@@ -65,6 +65,18 @@ wrapper's own closed vocabulary and never replaces the product outcome.
 Outputs are always emitted where definable: a wrapper failure yields
 `action-status` plus empty product fields.
 
+### Envelope validation
+
+The wrapper validates only the physical envelope shape it depends on to
+project outputs: a single compact JSON object plus LF within the byte bound,
+`githubProposalEnvelopeVersion` 1, the twelve documented keys present, the
+projected fields typed as string/int/null/list-of-codes, and stderr empty on
+exit 0 and at most one bounded control-free line otherwise. It does **not**
+check outcome/exit-code/layer/diagnostic consistency, does not interpret
+stderr text, and tolerates additional keys — product semantics are the CLI's
+contract alone, so CLI contract evolution (new outcomes, enum members,
+fields, or messages) requires no Action change.
+
 The `action-status` vocabulary is closed: `<stage>` is one of `guard`,
 `prepare`, `acquire`, `install`, `invoke`, `envelope`, `emit`, and HTTP
 transport failures surface only as the fixed classes `http-auth`,
@@ -88,10 +100,13 @@ by the runner.
 
 ## Exit semantics
 
-The Action step exits with the CLI's exit code unchanged. CLI exit codes are
-product semantics (0 published/replayed/no-op/awaiting-review/merged, 2
-usage, 3 bounded-resumable, 4 invalid-state/authority, 5 host, 6 cancelled,
-7 timeout). A wrapper failure exits 1 with `action-status` set.
+The Action step exits with the CLI's exit code unchanged — a valid
+envelope's exit code is returned verbatim, even when the step was signalled
+(cancellation maps to 130 only when no valid envelope exists). CLI exit
+codes are product semantics (0 published/replayed/no-op/awaiting-review/
+merged, 2 usage, 3 bounded-resumable, 4 invalid-state/authority, 5 host, 6
+cancelled, 7 timeout); the wrapper never re-judges which code an outcome
+permits. A wrapper failure exits 1 with `action-status` set.
 
 ## Credentials
 
