@@ -767,8 +767,8 @@ jobs:
             echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
             echo "base_oid=$BASE_OID"
           } >> "$GITHUB_OUTPUT"
-          mkdir -p action-inputs checkpoint-state
-          chmod 0700 checkpoint-state
+          mkdir -p action-inputs checkpoint-state checkpoint-state-2
+          chmod 0700 checkpoint-state checkpoint-state-2
           cat > action-inputs/request.json <<EOFX
           {"githubProposalRequestVersion":1,
            "campaignLineage":"campaign.action.e2e","snapshot":"snapshot.action.e2e",
@@ -781,9 +781,13 @@ jobs:
                "maximumCumulativePatchBytes":4194304},
              "transition":"initial"}}
           EOFX
+          sed 's|checkpoint-state/state.bin|checkpoint-state-2/state.bin|'               action-inputs/request.json > action-inputs/request-2.json
           {
             echo "request-json<<CSREQ"
             cat action-inputs/request.json
+            echo "CSREQ"
+            echo "request2-json<<CSREQ"
+            cat action-inputs/request-2.json
             echo "CSREQ"
           } >> "$GITHUB_OUTPUT"
           cat > action-inputs/layer.json <<EOFX
@@ -839,7 +843,7 @@ jobs:
           repository-root: ${{ github.workspace }}/target repo a2
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ steps.target.outputs.request-json }}
+          request: ${{ steps.target.outputs.request2-json }}
           configuration: ${{ github.workspace }}/action-inputs/layer.json
           provider-api-key: contract-scribe-synthetic-provider-only
           acquisition-token: contract-scribe-synthetic-acquisition-only

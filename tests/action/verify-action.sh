@@ -770,7 +770,7 @@ prepare_real() {
     mkdir -p "$w/target repo x" "$w/checkpoint"
     chmod 0700 "$w/checkpoint"
     cp -r "$FIXTURE/." "$w/target repo x/"
-    (cd "$w/target repo x" && dotnet restore >/dev/null && dotnet build -c Release --no-restore >/dev/null)
+    (cd "$w/target repo x" && dotnet restore Fixture.slnx >/dev/null && dotnet build Fixture.slnx --no-restore >/dev/null)
     cat > "$w/layer.json" <<EOF
 {"consumerConfigurationVersion":1,
  "provider":{"endpoint":"$PROVIDER_ENDPOINT","model":"fixture-model",
@@ -795,7 +795,7 @@ EOF
         GITHUB_ENV="$w/pre-env.txt" GITHUB_WORKSPACE="$w" \
         CS_INPUT_OPERATION="github-proposal-$2" \
         CS_INPUT_REPOSITORY_ROOT="$w/target repo x" \
-        CS_INPUT_INPUT="App/App.csproj" CS_INPUT_POLICY="policy.json" \
+        CS_INPUT_INPUT="Fixture.slnx" CS_INPUT_POLICY="policy.json" \
         CS_INPUT_REQUEST="$(cat "$w/request.json")" \
         CS_INPUT_CONFIGURATION="$w/layer.json" \
         python3 "$ACTION_SCRIPTS/prepare.py"
