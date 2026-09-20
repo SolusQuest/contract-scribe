@@ -87,6 +87,28 @@ DIAG_TRANSPORT_CODE = {
 }
 DIAG_DELIVERY = {"NotDispatched", "Read", "NeedsReadback", "Ambiguous"}
 DIAG_OBJECT_KIND = {"Blob", "Tree", "Commit"}
+
+# Closed cli.usage.* -> message mapping (CliDiagnostics.Messages, verbatim).
+# The usage-layer stderr line is exactly '<code>: <message>'.
+USAGE_LINES = {
+    "cli.usage.unknown-command":
+        "the command is not recognized; run 'contract-scribe --help' for usage",
+    "cli.usage.unknown-option":
+        "the option is not recognized for this command",
+    "cli.usage.missing-required-option":
+        "a required option is missing",
+    "cli.usage.duplicate-option":
+        "an option was specified more than once",
+    "cli.usage.missing-option-value":
+        "an option is missing its required value",
+    "cli.usage.invalid-option-value":
+        "an option value is not permitted",
+    "cli.usage.unexpected-operand":
+        "positional operands are not supported",
+    "cli.usage.forbidden-combination":
+        "the argument combination is not permitted",
+}
+
 DIAG_PREDICATE = {
     "InvalidCorrelation", "Cancelled", "UnhandledException",
     "RepositoryUnavailable", "DifferentOperation", "TargetMoved",
@@ -344,8 +366,9 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
             fail_envelope("stderr-control")
         layer = envelope["terminalLayer"]
         if layer == "usage":
-            declared = any(line.startswith(c + ": ")
-                           for c in codes if c.startswith("cli.usage."))
+            # The exact '<code>: <closed message>' form — not any suffix.
+            declared = any(line == c + ": " + USAGE_LINES[c]
+                           for c in codes if c in USAGE_LINES)
         elif layer == "publication":
             declared = any(line == "github proposal publication stopped: " + c
                            for c in codes)

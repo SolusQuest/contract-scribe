@@ -139,6 +139,7 @@ case "${STUB_MODE:-ok}" in
     stderrbad) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'raw credential dump hunter2 hunter2' >&2; exit 4 ;;
     stderrsuffix) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.permission","diagnosticCodes":["github-proposal.permission"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'SECRET_OR_RAW_PRODUCT_BYTES: github-proposal.permission' >&2; exit 4 ;;
     missingstderr) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":2,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
+    usageforged) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"usage","cliContractBaseline":"b","toolVersion":"t","campaignOperation":null,"publicationOperationId":null,"generationId":null,"outcome":"github-proposal.local-invalid","diagnosticCodes":["cli.usage.missing-option-value"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'cli.usage.missing-option-value: hunter2 exfiltrated token' >&2; exit 2 ;;
     orphan) bash -c 'sleep 45' & echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":null,"generationId":null,"outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo 'github proposal stopped before publication: github-proposal.conflict' >&2; exit 3 ;;
     *) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"v1","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":7,"pullRequestUrl":"https://github.com/Owner/repo/pull/1","publicationDiagnostic":null}'; exit 0 ;;
 esac
@@ -828,6 +829,14 @@ case_invoke_stderr_missing() {
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
     grep -q "action.envelope-stderr-missing" "$w/out.txt"
 }
+case_invoke_stderr_usage_forged() {
+    # A valid usage code with a forged message is not the closed line.
+    posix_only && return 0
+    local w; w="$(setup_invoke iuf)"
+    if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=usageforged \
+            python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
+    grep -q "action.envelope-stderr-code" "$w/out.txt"
+}
 case_invoke_diagnostic_wrong_layer() {
     posix_only && return 0
     local w; w="$(setup_invoke idl)"
@@ -1105,6 +1114,7 @@ run_case invoke-diagnostic-wrong-layer case_invoke_diagnostic_wrong_layer
 run_case invoke-stderr-adversarial case_invoke_stderr_adversarial
 run_case invoke-stderr-suffix case_invoke_stderr_suffix
 run_case invoke-stderr-missing case_invoke_stderr_missing
+run_case invoke-stderr-usage-forged case_invoke_stderr_usage_forged
 run_case invoke-descendant-survives case_invoke_descendant_survives
 run_case acquire-sigterm-partial case_acquire_sigterm_partial
 run_case invoke-missing-install case_invoke_missing_install
