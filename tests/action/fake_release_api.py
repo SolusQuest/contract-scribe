@@ -40,12 +40,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 def load_config(path):
     # Legs rewrite the config between requests; tolerate a torn read once.
-    for attempt in range(3):
+    for attempt in range(20):
         try:
             with open(path, encoding="utf-8") as fh:
                 return json.load(fh)
         except (json.JSONDecodeError, OSError):
-            if attempt == 2:
+            if attempt == 19:
                 raise
             time.sleep(0.05)
 

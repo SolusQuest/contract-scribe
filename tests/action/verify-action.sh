@@ -150,7 +150,7 @@ release_config() {
     # overrides fragment, $3 = extra assets fragment, $4 = "draft" to mark
     # the primary release draft, $5 = require_auth true
     # Atomic replace: the server reloads the config per request.
-    cat > "$RELEASE_CFG.tmp" <<EOF
+    cat > "$RELEASE_CFG.$$.tmp" <<EOF
 {"repository":"SolusQuest/contract-scribe",
  "expected_token":"$SYNTHETIC_TOKEN",
  "require_auth":${5:-false},
@@ -158,7 +158,7 @@ release_config() {
    "assets":[{"id":1,"name":"$ARCHIVE_BASE.tar.gz","file":"$ARCHIVE"}$3]}$1],
  "overrides":{$2}}
 EOF
-    mv -f "$RELEASE_CFG.tmp" "$RELEASE_CFG"
+    mv -f "$RELEASE_CFG.$$.tmp" "$RELEASE_CFG"
 }
 release_config "" "" ""
 
