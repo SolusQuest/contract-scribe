@@ -24,6 +24,8 @@ GitHub-hosted Ubuntu x64 (`ubuntu-latest`) is the sole required M1-M5 source-val
 
 Initial target repositories must expose an explicit C# solution or project whose caller-prepared prerequisites and design-time MSBuild/Roslyn load succeed on the selected Ubuntu runner. Native-Windows-only workloads, targets, tools, filesystem behavior, process behavior, and host assumptions are outside that boundary. See [ADR 0004](docs/20_architecture/decisions/0004-initial-runner-platform-support.md).
 
+A caller-owned GitHub Actions example for manually and periodically running the Action with verified campaign-state handoff lives under `examples/github-actions/`; see [Caller-owned Action usage](docs/10_workflow/action-usage.md).
+
 Licensing and contribution policy are to be decided before the first downstream-consumable release, NuGet package or GitHub Action publication, or merge of external code contributions.
 
 Until that decision is made, this repository does not invite external contributions or third-party adoption.

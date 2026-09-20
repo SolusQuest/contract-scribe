@@ -1,0 +1,14 @@
+{
+  "consumerConfigurationVersion": 1,
+  "provider": {
+    "endpoint": "https://your-provider.invalid/v1/chat/completions",
+    "model": "your-model",
+    "requestProfile": { "toolChoice": "auto" }
+  },
+  "budgets": {
+    "campaign": {
+      "maximumCandidatesPerBlock": 30,
+      "maximumElapsedMilliseconds": 3600000
+    }
+  }
+}
