@@ -487,5 +487,11 @@ def run_owned(argv, timeout=30):
             signal.signal(sig, handler)
     rc = child.wait()
     if state["signalled"]:
+        # run_owned replaced the owning stage's signal handler, so the stage
+        # cannot report cancellation itself — write its cancelled status here
+        # or the always-running emit step would report action-status=ok.
+        stage = os.environ.get("CS_ACTION_STAGE")
+        if stage and _SAFE_ENV_NAME.fullmatch(stage):
+            write_output("action-status", f"action.{stage}-cancelled")
         raise SystemExit(130)
     return rc, out, err

@@ -914,6 +914,28 @@ case_acquire_sigterm_partial() {
     ! find "$w" -name '*.partial' | grep -q .
     release_config "" "" ""
 }
+case_run_owned_cancel() {
+    # Cancellation landing while a stage is inside run_owned (the dotnet
+    # probes in prepare/install, the publish/selector mv) must still publish
+    # the stage's cancelled status: run_owned holds the signal handler then,
+    # so it reports action.<stage>-cancelled itself before exiting 130.
+    posix_only && return 0
+    local w; w="$(new_work rwc)"
+    env CS_ACTION_STAGE=prepare GITHUB_OUTPUT="$w/out.txt" \
+        python3 - "$ACTION_SCRIPTS" <<'PYEOF' &
+import os, sys
+sys.path.insert(0, sys.argv[1])
+import common as C
+C.run_owned([sys.executable, "-c", "import time; time.sleep(30)"])
+PYEOF
+    local pid=$!
+    sleep 1.0
+    kill -TERM "$pid" 2>/dev/null
+    local rc=0
+    wait "$pid" || rc=$?
+    [ "$rc" -eq 130 ]
+    grep -q "^action-status=action.prepare-cancelled$" "$w/out.txt"
+}
 case_invoke_cancel() {
     posix_only && return 0
     local w; w="$(setup_invoke icx)"
@@ -1153,6 +1175,7 @@ run_case invoke-failure-silent-stderr case_invoke_failure_silent_stderr
 run_case invoke-stderr-adversarial case_invoke_stderr_adversarial
 run_case invoke-descendant-survives case_invoke_descendant_survives
 run_case acquire-sigterm-partial case_acquire_sigterm_partial
+run_case run-owned-cancel case_run_owned_cancel
 run_case invoke-missing-install case_invoke_missing_install
 case_emit_annotation_counts() {
     # Frozen annotation contract: success emits no ::error::; a wrapper
