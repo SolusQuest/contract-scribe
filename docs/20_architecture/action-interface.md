@@ -31,7 +31,7 @@ map; no input or environment route substitutes the checked-in authority.
 | `configuration-override` | no | **inline** layer-override JSON (materialized like `request`) |
 | `provider-api-key` | yes* | reaches only the CLI invocation step env |
 | `github-token` | yes* | reaches only the CLI invocation step env |
-| `acquisition-token` | no | draft-release enumeration only; must differ from `github-token` when both set |
+| `acquisition-token` | no | authenticated release enumeration (required for drafts); recommended for published releases too — without it the resolve call is anonymous (60 req/h per egress IP, shared on hosted runners); must differ from `github-token` when both set |
 
 `*` required by the operation's own contract, not by the wrapper.
 
@@ -125,7 +125,9 @@ permits. A wrapper failure exits 1 with `action-status` set.
   authenticated release enumeration; it is masked and never reaches the CLI or
   the install tree. When both are supplied, `acquisition-token` must differ
   from `github-token` (enforced by a runner expression before any script sees
-  either value).
+  either value). Any read-scoped token suffices — the payload repository is
+  public — and supplying one moves resolution off the anonymous rate limit,
+  which shared runner egress IPs exhaust easily.
 - Acquisition redirects are validated hop-by-hop; `Authorization` is forwarded
   only to the API origin itself, never across origins.
 

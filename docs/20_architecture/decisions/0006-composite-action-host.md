@@ -64,9 +64,11 @@ map.
 R1 (#187) records the first authorized pair as a reviewed change to
 `payload-map.json` during candidate preparation: `sourceRevision` must be
 main-reachable and `sha256` taken from a clean ubuntu build of that
-revision. `action_packaged` must pass its byte-equality rebuild on that
-change; a digest mismatch is a **stop condition** — no promotion, and R1
-never edits `payload-map.json` inside the promotion itself.
+revision. `releaseTag` follows the `payload-<toolVersion>` convention the
+gated test map already uses. `action_packaged` must pass its byte-equality
+rebuild on that change; a digest mismatch is a **stop condition** — no
+promotion, and R1 never edits `payload-map.json` inside the promotion
+itself.
 
 ## Consequences
 
