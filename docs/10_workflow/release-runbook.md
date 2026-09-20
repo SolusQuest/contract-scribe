@@ -100,11 +100,14 @@ by-tag route.
 
 ## R2 qualification (#188)
 
-A consumer repo pins `SolusQuest/contract-scribe@<version_tag>`... — during
-qualification, pin the **payload tag** (`payload-<toolVersion>`) or the
-exact `source_revision` sha since `vX.Y.Z` does not exist yet. Qualification
-records `qualified_release_id` and `qualified_asset_id` from
-`staged.json` plus evidence per #188.
+During qualification the public `vX.Y.Z` tag does not exist yet, so the
+consumer repo pins the Action to the exact `source_revision` sha
+(`SolusQuest/contract-scribe@<source_revision>`). The `payload-<toolVersion>`
+tag is strictly the internal release-asset identity consumed by the
+wrapper's A2 acquisition path — it names the payload build revision, not
+the wrapper candidate, and it does not exist until promotion. Qualification
+records `qualified_release_id` and `qualified_asset_id` from `staged.json`
+plus evidence per #188.
 
 ## Operation 3: promote — guarded publication (R3, #189)
 

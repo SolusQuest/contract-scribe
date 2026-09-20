@@ -60,7 +60,8 @@ def step_envs(job):
 
 def main():
     try:
-        text = open(WORKFLOW, encoding="utf-8").read()
+        with open(WORKFLOW, encoding="utf-8") as fh:
+            text = fh.read()
     except OSError:
         print("FAIL release.yml: missing")
         return 1
@@ -151,9 +152,12 @@ def main():
                      "github.repository == 'SolusQuest/contract-scribe'"):
             if gate not in job:
                 fail(name, f"missing job gate: {gate}")
-        if "github.run_attempt" not in job \
-                or "github.triggering_actor" not in job:
-            fail(name, "fresh-dispatch assertions required")
+        # Stale-approval predicates must be the exact fail-closed forms —
+        # a weakened/negated/logging-only variant must not satisfy this.
+        if 'github.run_attempt }}" = "1"' not in job:
+            fail(name, "run_attempt == 1 assertion required")
+        if 'github.actor }}" = "${{ github.triggering_actor' not in job:
+            fail(name, "actor == triggering_actor assertion required")
         if "persist-credentials: false" not in job:
             fail(name, "checkout must not persist credentials")
         if "digest-mismatch: error" not in job:
@@ -186,7 +190,8 @@ def main():
             fail(name, "automatic token must not be publication-capable")
 
     try:
-        ci = open(CI, encoding="utf-8").read()
+        with open(CI, encoding="utf-8") as fh:
+            ci = fh.read()
     except OSError:
         ci = ""
     for needle in ("release.yml", "promote-candidate", "prepare-candidate"):
@@ -194,12 +199,14 @@ def main():
             fail("ci", f"ci.yml must not invoke {needle}")
 
     try:
-        policy = open(os.path.join(
-            REPO, "docs", "10_workflow", "release-policy.md"),
-            encoding="utf-8").read()
-        runbook = open(os.path.join(
-            REPO, "docs", "10_workflow", "release-runbook.md"),
-            encoding="utf-8").read()
+        with open(os.path.join(
+                REPO, "docs", "10_workflow", "release-policy.md"),
+                encoding="utf-8") as fh:
+            policy = fh.read()
+        with open(os.path.join(
+                REPO, "docs", "10_workflow", "release-runbook.md"),
+                encoding="utf-8") as fh:
+            runbook = fh.read()
     except OSError:
         fail("docs", "release-policy.md and release-runbook.md must exist")
     else:

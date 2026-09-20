@@ -317,14 +317,17 @@ def make_api_handler(server):
                         return self._json(200, run)
                 return self._json(404, {"message": "Not Found"})
 
-            match = re.fullmatch(base + r"/actions/workflows/(.+)/runs",
+            # workflow_id is a single path segment (file name or numeric
+            # id), matching the real REST contract — a path like
+            # .github/workflows/ci.yml cannot reach this route.
+            match = re.fullmatch(base + r"/actions/workflows/([^/]+)/runs",
                                  path)
             if match:
                 if not server.auth(self, state, "read"):
                     return self._json(401, {"message": "auth"})
                 workflow = urllib.parse.unquote(match.group(1))
                 head_sha = query.get("head_sha", [""])[0]
-                if workflow != ".github/workflows/ci.yml":
+                if workflow != "ci.yml":
                     return self._json(404, {"message": "Not Found"})
                 rows = state["ci_runs"].get(head_sha, [])
                 return self._json(200, {"total_count": len(rows),
@@ -340,7 +343,6 @@ def make_api_handler(server):
             base = f"/repos/{repo}"
             parsed = urllib.parse.urlsplit(self.path)
             path = parsed.path
-            query = urllib.parse.parse_qs(parsed.query)
 
             if path == base + "/releases":
                 if not server.auth(self, state, "release"):
@@ -412,6 +414,8 @@ def make_api_handler(server):
                 body = json.loads(self._body() or b"{}")
                 if "draft" in body:
                     release["draft"] = bool(body["draft"])
+                if state.get("overrides", {}).get("mutate_on_publish")                         and body.get("draft") is False                         and release["assets"]:
+                    release["assets"][0]["digest"] = "sha256:" + "f" * 64
                 save_state(server.state_path, state)
                 if self._drop_after_write(state, "release-publish"):
                     self.close_connection = True

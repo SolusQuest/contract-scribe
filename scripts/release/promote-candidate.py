@@ -57,6 +57,9 @@ BOUND_REFERENCE = 1024
 API_ROOT_PRODUCTION = "https://api.github.com"
 REPOSITORY = "SolusQuest/contract-scribe"
 WORKFLOW_PATH = ".github/workflows/release.yml"
+# REST workflow_id is a single path segment (numeric id or file name),
+# so the CI gate addresses ci.yml, then verifies run.path independently.
+CI_WORKFLOW_ID = "ci.yml"
 CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
 REQUIRED_CI_JOB = "action_packaged"
 ARTIFACT_NAME = "release-candidate"
@@ -708,10 +711,12 @@ def verify_candidate(args):
           and map_doc.get("payload") == expected_map_payload(identity),
           "map-pair")
 
-    # Workflow revision: the candidate was produced by this exact workflow.
-    check(stage, env_text("GITHUB_WORKFLOW_SHA") is not None
+    # Workflow revision is inside the digested identity: a changed release
+    # workflow means a different candidate digest, and the runtime must
+    # still be executing that exact revision.
+    check(stage, identity.get("workflowRevision") is not None
           and env_text("GITHUB_WORKFLOW_SHA")
-          == provenance.get("workflowSha"), "workflow-revision")
+          == identity.get("workflowRevision"), "workflow-revision")
 
     # Both revisions must remain ancestors of the current main (HEAD).
     for rev in (identity["sourceRevision"], identity["payloadSourceRevision"]):
@@ -892,7 +897,7 @@ def cmd_stage_draft(args):
         check(stage, hashlib.sha256(body.encode("utf-8")).hexdigest()
               == identity["releaseBodySha256"], "body-sha256")
         try:
-            release = post_json(f"{repo_base}/releases", token, {
+            created = post_json(f"{repo_base}/releases", token, {
                 "tag_name": identity["releaseTag"],
                 "target_commitish": identity["payloadSourceRevision"],
                 "name": identity["releaseName"],
@@ -900,9 +905,17 @@ def cmd_stage_draft(args):
                 "draft": True,
                 "prerelease": False,
             }, "release-create")
-            check(stage, isinstance(release, dict)
-                  and isinstance(release.get("id"), int),
+            check(stage, isinstance(created, dict)
+                  and isinstance(created.get("id"), int),
                   "release-create")
+            # pre-read -> one write -> exact readback: the mutation
+            # response is not proof; enumerate and require the exact draft.
+            after = find_release(root, token, identity)
+            check(stage, len(after) == 1
+                  and after[0]["id"] == created["id"]
+                  and release_matches(identity, after[0], True),
+                  "release-readback")
+            release = after[0]
             recovered = False
         except ReleaseHttp as error:
             if error.reason in _AMBIGUOUS:
@@ -966,10 +979,10 @@ def ci_gate(root, read, identity, stage):
     containing a successful action_packaged job."""
     runs = list_json(
         f"{root}/repos/{REPOSITORY}/actions/workflows/"
-        f"{CI_WORKFLOW_PATH}/runs?head_sha={identity['sourceRevision']}"
+        f"{CI_WORKFLOW_ID}/runs?head_sha={identity['sourceRevision']}"
         "&status=completed", read, "ci-runs", key="workflow_runs")
     for run in runs:
-        if run.get("conclusion") != "success":
+        if run.get("conclusion") != "success"                 or run.get("path") != CI_WORKFLOW_PATH:
             continue
         jobs = list_json(
             f"{root}/repos/{REPOSITORY}/actions/runs/{run['id']}/jobs",
@@ -1058,6 +1071,16 @@ def cmd_promote(args):
                   and release_matches(identity, after[0], False),
                   "release-readback")
 
+    # Final re-verification immediately before the public version tag:
+    # the qualified release/asset must still be the exact approved objects.
+    after = find_release(root, token, identity)
+    check(stage, len(after) == 1
+          and str(after[0]["id"]) == args.qualified_release_id
+          and release_matches(identity, after[0], False),
+          "release-readback")
+    final_asset = check_assets(root, token, identity, after[0], stage)
+    check(stage, str(final_asset) == args.qualified_asset_id, "asset-id")
+
     ensure_ref(root, token, identity["releaseVersion"],
                identity["sourceRevision"], stage)
 
@@ -1107,7 +1130,7 @@ def main():
     args = parser.parse_args()
     try:
         {"resolve-artifact": cmd_resolve_artifact,
-         "verify-candidate": lambda a: verify_candidate(a),
+         "verify-candidate": verify_candidate,
          "stage-draft": cmd_stage_draft,
          "verify-draft": cmd_verify_draft,
          "promote": cmd_promote}[args.command](args)

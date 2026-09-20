@@ -202,6 +202,7 @@ import json, sys
 s = json.load(open(sys.argv[1]))
 s["ci_runs"][s["runs"][0]["head_sha"]] = [
     {"id": 888, "conclusion": "success", "run_attempt": 1,
+     "path": ".github/workflows/ci.yml",
      "jobs": [{"name": "action_packaged", "status": "completed",
                "conclusion": "success"},
               {"name": "validate", "status": "completed",
@@ -295,6 +296,7 @@ s["runs"][0]["head_sha"] = head
 s["artifacts"][0]["workflow_run"]["head_sha"] = head
 s["ci_runs"] = {head: [
     {"id": 888, "conclusion": "success", "run_attempt": 1,
+     "path": ".github/workflows/ci.yml",
      "jobs": [{"name": "action_packaged", "status": "completed",
                "conclusion": "success"}]}]}
 tmp = path + ".tmp"; json.dump(s, open(tmp, "w")); os.replace(tmp, path)
@@ -425,6 +427,14 @@ case_prepare_archive_sha_mismatch() {
         --payload-source-revision "$BASE_REV" --release-version v0.1.0 \
         --wrapper contract-scribe-action
 }
+case_prepare_workflow_drift() {
+    local d="$WORK/p-wfdrift"
+    prepare_env "GITHUB_WORKFLOW_SHA=wf9999999999999999999999999999999999wf" \
+        --repo "$FIXTURE" --output "$d" \
+        --source-revision "$MAP_REV" --payload-source-revision "$BASE_REV" \
+        --release-version v0.1.0 --wrapper contract-scribe-action
+    [ "$(cut -d' ' -f1 "$d/candidate.sha256")" != "$CAND2_DIGEST" ]
+}
 case_prepare_output_nonempty() {
     expect_fail run_prepare "$CAND2" "$MAP_REV" "$BASE_REV" "v0.1.0"
 }
@@ -439,6 +449,7 @@ run_case prepare-wrapper-mismatch case_prepare_wrapper_mismatch
 run_case prepare-manifest-source-mismatch case_prepare_manifest_source_mismatch
 run_case prepare-archive-sha-mismatch case_prepare_archive_sha_mismatch
 run_case prepare-output-nonempty case_prepare_output_nonempty
+run_case prepare-workflow-drift case_prepare_workflow_drift
 
 # ---------------------------------------------------------------------------
 # resolve-artifact legs
@@ -542,11 +553,38 @@ case_stage_field_mismatch() {
 }
 case_stage_extra_asset() {
     fresh_state
-    state_edit 's["releases"].append({"id":9102,"tag_name":"'"$REL_TAG"'","target_commitish":"'"$MAP_REV"'","name":None,"body":None,"draft":True,"prerelease":False,"assets":[{"id":5,"name":"other.bin","file":"/nope","size":1,"digest":"sha256:"+"0"*64}]})'
-    # exact-match on frozen fields fails before the asset set is even read
+    seed_exact_draft 's["releases"][0]["assets"].append({"id":31337,"name":"extra.bin","file":"/nope","size":1,"digest":"sha256:"+"0"*64})'
+    # reaches converge_assets -> asset-extra, zero mutations
     expect_fail release_env x stage-draft $(vc_args "$CAND2")
-    state_edit 's["releases"]=[r for r in s["releases"] if r["id"]!=9102]'
+    [ "$(mutations)" = "0" ]
 }
+case_stage_duplicate_asset() {
+    fresh_state
+    seed_exact_draft 'a=s["releases"][0]["assets"]; a.append(dict(a[0], id=31337))'
+    expect_fail release_env x stage-draft $(vc_args "$CAND2")
+    [ "$(mutations)" = "0" ]
+}
+case_stage_wrong_asset_digest() {
+    fresh_state
+    seed_exact_draft 's["releases"][0]["assets"][0]["digest"]="sha256:"+"f"*64'
+    expect_fail release_env x stage-draft $(vc_args "$CAND2")
+    [ "$(mutations)" = "0" ]
+}
+case_stage_starter_asset() {
+    # failed-upload leftover: same name, size 0 — must stop, never replace
+    fresh_state
+    seed_exact_draft 's["releases"][0]["assets"]=[{"id":1,"name":s["releases"][0]["assets"][0]["name"],"file":"/nope","size":0,"digest":"sha256:"+"0"*64}]'
+    expect_fail release_env x stage-draft $(vc_args "$CAND2")
+    [ "$(mutations)" = "0" ]
+}
+seed_exact_draft() {
+    # First run stages the real exact draft (metadata cannot drift from
+    # the frozen identity); $1 then mutates its asset state.
+    release_env x stage-draft $(vc_args "$CAND2") >/dev/null
+    state_edit "$1"
+    : > "$WORK/fake-requests.log"
+}
+
 case_stage_no_token() {
     fresh_state
     expect_fail release_env notoken stage-draft $(vc_args "$CAND2")
@@ -595,6 +633,9 @@ run_case stage-published-conflict case_stage_published_conflict
 run_case stage-tag-present case_stage_tag_present
 run_case stage-field-mismatch case_stage_field_mismatch
 run_case stage-extra-asset case_stage_extra_asset
+run_case stage-duplicate-asset case_stage_duplicate_asset
+run_case stage-wrong-asset-digest case_stage_wrong_asset_digest
+run_case stage-starter-asset case_stage_starter_asset
 run_case stage-no-token case_stage_no_token
 run_case stage-upload-drop-after-write case_stage_upload_drop_after_write
 run_case stage-upload-lost-before-write case_stage_upload_lost_before_write
@@ -763,6 +804,20 @@ case_promote_metadata_mismatch() {
     expect_fail release_env x promote $(promote_args)
     [ "$(mutations)" = "0" ]
 }
+case_promote_asset_mutated() {
+    stage_once
+    state_edit 's["overrides"]["mutate_on_publish"]=True'
+    : > "$WORK/fake-requests.log"
+    expect_fail release_env x promote $(promote_args)
+    python3 - "$STATE" <<'EOS'
+import json, sys
+s = json.load(open(sys.argv[1]))
+# publish landed (ambiguous partial state) but the public version tag
+# must NOT have been created — the final re-verify stopped it.
+assert s["releases"][0]["draft"] is False
+assert "tags/v0.1.0" not in s["refs"]
+EOS
+}
 case_promote_map_not_authorizing() {
     stage_once
     # A later main commit reverts the map; a candidate whose source
@@ -812,6 +867,7 @@ run_case promote-partial-published case_promote_partial_published_no_version_tag
 run_case promote-publish-drop case_promote_publish_drop_after_write
 run_case promote-extra-asset case_promote_extra_asset
 run_case promote-metadata-mismatch case_promote_metadata_mismatch
+run_case promote-asset-mutated-on-publish case_promote_asset_mutated
 run_case promote-map-not-authorizing case_promote_map_not_authorizing
 
 # ---------------------------------------------------------------------------

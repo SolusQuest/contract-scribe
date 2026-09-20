@@ -345,7 +345,6 @@ def main():
     check(stage, isinstance(defaults_sha, str)
           and re.fullmatch(r"[0-9a-f]{64}", defaults_sha), "defaults-sha")
 
-    stage = "candidate"
     release_tag = f"payload-{tool_version}"
     release_name = f"contract-scribe payload {tool_version}"
     release_body = (
@@ -357,6 +356,7 @@ def main():
         f"- archiveSha256: {archive_sha}\n")
     identity = {
         "repository": args.repository,
+        "workflowRevision": env_text("GITHUB_WORKFLOW_SHA"),
         "repositoryId": env_text("GITHUB_REPOSITORY_ID"),
         "sourceRevision": args.source_revision,
         "wrapper": {
@@ -392,7 +392,6 @@ def main():
         "dependencyInventory": inventory,
     }
     provenance = {
-        "workflowSha": env_text("GITHUB_WORKFLOW_SHA"),
         "sha": env_text("GITHUB_SHA"),
         "runId": env_text("GITHUB_RUN_ID"),
         "runAttempt": env_text("GITHUB_RUN_ATTEMPT"),
