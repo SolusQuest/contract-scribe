@@ -723,8 +723,7 @@ jobs:
           python3 action-src/tests/action/fake_release_api.py fakes/release-config.json fakes/release-ready.json fakes/release.log &
           python3 action-src/tests/action/fake_provider.py proposal fakes/provider-ready.json fakes/provider.log &
           python3 action-src/tests/action/fake_provider.py hang fakes/hang-ready.json fakes/hang.log &
-          python3 action-src/tests/action/fake_github_api.py fakes/github-config.json fakes/github-ready.json fakes/github.log fakes/github-failures.log &
-          for f in release provider hang github; do
+          for f in release provider hang; do
             for _ in $(seq 100); do [ -f "fakes/$f-ready.json" ] && break; sleep 0.1; done
             [ -f "fakes/$f-ready.json" ]
           done
@@ -732,15 +731,12 @@ jobs:
             echo "api_root=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["api"])' fakes/release-ready.json)"
             echo "provider=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/provider-ready.json)"
             echo "hang=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/hang-ready.json)"
-            echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
-            echo "base_oid=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseOid"])' fakes/github-ready.json)"
           } >> "$GITHUB_OUTPUT"
       - name: Prepare target fixture (spaced path)
         id: target
         shell: bash
         env:
           PROVIDER: ${{ steps.fakes.outputs.provider }}
-          BASE_OID: ${{ steps.fakes.outputs.base_oid }}
         run: |
           set -euo pipefail
           TGT="$PWD/target repo a2"
@@ -748,15 +744,31 @@ jobs:
           cp -r kit/fixture/. "$TGT/"
           cp kit/global.json "$TGT/global.json"
           (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null              && dotnet build Fixture.slnx --no-restore --nologo >/dev/null)
+          # The CLI verifies each governed file's original sha256 against the
+          # fake's base tree: seed the remote repo with the real file set.
+          python3 - "$TGT" fakes/github-config.json <<'PYEOF'
+          import json, os, sys
+          root, out = sys.argv[1], sys.argv[2]
+          files = {}
+          for base, dirs, names in os.walk(root):
+              dirs[:] = [d for d in dirs if d not in ("obj", "bin", ".git")]
+              for name in names:
+                  path = os.path.join(base, name)
+                  rel = os.path.relpath(path, root).replace(os.sep, "/")
+                  if rel.endswith((".cs", ".csproj")) or rel == "policy.json":
+                      files[rel] = open(path, encoding="utf-8").read()
+          json.dump({"files": files}, open(out, "w"))
+          PYEOF
+          python3 action-src/tests/action/fake_github_api.py fakes/github-config.json fakes/github-ready.json fakes/github.log fakes/github-failures.log &
+          for _ in $(seq 100); do [ -f fakes/github-ready.json ] && break; sleep 0.1; done
+          [ -f fakes/github-ready.json ]
+          BASE_OID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseOid"])' fakes/github-ready.json)"
+          {
+            echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
+            echo "base_oid=$BASE_OID"
+          } >> "$GITHUB_OUTPUT"
           mkdir -p action-inputs checkpoint-state
           chmod 0700 checkpoint-state
-          cat > action-inputs/layer.json <<EOFX
-          {"consumerConfigurationVersion":1,
-           "provider":{"endpoint":"$PROVIDER","model":"fixture-model",
-             "requestProfile":{"toolChoice":"auto"}},
-           "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
-             "maximumElapsedMilliseconds":3600000}}}
-          EOFX
           cat > action-inputs/request.json <<EOFX
           {"githubProposalRequestVersion":1,
            "campaignLineage":"campaign.action.e2e","snapshot":"snapshot.action.e2e",
@@ -774,6 +786,13 @@ jobs:
             cat action-inputs/request.json
             echo "CSREQ"
           } >> "$GITHUB_OUTPUT"
+          cat > action-inputs/layer.json <<EOFX
+          {"consumerConfigurationVersion":1,
+           "provider":{"endpoint":"$PROVIDER","model":"fixture-model",
+             "requestProfile":{"toolChoice":"auto"}},
+           "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
+             "maximumElapsedMilliseconds":3600000}}}
+          EOFX
       - name: "E2E happy path through uses"
         id: e2e_ok
         uses: ./action-src
@@ -781,7 +800,7 @@ jobs:
           CONTRACTSCRIBE_ACTION_TEST: "1"
           CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
           DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
-          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.target.outputs.github }}
           CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/e2e-obs.txt
         with:
           operation: github-proposal-start
@@ -814,7 +833,7 @@ jobs:
           CONTRACTSCRIBE_ACTION_TEST: "1"
           CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
           DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
-          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.target.outputs.github }}
         with:
           operation: github-proposal-start
           repository-root: ${{ github.workspace }}/target repo a2

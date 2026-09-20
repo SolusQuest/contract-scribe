@@ -975,8 +975,20 @@ if [ "$REAL" -eq 1 ]; then
     python3 "$SCRIPT_DIR/fake_provider.py" hang \
         "$WORK/hang-ready.json" "$WORK/hang-requests.log" &
     HANG_PID=$!
-    cat > "$WORK/github-config.json" <<'EOF'
-{"files":{"README.md":"# synthetic\n","src/App.cs":"class A {}\n"}}
+    # The CLI verifies each governed file's original sha256 against the
+    # fake's base tree: seed the remote repo with the real fixture file set.
+    python3 - "$FIXTURE" "$WORK/github-config.json" <<'EOF'
+import json, os, sys
+root, out = sys.argv[1], sys.argv[2]
+files = {}
+for base, dirs, names in os.walk(root):
+    dirs[:] = [d for d in dirs if d not in ("obj", "bin", ".git")]
+    for name in names:
+        path = os.path.join(base, name)
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        if rel.endswith((".cs", ".csproj")) or rel == "policy.json":
+            files[rel] = open(path, encoding="utf-8").read()
+json.dump({"files": files}, open(out, "w"))
 EOF
     touch "$WORK/provider-requests.log" "$WORK/hang-requests.log" \
         "$WORK/github-requests.log" "$WORK/github-failures.log"
