@@ -15,6 +15,7 @@ product credentials are masked before the child starts.
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -25,37 +26,43 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
 
-ENVELOPE_FIELDS = {
-    "githubProposalEnvelopeVersion": int,
-    "terminalLayer": str,
-    "cliContractBaseline": str,
-    "toolVersion": str,
-    "campaignOperation": str,
-    "publicationOperationId": str,
-    "generationId": str,
-    "outcome": str,
-    "diagnosticCodes": list,
-    "checkpointRevision": object,      # int | null
-    "pullRequestUrl": object,          # str | null
-    "publicationDiagnostic": object,   # object | null
+# Envelope contract per docs/20_architecture/github-proposal-cli.md:
+# exactly these fields, in this order; explicit nulls where unavailable.
+ENVELOPE_FIELDS = (
+    "githubProposalEnvelopeVersion", "terminalLayer", "cliContractBaseline",
+    "toolVersion", "campaignOperation", "publicationOperationId",
+    "generationId", "outcome", "diagnosticCodes", "checkpointRevision",
+    "pullRequestUrl", "publicationDiagnostic",
+)
+TERMINAL_LAYERS = ("usage", "preflight", "campaign", "publication",
+                   "presentation")
+CAMPAIGN_OPERATIONS = ("start", "resume")
+
+# outcome suffix (github-proposal.<suffix>) -> permitted exit codes.
+OUTCOME_EXIT = {
+    "published": (0,), "replayed": (0,), "no-op": (0,),
+    "awaiting-review": (0,), "merged": (0,),
+    "usage": (2,),
+    "stale-base-after-create": (3,), "rate-limit": (3,), "conflict": (3,),
+    "admitted": (3,), "recovered-content-partial": (3,),
+    "recovered-ref-partial": (3,),
+    "local-invalid": (4,), "stale": (4,), "human-change": (4,),
+    "permission": (4,), "closed-unmerged": (4,),
+    "host-failure": (5,),
+    "cancelled": (6,),
+    "timeout": (7,),
 }
 
-# outcome -> permitted exit codes, per the github-proposal contract.
-OUTCOME_EXIT = {
-    "github-proposal.published": (0,),
-    "github-proposal.replayed": (0,),
-    "github-proposal.no-work": (0,),
-    "github-proposal.awaiting-review": (0,),
-    "github-proposal.merged": (0,),
-    "github-proposal.conflict": (3,),
-    "github-proposal.permission": (4,),
-    "github-proposal.local-invalid": (4,),
-    "github-proposal.preflight": (4,),
-    "github-proposal.failed": (5,),
-    "github-proposal.cancelled": (6,),
-    "github-proposal.timeout": (7,),
-    "github-proposal.contract-error": (1, 5),
-}
+_PR_URL = re.compile(
+    r"https://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+/pull/[1-9][0-9]*\Z")
+_DIAG_CODE = re.compile(r"[a-z0-9]+([a-z0-9-]*[a-z0-9])?(\.[a-z0-9-]+)+")
+
+PUBLICATION_DIAGNOSTIC_FIELDS = (
+    "boundary", "owner", "coordinationFailure", "proposalFailure",
+    "pullRequestOutcome", "transportCode", "transportHttpStatus",
+    "delivery", "recoveryCode", "recoveryHttpStatus", "objectKind",
+    "predicate",
+)
 
 
 def fail_invoke(reason):
@@ -70,9 +77,9 @@ def fail_envelope(reason):
     raise SystemExit(1)
 
 
-def _drain(stream, sink, cap):
-    """Read the child stream into sink[:cap]; keep draining overflow so the
-    child never blocks on a full pipe."""
+def _drain(stream, sink, cap, state):
+    """Read the child stream into sink[:cap]; keep draining so the child
+    never blocks, but record every byte beyond the cap as overflow."""
     total = 0
     while True:
         chunk = stream.read(65536)
@@ -81,7 +88,8 @@ def _drain(stream, sink, cap):
         if total < cap:
             take = min(cap - total, len(chunk))
             sink.extend(chunk[:take])
-            total += take
+        total += len(chunk)
+    state["overflow"] = max(0, total - cap)
     stream.close()
 
 
@@ -91,11 +99,14 @@ def run_cli(argv, env, cwd):
         stdin=subprocess.DEVNULL, env=env, cwd=cwd,
         start_new_session=True)
     out_buf, err_buf = bytearray(), bytearray()
+    out_state, err_state = {"overflow": 0}, {"overflow": 0}
     threads = [
         threading.Thread(target=_drain,
-                         args=(child.stdout, out_buf, C.BOUND_STDOUT)),
+                         args=(child.stdout, out_buf, C.BOUND_STDOUT,
+                               out_state)),
         threading.Thread(target=_drain,
-                         args=(child.stderr, err_buf, C.BOUND_STDERR)),
+                         args=(child.stderr, err_buf, C.BOUND_STDERR,
+                               err_state)),
     ]
     for thread in threads:
         thread.daemon = True
@@ -152,7 +163,8 @@ def run_cli(argv, env, cwd):
         orphan = True
     except (ProcessLookupError, PermissionError):
         orphan = False
-    return rc, bytes(out_buf), bytes(err_buf), state["signalled"], orphan
+    return (rc, bytes(out_buf), bytes(err_buf), state["signalled"], orphan,
+            out_state["overflow"], err_state["overflow"])
 
 
 def parse_envelope(stdout_bytes, stderr_bytes, rc):
@@ -166,30 +178,59 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
     if stderr_bytes and (stderr_bytes.count(b"\n") != 1
                          or not stderr_bytes.endswith(b"\n")):
         fail_envelope("stderr-shape")
-    envelope = C.load_json_bytes(stdout_bytes[:-1], "envelope")
-    if not isinstance(envelope, dict) or set(envelope) != set(ENVELOPE_FIELDS):
+    try:
+        envelope = json.loads(stdout_bytes[:-1].decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        fail_envelope("malformed")
+    if not isinstance(envelope, dict) \
+            or list(envelope.keys()) != list(ENVELOPE_FIELDS):
         fail_envelope("shape")
-    for field, kind in ENVELOPE_FIELDS.items():
-        value = envelope[field]
-        if kind is object:
-            if field == "checkpointRevision" and \
-                    value is not None and not isinstance(value, int):
-                fail_envelope("field-type")
-            if field == "pullRequestUrl" and \
-                    value is not None and not isinstance(value, str):
-                fail_envelope("field-type")
-            if field == "publicationDiagnostic" and \
-                    value is not None and not isinstance(value, dict):
-                fail_envelope("field-type")
-        elif not isinstance(value, kind):
-            fail_envelope("field-type")
-    if envelope["githubProposalEnvelopeVersion"] != 1:
+    v = envelope["githubProposalEnvelopeVersion"]
+    if not isinstance(v, int) or isinstance(v, bool) or v != 1:
         fail_envelope("version")
-    if not all(isinstance(c, str) for c in envelope["diagnosticCodes"]):
-        fail_envelope("field-type")
-    permitted = OUTCOME_EXIT.get(envelope["outcome"])
-    if permitted is None:
+    if envelope["terminalLayer"] not in TERMINAL_LAYERS:
+        fail_envelope("layer")
+    for name in ("cliContractBaseline", "toolVersion"):
+        if not isinstance(envelope[name], str) or not envelope[name]:
+            fail_envelope("field-" + name)
+    op = envelope["campaignOperation"]
+    if op is not None and op not in CAMPAIGN_OPERATIONS:
+        fail_envelope("field-campaignOperation")
+    for name in ("publicationOperationId", "generationId"):
+        if envelope[name] is not None \
+                and not isinstance(envelope[name], str):
+            fail_envelope("field-" + name)
+    codes = envelope["diagnosticCodes"]
+    if not isinstance(codes, list) or len(codes) > 16 \
+            or not all(isinstance(c, str) and len(c) <= 96
+                       and _DIAG_CODE.fullmatch(c) for c in codes):
+        fail_envelope("diagnostic-codes")
+    rev = envelope["checkpointRevision"]
+    if rev is not None and (not isinstance(rev, int) or isinstance(rev, bool)):
+        fail_envelope("field-checkpointRevision")
+    url = envelope["pullRequestUrl"]
+    if url is not None \
+            and (not isinstance(url, str) or not _PR_URL.fullmatch(url)):
+        fail_envelope("pull-request-url")
+    diag = envelope["publicationDiagnostic"]
+    if diag is not None:
+        if not isinstance(diag, dict) \
+                or list(diag.keys()) != list(PUBLICATION_DIAGNOSTIC_FIELDS) \
+                or not isinstance(diag["boundary"], str) \
+                or not isinstance(diag["owner"], str):
+            fail_envelope("publication-diagnostic-shape")
+        for status_key in ("transportHttpStatus", "recoveryHttpStatus"):
+            status = diag[status_key]
+            if status is not None and (not isinstance(status, int)
+                                       or isinstance(status, bool)
+                                       or not 100 <= status <= 599):
+                fail_envelope("publication-diagnostic")
+    outcome = envelope["outcome"]
+    if not isinstance(outcome, str) \
+            or not outcome.startswith("github-proposal.") \
+            or OUTCOME_EXIT.get(outcome[len("github-proposal."):]) is None:
         fail_envelope("outcome-unknown")
+    permitted = OUTCOME_EXIT[outcome[len("github-proposal."):]]
     if rc not in permitted:
         fail_envelope("exit-mismatch")
     if rc == 0 and stderr_bytes:
@@ -197,10 +238,12 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
     return envelope
 
 
-def emit_outputs(envelope, rc):
-    """Lossless product outputs: the complete envelope verbatim plus exact
-    convenience copies of every field. Empty when the value is absent."""
-    C.write_output("result", envelope["_raw"], limit=C.BOUND_ENVELOPE)
+def emit_outputs(envelope, stdout_bytes, rc):
+    """Lossless product outputs: the complete envelope verbatim (including
+    the contract's trailing LF) plus exact convenience copies of every
+    field. Empty when the value is absent."""
+    C.write_output("result", stdout_bytes.decode("utf-8", "replace"),
+                   limit=C.BOUND_ENVELOPE)
     C.write_output("outcome", envelope["outcome"])
     C.write_output("exit-code", str(rc))
     C.write_output("terminal-layer", envelope["terminalLayer"])
@@ -210,10 +253,10 @@ def emit_outputs(envelope, rc):
                    else str(envelope["checkpointRevision"]))
     C.write_output("pull-request-url", envelope["pullRequestUrl"] or "")
     C.write_output("tool-version", envelope["toolVersion"])
-    C.write_output("campaign-operation", envelope["campaignOperation"])
+    C.write_output("campaign-operation", envelope["campaignOperation"] or "")
     C.write_output("publication-operation-id",
-                   envelope["publicationOperationId"])
-    C.write_output("generation-id", envelope["generationId"])
+                   envelope["publicationOperationId"] or "")
+    C.write_output("generation-id", envelope["generationId"] or "")
     C.write_output("publication-diagnostic",
                    "" if envelope["publicationDiagnostic"] is None
                    else json.dumps(envelope["publicationDiagnostic"],
@@ -246,23 +289,42 @@ def main():
     if plan.get("configurationOverride"):
         argv += ["--configuration-override", plan["configurationOverride"]]
 
+    # Child environment: inherited ambient variables are not authority — the
+    # documented credential channels are set only from the owning step env.
     env = dict(os.environ)
     env.pop("CONTRACTSCRIBE_ACQUISITION_TOKEN", None)
 
-    rc, stdout_b, stderr_b, signalled, orphan = run_cli(
-        argv, env, plan["cwd"])
+    (rc, stdout_b, stderr_b, signalled, orphan,
+     out_over, err_over) = run_cli(argv, env, plan["cwd"])
     if orphan:
         fail_invoke("orphan-survived")
+    if out_over or err_over:
+        fail_envelope("oversize")
 
-    envelope = parse_envelope(stdout_b, stderr_b, rc)
-    envelope["_raw"] = stdout_b[:-1].decode("utf-8", "replace")
-    emit_outputs(envelope, rc)
+    try:
+        envelope = parse_envelope(stdout_b, stderr_b, rc)
+    except SystemExit:
+        # Cancellation before a valid envelope is wrapper cancellation (130);
+        # a legitimately emitted envelope is still preserved below.
+        if signalled:
+            C.marker("action-invoke", "stage=invoke", "cancelled")
+            C.write_output("action-status", "action.invoke-cancelled")
+            raise SystemExit(130)
+        raise
+
+    # A validated controlled-failure diagnostic line is preserved as
+    # diagnostic-only on wrapper stderr — never as an annotation.
+    if stderr_b:
+        sys.stderr.write(stderr_b.decode("utf-8", "replace"))
+        sys.stderr.flush()
+
+    emit_outputs(envelope, stdout_b, rc)
     C.write_output("action-status", "ok")
     C.marker("action-invoke", "stage=invoke", "ok")
 
     # Cancellation semantics: the product's own cancelled envelope (exit 6)
-    # is preserved verbatim; a signal that killed the child before it could
-    # report maps to 130.
+    # is preserved verbatim; a signal that killed the child after it emitted
+    # a valid non-cancelled result maps to 130.
     if signalled and rc != 6:
         raise SystemExit(130)
     raise SystemExit(rc)
