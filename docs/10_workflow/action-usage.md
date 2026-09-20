@@ -36,7 +36,7 @@ authority. Nothing runs without the caller-provided values:
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE` | repository variable | Plain lineage identifier (e.g. `campaign.docs`). Arms both jobs and feeds the per-campaign concurrency group. |
-| `vars.CONTRACTSCRIBE_CAMPAIGN` | repository variable | JSON caller claims rendered into `github-proposal-request-v1`: `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`, `policyCeilings` (`maximumDocumentationBlocks`, `maximumDistinctChangedFiles`, `maximumCumulativePatchBytes`). |
+| `vars.CONTRACTSCRIBE_CAMPAIGN` | repository variable | JSON caller claims rendered into `github-proposal-request-v1`: `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`, `policyCeilings` (`maximumDocumentationBlocks`, `maximumDistinctChangedFiles`, `maximumCumulativePatchBytes`). Do not put `campaignLineage` inside this JSON — lineage is the separate variable above and the helper inserts it into the request. |
 | `vars.CONTRACTSCRIBE_ACTIVATION` | repository variable | The explicit consumer activation — JSON naming the producer `runId`/`runNumber`/`runAttempt`, the post-upload `artifactId`/`artifactDigest`, and the asserted consumer slot `runNumber`/`event`. Rewritten by you between hops (see below). |
 | `secrets.CONTRACTSCRIBE_GITHUB_TOKEN` | secret | Product publication credential — the token ContractScribe uses for the proposal PR it publishes. |
 | `secrets.CONTRACTSCRIBE_PROVIDER_API_KEY` | secret | Provider credential for the proposal model endpoint. |
@@ -53,8 +53,8 @@ the layer format.
 
 Three distinct authorities are in play and are never conflated:
 
-- The **job `GITHUB_TOKEN`** (`permissions: contents: read` on `start`,
-  `contents: read + actions: read` on `resume`) is the ambient, read-only
+- The **job `GITHUB_TOKEN`** (`contents: read` + `actions: read` on both
+  jobs) is the ambient, read-only
   channel the helper uses to authenticate run records and artifact metadata
   and that `download-artifact` uses for acquisition. It cannot publish.
 - `secrets.CONTRACTSCRIBE_GITHUB_TOKEN` is the **product publication
@@ -77,18 +77,22 @@ domain. A `workflow_dispatch` run performs the expected-absence `start`; a
 `schedule` run performs the expected-presence `resume`. Both end the same
 way after a successful (exit-0) Action invocation:
 
-1. `handoff.py emit` builds `handoff.json` + `checkpoint.json`.
+1. (start only) The workflow creates `$CS_STATE_DIR` as an owner-private
+   `0700` directory under `runner.temp` — expected-absence means the
+   checkpoint file is absent, not its parent. The Action writes the initial
+   Campaign State there; the CLI enforces the 4 MiB bound and file shape.
+2. `handoff.py emit` builds `handoff.json` + `checkpoint.json`.
    `handoff.json` records the **producer** run's authenticated facts
    (repository, workflow id/path, run id/number/attempt, event, head
    ref/sha) and the checkpoint's sha256/size, and a **consumer seal** —
    this repository/workflow, `run_number + 1`, event `schedule`.
-2. `actions/upload-artifact` publishes it as the immutable artifact
+3. `actions/upload-artifact` publishes it as the immutable artifact
    `contract-scribe-handoff` (`overwrite: false`, bounded retention).
-3. `handoff.py activation` renders the next-hop activation JSON — the
+4. `handoff.py activation` renders the next-hop activation JSON — the
    producer run/attempt plus the **post-upload** artifact id and digest —
    into the job summary and step outputs.
 
-4. You then decide whether the chain advances: copy the printed JSON into
+5. You then decide whether the chain advances: copy the printed JSON into
    `vars.CONTRACTSCRIBE_ACTIVATION`. The next scheduled run (which must be
    exactly the sealed `run_number + 1`) presents that activation; the
    helper requires it to match the authenticated producer record, the

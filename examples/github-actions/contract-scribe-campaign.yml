@@ -61,6 +61,7 @@ concurrency:
 env:
   CS_HELPER: ${{ github.workspace }}/.github/contract-scribe/handoff.py
   CS_STATE_DIR: ${{ runner.temp }}/contract-scribe-state
+  CS_CAMPAIGN_LINEAGE: ${{ vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE }}
   # The checked-out target revision, input surface, policy file and optional
   # consumer configuration layer are ordinary file edits for the caller:
   CS_INPUT: Fixture.slnx
@@ -87,6 +88,7 @@ jobs:
     timeout-minutes: 30
     permissions:
       contents: read
+      actions: read
     steps:
       - name: Check out trusted revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -101,6 +103,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 "$CS_HELPER" gate
+
+      - name: Prepare private state directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$CS_STATE_DIR"
+          chmod 0700 "$CS_STATE_DIR"
 
       - name: Build invocation request
         id: request

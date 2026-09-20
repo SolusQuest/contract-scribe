@@ -62,7 +62,7 @@ HANDOFF_NAME = "contract-scribe-handoff"
 CONSUMER_EVENT = "schedule"
 EXPECTED_REF_PREFIX = "refs/heads/"
 
-IDENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*")
+IDENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
 SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
@@ -421,13 +421,21 @@ def cmd_verify(archive, selection_path, state_dir):
 
     members = {}
     with zipfile.ZipFile(archive) as zf:
-        for info in zf.infolist():
+        infos = zf.infolist()
+        require(len(infos) == 2, "zip-count")
+        for info in infos:
             name = info.filename
             require(name in ("handoff.json", "checkpoint.json")
                     and "/" not in name and "\\" not in name
                     and not name.startswith(".") and len(name) <=
                     BOUND_ZIP_MEMBER_NAME and not info.is_dir(),
                     "zip-member")
+            # external_attr>>16 carries Unix mode bits when present;
+            # plain writestr archives store permission bits only (type 0).
+            # Accept type-0 (ordinary) and regular files; reject symlink/
+            # fifo/other special types.
+            ftype = (info.external_attr >> 16) & 0o170000
+            require(ftype in (0, 0o100000), "zip-member-type")
             require(info.file_size <= BOUND_CHECKPOINT, "zip-member-size")
             members[name] = zf.read(info)
     require(set(members) == {"handoff.json", "checkpoint.json"},
@@ -526,13 +534,23 @@ def cmd_activation(handoff_dir, artifact_id, artifact_digest):
     require(set(handoff) == {"producer", "checkpoint", "consumer"},
             "handoff-fields")
     producer, consumer = handoff["producer"], handoff["consumer"]
+    # upload-artifact emits a bare hex digest while the Actions REST API
+    # reports "sha256:<hex>"; normalize to the REST representation once so
+    # the installed activation matches authenticated artifact metadata.
+    digest = artifact_digest
+    if digest.startswith("sha256:"):
+        digest = digest[7:]
+    require(SHA256_RE.fullmatch(digest), "artifact-digest-format")
+    digest = "sha256:" + digest
+    require(str(int(artifact_id)) == artifact_id and int(artifact_id) > 0,
+            "artifact-id-format")
     activation = {
         "producer": {
             "runId": producer["runId"],
             "runNumber": producer["runNumber"],
             "runAttempt": producer["runAttempt"],
             "artifactId": int(artifact_id),
-            "artifactDigest": artifact_digest,
+            "artifactDigest": digest,
         },
         "consumer": {
             "runNumber": consumer["runNumber"],
@@ -560,11 +578,15 @@ def cmd_activation(handoff_dir, artifact_id, artifact_digest):
 def cmd_request(base_oid, state_path, out_path):
     ctx = context()
     campaign = env_json("CS_CAMPAIGN", BOUND_CAMPAIGN)
-    require(set(campaign) == {"campaignLineage", "snapshot", "operationId",
-                              "generationId", "targetRef", "policyCeilings",
+    require(set(campaign) == {"snapshot", "operationId", "generationId",
+                              "targetRef", "policyCeilings",
                               "repositoryOwner", "repositoryName"},
             "campaign-fields")
-    for key in ("campaignLineage", "operationId", "generationId"):
+    # The lineage is a separate caller authority (it also drives the
+    # per-campaign concurrency group), not a member of the claims document.
+    lineage = os.environ.get("CS_CAMPAIGN_LINEAGE") or ""
+    require(IDENT_RE.fullmatch(lineage), "campaign-lineage")
+    for key in ("operationId", "generationId"):
         require(IDENT_RE.fullmatch(str_field(campaign, key)),
                 f"campaign-{key}")
     snapshot = str_field(campaign, "snapshot")
@@ -589,7 +611,7 @@ def cmd_request(base_oid, state_path, out_path):
                 and 0 < value <= 1 << 30, f"ceiling-{key}")
     request = {
         "githubProposalRequestVersion": 1,
-        "campaignLineage": campaign["campaignLineage"],
+        "campaignLineage": lineage,
         "snapshot": campaign["snapshot"],
         "state": state_path,
         "github": {

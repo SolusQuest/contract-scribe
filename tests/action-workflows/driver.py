@@ -157,7 +157,6 @@ def _zip_with_extra(handoff, checkpoint):
 
 
 CAMPAIGN = json.dumps({
-    "campaignLineage": "campaign.example",
     "snapshot": "snapshot.example",
     "operationId": "operation.example",
     "generationId": "generation.example",
@@ -219,6 +218,7 @@ class Runner:
                 CONSUMER_RUN, 501, "schedule"),
             "GITHUB_API_URL": self.api,
             "GITHUB_TOKEN": token,
+            "CS_CAMPAIGN_LINEAGE": "campaign.example",
         })
         if activation is not None:
             env["CS_ACTIVATION"] = activation
@@ -469,8 +469,61 @@ def register(r):
     verify_case("verify_tampered_checkpoint", "checkpoint-digest",
                 handoff_mut=lambda h: h["checkpoint"]
                 .update({"sha256": "f" * 64}))
-    verify_case("verify_extra_member", "zip-member",
+    verify_case("verify_extra_member", "zip-count",
                 zip_mut=lambda h, c: _zip_with_extra(h, c))
+
+    @leg("verify_duplicate_member")
+    def _():
+        checkpoint = b'{"state":1}'
+        handoff = good_handoff(sha=hashlib.sha256(checkpoint).hexdigest(),
+                               size=len(checkpoint))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("handoff.json", json.dumps(handoff))
+            zf.writestr("checkpoint.json", checkpoint)
+            zf.writestr("checkpoint.json", checkpoint)
+        archive = buf.getvalue()
+        cfg = base_config()
+        digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+        cfg["artifacts"][str(ARTIFACT_ID)]["digest"] = digest
+        cfg["artifacts"][str(ARTIFACT_ID)]["size_in_bytes"] = len(archive)
+        r.configure(cfg)
+        env = select_env(activation=activation_json(digest=digest))
+        sel = os.path.join(r.workdir, "sel")
+        r.run_helper(["select", "--workdir", sel], env)
+        arch = os.path.join(r.workdir, "in.zip")
+        with open(arch, "wb") as fh:
+            fh.write(archive)
+        r.run_helper(verify_args(os.path.join(sel, "selection.json"),
+                                 arch, r.workdir), env, ok=False,
+                     reason="zip-count")
+
+    @leg("verify_symlink_member")
+    def _():
+        checkpoint = b'{"state":1}'
+        handoff = good_handoff(sha=hashlib.sha256(checkpoint).hexdigest(),
+                               size=len(checkpoint))
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as zf:
+            zf.writestr("handoff.json", json.dumps(handoff))
+            info = zipfile.ZipInfo("checkpoint.json")
+            info.external_attr = (0o120000 | 0o777) << 16  # S_IFLNK
+            zf.writestr(info, checkpoint)
+        archive = buf.getvalue()
+        cfg = base_config()
+        digest = "sha256:" + hashlib.sha256(archive).hexdigest()
+        cfg["artifacts"][str(ARTIFACT_ID)]["digest"] = digest
+        cfg["artifacts"][str(ARTIFACT_ID)]["size_in_bytes"] = len(archive)
+        r.configure(cfg)
+        env = select_env(activation=activation_json(digest=digest))
+        sel = os.path.join(r.workdir, "sel")
+        r.run_helper(["select", "--workdir", sel], env)
+        arch = os.path.join(r.workdir, "in.zip")
+        with open(arch, "wb") as fh:
+            fh.write(archive)
+        r.run_helper(verify_args(os.path.join(sel, "selection.json"),
+                                 arch, r.workdir), env, ok=False,
+                     reason="zip-member-type")
     verify_case("verify_seal_run", "handoff-seal",
                 handoff_mut=lambda h: h["consumer"]
                 .update({"runNumber": 999}))
@@ -487,9 +540,8 @@ def register(r):
     def _():
         buf = io.BytesIO()
         with zipfile.ZipFile(buf, "w") as zf:
-            zf.writestr("handoff.json", "{}")
             zf.writestr("evil/", "")
-            zf.writestr("checkpoint.json", b"x")
+            zf.writestr("handoff.json", "{}")
         archive = buf.getvalue()
         cfg = base_config()
         digest = "sha256:" + hashlib.sha256(archive).hexdigest()
@@ -729,6 +781,50 @@ def register(r):
                       "--out", os.path.join(r.workdir, "r.json")], env,
                      ok=False, reason="campaign-fields")
 
+    @leg("request_lineage_colon")
+    def _():
+        # The product lineage grammar permits ':'; the transport helper
+        # must not narrow it - C# owns semantic acceptance.
+        env = request_env()
+        env["CS_CAMPAIGN_LINEAGE"] = "campaign:docs.daily"
+        out = os.path.join(r.workdir, "req.json")
+        r.run_helper(["request", "--base-oid", SHA_A,
+                      "--state", os.path.join(r.workdir, "s.json"),
+                      "--out", out], env)
+        with open(out, encoding="utf-8") as fh:
+            req = json.load(fh)
+        assert req["campaignLineage"] == "campaign:docs.daily"
+
+    @leg("request_bad_lineage")
+    def _():
+        env = request_env()
+        env["CS_CAMPAIGN_LINEAGE"] = "bad/lineage"
+        r.run_helper(["request", "--base-oid", SHA_A,
+                      "--state", os.path.join(r.workdir, "s.json"),
+                      "--out", os.path.join(r.workdir, "r.json")], env,
+                     ok=False, reason="campaign-lineage")
+
+    @leg("request_no_lineage")
+    def _():
+        env = request_env()
+        env.pop("CS_CAMPAIGN_LINEAGE")
+        r.run_helper(["request", "--base-oid", SHA_A,
+                      "--state", os.path.join(r.workdir, "s.json"),
+                      "--out", os.path.join(r.workdir, "r.json")], env,
+                     ok=False, reason="campaign-lineage")
+
+    @leg("request_lineage_in_campaign")
+    def _():
+        # campaignLineage inside the claims document is a closed-shape
+        # violation - the lineage authority is the separate env var.
+        campaign = json.loads(CAMPAIGN)
+        campaign["campaignLineage"] = "campaign.example"
+        env = request_env(campaign=json.dumps(campaign))
+        r.run_helper(["request", "--base-oid", SHA_A,
+                      "--state", os.path.join(r.workdir, "s.json"),
+                      "--out", os.path.join(r.workdir, "r.json")], env,
+                     ok=False, reason="campaign-fields")
+
     # -- activation render -------------------------------------------------
     @leg("activation_ok")
     def _():
@@ -741,11 +837,27 @@ def register(r):
         env2 = dict(env)
         proc = r.run_helper(["activation", "--handoff-dir", out,
                              "--artifact-id", "42",
-                             "--artifact-digest", "sha256:" + "1" * 64],
+                             "--artifact-digest", "1" * 64],
                             env2)
         doc = json.loads(proc.stdout.strip().splitlines()[0])
         assert doc["producer"]["artifactId"] == 42
+        assert doc["producer"]["artifactDigest"] == "sha256:" + "1" * 64
         assert doc["consumer"]["runNumber"] == 501
+
+    @leg("activation_prefixed_digest")
+    def _():
+        env = emit_env()
+        cp = os.path.join(r.workdir, "cp.json")
+        with open(cp, "wb") as fh:
+            fh.write(b'{"campaign":1}')
+        out = os.path.join(r.workdir, "hand")
+        r.run_helper(["emit", "--checkpoint", cp, "--handoff-dir", out], env)
+        proc = r.run_helper(["activation", "--handoff-dir", out,
+                             "--artifact-id", "43",
+                             "--artifact-digest", "sha256:" + "2" * 64],
+                            dict(env))
+        doc = json.loads(proc.stdout.strip().splitlines()[0])
+        assert doc["producer"]["artifactDigest"] == "sha256:" + "2" * 64
 
 
 def main():

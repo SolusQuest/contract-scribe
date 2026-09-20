@@ -119,8 +119,8 @@ def main():
     start = jobs["start"]
     resume = jobs["resume"]
     require("matrix" not in start and "matrix" not in resume, "matrix")
-    require(start.get("permissions") == {"contents": "read"},
-            "start-permissions")
+    require(start.get("permissions") ==
+            {"contents": "read", "actions": "read"}, "start-permissions")
     require(resume.get("permissions") ==
             {"contents": "read", "actions": "read"}, "resume-permissions")
     require("workflow_dispatch" in str(start.get("if", "")),
@@ -134,7 +134,8 @@ def main():
     for job_name, job, order in (
             ("start", start,
              ["Check out trusted revision", "Assert exact workflow head",
-              "Producer admission gate", "Build invocation request",
+              "Producer admission gate", "Prepare private state directory",
+              "Build invocation request",
               "ContractScribe github-proposal", "Emit",
               "Upload", "Render next activation"]),
             ("resume", resume,

@@ -957,6 +957,7 @@ jobs:
       handoff_artifact_id: ${{ steps.handoff_upload.outputs.artifact-id }}
       handoff_artifact_digest: ${{ steps.handoff_upload.outputs.artifact-digest }}
       target_head: ${{ steps.target.outputs.target_head }}
+      activation_json: ${{ steps.activation.outputs.activation-json }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -1092,7 +1093,6 @@ jobs:
           python3 - "$RUNNER_TEMP/cs-state/checkpoint.json" <<'PYEOF'
           import json, sys
           campaign = {
-              "campaignLineage": "campaign.action.a3",
               "snapshot": "snapshot.action.a3",
               "operationId": "operation.a3",
               "generationId": "generation.a3",
@@ -1121,7 +1121,8 @@ jobs:
       - name: Build invocation request
         id: request
         env:
-          CS_CAMPAIGN: '{"campaignLineage":"campaign.action.a3","snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
           CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
           python3 action-src/examples/github-actions/handoff.py request
@@ -1167,6 +1168,7 @@ jobs:
           retention-days: 7
           overwrite: false
       - name: Render next activation
+        id: activation
         env:
           GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
@@ -1205,6 +1207,9 @@ jobs:
     # checkpoint privately, and replays the operation through the real CLI.
     needs: action_examples_producer
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -1347,7 +1352,7 @@ jobs:
                 "id": aid, "name": "contract-scribe-handoff",
                 "size_in_bytes": 4096, "expired": False,
                 "expires_at": "2099-01-01T00:00:00Z",
-                "digest": digest,
+                "digest": "sha256:" + digest,
                 "workflow_run": {"id": 91001, "repository_id": 7001,
                                  "head_repository_id": 7001,
                                  "head_branch": "main",
@@ -1373,7 +1378,7 @@ jobs:
         env:
           GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
-          CS_ACTIVATION: '{"producer":{"runId":91001,"runNumber":500,"runAttempt":1,"artifactId":${{ needs.action_examples_producer.outputs.handoff_artifact_id }},"artifactDigest":"${{ needs.action_examples_producer.outputs.handoff_artifact_digest }}"},"consumer":{"runNumber":501,"event":"schedule"}}'
+          CS_ACTIVATION: ${{ needs.action_examples_producer.outputs.activation_json }}
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: python3 action-src/examples/github-actions/handoff.py select --workdir "$RUNNER_TEMP/cs-select"
       - name: "Consumer leg 1 — download handoff (native transport)"
@@ -1403,7 +1408,8 @@ jobs:
       - name: "Consumer leg 1 — build invocation request"
         id: request
         env:
-          CS_CAMPAIGN: '{"campaignLineage":"campaign.action.a3","snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
           python3 action-src/examples/github-actions/handoff.py request
@@ -1449,6 +1455,7 @@ jobs:
           retention-days: 7
           overwrite: false
       - name: "Consumer leg 1 — render next activation"
+        id: activation1
         env:
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
@@ -1493,7 +1500,8 @@ jobs:
           cfg["artifacts"][str(aid)] = {
               "id": aid, "name": "contract-scribe-handoff",
               "size_in_bytes": 4096, "expired": False,
-              "expires_at": "2099-01-01T00:00:00Z", "digest": digest,
+              "expires_at": "2099-01-01T00:00:00Z",
+              "digest": "sha256:" + digest,
               "workflow_run": {"id": 92002, "repository_id": 7001,
                                "head_repository_id": 7001,
                                "head_branch": "main", "head_sha": "c" * 40}}
@@ -1505,7 +1513,7 @@ jobs:
         env:
           GITHUB_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
-          CS_ACTIVATION: '{"producer":{"runId":92002,"runNumber":501,"runAttempt":1,"artifactId":${{ steps.successor_upload.outputs.artifact-id }},"artifactDigest":"${{ steps.successor_upload.outputs.artifact-digest }}"},"consumer":{"runNumber":502,"event":"schedule"}}'
+          CS_ACTIVATION: ${{ steps.activation1.outputs.activation-json }}
           CS_RUN_CONTEXT: '{"runId":93003,"runNumber":502,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: |
           set -euo pipefail
@@ -1533,7 +1541,8 @@ jobs:
       - name: "Consumer leg 2 — build request + resume"
         id: request2
         env:
-          CS_CAMPAIGN: '{"campaignLineage":"campaign.action.a3","snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
           CS_RUN_CONTEXT: '{"runId":93003,"runNumber":502,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
           python3 action-src/examples/github-actions/handoff.py request
@@ -1581,11 +1590,13 @@ jobs:
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
         run: |
           set -euo pipefail
-          # A structurally-valid handoff carrying bytes that are not a
-          # Campaign State — the production CLI must reject it at admission
-          # (exit 4) with zero provider/GitHub activity.
+          # A structurally-valid handoff directory carrying bytes that are
+          # not a Campaign State — upload-artifact wraps it exactly as the
+          # production emit path, and the CLI must reject the restored
+          # checkpoint at admission (exit 4) before privileged execution.
           python3 - <<'PYEOF'
-          import hashlib, io, json, zipfile
+          import hashlib, json, os
+          os.makedirs("bad-handoff", exist_ok=True)
           checkpoint = b'{"not":"campaign-state"}'
           handoff = {
             "producer": {"repositoryId": 7001, "repository": "Owner/repo",
@@ -1598,20 +1609,17 @@ jobs:
                            "bytes": len(checkpoint)},
             "consumer": {"repositoryId": 7001, "repository": "Owner/repo",
               "workflowId": 55, "runNumber": 504, "event": "schedule"}}
-          buf = io.BytesIO()
-          with zipfile.ZipFile(buf, "w") as zf:
-              zf.writestr("handoff.json", json.dumps(handoff))
-              zf.writestr("checkpoint.json", checkpoint)
-          open("bad-handoff.zip", "wb").write(buf.getvalue())
-          digest = "sha256:" + hashlib.sha256(buf.getvalue()).hexdigest()
-          print(digest)
+          with open("bad-handoff/handoff.json", "w") as fh:
+              fh.write(json.dumps(handoff))
+          with open("bad-handoff/checkpoint.json", "wb") as fh:
+              fh.write(checkpoint)
           PYEOF
       - name: "Invalid-checkpoint leg — upload artifact"
         id: bad_upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: a3-handoff-bad-attempt-${{ github.run_attempt }}
-          path: bad-handoff.zip
+          path: bad-handoff/
           if-no-files-found: error
           retention-days: 7
           overwrite: false
@@ -1646,14 +1654,16 @@ jobs:
           cfg["artifacts"][str(aid)] = {
               "id": aid, "name": "contract-scribe-handoff",
               "size_in_bytes": 4096, "expired": False,
-              "expires_at": "2099-01-01T00:00:00Z", "digest": digest,
+              "expires_at": "2099-01-01T00:00:00Z",
+              "digest": "sha256:" + digest,
               "workflow_run": {"id": 94004, "repository_id": 7001,
                                "head_repository_id": 7001,
                                "head_branch": "main", "head_sha": "b" * 40}}
           cfg["run_artifacts"] = {"94004": [aid]}
           json.dump(cfg, open("fakes/actions-config.json", "w"))
           print(json.dumps({"producer": {"runId": 94004, "runNumber": 503,
-                "runAttempt": 1, "artifactId": aid, "artifactDigest": digest},
+                "runAttempt": 1, "artifactId": aid,
+                "artifactDigest": "sha256:" + digest},
               "consumer": {"runNumber": 504, "event": "schedule"}}),
                 file=open("bad-activation.json", "w"))
           PYEOF
@@ -1692,7 +1702,8 @@ jobs:
       - name: "Invalid-checkpoint leg — build request"
         id: bad_request
         env:
-          CS_CAMPAIGN: '{"campaignLineage":"campaign.action.a3","snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
           CS_RUN_CONTEXT: '{"runId":95005,"runNumber":504,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
           python3 action-src/examples/github-actions/handoff.py request
