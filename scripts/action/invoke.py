@@ -291,8 +291,12 @@ def main():
 
     # Child environment: inherited ambient variables are not authority — the
     # documented credential channels are set only from the owning step env.
+    # Empty values are dropped so "input absent" reaches the CLI as "unset".
     env = dict(os.environ)
     env.pop("CONTRACTSCRIBE_ACQUISITION_TOKEN", None)
+    for name in ("CONTRACTSCRIBE_PROVIDER_API_KEY", "CONTRACTSCRIBE_GITHUB_TOKEN"):
+        if not env.get(name):
+            env.pop(name, None)
 
     (rc, stdout_b, stderr_b, signalled, orphan,
      out_over, err_over) = run_cli(argv, env, plan["cwd"])
