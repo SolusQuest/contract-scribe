@@ -958,6 +958,7 @@ jobs:
       handoff_artifact_digest: ${{ steps.handoff_upload.outputs.artifact-digest }}
       target_head: ${{ steps.target.outputs.target_head }}
       activation_json: ${{ steps.activation.outputs.activation-json }}
+      provider_endpoint: ${{ steps.fakes.outputs.provider }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -1362,7 +1363,7 @@ jobs:
           PYEOF
       - name: Prepare layer for resumes
         env:
-          PROVIDER: ${{ steps.fakes.outputs.provider }}
+          PROVIDER: ${{ needs.action_examples_producer.outputs.provider_endpoint }}
         run: |
           set -euo pipefail
           mkdir -p action-inputs
