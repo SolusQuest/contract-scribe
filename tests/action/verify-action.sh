@@ -767,7 +767,8 @@ prepare_real() {
     # $1 = workdir; materializes fixture + request + layer; writes plan via
     # the real prepare.py with production env names.
     local w="$1"
-    mkdir -p "$w/target repo x"
+    mkdir -p "$w/target repo x" "$w/checkpoint"
+    chmod 0700 "$w/checkpoint"
     cp -r "$FIXTURE/." "$w/target repo x/"
     (cd "$w/target repo x" && dotnet restore >/dev/null && dotnet build -c Release --no-restore >/dev/null)
     cat > "$w/layer.json" <<EOF

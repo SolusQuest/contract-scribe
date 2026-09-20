@@ -748,7 +748,8 @@ jobs:
           cp -r kit/fixture/. "$TGT/"
           cp kit/global.json "$TGT/global.json"
           (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null              && dotnet build Fixture.slnx --no-restore --nologo >/dev/null)
-          mkdir -p action-inputs
+          mkdir -p action-inputs checkpoint-state
+          chmod 0700 checkpoint-state
           cat > action-inputs/layer.json <<EOFX
           {"consumerConfigurationVersion":1,
            "provider":{"endpoint":"$PROVIDER","model":"fixture-model",
