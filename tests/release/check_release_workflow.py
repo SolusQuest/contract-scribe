@@ -142,6 +142,12 @@ def main():
             fail("candidate", "candidate job must never see the token")
         if "prepare-candidate.py" not in candidate:
             fail("candidate", "candidate job must run prepare-candidate.py")
+        # Same env boundary as stage/promote: untrusted dispatch inputs
+        # must never reach a shell run body in the producer job either.
+        for body in run_bodies(candidate):
+            if re.search(r"\$\{\{\s*inputs\.", body):
+                fail("candidate",
+                     "dispatch inputs must reach run steps via env")
 
     for name, env_name, var_name in (
             ("stage", "release-candidate", "RELEASE_DRAFT_ENABLED"),
