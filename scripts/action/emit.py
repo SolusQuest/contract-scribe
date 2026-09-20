@@ -37,6 +37,7 @@ def first_failure():
 
 
 def main():
+    os.environ["CS_ACTION_STAGE"] = "emit"
     failure = first_failure()
     action_status = failure or "ok"
     C.write_output("action-status", action_status)

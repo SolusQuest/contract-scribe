@@ -122,11 +122,11 @@ echo "$@" > "${STUB_ARGV:-/dev/null}"
 env | sort > "${STUB_ENV:-/dev/null}"
 case "${STUB_MODE:-ok}" in
     sleep) sleep 3600 ;;
-    conflict) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.conflict","diagnosticCodes":["github.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
+    conflict) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.conflict","diagnosticCodes":["github-proposal.conflict"],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; exit 3 ;;
     badshape) echo '{"unexpected":1}'; exit 0 ;;
     extraline) echo '{"a":1}'; echo '{"b":2}'; exit 0 ;;
     extrastderr) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"campaign","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":null,"pullRequestUrl":null,"publicationDiagnostic":null}'; echo "one" >&2; echo "two" >&2; exit 0 ;;
-    *) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"github-proposal","cliContractBaseline":"b","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":7,"pullRequestUrl":"https://github.test/x/pull/1","publicationDiagnostic":null}'; exit 0 ;;
+    *) echo '{"githubProposalEnvelopeVersion":1,"terminalLayer":"publication","cliContractBaseline":"v1","toolVersion":"t","campaignOperation":"start","publicationOperationId":"op","generationId":"gen","outcome":"github-proposal.published","diagnosticCodes":[],"checkpointRevision":7,"pullRequestUrl":"https://github.com/Owner/repo/pull/1","publicationDiagnostic":null}'; exit 0 ;;
 esac
 EOF
 chmod +x "$STUB_BIN/dotnet"
@@ -940,6 +940,23 @@ run_case invoke-envelope-extraline case_invoke_envelope_extraline
 run_case invoke-envelope-extrastderr case_invoke_envelope_extrastderr
 run_case invoke-cancel case_invoke_cancel
 run_case invoke-missing-install case_invoke_missing_install
+case_emit_annotation_counts() {
+    # Frozen annotation contract: success emits no ::error::; a wrapper
+    # failure and a product failure each emit exactly one.
+    local w; w="$(new_work emit)"
+    env GITHUB_OUTPUT="$w/o1.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE=""         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="0" CS_INPUT_OPERATION="github-proposal-start"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/ok.log" 2>&1
+    [ "$(grep -c '::error::' "$w/ok.log")" -eq 0 ]
+    env GITHUB_OUTPUT="$w/o2.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE="action.prepare-operation"         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="" CS_INPUT_OPERATION="github-proposal-start"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/wrap.log" 2>&1
+    [ "$(grep -c '::error::' "$w/wrap.log")" -eq 1 ]
+    grep -q "action.prepare-operation" "$w/wrap.log"
+    env GITHUB_OUTPUT="$w/o3.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE=""         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="github-proposal.permission" CS_OUT_EXIT_CODE="4"         CS_INPUT_OPERATION="github-proposal-start"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/prod.log" 2>&1
+    [ "$(grep -c '::error::' "$w/prod.log")" -eq 1 ]
+    grep -q "github-proposal.permission (exit 4)" "$w/prod.log"
+    grep -q "^action-status=ok" "$w/o1.txt"
+    grep -q "^action-status=action.prepare-operation" "$w/o2.txt"
+}
+
+run_case emit-annotation-counts case_emit_annotation_counts
 
 if [ "$REAL" -eq 1 ]; then
     # Loopback provider + GitHub fakes for the real-CLI legs.

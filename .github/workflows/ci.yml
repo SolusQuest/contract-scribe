@@ -747,7 +747,7 @@ jobs:
           mkdir -p "$TGT"
           cp -r kit/fixture/. "$TGT/"
           cp kit/global.json "$TGT/global.json"
-          (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null)
+          (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null              && dotnet build Fixture.slnx --no-restore --nologo >/dev/null)
           mkdir -p action-inputs
           cat > action-inputs/layer.json <<EOFX
           {"consumerConfigurationVersion":1,
@@ -768,15 +768,17 @@ jobs:
                "maximumCumulativePatchBytes":4194304},
              "transition":"initial"}}
           EOFX
+          {
+            echo "request-json<<CSREQ"
+            cat action-inputs/request.json
+            echo "CSREQ"
+          } >> "$GITHUB_OUTPUT"
       - name: "E2E happy path through uses"
         id: e2e_ok
         uses: ./action-src
         env:
           CONTRACTSCRIBE_ACTION_TEST: "1"
           CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
-          CONTRACTSCRIBE_ACQUISITION_TOKEN: contract-scribe-synthetic-acquisition-only
-          CONTRACTSCRIBE_PROVIDER_API_KEY: contract-scribe-synthetic-provider-only
-          CONTRACTSCRIBE_GITHUB_TOKEN: contract-scribe-synthetic-transport-only
           DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
           CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
           CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/e2e-obs.txt
@@ -785,8 +787,11 @@ jobs:
           repository-root: ${{ github.workspace }}/target repo a2
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ github.workspace }}/action-inputs/request.json
+          request: ${{ steps.target.outputs.request-json }}
           configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          github-token: contract-scribe-synthetic-transport-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
       - name: Assert happy-path outputs
         shell: bash
         env:
@@ -807,8 +812,6 @@ jobs:
         env:
           CONTRACTSCRIBE_ACTION_TEST: "1"
           CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
-          CONTRACTSCRIBE_ACQUISITION_TOKEN: contract-scribe-synthetic-acquisition-only
-          CONTRACTSCRIBE_PROVIDER_API_KEY: contract-scribe-synthetic-provider-only
           DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
           CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
         with:
@@ -816,9 +819,12 @@ jobs:
           repository-root: ${{ github.workspace }}/target repo a2
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ github.workspace }}/action-inputs/request.json
+          request: ${{ steps.target.outputs.request-json }}
           configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
       - name: Assert product-failure outputs
+        id: e2e_notoken_assert
         shell: bash
         env:
           STEP_RESULT: ${{ steps.e2e_notoken.outcome }}
@@ -847,14 +853,14 @@ jobs:
         env:
           MATRIX_OUTCOME: ${{ steps.matrix.outcome }}
           E2E_OK: ${{ steps.e2e_ok.outcome }}
-          E2E_NOTOKEN: ${{ steps.e2e_notoken.outcome }}
+          E2E_NOTOKEN_ASSERT: ${{ steps.e2e_notoken_assert.outcome }}
           BUILD_OUTCOME: ${{ steps.payload_build.outcome }}
           PAIR_OUTCOME: ${{ steps.pair_check.outcome }}
         run: |
           if ($env:MATRIX_OUTCOME -ne 'success' -or $env:E2E_OK -ne 'success' `
-              -or $env:E2E_NOTOKEN -ne 'success' -or $env:BUILD_OUTCOME -ne 'success' `
+              -or $env:E2E_NOTOKEN_ASSERT -ne 'success' -or $env:BUILD_OUTCOME -ne 'success' `
               -or $env:PAIR_OUTCOME -ne 'success') {
-            throw "action_packaged failure: matrix=$env:MATRIX_OUTCOME e2e_ok=$env:E2E_OK e2e_notoken=$env:E2E_NOTOKEN build=$env:BUILD_OUTCOME pair=$env:PAIR_OUTCOME"
+            throw "action_packaged failure: matrix=$env:MATRIX_OUTCOME e2e_ok=$env:E2E_OK e2e_notoken_assert=$env:E2E_NOTOKEN_ASSERT build=$env:BUILD_OUTCOME pair=$env:PAIR_OUTCOME"
           }
 
   validate:

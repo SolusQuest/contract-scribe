@@ -43,52 +43,52 @@ inputs:
 outputs:
   result:
     description: "Complete product github-proposal envelope (verbatim compact JSON; empty when none was produced)"
-    value: ${{ steps.emit.outputs.result }}
+    value: ${{ steps.emit.outputs['result'] }}
   outcome:
     description: "Product outcome (github-proposal.*; empty when no valid envelope)"
-    value: ${{ steps.emit.outputs.outcome }}
+    value: ${{ steps.emit.outputs['outcome'] }}
   exit-code:
     description: "CLI process exit code as digits"
-    value: ${{ steps.emit.outputs.exit_code }}
+    value: ${{ steps.emit.outputs['exit-code'] }}
   terminal-layer:
     description: "Product envelope terminalLayer"
-    value: ${{ steps.emit.outputs.terminal_layer }}
+    value: ${{ steps.emit.outputs['terminal-layer'] }}
   diagnostic-codes:
     description: "Product diagnosticCodes, comma-joined"
-    value: ${{ steps.emit.outputs.diagnostic_codes }}
+    value: ${{ steps.emit.outputs['diagnostic-codes'] }}
   checkpoint-revision:
     description: "Product checkpointRevision"
-    value: ${{ steps.emit.outputs.checkpoint_revision }}
+    value: ${{ steps.emit.outputs['checkpoint-revision'] }}
   pull-request-url:
     description: "Product pullRequestUrl"
-    value: ${{ steps.emit.outputs.pull_request_url }}
+    value: ${{ steps.emit.outputs['pull-request-url'] }}
   tool-version:
     description: "Product toolVersion"
-    value: ${{ steps.emit.outputs.tool_version }}
+    value: ${{ steps.emit.outputs['tool-version'] }}
   campaign-operation:
     description: "Product campaignOperation"
-    value: ${{ steps.emit.outputs.campaign_operation }}
+    value: ${{ steps.emit.outputs['campaign-operation'] }}
   publication-operation-id:
     description: "Product publicationOperationId"
-    value: ${{ steps.emit.outputs.publication_operation_id }}
+    value: ${{ steps.emit.outputs['publication-operation-id'] }}
   generation-id:
     description: "Product generationId"
-    value: ${{ steps.emit.outputs.generation_id }}
+    value: ${{ steps.emit.outputs['generation-id'] }}
   publication-diagnostic:
     description: "Product publicationDiagnostic (compact JSON or empty)"
-    value: ${{ steps.emit.outputs.publication_diagnostic }}
+    value: ${{ steps.emit.outputs['publication-diagnostic'] }}
   action-status:
     description: "Wrapper status: ok | action.<stage>-<reason> (never a product outcome)"
-    value: ${{ steps.emit.outputs.action_status }}
+    value: ${{ steps.emit.outputs['action-status'] }}
   payload-version:
     description: "Authorized payload toolVersion from the checked-in map"
-    value: ${{ steps.emit.outputs.payload_version }}
+    value: ${{ steps.emit.outputs['payload-version'] }}
   payload-sha256:
     description: "Authorized payload archive SHA-256"
-    value: ${{ steps.emit.outputs.payload_sha256 }}
+    value: ${{ steps.emit.outputs['payload-sha256'] }}
   install-dir:
     description: "Installed payload directory"
-    value: ${{ steps.emit.outputs.install_dir }}
+    value: ${{ steps.emit.outputs['install-dir'] }}
 
 runs:
   using: composite
@@ -100,8 +100,11 @@ runs:
       id: guard
       shell: bash
       if: ${{ inputs.acquisition-token != '' && inputs.acquisition-token == inputs.github-token }}
+      env:
+        CONTRACTSCRIBE_PROVIDER_API_KEY: ""
+        CONTRACTSCRIBE_GITHUB_TOKEN: ""
+        CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
       run: |
-        echo "::error::acquisition-token must differ from github-token (action.credential-shared)"
         echo "action-status=action.credential-shared" >> "$GITHUB_OUTPUT"
         exit 1
 
@@ -109,6 +112,9 @@ runs:
       id: prepare
       shell: bash
       env:
+        CONTRACTSCRIBE_PROVIDER_API_KEY: ""
+        CONTRACTSCRIBE_GITHUB_TOKEN: ""
+        CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
         CS_INPUT_OPERATION: ${{ inputs.operation }}
         CS_INPUT_REPOSITORY_ROOT: ${{ inputs.repository-root }}
         CS_INPUT_INPUT: ${{ inputs.input }}
@@ -122,18 +128,25 @@ runs:
       id: acquire
       shell: bash
       env:
+        CONTRACTSCRIBE_PROVIDER_API_KEY: ""
+        CONTRACTSCRIBE_GITHUB_TOKEN: ""
         CONTRACTSCRIBE_ACQUISITION_TOKEN: ${{ inputs.acquisition-token }}
       run: exec python3 "${{ github.action_path }}/scripts/action/acquire.py"
 
     - name: install
       id: install
       shell: bash
+      env:
+        CONTRACTSCRIBE_PROVIDER_API_KEY: ""
+        CONTRACTSCRIBE_GITHUB_TOKEN: ""
+        CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
       run: exec python3 "${{ github.action_path }}/scripts/action/install.py"
 
     - name: invoke
       id: invoke
       shell: bash
       env:
+        CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
         CONTRACTSCRIBE_PROVIDER_API_KEY: ${{ inputs.provider-api-key }}
         CONTRACTSCRIBE_GITHUB_TOKEN: ${{ inputs.github-token }}
       run: exec python3 "${{ github.action_path }}/scripts/action/invoke.py"
@@ -143,25 +156,28 @@ runs:
       shell: bash
       if: always()
       env:
-        CS_STATUS_GUARD: ${{ steps.guard.outputs.action_status }}
-        CS_STATUS_PREPARE: ${{ steps.prepare.outputs.action_status }}
-        CS_STATUS_ACQUIRE: ${{ steps.acquire.outputs.action_status }}
-        CS_STATUS_INSTALL: ${{ steps.install.outputs.action_status }}
-        CS_STATUS_INVOKE: ${{ steps.invoke.outputs.action_status }}
-        CS_OUT_RESULT: ${{ steps.invoke.outputs.result }}
-        CS_OUT_OUTCOME: ${{ steps.invoke.outputs.outcome }}
-        CS_OUT_EXIT_CODE: ${{ steps.invoke.outputs.exit_code }}
-        CS_OUT_TERMINAL_LAYER: ${{ steps.invoke.outputs.terminal_layer }}
-        CS_OUT_DIAGNOSTIC_CODES: ${{ steps.invoke.outputs.diagnostic_codes }}
-        CS_OUT_CHECKPOINT_REVISION: ${{ steps.invoke.outputs.checkpoint_revision }}
-        CS_OUT_PULL_REQUEST_URL: ${{ steps.invoke.outputs.pull_request_url }}
-        CS_OUT_TOOL_VERSION: ${{ steps.invoke.outputs.tool_version }}
-        CS_OUT_CAMPAIGN_OPERATION: ${{ steps.invoke.outputs.campaign_operation }}
-        CS_OUT_PUBLICATION_OPERATION_ID: ${{ steps.invoke.outputs.publication_operation_id }}
-        CS_OUT_GENERATION_ID: ${{ steps.invoke.outputs.generation_id }}
-        CS_OUT_PUBLICATION_DIAGNOSTIC: ${{ steps.invoke.outputs.publication_diagnostic }}
-        CS_OUT_PAYLOAD_VERSION: ${{ steps.acquire.outputs.payload_version }}
-        CS_OUT_PAYLOAD_SHA256: ${{ steps.acquire.outputs.payload_sha256 }}
-        CS_OUT_INSTALL_DIR: ${{ steps.install.outputs.install_dir }}
+        CONTRACTSCRIBE_PROVIDER_API_KEY: ""
+        CONTRACTSCRIBE_GITHUB_TOKEN: ""
+        CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
+        CS_STATUS_GUARD: ${{ steps.guard.outputs['action-status'] }}
+        CS_STATUS_PREPARE: ${{ steps.prepare.outputs['action-status'] }}
+        CS_STATUS_ACQUIRE: ${{ steps.acquire.outputs['action-status'] }}
+        CS_STATUS_INSTALL: ${{ steps.install.outputs['action-status'] }}
+        CS_STATUS_INVOKE: ${{ steps.invoke.outputs['action-status'] }}
+        CS_OUT_RESULT: ${{ steps.invoke.outputs['result'] }}
+        CS_OUT_OUTCOME: ${{ steps.invoke.outputs['outcome'] }}
+        CS_OUT_EXIT_CODE: ${{ steps.invoke.outputs['exit-code'] }}
+        CS_OUT_TERMINAL_LAYER: ${{ steps.invoke.outputs['terminal-layer'] }}
+        CS_OUT_DIAGNOSTIC_CODES: ${{ steps.invoke.outputs['diagnostic-codes'] }}
+        CS_OUT_CHECKPOINT_REVISION: ${{ steps.invoke.outputs['checkpoint-revision'] }}
+        CS_OUT_PULL_REQUEST_URL: ${{ steps.invoke.outputs['pull-request-url'] }}
+        CS_OUT_TOOL_VERSION: ${{ steps.invoke.outputs['tool-version'] }}
+        CS_OUT_CAMPAIGN_OPERATION: ${{ steps.invoke.outputs['campaign-operation'] }}
+        CS_OUT_PUBLICATION_OPERATION_ID: ${{ steps.invoke.outputs['publication-operation-id'] }}
+        CS_OUT_GENERATION_ID: ${{ steps.invoke.outputs['generation-id'] }}
+        CS_OUT_PUBLICATION_DIAGNOSTIC: ${{ steps.invoke.outputs['publication-diagnostic'] }}
+        CS_OUT_PAYLOAD_VERSION: ${{ steps.acquire.outputs['payload-version'] }}
+        CS_OUT_PAYLOAD_SHA256: ${{ steps.acquire.outputs['payload-sha256'] }}
+        CS_OUT_INSTALL_DIR: ${{ steps.install.outputs['install-dir'] }}
         CS_INPUT_OPERATION: ${{ inputs.operation }}
       run: exec python3 "${{ github.action_path }}/scripts/action/emit.py"

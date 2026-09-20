@@ -20,7 +20,6 @@ import os
 import shutil
 import signal
 import stat
-import subprocess
 import sys
 
 sys.dont_write_bytecode = True
@@ -185,10 +184,9 @@ def prereq(dotnet):
     """dotnet host prereq stage: the resolved host path from prepare is the
     same binary probed here and invoked later."""
     try:
-        out = subprocess.run([dotnet, "--list-runtimes"], capture_output=True,
-                             timeout=30, check=False).stdout.decode(
-                                 "utf-8", "replace")
-    except (OSError, subprocess.TimeoutExpired):
+        _, out_b, _ = C.run_owned([dotnet, "--list-runtimes"], timeout=30)
+        out = out_b.decode("utf-8", "replace")
+    except OSError:
         fail_install("prereq", "missing-runtime")
     if not any(line.startswith("Microsoft.NETCore.App 10.")
                for line in out.splitlines()):
@@ -199,8 +197,8 @@ def publish(staged_top, dest):
     """Atomic same-filesystem no-clobber rename (mv -T -n semantics)."""
     if os.path.lexists(dest):
         fail_install("publish", "destination-exists")
-    rc = subprocess.run(["mv", "-T", "-n", "--", staged_top, dest],
-                        check=False).returncode
+    rc, _, _ = C.run_owned(["mv", "-T", "-n", "--", staged_top, dest],
+                            timeout=30)
     if rc != 0:
         fail_install("publish", "rename-failed")
     if os.path.lexists(staged_top):
@@ -208,7 +206,8 @@ def publish(staged_top, dest):
 
 
 def _mv(args):
-    return subprocess.run(["mv", "-T"] + args, check=False).returncode
+    rc, _, _ = C.run_owned(["mv", "-T"] + args, timeout=30)
+    return rc
 
 
 def select_current(root, version):
@@ -368,6 +367,7 @@ def install_from_verified(plan, archive, payload):
 
 
 def main():
+    os.environ["CS_ACTION_STAGE"] = "install"
     """Production entry: installs only the archive that acquire.py verified
     against the checked-in map — no argument surface exists to substitute
     either."""

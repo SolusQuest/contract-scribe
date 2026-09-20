@@ -15,7 +15,6 @@ caller bytes never pass through argv or $GITHUB_ENV.
 import os
 import platform
 import shutil
-import subprocess
 import sys
 import uuid
 
@@ -43,19 +42,17 @@ def check(condition, reason):
 def dotnet_prereq(dotnet):
     """Probe the resolved dotnet host; the same absolute path is invoked later."""
     try:
-        runtimes = subprocess.run(
-            [dotnet, "--list-runtimes"], capture_output=True, timeout=30,
-            check=False).stdout.decode("utf-8", "replace")
-    except (OSError, subprocess.TimeoutExpired):
+        _, out_b, _ = C.run_owned([dotnet, "--list-runtimes"], timeout=30)
+        runtimes = out_b.decode("utf-8", "replace")
+    except OSError:
         fail_prepare("dotnet-probe")
     if not any(line.startswith("Microsoft.NETCore.App 10.")
                for line in runtimes.splitlines()):
         fail_prepare("runtime-missing")
     try:
-        sdks = subprocess.run(
-            [dotnet, "--list-sdks"], capture_output=True, timeout=30,
-            check=False).stdout.decode("utf-8", "replace")
-    except (OSError, subprocess.TimeoutExpired):
+        _, out_b, _ = C.run_owned([dotnet, "--list-sdks"], timeout=30)
+        sdks = out_b.decode("utf-8", "replace")
+    except OSError:
         fail_prepare("dotnet-probe")
     if not sdks.strip():
         # github-proposal is a semantic operation: BuildHost/MSBuild need an SDK.
@@ -72,6 +69,7 @@ def materialize(name, value):
 
 
 def main():
+    os.environ["CS_ACTION_STAGE"] = "prepare"
     # Validate the test-seam gate before anything else can act on it.
     C.test_api_root()
 

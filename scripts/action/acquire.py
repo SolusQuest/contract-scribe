@@ -204,6 +204,7 @@ DEFAULT_MAP = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def main():
+    os.environ["CS_ACTION_STAGE"] = "acquire"
     """Production entry: the checked-in map and the fixed/gated API root are
     the only authorities — no argument surface exists to override either."""
     token = os.environ.get("CONTRACTSCRIBE_ACQUISITION_TOKEN") or None

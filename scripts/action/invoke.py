@@ -221,6 +221,7 @@ def emit_outputs(envelope, rc):
 
 
 def main():
+    os.environ["CS_ACTION_STAGE"] = "invoke"
     plan = C.load_plan()
     acquired = C.load_json_file(C.work_file("acquired.json"),
                                 C.BOUND_METADATA_JSON, "acquired")

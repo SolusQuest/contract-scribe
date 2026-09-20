@@ -73,6 +73,11 @@ def marker(kind, stage, result, reason="-"):
 
 def fail(kind, stage, reason, exit_code=1):
     marker(kind, stage, "fail", reason)
+    # Any shared-helper failure inside a stage entrypoint still produces the
+    # closed wrapper status so emit can classify it.
+    owner = os.environ.get("CS_ACTION_STAGE")
+    if owner and _SAFE_ENV_NAME.fullmatch(owner):
+        write_output("action-status", f"action.{owner}-{reason}")
     raise SystemExit(exit_code)
 
 
@@ -321,14 +326,24 @@ def write_output(name, value, limit=BOUND_OUTPUT_VALUE):
     if value is None:
         value = ""
     if not isinstance(value, str) or len(value) > limit \
-            or "\n" in value or "\r" in value or "\x00" in value:
+            or "\x00" in value or "\r" in value:
         fail("action-emit", "stage=output", "output-value")
     path = os.environ.get("GITHUB_OUTPUT")
     if path:
         with open(path, "a", encoding="utf-8", newline="\n") as fh:
-            fh.write(name + "=" + value + "\n")
+            if "\n" in value:
+                # Multiline values use the delimiter form. The delimiter is a
+                # wrapper-generated token; if it collides with content, suffix
+                # until unique (closed-charset, bounded).
+                delim = "CS_OUTPUT_DELIM"
+                while delim in value:
+                    delim += "X"
+                fh.write(name + "<<" + delim + "\n" + value + "\n" + delim + "\n")
+            else:
+                fh.write(name + "=" + value + "\n")
     else:
-        print(f"action-output {name}={value}", flush=True)
+        safe = value if "\n" not in value else value.replace("\n", "\\n")
+        print(f"action-output {name}={safe}", flush=True)
 
 
 def write_env(name, value):
@@ -349,9 +364,14 @@ def annotate_error(text):
     print(f"::error::{clean[:512]}", flush=True)
 
 
+def _escape_workflow_command(value):
+    """Percent-encode the bytes that would corrupt a workflow command."""
+    return value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def mask(value):
     if value:
-        print(f"::add-mask::{value}", flush=True)
+        print(f"::add-mask::{_escape_workflow_command(value)}", flush=True)
 
 
 def add_path_line(path_value):
@@ -378,3 +398,62 @@ def plan_path():
 
 def load_plan():
     return load_json_file(plan_path(), BOUND_METADATA_JSON, "plan")
+
+
+# ---------------------------------------------------------------------------
+# Owned subprocesses — cancellation-safe child execution
+# ---------------------------------------------------------------------------
+
+def run_owned(argv, timeout=30):
+    """Run a child in its own process group with cancellation forwarding.
+
+    The step entry process receives the runner's signal; nested children must
+    be owned explicitly: forward INT/TERM to the child's group, escalate after
+    a bounded grace, and reap. Returns (returncode, stdout, stderr). Raises
+    SystemExit(130) when a signal terminated the run.
+    """
+    import signal
+    import subprocess
+    import time
+
+    child = subprocess.Popen(
+        argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        stdin=subprocess.DEVNULL, start_new_session=True)
+    state = {"signalled": False, "deadline": None}
+
+    def on_signal(signum, _frame):
+        state["signalled"] = True
+        try:
+            os.killpg(child.pid, signum)
+        except (ProcessLookupError, PermissionError):
+            pass
+        state["deadline"] = time.monotonic() + 4.0
+
+    previous = {}
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        previous[sig] = signal.signal(sig, on_signal)
+    try:
+        deadline = time.monotonic() + timeout
+        while child.poll() is None:
+            if state["deadline"] is not None \
+                    and time.monotonic() > state["deadline"]:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                state["deadline"] = None
+            if time.monotonic() > deadline:
+                try:
+                    os.killpg(child.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+                break
+            time.sleep(0.05)
+        out, err = child.communicate()
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+    rc = child.wait()
+    if state["signalled"]:
+        raise SystemExit(130)
+    return rc, out, err
