@@ -598,6 +598,351 @@ jobs:
             throw "Packed payload verification failure: verify=$env:VERIFY_OUTCOME."
           }
 
+  action_packaged:
+    # M6-A2: the composite Action end-to-end - acquisition through a strictly
+    # gated test map, frozen install semantics, real CLI invocation against
+    # loopback fakes. Also proves byte reproducibility of the payload build:
+    # the producer artifact must equal an independent clean rebuild of the
+    # checked-out revision. While payload-map.json carries payload:null the
+    # production acquisition path fails closed; once a pair is recorded this
+    # job additionally rebuilds the mapped sourceRevision and requires byte
+    # equality with the map.
+    needs: payload_producer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: action-src
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: packaging-test-kit-attempt-${{ github.run_attempt }}
+          path: kit
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: d2-payload-attempt-${{ github.run_attempt }}
+          path: producer-payload
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: kit/global.json
+      - name: Independent clean rebuild of the checked-out revision
+        id: payload_build
+        shell: bash
+        run: |
+          set -euo pipefail
+          dotnet --version
+          dotnet --info | head -20
+          bash action-src/scripts/release/build-payload.sh --output payload-build
+          find payload-build -name '*.tar.gz' -o -name '*.sha256' -o -name '*.payload.json'
+      - name: Assert byte reproducibility and map state
+        id: pair_check
+        shell: bash
+        env:
+          MAP: action-src/scripts/action/payload-map.json
+        run: |
+          set -euo pipefail
+          python3 - "$MAP" <<'PYEOF'
+          import glob, hashlib, json, sys
+          digest = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+          rebuilt = glob.glob("payload-build/**/*.tar.gz", recursive=True)
+          produced = glob.glob("producer-payload/**/*.tar.gz", recursive=True)
+          assert len(rebuilt) == 1, rebuilt
+          assert len(produced) == 1, produced
+          archive = rebuilt[0]
+          sha = digest(archive)
+          # Byte reproducibility: the independent clean rebuild of the
+          # checked-out revision must equal the producer artifact exactly.
+          # On mismatch, name the differing members so SDK/image drift
+          # between the two runners is diagnosable from the log.
+          if sha != digest(produced[0]):
+              import tarfile
+              def members(path):
+                  out = {}
+                  with tarfile.open(path, "r:gz") as tar:
+                      for m in tar:
+                          if m.isfile():
+                              out[m.name] = (m.size, hashlib.sha256(
+                                  tar.extractfile(m).read()).hexdigest())
+                  return out
+              a, b = members(archive), members(produced[0])
+              for name in sorted(set(a) | set(b)):
+                  if name not in a:
+                      print(f"only in producer: {name} (size {b[name][0]})")
+                  elif name not in b:
+                      print(f"only in rebuild: {name} (size {a[name][0]})")
+                  elif a[name] != b[name]:
+                      print(f"differs: {name} "
+                            f"(rebuild size {a[name][0]}, "
+                            f"producer size {b[name][0]})")
+              raise AssertionError(
+                  "clean rebuild is not byte-identical to the producer artifact")
+          manifest = archive[:-7] + ".payload.json"
+          assert open(manifest, "rb").read() == \
+              open(produced[0][:-7] + ".payload.json", "rb").read(), \
+              "rebuilt .payload.json differs from the producer manifest"
+          recorded = open(archive[:-7] + ".sha256").read().split()[0]
+          assert recorded == sha, ".sha256 sidecar does not match the archive"
+          payload = json.load(open(sys.argv[1]))["payload"]
+          if payload is None:
+              print("map: no authorized pair (pre-release)")
+          else:
+              with open("pair-revision.txt", "w") as fh:
+                  fh.write(payload["sourceRevision"])
+              with open("pair-expected.json", "w") as fh:
+                  json.dump(payload, fh)
+          with open("pair-archive-path.txt", "w") as fh:
+              fh.write(archive)
+          PYEOF
+          if [ -f pair-revision.txt ]; then
+            SRC="$(cat pair-revision.txt)"
+            mkdir pair-src
+            git -C pair-src init -q
+            git -C pair-src remote add origin https://github.com/SolusQuest/contract-scribe.git
+            git -C pair-src fetch --depth 1 origin "$SRC"
+            git -C pair-src checkout -q --detach FETCH_HEAD
+            bash pair-src/scripts/release/build-payload.sh --output pair-build
+            python3 - <<'PYEOF'
+          import glob, hashlib, json
+          digest = lambda p: hashlib.sha256(open(p, "rb").read()).hexdigest()
+          payload = json.load(open("pair-expected.json"))
+          archives = glob.glob("pair-build/**/*.tar.gz", recursive=True)
+          assert len(archives) == 1, archives
+          manifest = json.load(open(archives[0][:-7] + ".payload.json"))
+          computed = digest(archives[0])
+          if computed != payload["sha256"]:
+              print("mapped pair rebuild mismatch: "
+                    f"toolVersion={manifest['toolVersion']} "
+                    f"sourceRevision={manifest['sourceRevision']} "
+                    f"recorded sha256={payload['sha256']} "
+                    f"computed sha256={computed}")
+          assert computed == payload["sha256"], \
+              "mapped pair rebuild does not equal the recorded sha256"
+          assert payload["assetName"] == \
+              "contract-scribe-%s-linux-x64.tar.gz" % manifest["toolVersion"]
+          assert payload["toolVersion"] == manifest["toolVersion"]
+          PYEOF
+          fi
+      - name: Run the script/test matrix
+        id: matrix
+        continue-on-error: true
+        timeout-minutes: 45
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$(cat pair-archive-path.txt)"
+          bash action-src/tests/action/verify-action.sh \
+            --kit "$PWD/kit" \
+            --archive "$archive" \
+            --sha256-file "${archive%.tar.gz}.sha256" \
+            --real --work "$PWD/verify-work" --keep
+      - name: Start loopback fakes
+        id: fakes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fakes
+          python3 - "$PWD/fakes" <<'PYEOF'
+          import hashlib, json, os, sys
+          archive = open("pair-archive-path.txt").read().strip()
+          manifest = json.load(open(archive[:-7] + ".payload.json"))
+          sha = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+          asset = os.path.basename(archive)
+          # The gated test map authorizes exactly this rebuilt pair; the
+          # committed production map stays payload:null.
+          test_map = {"mapVersion": 1, "wrapper": "contract-scribe-action",
+              "payload": {"repository": "SolusQuest/contract-scribe",
+                  "releaseTag": "payload-" + manifest["toolVersion"],
+                  "toolVersion": manifest["toolVersion"],
+                  "sourceRevision": manifest["sourceRevision"],
+                  "runtimeIdentifier": "linux-x64",
+                  "assetName": asset,
+                  "sha256": sha,
+                  "assets": [asset]}}
+          json.dump(test_map, open(sys.argv[1] + "/test-map.json", "w"))
+          m = test_map["payload"]
+          cfg = {"repository": m["repository"],
+                 "expected_token": "contract-scribe-synthetic-acquisition-only",
+                 "require_auth": False,
+                 "releases": [{"id": 1, "tag": m["releaseTag"], "draft": False,
+                     "assets": [{"id": 1, "name": m["assetName"],
+                                 "file": archive}]}],
+                 "overrides": {}}
+          json.dump(cfg, open(sys.argv[1] + "/release-config.json", "w"))
+          gh = {"files": {"README.md": "# synthetic\n", "src/App.cs": "class A {}\n"}}
+          json.dump(gh, open(sys.argv[1] + "/github-config.json", "w"))
+          PYEOF
+          touch fakes/release.log fakes/provider.log fakes/hang.log fakes/github.log fakes/github-failures.log
+          python3 action-src/tests/action/fake_release_api.py fakes/release-config.json fakes/release-ready.json fakes/release.log &
+          python3 action-src/tests/action/fake_provider.py proposal fakes/provider-ready.json fakes/provider.log &
+          python3 action-src/tests/action/fake_provider.py hang fakes/hang-ready.json fakes/hang.log &
+          for f in release provider hang; do
+            for _ in $(seq 100); do [ -f "fakes/$f-ready.json" ] && break; sleep 0.1; done
+            [ -f "fakes/$f-ready.json" ]
+          done
+          {
+            echo "api_root=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["api"])' fakes/release-ready.json)"
+            echo "provider=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/provider-ready.json)"
+            echo "hang=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/hang-ready.json)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Prepare target fixture (spaced path)
+        id: target
+        shell: bash
+        env:
+          PROVIDER: ${{ steps.fakes.outputs.provider }}
+        run: |
+          set -euo pipefail
+          TGT="$PWD/target repo a2"
+          mkdir -p "$TGT"
+          cp -r kit/fixture/. "$TGT/"
+          cp kit/global.json "$TGT/global.json"
+          (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null              && dotnet build Fixture.slnx --no-restore --nologo >/dev/null)
+          # The CLI verifies each governed file's original sha256 against the
+          # fake's base tree: seed the remote repo with the real file set.
+          python3 - "$TGT" fakes/github-config.json <<'PYEOF'
+          import json, os, sys
+          root, out = sys.argv[1], sys.argv[2]
+          files = {}
+          for base, dirs, names in os.walk(root):
+              dirs[:] = [d for d in dirs if d not in ("obj", "bin", ".git")]
+              for name in names:
+                  path = os.path.join(base, name)
+                  rel = os.path.relpath(path, root).replace(os.sep, "/")
+                  if rel.endswith((".cs", ".csproj")) or rel == "policy.json":
+                      files[rel] = open(path, encoding="utf-8").read()
+          json.dump({"files": files}, open(out, "w"))
+          PYEOF
+          python3 action-src/tests/action/fake_github_api.py fakes/github-config.json fakes/github-ready.json fakes/github.log fakes/github-failures.log &
+          for _ in $(seq 100); do [ -f fakes/github-ready.json ] && break; sleep 0.1; done
+          [ -f fakes/github-ready.json ]
+          BASE_OID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseOid"])' fakes/github-ready.json)"
+          {
+            echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
+            echo "base_oid=$BASE_OID"
+          } >> "$GITHUB_OUTPUT"
+          mkdir -p action-inputs checkpoint-state checkpoint-state-2
+          chmod 0700 checkpoint-state checkpoint-state-2
+          cat > action-inputs/request.json <<EOFX
+          {"githubProposalRequestVersion":1,
+           "campaignLineage":"campaign.action.e2e","snapshot":"snapshot.action.e2e",
+           "state":"$PWD/checkpoint-state/state.bin",
+           "github":{"repositoryOwner":"Owner","repositoryName":"repo",
+             "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
+             "operationId":"operation.e2e","generationId":"generation.e2e",
+             "policy":{"maximumDocumentationBlocks":128,
+               "maximumDistinctChangedFiles":128,
+               "maximumCumulativePatchBytes":4194304},
+             "transition":"initial"}}
+          EOFX
+          sed 's|checkpoint-state/state.bin|checkpoint-state-2/state.bin|'               action-inputs/request.json > action-inputs/request-2.json
+          {
+            echo "request-json<<CSREQ"
+            cat action-inputs/request.json
+            echo "CSREQ"
+            echo "request2-json<<CSREQ"
+            cat action-inputs/request-2.json
+            echo "CSREQ"
+          } >> "$GITHUB_OUTPUT"
+          cat > action-inputs/layer.json <<EOFX
+          {"consumerConfigurationVersion":1,
+           "provider":{"endpoint":"$PROVIDER","model":"fixture-model",
+             "requestProfile":{"toolChoice":"auto"}},
+           "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
+             "maximumElapsedMilliseconds":3600000}}}
+          EOFX
+      - name: "E2E happy path through uses"
+        id: e2e_ok
+        uses: ./action-src
+        env:
+          CONTRACTSCRIBE_ACTION_TEST: "1"
+          CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
+          CONTRACTSCRIBE_ACTION_TEST_MAP: ${{ github.workspace }}/fakes/test-map.json
+          DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.target.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/e2e-obs.txt
+        with:
+          operation: github-proposal-start
+          repository-root: ${{ github.workspace }}/target repo a2
+          input: Fixture.slnx
+          policy: policy.json
+          request: ${{ steps.target.outputs.request-json }}
+          configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          github-token: contract-scribe-synthetic-transport-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
+      - name: Assert happy-path outputs
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.e2e_ok.outputs.outcome }}
+          STATUS: ${{ steps.e2e_ok.outputs.action-status }}
+          RESULT: ${{ steps.e2e_ok.outputs.result }}
+        run: |
+          set -euo pipefail
+          [ "$STATUS" = ok ]
+          [ "$OUTCOME" = github-proposal.published ]
+          python3 -c 'import json,os; e=json.loads(os.environ["RESULT"]); assert e["outcome"]=="github-proposal.published"'
+          grep -q "POST /repos/Owner/repo/pulls" fakes/github.log
+          test -s e2e-obs.txt && grep -q token-read e2e-obs.txt
+      - name: E2E missing token (product failure, exit 4)
+        id: e2e_notoken
+        continue-on-error: true
+        uses: ./action-src
+        env:
+          CONTRACTSCRIBE_ACTION_TEST: "1"
+          CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
+          CONTRACTSCRIBE_ACTION_TEST_MAP: ${{ github.workspace }}/fakes/test-map.json
+          DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.target.outputs.github }}
+        with:
+          operation: github-proposal-start
+          repository-root: ${{ github.workspace }}/target repo a2
+          input: Fixture.slnx
+          policy: policy.json
+          request: ${{ steps.target.outputs.request2-json }}
+          configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
+      - name: Assert product-failure outputs
+        id: e2e_notoken_assert
+        shell: bash
+        env:
+          STEP_RESULT: ${{ steps.e2e_notoken.outcome }}
+          OUTCOME: ${{ steps.e2e_notoken.outputs.outcome }}
+          EXIT_CODE: ${{ steps.e2e_notoken.outputs.exit-code }}
+          STATUS: ${{ steps.e2e_notoken.outputs.action-status }}
+        run: |
+          set -euo pipefail
+          [ "$STEP_RESULT" = failure ]
+          [ "$STATUS" = ok ]
+          [ "$OUTCOME" = github-proposal.permission ]
+          [ "$EXIT_CODE" = 4 ]
+      - name: Upload action verification logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: action-verify-logs-attempt-${{ github.run_attempt }}
+          path: |
+            verify-work/*/logs/
+            fakes/
+            e2e-obs.txt
+          if-no-files-found: warn
+      - name: Aggregate action outcomes
+        if: always()
+        shell: pwsh
+        env:
+          MATRIX_OUTCOME: ${{ steps.matrix.outcome }}
+          E2E_OK: ${{ steps.e2e_ok.outcome }}
+          E2E_NOTOKEN_ASSERT: ${{ steps.e2e_notoken_assert.outcome }}
+          BUILD_OUTCOME: ${{ steps.payload_build.outcome }}
+          PAIR_OUTCOME: ${{ steps.pair_check.outcome }}
+        run: |
+          if ($env:MATRIX_OUTCOME -ne 'success' -or $env:E2E_OK -ne 'success' `
+              -or $env:E2E_NOTOKEN_ASSERT -ne 'success' -or $env:BUILD_OUTCOME -ne 'success' `
+              -or $env:PAIR_OUTCOME -ne 'success') {
+            throw "action_packaged failure: matrix=$env:MATRIX_OUTCOME e2e_ok=$env:E2E_OK e2e_notoken_assert=$env:E2E_NOTOKEN_ASSERT build=$env:BUILD_OUTCOME pair=$env:PAIR_OUTCOME"
+          }
+
   validate:
     if: always()
     needs:
@@ -606,6 +951,7 @@ jobs:
       - integration_remaining
       - payload_producer
       - packed_payload
+      - action_packaged
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate required CI jobs
@@ -616,6 +962,7 @@ jobs:
           REMAINING_INTEGRATION_RESULT: ${{ needs.integration_remaining.result }}
           PAYLOAD_PRODUCER_RESULT: ${{ needs.payload_producer.result }}
           PACKED_PAYLOAD_RESULT: ${{ needs.packed_payload.result }}
+          ACTION_PACKAGED_RESULT: ${{ needs.action_packaged.result }}
         run: |
           $results = @{
             fast_and_static = $env:FAST_AND_STATIC_RESULT
@@ -623,6 +970,7 @@ jobs:
             integration_remaining = $env:REMAINING_INTEGRATION_RESULT
             payload_producer = $env:PAYLOAD_PRODUCER_RESULT
             packed_payload = $env:PACKED_PAYLOAD_RESULT
+            action_packaged = $env:ACTION_PACKAGED_RESULT
           }
           $failures = @($results.GetEnumerator() | Where-Object Value -ne 'success' | ForEach-Object { "$($_.Key)=$($_.Value)" })
           if ($failures.Count -gt 0) {
