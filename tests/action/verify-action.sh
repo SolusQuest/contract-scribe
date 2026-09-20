@@ -802,7 +802,7 @@ case_invoke_diagnostic_on_success() {
     local w; w="$(setup_invoke ids)"
     if env CS_WORK_DIR="$w" GITHUB_OUTPUT="$w/out.txt" STUB_MODE=diagonsuccess \
             python3 "$ACTION_SCRIPTS/invoke.py"; then return 1; fi
-    grep -q "action.envelope-diagnostic-on-success" "$w/out.txt"
+    grep -q "action.envelope-diagnostic-layer" "$w/out.txt"
 }
 case_invoke_stderr_adversarial() {
     posix_only && return 0
