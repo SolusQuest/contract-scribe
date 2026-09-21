@@ -3,7 +3,9 @@ name: Release
 # Manually initiated release candidate preparation and guarded promotion
 # (issue #187 / M6-R1). Three dispatch operations, run separately:
 #
-#   prepare      -> build + freeze one candidate (read-only)
+#   prepare      -> build + freeze one candidate and attest its payload
+#                   provenance (candidate build stays credential-free; a
+#                   dedicated OIDC job emits and verifies the attestation)
 #   stage-draft  -> separately authorized unpublished draft for R2 (#188)
 #   promote      -> separately authorized publication of the exact
 #                   qualified candidate (R3, #189)
@@ -170,6 +172,76 @@ jobs:
           echo "- prepare run id: \`${{ github.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- artifact id: \`${{ steps.upload.outputs.artifact-id }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- artifact digest: \`${{ steps.upload.outputs.artifact-digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  attest:
+    # Producer-side provenance (issue #198): attests the exact payload
+    # archive bytes so the qualified/published artifact carries Sigstore
+    # provenance. OIDC + attestation-write authority is confined to this
+    # dedicated job; the candidate build above stays credential-free.
+    # Supplemental evidence only — payload-map.json sha256 remains the
+    # sole acquisition authority.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.operation == 'prepare'
+      && github.repository == 'SolusQuest/contract-scribe'
+      && github.ref == 'refs/heads/main'
+    needs: candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - name: Download the candidate bundle
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ needs.candidate.outputs.artifact-id }}
+          path: ${{ runner.temp }}/release-candidate
+          digest-mismatch: error
+      - name: Verify the payload archive digest
+        id: subject
+        shell: bash
+        env:
+          CS_CANDIDATE_DIR: ${{ runner.temp }}/release-candidate
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, sys
+          d = os.environ["CS_CANDIDATE_DIR"]
+          identity = json.load(open(os.path.join(d, "candidate.json"),
+                                    encoding="utf-8"))["identity"]
+          name = identity["assetName"]
+          if os.path.basename(name) != name:
+              sys.exit("assetName is not a basename")
+          archive = os.path.join(d, name)
+          if not os.path.isfile(archive):
+              sys.exit("payload archive missing from candidate bundle")
+          h = hashlib.sha256()
+          with open(archive, "rb") as fh:
+              for chunk in iter(lambda: fh.read(1 << 20), b""):
+                  h.update(chunk)
+          if h.hexdigest() != identity["archiveSha256"]:
+              sys.exit("payload archive digest mismatch")
+          with open(os.environ["GITHUB_OUTPUT"], "a",
+                    encoding="utf-8") as fh:
+              fh.write(f"archive-path={archive}\n")
+          PY
+      - name: Attest the payload archive
+        id: attest
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6
+        with:
+          subject-path: ${{ steps.subject.outputs.archive-path }}
+      - name: Verify the emitted attestation
+        shell: bash
+        run: >-
+          gh attestation verify "${{ steps.subject.outputs.archive-path }}"
+          --repo SolusQuest/contract-scribe
+          --bundle "${{ steps.attest.outputs.bundle-path }}"
+          --signer-workflow SolusQuest/contract-scribe/.github/workflows/release.yml
+          --source-ref refs/heads/main
+          --source-digest "$GITHUB_SHA"
+          --deny-self-hosted-runners
 
   stage:
     # Separately authorized unpublished-draft staging (R2 qualification
