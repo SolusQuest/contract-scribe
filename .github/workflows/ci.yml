@@ -943,6 +943,850 @@ jobs:
             throw "action_packaged failure: matrix=$env:MATRIX_OUTCOME e2e_ok=$env:E2E_OK e2e_notoken_assert=$env:E2E_NOTOKEN_ASSERT build=$env:BUILD_OUTCOME pair=$env:PAIR_OUTCOME"
           }
 
+  action_examples_producer:
+    # M6-A3: producer leg of the caller-owned campaign example — real
+    # checkout of a real git fixture, real Action start against the
+    # deterministic substitutes, real upload-artifact. The emitted handoff
+    # is sealed for synthetic run 501/schedule; the consumer job authenticates
+    # it from a fresh runner. Run ids/numbers/attempts/events are synthetic
+    # (a single physical CI run cannot be two workflow runs); artifact
+    # id/digest and transport are the real native ones.
+    needs: action_packaged
+    runs-on: ubuntu-latest
+    outputs:
+      handoff_artifact_id: ${{ steps.handoff_upload.outputs.artifact-id }}
+      handoff_artifact_digest: ${{ steps.handoff_upload.outputs.artifact-digest }}
+      target_head: ${{ steps.target.outputs.target_head }}
+      activation_json: ${{ steps.activation.outputs.activation-json }}
+      provider_endpoint: ${{ steps.fakes.outputs.provider }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: action-src
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: packaging-test-kit-attempt-${{ github.run_attempt }}
+          path: kit
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: d2-payload-attempt-${{ github.run_attempt }}
+          path: producer-payload
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: kit/global.json
+      - name: Build target fixture as a real git repository
+        id: target
+        shell: bash
+        run: |
+          set -euo pipefail
+          TGT="$PWD/target-repo-a3"
+          mkdir -p "$TGT"
+          cp -r kit/fixture/. "$TGT/"
+          cp kit/global.json "$TGT/global.json"
+          # Real checkout: HEAD commit is the request's expectedBaseCommitOid
+          # AND the fake remote's refs/heads/main. Deterministic
+          # author/committer/date makes the sha identical in the consumer job.
+          git -C "$TGT" init -q -b main
+          git -C "$TGT" config user.email fixture@example.invalid
+          git -C "$TGT" config user.name Fixture
+          git -C "$TGT" add '*.cs' '*.csproj' '*.slnx' 'policy.json' \
+              'global.json' 'NuGet.Config'
+          GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' \
+          GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' \
+              git -C "$TGT" commit -qm 'fixture base'
+          TARGET_HEAD="$(git -C "$TGT" rev-parse HEAD)"
+          echo "target_head=$TARGET_HEAD" >> "$GITHUB_OUTPUT"
+          (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null \
+              && dotnet build Fixture.slnx --no-restore --nologo >/dev/null)
+      - name: Start loopback fakes
+        id: fakes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fakes
+          python3 - fakes <<'PYEOF'
+          import glob, hashlib, json, sys
+          archive = glob.glob("producer-payload/**/*.tar.gz", recursive=True)[0]
+          manifest = json.load(open(archive[:-7] + ".payload.json"))
+          sha = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+          asset = archive.rsplit("/", 1)[-1]
+          test_map = {"mapVersion": 1, "wrapper": "contract-scribe-action",
+              "payload": {"repository": "SolusQuest/contract-scribe",
+                  "releaseTag": "payload-" + manifest["toolVersion"],
+                  "toolVersion": manifest["toolVersion"],
+                  "sourceRevision": manifest["sourceRevision"],
+                  "runtimeIdentifier": "linux-x64",
+                  "assetName": asset,
+                  "sha256": sha,
+                  "assets": [asset]}}
+          json.dump(test_map, open(sys.argv[1] + "/test-map.json", "w"))
+          m = test_map["payload"]
+          cfg = {"repository": m["repository"],
+                 "expected_token": "contract-scribe-synthetic-acquisition-only",
+                 "require_auth": False,
+                 "releases": [{"id": 1, "tag": m["releaseTag"], "draft": False,
+                     "assets": [{"id": 1, "name": m["assetName"],
+                                 "file": archive}]}],
+                 "overrides": {}}
+          json.dump(cfg, open(sys.argv[1] + "/release-config.json", "w"))
+          gh = {"repository": "Owner/repo",
+                "seed_repo": "target-repo-a3",
+                "state_file": "fakes/github-state.json"}
+          json.dump(gh, open(sys.argv[1] + "/github-config.json", "w"))
+          # Producer-side synthetic Actions metadata: this run is the
+          # workflow_dispatch start at run_number 500, attempt 1.
+          actions = {
+            "repository": {"id": 7001, "full_name": "Owner/repo",
+                           "default_branch": "main"},
+            "expected_token": "contract-scribe-synthetic-actions-read",
+            "runs": {"91001": {
+                "id": 91001, "run_number": 500, "run_attempt": 1,
+                "event": "workflow_dispatch", "status": "in_progress",
+                "conclusion": None, "head_branch": "main",
+                "head_sha": "b" * 40, "workflow_id": 55,
+                "path": ".github/workflows/contract-scribe-campaign.yml",
+                "repository": {"id": 7001, "full_name": "Owner/repo"},
+                "head_repository": {"id": 7001}}},
+            "artifacts": {}, "run_artifacts": {}}
+          json.dump(actions, open(sys.argv[1] + "/actions-config.json", "w"))
+          PYEOF
+          touch fakes/release.log fakes/provider.log fakes/github.log \
+              fakes/github-failures.log fakes/actions.log
+          python3 action-src/tests/action/fake_release_api.py \
+              fakes/release-config.json fakes/release-ready.json fakes/release.log &
+          python3 action-src/tests/action/fake_provider.py proposal \
+              fakes/provider-ready.json fakes/provider.log &
+          python3 action-src/tests/action-workflows/fake_github_state.py \
+              fakes/github-config.json fakes/github-ready.json \
+              fakes/github.log fakes/github-failures.log &
+          python3 action-src/tests/action-workflows/fake_actions_api.py \
+              fakes/actions-config.json fakes/actions-ready.json \
+              fakes/actions.log &
+          for f in release provider github actions; do
+            for _ in $(seq 100); do [ -f "fakes/$f-ready.json" ] && break; sleep 0.1; done
+            [ -f "fakes/$f-ready.json" ]
+          done
+          {
+            echo "api_root=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["api"])' fakes/release-ready.json)"
+            echo "provider=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/provider-ready.json)"
+            echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
+            echo "actions_api=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/actions-ready.json)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Caller authority surface (synthetic)
+        id: authority
+        shell: bash
+        env:
+          PROVIDER: ${{ steps.fakes.outputs.provider }}
+        run: |
+          set -euo pipefail
+          mkdir -p action-inputs "$RUNNER_TEMP/cs-state"
+          chmod 0700 "$RUNNER_TEMP/cs-state"
+          cat > action-inputs/layer.json <<EOFX
+          {"consumerConfigurationVersion":1,
+           "provider":{"endpoint":"$PROVIDER","model":"fixture-model",
+             "requestProfile":{"toolChoice":"auto"}},
+           "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
+             "maximumElapsedMilliseconds":3600000}}}
+          EOFX
+          python3 - "$RUNNER_TEMP/cs-state/checkpoint.json" <<'PYEOF'
+          import json, sys
+          campaign = {
+              "snapshot": "snapshot.action.a3",
+              "operationId": "operation.a3",
+              "generationId": "generation.a3",
+              "targetRef": "refs/heads/main",
+              "repositoryOwner": "Owner",
+              "repositoryName": "repo",
+              "policyCeilings": {"maximumDocumentationBlocks": 128,
+                                 "maximumDistinctChangedFiles": 128,
+                                 "maximumCumulativePatchBytes": 4194304}}
+          json.dump(campaign, open("action-inputs/campaign.json", "w"))
+          context = {"runId": 91001, "runNumber": 500, "runAttempt": 1,
+                     "event": "workflow_dispatch", "ref": "refs/heads/main",
+                     "sha": "b" * 40, "repository": "Owner/repo",
+                     "repositoryId": 7001,
+                     "workflowRef": "Owner/repo/.github/workflows/"
+                                    "contract-scribe-campaign.yml@refs/heads/main"}
+          json.dump(context, open("action-inputs/context.json", "w"))
+          print("state=" + sys.argv[1])
+          PYEOF
+      - name: Producer admission gate
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: python3 action-src/examples/github-actions/handoff.py gate
+      - name: Build invocation request
+        id: request
+        env:
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py request
+          --base-oid "${{ steps.target.outputs.target_head }}"
+          --state "$RUNNER_TEMP/cs-state/checkpoint.json"
+          --out "$RUNNER_TEMP/cs-request.json"
+      - name: "E2E start through uses (producer)"
+        id: invoke
+        uses: ./action-src
+        env:
+          CONTRACTSCRIBE_ACTION_TEST: "1"
+          CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
+          CONTRACTSCRIBE_ACTION_TEST_MAP: ${{ github.workspace }}/fakes/test-map.json
+          DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/producer-obs.txt
+        with:
+          operation: github-proposal-start
+          repository-root: ${{ github.workspace }}/target-repo-a3
+          input: Fixture.slnx
+          policy: policy.json
+          request: ${{ steps.request.outputs.request-json }}
+          configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          github-token: contract-scribe-synthetic-transport-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
+      - name: Emit sealed handoff
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py emit
+          --checkpoint "$RUNNER_TEMP/cs-state/checkpoint.json"
+          --handoff-dir "$RUNNER_TEMP/cs-handoff"
+      - name: Upload producer handoff (physical CI name)
+        id: handoff_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a3-handoff-start-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cs-handoff/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+      - name: Render next activation
+        id: activation
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py activation
+          --handoff-dir "$RUNNER_TEMP/cs-handoff"
+          --artifact-id "${{ steps.handoff_upload.outputs.artifact-id }}"
+          --artifact-digest "${{ steps.handoff_upload.outputs.artifact-digest }}"
+      - name: Assert producer-side facts
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.invoke.outputs.outcome }}
+          STATUS: ${{ steps.invoke.outputs.action-status }}
+        run: |
+          set -euo pipefail
+          [ "$STATUS" = ok ]
+          [ "$OUTCOME" = github-proposal.published ]
+          grep -q "POST /repos/Owner/repo/pulls" fakes/github.log
+          test -s fakes/github-state.json
+          test -s producer-obs.txt && grep -q token-read producer-obs.txt
+      - name: Upload diagnostics (includes synthetic GitHub state)
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a3-producer-diagnostics-attempt-${{ github.run_attempt }}
+          path: |
+            fakes/
+            action-inputs/
+            producer-obs.txt
+          if-no-files-found: warn
+
+  action_examples_consumer:
+    # M6-A3: consumer leg — a fresh runner authenticates the caller
+    # activation + sealed artifact, downloads it natively, restores the
+    # checkpoint privately, and replays the operation through the real CLI.
+    needs: action_examples_producer
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          path: action-src
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: packaging-test-kit-attempt-${{ github.run_attempt }}
+          path: kit
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: d2-payload-attempt-${{ github.run_attempt }}
+          path: producer-payload
+      - uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          name: a3-producer-diagnostics-attempt-${{ github.run_attempt }}
+          path: producer-diagnostics
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: kit/global.json
+      - name: Rebuild the identical target fixture
+        id: target
+        shell: bash
+        env:
+          EXPECTED_HEAD: ${{ needs.action_examples_producer.outputs.target_head }}
+        run: |
+          set -euo pipefail
+          TGT="$PWD/target-repo-a3"
+          mkdir -p "$TGT"
+          cp -r kit/fixture/. "$TGT/"
+          cp kit/global.json "$TGT/global.json"
+          git -C "$TGT" init -q -b main
+          git -C "$TGT" config user.email fixture@example.invalid
+          git -C "$TGT" config user.name Fixture
+          git -C "$TGT" add '*.cs' '*.csproj' '*.slnx' 'policy.json' \
+              'global.json' 'NuGet.Config'
+          GIT_AUTHOR_DATE='2026-01-01T00:00:00Z' \
+          GIT_COMMITTER_DATE='2026-01-01T00:00:00Z' \
+              git -C "$TGT" commit -qm 'fixture base'
+          TARGET_HEAD="$(git -C "$TGT" rev-parse HEAD)"
+          [ "$TARGET_HEAD" = "$EXPECTED_HEAD" ]
+          echo "target_head=$TARGET_HEAD" >> "$GITHUB_OUTPUT"
+          (cd "$TGT" && dotnet restore Fixture.slnx --nologo >/dev/null \
+              && dotnet build Fixture.slnx --no-restore --nologo >/dev/null)
+      - name: Start loopback fakes (GitHub state hydrated from producer)
+        id: fakes
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p fakes
+          python3 - fakes <<'PYEOF'
+          import glob, hashlib, json, sys
+          archive = glob.glob("producer-payload/**/*.tar.gz", recursive=True)[0]
+          manifest = json.load(open(archive[:-7] + ".payload.json"))
+          sha = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+          asset = archive.rsplit("/", 1)[-1]
+          test_map = {"mapVersion": 1, "wrapper": "contract-scribe-action",
+              "payload": {"repository": "SolusQuest/contract-scribe",
+                  "releaseTag": "payload-" + manifest["toolVersion"],
+                  "toolVersion": manifest["toolVersion"],
+                  "sourceRevision": manifest["sourceRevision"],
+                  "runtimeIdentifier": "linux-x64",
+                  "assetName": asset,
+                  "sha256": sha,
+                  "assets": [asset]}}
+          json.dump(test_map, open(sys.argv[1] + "/test-map.json", "w"))
+          m = test_map["payload"]
+          cfg = {"repository": m["repository"],
+                 "expected_token": "contract-scribe-synthetic-acquisition-only",
+                 "require_auth": False,
+                 "releases": [{"id": 1, "tag": m["releaseTag"], "draft": False,
+                     "assets": [{"id": 1, "name": m["assetName"],
+                                 "file": archive}]}],
+                 "overrides": {}}
+          json.dump(cfg, open(sys.argv[1] + "/release-config.json", "w"))
+          PYEOF
+          STATE_FILE="$(find producer-diagnostics -name github-state.json | head -1)"
+          [ -n "$STATE_FILE" ] && [ -f "$STATE_FILE" ]
+          python3 - "$STATE_FILE" <<'PYEOF'
+          import json, sys
+          gh = {"repository": "Owner/repo",
+                "load_state": sys.argv[1],
+                "state_file": "fakes/github-state.json"}
+          json.dump(gh, open("fakes/github-config.json", "w"))
+          PYEOF
+          touch fakes/release.log fakes/provider.log fakes/github.log \
+              fakes/github-failures.log fakes/actions.log
+          python3 action-src/tests/action/fake_release_api.py \
+              fakes/release-config.json fakes/release-ready.json fakes/release.log &
+          python3 action-src/tests/action/fake_provider.py proposal \
+              fakes/provider-ready.json fakes/provider.log &
+          python3 action-src/tests/action-workflows/fake_github_state.py \
+              fakes/github-config.json fakes/github-ready.json \
+              fakes/github.log fakes/github-failures.log &
+          python3 action-src/tests/action-workflows/fake_actions_api.py \
+              fakes/actions-config.json fakes/actions-ready.json \
+              fakes/actions.log &
+          for f in release provider github actions; do
+            for _ in $(seq 100); do [ -f "fakes/$f-ready.json" ] && break; sleep 0.1; done
+            [ -f "fakes/$f-ready.json" ]
+          done
+          {
+            echo "api_root=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["api"])' fakes/release-ready.json)"
+            echo "provider=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/provider-ready.json)"
+            echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
+            echo "actions_api=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/actions-ready.json)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Seed Actions metadata for consumer leg 1
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ needs.action_examples_producer.outputs.handoff_artifact_id }}
+          ARTIFACT_DIGEST: ${{ needs.action_examples_producer.outputs.handoff_artifact_digest }}
+        run: |
+          set -euo pipefail
+          python3 - "$ARTIFACT_ID" "$ARTIFACT_DIGEST" <<'PYEOF'
+          import json, sys
+          aid, digest = int(sys.argv[1]), sys.argv[2]
+          actions = {
+            "repository": {"id": 7001, "full_name": "Owner/repo",
+                           "default_branch": "main"},
+            "expected_token": "contract-scribe-synthetic-actions-read",
+            "runs": {
+              "91001": {"id": 91001, "run_number": 500, "run_attempt": 1,
+                "event": "workflow_dispatch", "status": "completed",
+                "conclusion": "success", "head_branch": "main",
+                "head_sha": "b" * 40, "workflow_id": 55,
+                "path": ".github/workflows/contract-scribe-campaign.yml",
+                "repository": {"id": 7001, "full_name": "Owner/repo"},
+                "head_repository": {"id": 7001}},
+              "92002": {"id": 92002, "run_number": 501, "run_attempt": 1,
+                "event": "schedule", "status": "in_progress",
+                "conclusion": None, "head_branch": "main",
+                "head_sha": "c" * 40, "workflow_id": 55,
+                "path": ".github/workflows/contract-scribe-campaign.yml",
+                "repository": {"id": 7001, "full_name": "Owner/repo"},
+                "head_repository": {"id": 7001}}},
+            "artifacts": {str(aid): {
+                "id": aid, "name": "contract-scribe-handoff",
+                "size_in_bytes": 4096, "expired": False,
+                "expires_at": "2099-01-01T00:00:00Z",
+                "digest": "sha256:" + digest,
+                "workflow_run": {"id": 91001, "repository_id": 7001,
+                                 "head_repository_id": 7001,
+                                 "head_branch": "main",
+                                 "head_sha": "b" * 40}}},
+            "run_artifacts": {"91001": [aid]}}
+          json.dump(actions, open("fakes/actions-config.json", "w"))
+          PYEOF
+      - name: Prepare layer for resumes
+        env:
+          PROVIDER: ${{ needs.action_examples_producer.outputs.provider_endpoint }}
+        run: |
+          set -euo pipefail
+          mkdir -p action-inputs
+          cat > action-inputs/layer.json <<EOFX
+          {"consumerConfigurationVersion":1,
+           "provider":{"endpoint":"$PROVIDER","model":"fixture-model",
+             "requestProfile":{"toolChoice":"auto"}},
+           "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
+             "maximumElapsedMilliseconds":3600000}}}
+          EOFX
+      - name: "Consumer leg 1 — authenticate activation"
+        id: select
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_ACTIVATION: ${{ needs.action_examples_producer.outputs.activation_json }}
+          CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: python3 action-src/examples/github-actions/handoff.py select --workdir "$RUNNER_TEMP/cs-select"
+      - name: "Consumer leg 1 — download handoff (native transport)"
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          # Physical identity substitution: all test artifacts live on this
+          # CI run, so run-id defaults to the current run. The logical
+          # producer binding is still enforced through artifact-ids + the
+          # authenticated metadata + digest. Production wires
+          # steps.select.outputs.producer-run-id instead.
+          artifact-ids: ${{ steps.select.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/cs-download
+          skip-decompress: true
+          digest-mismatch: error
+      - name: "Consumer leg 1 — verify + restore checkpoint"
+        env:
+          CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: |
+          set -euo pipefail
+          ZIP="$(find "$RUNNER_TEMP/cs-download" -name '*.zip' | head -1)"
+          [ -n "$ZIP" ] && [ -f "$ZIP" ]
+          python3 action-src/examples/github-actions/handoff.py verify \
+              --archive "$ZIP" \
+              --selection "$RUNNER_TEMP/cs-select/selection.json" \
+              --state-dir "$RUNNER_TEMP/cs-state"
+      - name: "Consumer leg 1 — build invocation request"
+        id: request
+        env:
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py request
+          --base-oid "${{ steps.target.outputs.target_head }}"
+          --state "$RUNNER_TEMP/cs-state/checkpoint.json"
+          --out "$RUNNER_TEMP/cs-request.json"
+      - name: "Consumer leg 1 — resume through uses"
+        id: invoke
+        uses: ./action-src
+        env:
+          CONTRACTSCRIBE_ACTION_TEST: "1"
+          CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
+          CONTRACTSCRIBE_ACTION_TEST_MAP: ${{ github.workspace }}/fakes/test-map.json
+          DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/consumer-obs.txt
+        with:
+          operation: github-proposal-resume
+          repository-root: ${{ github.workspace }}/target-repo-a3
+          input: Fixture.slnx
+          policy: policy.json
+          request: ${{ steps.request.outputs.request-json }}
+          configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          github-token: contract-scribe-synthetic-transport-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
+      - name: "Consumer leg 1 — emit successor handoff"
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py emit
+          --checkpoint "$RUNNER_TEMP/cs-state/checkpoint.json"
+          --handoff-dir "$RUNNER_TEMP/cs-handoff-1"
+      - name: "Consumer leg 1 — upload successor (physical CI name)"
+        id: successor_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a3-handoff-leg1-attempt-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cs-handoff-1/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+      - name: "Consumer leg 1 — render next activation"
+        id: activation1
+        env:
+          CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"cccccccccccccccccccccccccccccccccccccccc","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py activation
+          --handoff-dir "$RUNNER_TEMP/cs-handoff-1"
+          --artifact-id "${{ steps.successor_upload.outputs.artifact-id }}"
+          --artifact-digest "${{ steps.successor_upload.outputs.artifact-digest }}"
+      - name: Assert leg-1 replayed outcome
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.invoke.outputs.outcome }}
+          STATUS: ${{ steps.invoke.outputs.action-status }}
+        run: |
+          set -euo pipefail
+          [ "$STATUS" = ok ]
+          [ "$OUTCOME" = github-proposal.replayed ]
+      - name: "Consumer leg 2 — consume the successor (synthetic K+2)"
+        id: leg2
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+        run: |
+          set -euo pipefail
+          # The consumer run becomes the producer of S; the fake presents
+          # run 92002 (synthetic number 501, concluded success) as the
+          # producer and 93003/502 as the current consumer.
+          python3 - "${{ steps.successor_upload.outputs.artifact-id }}" \
+                    "${{ steps.successor_upload.outputs.artifact-digest }}" <<'PYEOF'
+          import json, sys
+          aid, digest = int(sys.argv[1]), sys.argv[2]
+          cfg = json.load(open("fakes/actions-config.json"))
+          cfg["runs"]["92002"].update({"status": "completed",
+                                       "conclusion": "success"})
+          cfg["runs"]["93003"] = {
+              "id": 93003, "run_number": 502, "run_attempt": 1,
+              "event": "schedule", "status": "in_progress",
+              "conclusion": None, "head_branch": "main",
+              "head_sha": "d" * 40, "workflow_id": 55,
+              "path": ".github/workflows/contract-scribe-campaign.yml",
+              "repository": {"id": 7001, "full_name": "Owner/repo"},
+              "head_repository": {"id": 7001}}
+          cfg["artifacts"][str(aid)] = {
+              "id": aid, "name": "contract-scribe-handoff",
+              "size_in_bytes": 4096, "expired": False,
+              "expires_at": "2099-01-01T00:00:00Z",
+              "digest": "sha256:" + digest,
+              "workflow_run": {"id": 92002, "repository_id": 7001,
+                               "head_repository_id": 7001,
+                               "head_branch": "main", "head_sha": "c" * 40}}
+          cfg["run_artifacts"] = {"92002": [aid]}
+          json.dump(cfg, open("fakes/actions-config.json", "w"))
+          PYEOF
+      - name: "Consumer leg 2 — authenticate activation"
+        id: select2
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_ACTIVATION: ${{ steps.activation1.outputs.activation-json }}
+          CS_RUN_CONTEXT: '{"runId":93003,"runNumber":502,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: |
+          set -euo pipefail
+          python3 action-src/examples/github-actions/handoff.py select \
+              --workdir "$RUNNER_TEMP/cs-select-2"
+      - name: "Consumer leg 2 — download successor (native transport)"
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ steps.select2.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/cs-download-2
+          skip-decompress: true
+          digest-mismatch: error
+      - name: "Consumer leg 2 — verify + restore checkpoint"
+        env:
+          CS_RUN_CONTEXT: '{"runId":93003,"runNumber":502,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: |
+          set -euo pipefail
+          ZIP="$(find "$RUNNER_TEMP/cs-download-2" -name '*.zip' | head -1)"
+          [ -n "$ZIP" ] && [ -f "$ZIP" ]
+          python3 action-src/examples/github-actions/handoff.py verify \
+              --archive "$ZIP" \
+              --selection "$RUNNER_TEMP/cs-select-2/selection.json" \
+              --state-dir "$RUNNER_TEMP/cs-state-2"
+      - name: "Consumer leg 2 — build request + resume"
+        id: request2
+        env:
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_RUN_CONTEXT: '{"runId":93003,"runNumber":502,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py request
+          --base-oid "${{ steps.target.outputs.target_head }}"
+          --state "$RUNNER_TEMP/cs-state-2/checkpoint.json"
+          --out "$RUNNER_TEMP/cs-request-2.json"
+      - name: "Consumer leg 2 — resume through uses"
+        id: invoke2
+        uses: ./action-src
+        env:
+          CONTRACTSCRIBE_ACTION_TEST: "1"
+          CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
+          CONTRACTSCRIBE_ACTION_TEST_MAP: ${{ github.workspace }}/fakes/test-map.json
+          DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/consumer2-obs.txt
+        with:
+          operation: github-proposal-resume
+          repository-root: ${{ github.workspace }}/target-repo-a3
+          input: Fixture.slnx
+          policy: policy.json
+          request: ${{ steps.request2.outputs.request-json }}
+          configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          github-token: contract-scribe-synthetic-transport-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
+      - name: Assert leg-2 replayed outcome
+        shell: bash
+        env:
+          OUTCOME: ${{ steps.invoke2.outputs.outcome }}
+          STATUS: ${{ steps.invoke2.outputs.action-status }}
+        run: |
+          set -euo pipefail
+          [ "$STATUS" = ok ]
+          # Post-replay state may report replayed/no-op/awaiting-review;
+          # all are exit-0 replay evidence — the chain consumed S.
+          case "$OUTCOME" in
+            github-proposal.replayed|github-proposal.no-op|github-proposal.awaiting-review) ;;
+            *) echo "unexpected outcome: $OUTCOME"; exit 1;;
+          esac
+      - name: "Invalid-checkpoint leg — corrupt state rejects before credentials"
+        id: bad_leg
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+        run: |
+          set -euo pipefail
+          # A structurally-valid handoff directory carrying bytes that are
+          # not a Campaign State — upload-artifact wraps it exactly as the
+          # production emit path, and the CLI must reject the restored
+          # checkpoint at admission (exit 4) before privileged execution.
+          python3 - <<'PYEOF'
+          import hashlib, json, os
+          os.makedirs("bad-handoff", exist_ok=True)
+          checkpoint = b'{"not":"campaign-state"}'
+          handoff = {
+            "producer": {"repositoryId": 7001, "repository": "Owner/repo",
+              "workflowId": 55,
+              "workflowPath": ".github/workflows/contract-scribe-campaign.yml",
+              "runId": 94004, "runNumber": 503, "runAttempt": 1,
+              "event": "workflow_dispatch", "headRef": "refs/heads/main",
+              "headSha": "b" * 40},
+            "checkpoint": {"sha256": hashlib.sha256(checkpoint).hexdigest(),
+                           "bytes": len(checkpoint)},
+            "consumer": {"repositoryId": 7001, "repository": "Owner/repo",
+              "workflowId": 55, "runNumber": 504, "event": "schedule"}}
+          with open("bad-handoff/handoff.json", "w") as fh:
+              fh.write(json.dumps(handoff))
+          with open("bad-handoff/checkpoint.json", "wb") as fh:
+              fh.write(checkpoint)
+          PYEOF
+      - name: "Invalid-checkpoint leg — upload artifact"
+        id: bad_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a3-handoff-bad-attempt-${{ github.run_attempt }}
+          path: bad-handoff/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+      - name: "Invalid-checkpoint leg — configure metadata"
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+        run: |
+          set -euo pipefail
+          AID="${{ steps.bad_upload.outputs.artifact-id }}"
+          DIGEST="${{ steps.bad_upload.outputs.artifact-digest }}"
+          python3 - "$AID" "$DIGEST" <<'PYEOF'
+          import json, sys
+          aid, digest = int(sys.argv[1]), sys.argv[2]
+          cfg = json.load(open("fakes/actions-config.json"))
+          cfg["runs"]["94004"] = {
+              "id": 94004, "run_number": 503, "run_attempt": 1,
+              "event": "workflow_dispatch", "status": "completed",
+              "conclusion": "success", "head_branch": "main",
+              "head_sha": "b" * 40, "workflow_id": 55,
+              "path": ".github/workflows/contract-scribe-campaign.yml",
+              "repository": {"id": 7001, "full_name": "Owner/repo"},
+              "head_repository": {"id": 7001}}
+          cfg["runs"]["95005"] = {
+              "id": 95005, "run_number": 504, "run_attempt": 1,
+              "event": "schedule", "status": "in_progress",
+              "conclusion": None, "head_branch": "main",
+              "head_sha": "d" * 40, "workflow_id": 55,
+              "path": ".github/workflows/contract-scribe-campaign.yml",
+              "repository": {"id": 7001, "full_name": "Owner/repo"},
+              "head_repository": {"id": 7001}}
+          cfg["artifacts"][str(aid)] = {
+              "id": aid, "name": "contract-scribe-handoff",
+              "size_in_bytes": 4096, "expired": False,
+              "expires_at": "2099-01-01T00:00:00Z",
+              "digest": "sha256:" + digest,
+              "workflow_run": {"id": 94004, "repository_id": 7001,
+                               "head_repository_id": 7001,
+                               "head_branch": "main", "head_sha": "b" * 40}}
+          cfg["run_artifacts"] = {"94004": [aid]}
+          json.dump(cfg, open("fakes/actions-config.json", "w"))
+          print(json.dumps({"producer": {"runId": 94004, "runNumber": 503,
+                "runAttempt": 1, "artifactId": aid,
+                "artifactDigest": "sha256:" + digest},
+              "consumer": {"runNumber": 504, "event": "schedule"}}),
+                file=open("bad-activation.json", "w"))
+          PYEOF
+      - name: "Invalid-checkpoint leg — authenticate activation"
+        id: select_bad
+        env:
+          CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
+          GITHUB_TOKEN: contract-scribe-synthetic-actions-read
+          CS_RUN_CONTEXT: '{"runId":95005,"runNumber":504,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: |
+          set -euo pipefail
+          export CS_ACTIVATION="$(cat bad-activation.json)"
+          python3 action-src/examples/github-actions/handoff.py select \
+              --workdir "$RUNNER_TEMP/cs-select-bad"
+      - name: "Invalid-checkpoint leg — native download"
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ steps.select_bad.outputs.artifact-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/cs-download-bad
+          skip-decompress: true
+          digest-mismatch: error
+      - name: "Invalid-checkpoint leg — verify restores bytes"
+        env:
+          CS_RUN_CONTEXT: '{"runId":95005,"runNumber":504,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: |
+          set -euo pipefail
+          ZIP="$(find "$RUNNER_TEMP/cs-download-bad" -name '*.zip' | head -1)"
+          [ -n "$ZIP" ] && [ -f "$ZIP" ]
+          python3 action-src/examples/github-actions/handoff.py verify \
+              --archive "$ZIP" \
+              --selection "$RUNNER_TEMP/cs-select-bad/selection.json" \
+              --state-dir "$RUNNER_TEMP/cs-state-bad"
+          wc -l < fakes/provider.log > provider-lines-before.txt
+          wc -l < fakes/github.log > github-lines-before.txt
+      - name: "Invalid-checkpoint leg — build request"
+        id: bad_request
+        env:
+          CS_CAMPAIGN_LINEAGE: campaign.action.a3
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_RUN_CONTEXT: '{"runId":95005,"runNumber":504,"runAttempt":1,"event":"schedule","ref":"refs/heads/main","sha":"dddddddddddddddddddddddddddddddddddddddd","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
+        run: >-
+          python3 action-src/examples/github-actions/handoff.py request
+          --base-oid "${{ steps.target.outputs.target_head }}"
+          --state "$RUNNER_TEMP/cs-state-bad/checkpoint.json"
+          --out "$RUNNER_TEMP/cs-request-bad.json"
+      - name: "Invalid-checkpoint leg — request + resume fails at admission"
+        id: bad_invoke
+        continue-on-error: true
+        uses: ./action-src
+        env:
+          CONTRACTSCRIBE_ACTION_TEST: "1"
+          CONTRACTSCRIBE_ACTION_TEST_API_ROOT: ${{ steps.fakes.outputs.api_root }}
+          CONTRACTSCRIBE_ACTION_TEST_MAP: ${{ github.workspace }}/fakes/test-map.json
+          DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
+          CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
+          CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/bad-obs.txt
+        with:
+          operation: github-proposal-resume
+          repository-root: ${{ github.workspace }}/target-repo-a3
+          input: Fixture.slnx
+          policy: policy.json
+          request: ${{ steps.bad_request.outputs.request-json }}
+          configuration: ${{ github.workspace }}/action-inputs/layer.json
+          provider-api-key: contract-scribe-synthetic-provider-only
+          github-token: contract-scribe-synthetic-transport-only
+          acquisition-token: contract-scribe-synthetic-acquisition-only
+      - name: Assert invalid-checkpoint stop
+        shell: bash
+        env:
+          STEP_OUTCOME: ${{ steps.bad_invoke.outcome }}
+          OUTCOME: ${{ steps.bad_invoke.outputs.outcome }}
+          EXIT_CODE: ${{ steps.bad_invoke.outputs.exit-code }}
+          STATUS: ${{ steps.bad_invoke.outputs.action-status }}
+        run: |
+          set -euo pipefail
+          [ "$STEP_OUTCOME" = failure ]
+          [ "$STATUS" = ok ]
+          [ "$EXIT_CODE" = 4 ]
+          case "$OUTCOME" in github-proposal.*) ;; *) exit 1;; esac
+          # The corrupt checkpoint was rejected before privileged product
+          # execution: zero new provider requests, zero new GitHub requests,
+          # zero token reads for this invocation.
+          [ "$(wc -l < fakes/provider.log)" = "$(cat provider-lines-before.txt)" ]
+          [ "$(wc -l < fakes/github.log)" = "$(cat github-lines-before.txt)" ]
+          ! test -s bad-obs.txt || ! grep -q token-read bad-obs.txt
+      - name: Functional leg matrix (same as local verify)
+        id: legs
+        continue-on-error: true
+        env:
+          HANDOFF_PY: ${{ github.workspace }}/action-src/examples/github-actions/handoff.py
+          FAKE_API_PY: ${{ github.workspace }}/action-src/tests/action-workflows/fake_actions_api.py
+        run: |
+          set -euo pipefail
+          python3 action-src/tests/action-workflows/driver.py run \
+              "$RUNNER_TEMP/a3-legs"
+      - name: Upload consumer diagnostics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: a3-consumer-diagnostics-attempt-${{ github.run_attempt }}
+          path: |
+            fakes/
+            action-inputs/
+            consumer-obs.txt
+            consumer2-obs.txt
+            bad-obs.txt
+            bad-activation.json
+          if-no-files-found: warn
+      - name: Aggregate action-workflow outcomes
+        if: always()
+        shell: pwsh
+        env:
+          L1: ${{ steps.invoke.outcome }}
+          L2: ${{ steps.invoke2.outcome }}
+          LEGS: ${{ steps.legs.outcome }}
+        run: |
+          if ($env:L1 -ne 'success' -or $env:L2 -ne 'success' `
+              -or $env:LEGS -ne 'success') {
+            throw "action_examples_consumer failure: leg1=$env:L1 leg2=$env:L2 legs=$env:LEGS"
+          }
+
   validate:
     if: always()
     needs:
@@ -952,6 +1796,8 @@ jobs:
       - payload_producer
       - packed_payload
       - action_packaged
+      - action_examples_producer
+      - action_examples_consumer
     runs-on: ubuntu-latest
     steps:
       - name: Aggregate required CI jobs
@@ -963,6 +1809,8 @@ jobs:
           PAYLOAD_PRODUCER_RESULT: ${{ needs.payload_producer.result }}
           PACKED_PAYLOAD_RESULT: ${{ needs.packed_payload.result }}
           ACTION_PACKAGED_RESULT: ${{ needs.action_packaged.result }}
+          A3_PRODUCER_RESULT: ${{ needs.action_examples_producer.result }}
+          A3_CONSUMER_RESULT: ${{ needs.action_examples_consumer.result }}
         run: |
           $results = @{
             fast_and_static = $env:FAST_AND_STATIC_RESULT
@@ -971,6 +1819,8 @@ jobs:
             payload_producer = $env:PAYLOAD_PRODUCER_RESULT
             packed_payload = $env:PACKED_PAYLOAD_RESULT
             action_packaged = $env:ACTION_PACKAGED_RESULT
+            action_examples_producer = $env:A3_PRODUCER_RESULT
+            action_examples_consumer = $env:A3_CONSUMER_RESULT
           }
           $failures = @($results.GetEnumerator() | Where-Object Value -ne 'success' | ForEach-Object { "$($_.Key)=$($_.Value)" })
           if ($failures.Count -gt 0) {

@@ -1,0 +1,258 @@
+# Caller-owned ContractScribe campaign example (issue #186 / M6-A3).
+#
+# Copy this file to .github/workflows/contract-scribe-campaign.yml and copy
+# handoff.py to .github/contract-scribe/handoff.py, then supply the caller
+# authority surface below. See docs/10_workflow/action-usage.md.
+#
+# Authority surface:
+#   vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE  plain lineage identifier, e.g.
+#                                       "campaign.docs". Presence arms the
+#                                       workflow; also feeds per-campaign
+#                                       concurrency.
+#   vars.CONTRACTSCRIBE_CAMPAIGN          JSON caller claims consumed by
+#                                       handoff.py request:
+#                                       {"snapshot":"...","operationId":"...",
+#                                        "generationId":"...",
+#                                        "targetRef":"refs/heads/main",
+#                                        "repositoryOwner":"...",
+#                                        "repositoryName":"...",
+#                                        "policyCeilings":{
+#                                          "maximumDocumentationBlocks":N,
+#                                          "maximumDistinctChangedFiles":N,
+#                                          "maximumCumulativePatchBytes":N}}
+#   vars.CONTRACTSCRIBE_ACTIVATION        JSON activation written by the
+#                                       caller between hops; each hop requires
+#                                       a NEW activation naming the producer
+#                                       run/attempt and the post-upload
+#                                       artifact id+digest printed by the
+#                                       previous run's "Render activation"
+#                                       step. Empty/absent skips the resume
+#                                       job cleanly.
+#   secrets.CONTRACTSCRIBE_GITHUB_TOKEN   product publication credential.
+#   secrets.CONTRACTSCRIBE_PROVIDER_API_KEY provider credential.
+#   secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN optional release-asset channel.
+#
+# The job GITHUB_TOKEN is confined to contents:read/actions:read and is the
+# read-only artifact/run authentication channel; it is never the publication
+# credential.
+#
+# Sealed-slot contract: a successful run uploads `contract-scribe-handoff`
+# sealed for this workflow's run_number+1 on the `schedule` event. The
+# consumer run must present a matching caller activation; the schedule firing
+# before you install the freshly printed activation burns that sealed slot
+# (intended consequence of the frozen missed-slot rule — disable the schedule
+# while advancing if the next cron could fire first).
+
+name: ContractScribe campaign
+
+on:
+  workflow_dispatch: {}
+  schedule:
+    # Inert placeholder (Feb 30 never fires). Replace with your cron only
+    # when the vars/secrets above are configured and reviewed.
+    - cron: '0 0 30 2 *'
+
+permissions: {}
+
+concurrency:
+  group: contract-scribe-${{ vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE || 'unconfigured' }}
+  cancel-in-progress: false
+
+env:
+  CS_HELPER: ${{ github.workspace }}/.github/contract-scribe/handoff.py
+  CS_STATE_DIR: ${{ runner.temp }}/contract-scribe-state
+  CS_CAMPAIGN_LINEAGE: ${{ vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE }}
+  # The checked-out target revision, input surface, policy file and optional
+  # consumer configuration layer are ordinary file edits for the caller.
+  # CS_CONFIGURATION may stay empty to use the payload defaults; to supply a
+  # layer, copy examples/github-actions/campaign-layer.example.json to a path
+  # of your choice and point this variable at it:
+  CS_INPUT: Fixture.slnx
+  CS_POLICY: policy.json
+  CS_CONFIGURATION: ""
+  CS_RUN_CONTEXT: >-
+    {"runId":${{ toJSON(github.run_id) }},"runNumber":${{ toJSON(github.run_number) }},
+    "runAttempt":${{ toJSON(github.run_attempt) }},"event":${{ toJSON(github.event_name) }},
+    "ref":${{ toJSON(github.ref) }},"sha":${{ toJSON(github.sha) }},
+    "repository":${{ toJSON(github.repository) }},
+    "repositoryId":${{ toJSON(github.repository_id) }},
+    "workflowRef":${{ toJSON(github.workflow_ref) }}}
+  CS_CAMPAIGN: ${{ vars.CONTRACTSCRIBE_CAMPAIGN }}
+  CS_ACTIVATION: ${{ vars.CONTRACTSCRIBE_ACTIVATION }}
+
+jobs:
+  start:
+    name: Manual campaign start
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE != '' &&
+      vars.CONTRACTSCRIBE_CAMPAIGN != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out trusted revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert exact workflow head
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Producer admission gate (credential-free)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 "$CS_HELPER" gate
+
+      - name: Prepare private state directory
+        run: |
+          set -euo pipefail
+          mkdir -p "$CS_STATE_DIR"
+          chmod 0700 "$CS_STATE_DIR"
+
+      - name: Build invocation request
+        id: request
+        run: >-
+          python3 "$CS_HELPER" request
+          --base-oid "$(git rev-parse HEAD)"
+          --state "$CS_STATE_DIR/checkpoint.json"
+          --out "$RUNNER_TEMP/cs-request.json"
+
+      - name: ContractScribe github-proposal start
+        id: invoke
+        uses: SolusQuest/contract-scribe@<RELEASE_TAG_OR_SHA>
+        with:
+          operation: github-proposal-start
+          repository-root: ${{ github.workspace }}
+          input: ${{ env.CS_INPUT }}
+          policy: ${{ env.CS_POLICY }}
+          request: ${{ steps.request.outputs.request-json }}
+          configuration: ${{ env.CS_CONFIGURATION }}
+          provider-api-key: ${{ secrets.CONTRACTSCRIBE_PROVIDER_API_KEY }}
+          github-token: ${{ secrets.CONTRACTSCRIBE_GITHUB_TOKEN }}
+          acquisition-token: ${{ secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN }}
+
+      - name: Emit sealed handoff
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 "$CS_HELPER" emit
+          --checkpoint "$CS_STATE_DIR/checkpoint.json"
+          --handoff-dir "$RUNNER_TEMP/cs-handoff"
+
+      - name: Upload handoff artifact
+        id: handoff_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: contract-scribe-handoff
+          path: ${{ runner.temp }}/cs-handoff/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+
+      - name: Render next activation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 "$CS_HELPER" activation
+          --handoff-dir "$RUNNER_TEMP/cs-handoff"
+          --artifact-id "${{ steps.handoff_upload.outputs.artifact-id }}"
+          --artifact-digest "${{ steps.handoff_upload.outputs.artifact-digest }}"
+
+  resume:
+    name: Scheduled campaign resume
+    if: >-
+      github.event_name == 'schedule' &&
+      vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE != '' &&
+      vars.CONTRACTSCRIBE_CAMPAIGN != '' &&
+      vars.CONTRACTSCRIBE_ACTIVATION != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out trusted revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Assert exact workflow head
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Authenticate activation (credential-free)
+        id: select
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 "$CS_HELPER" select --workdir "$RUNNER_TEMP/cs-select"
+
+      - name: Download sealed producer handoff
+        id: download
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ steps.select.outputs.artifact-id }}
+          run-id: ${{ steps.select.outputs.producer-run-id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/cs-download
+          skip-decompress: true
+          digest-mismatch: error
+
+      - name: Verify handoff and restore checkpoint
+        run: |
+          set -euo pipefail
+          ZIP="$(find "$RUNNER_TEMP/cs-download" -name '*.zip' | head -1)"
+          [ -n "$ZIP" ] && [ -f "$ZIP" ]
+          python3 "$CS_HELPER" verify               --archive "$ZIP"               --selection "$RUNNER_TEMP/cs-select/selection.json"               --state-dir "$CS_STATE_DIR"
+
+      - name: Build invocation request
+        id: request
+        run: >-
+          python3 "$CS_HELPER" request
+          --base-oid "$(git rev-parse HEAD)"
+          --state "$CS_STATE_DIR/checkpoint.json"
+          --out "$RUNNER_TEMP/cs-request.json"
+
+      - name: ContractScribe github-proposal resume
+        id: invoke
+        uses: SolusQuest/contract-scribe@<RELEASE_TAG_OR_SHA>
+        with:
+          operation: github-proposal-resume
+          repository-root: ${{ github.workspace }}
+          input: ${{ env.CS_INPUT }}
+          policy: ${{ env.CS_POLICY }}
+          request: ${{ steps.request.outputs.request-json }}
+          configuration: ${{ env.CS_CONFIGURATION }}
+          provider-api-key: ${{ secrets.CONTRACTSCRIBE_PROVIDER_API_KEY }}
+          github-token: ${{ secrets.CONTRACTSCRIBE_GITHUB_TOKEN }}
+          acquisition-token: ${{ secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN }}
+
+      - name: Emit successor handoff
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 "$CS_HELPER" emit
+          --checkpoint "$CS_STATE_DIR/checkpoint.json"
+          --handoff-dir "$RUNNER_TEMP/cs-handoff"
+
+      - name: Upload successor artifact
+        id: handoff_upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: contract-scribe-handoff
+          path: ${{ runner.temp }}/cs-handoff/
+          if-no-files-found: error
+          retention-days: 7
+          overwrite: false
+
+      - name: Render next activation
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python3 "$CS_HELPER" activation
+          --handoff-dir "$RUNNER_TEMP/cs-handoff"
+          --artifact-id "${{ steps.handoff_upload.outputs.artifact-id }}"
+          --artifact-digest "${{ steps.handoff_upload.outputs.artifact-digest }}"
