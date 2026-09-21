@@ -1,0 +1,357 @@
+name: Release
+
+# Manually initiated release candidate preparation and guarded promotion
+# (issue #187 / M6-R1). Three dispatch operations, run separately:
+#
+#   prepare      -> build + freeze one candidate (read-only)
+#   stage-draft  -> separately authorized unpublished draft for R2 (#188)
+#   promote      -> separately authorized publication of the exact
+#                   qualified candidate (R3, #189)
+#
+# Ordinary push/PR CI has no publication path: the operational jobs require
+# a workflow_dispatch on refs/heads/main, a maintainer-provisioned
+# environment with required reviewers and a main-only deployment
+# restriction, the repository-level RELEASE_DRAFT_ENABLED /
+# RELEASE_PROMOTION_ENABLED variables, and the RELEASE_PUBLICATION_TOKEN
+# environment secret. None of those are provisioned by this workflow.
+#
+# A workflow rerun is not fresh approval: stage/promote require
+# run_attempt == 1 and actor == triggering_actor; recovery is a fresh
+# dispatch, never a rerun.
+
+on:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Release operation
+        required: true
+        type: choice
+        options: [prepare, stage-draft, promote]
+      source_revision:
+        description: 40-hex main-reachable release/tag target and wrapper revision
+        required: false
+        type: string
+      payload_source_revision:
+        description: 40-hex main-reachable A1 payload build revision (map sourceRevision)
+        required: false
+        type: string
+      wrapper:
+        description: Wrapper component name (payload-map wrapper field)
+        required: false
+        type: string
+        default: contract-scribe-action
+      release_version:
+        description: Fixed public version, vX.Y.Z
+        required: false
+        type: string
+      candidate_run_id:
+        description: Prepare run id whose release-candidate artifact carries the candidate (stage-draft/promote)
+        required: false
+        type: string
+      candidate_digest:
+        description: sha256 of the candidate identity (stage-draft/promote; binds the exact approved candidate)
+        required: false
+        type: string
+      qualified_release_id:
+        description: Draft release id qualified by R2 (promote)
+        required: false
+        type: string
+      qualified_asset_id:
+        description: Draft release asset id qualified by R2 (promote)
+        required: false
+        type: string
+      approval_reference:
+        description: Recorded reference for the current explicit maintainer approval (promote)
+        required: false
+        type: string
+      governance_reference:
+        description: Recorded reference for the #29 governance disposition preflight (promote)
+        required: false
+        type: string
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release/**
+      - tests/release/**
+
+permissions: {}
+
+jobs:
+  offline:
+    # Offline verification only: static workflow checks + the fake-API
+    # matrix + the real candidate-build smoke. No secrets, environments,
+    # or publication capability exist in this job.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    concurrency:
+      group: contract-scribe-release-offline-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Assert exact workflow head
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Offline release verification
+        shell: bash
+        run: bash tests/release/verify-release.sh --real
+
+  candidate:
+    # Candidate build stage: contents read only, no release credential.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.operation == 'prepare'
+      && github.repository == 'SolusQuest/contract-scribe'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    concurrency:
+      group: contract-scribe-release
+      cancel-in-progress: false
+    outputs:
+      candidate-digest: ${{ steps.prepare.outputs.candidate-digest }}
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+      artifact-digest: ${{ steps.upload.outputs.artifact-digest }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Assert exact workflow head
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Build and freeze the candidate
+        id: prepare
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+        run: >-
+          python3 scripts/release/prepare-candidate.py
+          --repo . --output "$RUNNER_TEMP/release-candidate"
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+      - name: Upload the candidate bundle
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-candidate
+          path: ${{ runner.temp }}/release-candidate
+          if-no-files-found: error
+          retention-days: 30
+      - name: Candidate summary
+        shell: bash
+        env:
+          CANDIDATE_DIR: ${{ runner.temp }}/release-candidate
+        run: |
+          cat "$CANDIDATE_DIR/summary.md" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- prepare run id: \`${{ github.run_id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- artifact id: \`${{ steps.upload.outputs.artifact-id }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- artifact digest: \`${{ steps.upload.outputs.artifact-digest }}\`" >> "$GITHUB_STEP_SUMMARY"
+
+  stage:
+    # Separately authorized unpublished-draft staging (R2 qualification
+    # vehicle). The environment + repository variable + environment secret
+    # are provisioned only by a maintainer; absent any of them this job
+    # cannot run or fails closed without a credential.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.operation == 'stage-draft'
+      && github.repository == 'SolusQuest/contract-scribe'
+      && github.ref == 'refs/heads/main'
+      && vars.RELEASE_DRAFT_ENABLED == 'true'
+    environment: release-candidate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: contract-scribe-release
+      cancel-in-progress: false
+    steps:
+      - name: Require a fresh dispatch, not a rerun
+        shell: bash
+        run: |
+          test "${{ github.run_attempt }}" = "1"
+          test "${{ github.actor }}" = "${{ github.triggering_actor }}"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Assert exact workflow head
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Resolve the producer run's release-candidate artifact
+        id: resolve
+        shell: bash
+        env:
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py resolve-artifact
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+      - name: Download the exact candidate artifact
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ steps.resolve.outputs.artifact-id }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/release-candidate
+          digest-mismatch: error
+      - name: Verify the exact candidate against current authority
+        shell: bash
+        env:
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py verify-candidate
+          --candidate "$RUNNER_TEMP/release-candidate" --repo .
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+      - name: Stage the unpublished draft candidate
+        shell: bash
+        env:
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CONTRACTSCRIBE_RELEASE_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py stage-draft
+          --candidate "$RUNNER_TEMP/release-candidate" --repo .
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+      - name: Upload the staged receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-staged
+          path: ${{ runner.temp }}/release-candidate/staged.json
+          if-no-files-found: error
+          retention-days: 30
+
+  promote:
+    # Separately authorized publication (R3). Requires the maintainer-
+    # provisioned release-publication environment, the repository-level
+    # enable variable, and the RELEASE_PUBLICATION_TOKEN environment
+    # secret; all mutation credentials are step-scoped.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.operation == 'promote'
+      && github.repository == 'SolusQuest/contract-scribe'
+      && github.ref == 'refs/heads/main'
+      && vars.RELEASE_PROMOTION_ENABLED == 'true'
+    environment: release-publication
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: contract-scribe-release
+      cancel-in-progress: false
+    steps:
+      - name: Require a fresh dispatch, not a rerun
+        shell: bash
+        run: |
+          test "${{ github.run_attempt }}" = "1"
+          test "${{ github.actor }}" = "${{ github.triggering_actor }}"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Assert exact workflow head
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Resolve the producer run's release-candidate artifact
+        id: resolve
+        shell: bash
+        env:
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py resolve-artifact
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+      - name: Download the exact candidate artifact
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ steps.resolve.outputs.artifact-id }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/release-candidate
+          digest-mismatch: error
+      - name: Promote the exact qualified candidate
+        shell: bash
+        env:
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CONTRACTSCRIBE_RELEASE_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+          CS_QUALIFIED_RELEASE_ID: ${{ inputs.qualified_release_id }}
+          CS_QUALIFIED_ASSET_ID: ${{ inputs.qualified_asset_id }}
+          CS_APPROVAL_REFERENCE: ${{ inputs.approval_reference }}
+          CS_GOVERNANCE_REFERENCE: ${{ inputs.governance_reference }}
+        run: >-
+          python3 scripts/release/promote-candidate.py promote
+          --candidate "$RUNNER_TEMP/release-candidate" --repo .
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+          --qualified-release-id "$CS_QUALIFIED_RELEASE_ID"
+          --qualified-asset-id "$CS_QUALIFIED_ASSET_ID"
+          --approval-reference "$CS_APPROVAL_REFERENCE"
+          --governance-reference "$CS_GOVERNANCE_REFERENCE"
+      - name: Upload the promotion evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-promotion
+          path: ${{ runner.temp }}/release-candidate/promotion.json
+          if-no-files-found: error
+          retention-days: 90

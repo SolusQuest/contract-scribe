@@ -19,6 +19,7 @@ This directory is the durable source for product, workflow, architecture, contra
 - [Pull-request workflow](10_workflow/pr-workflow.md)
 - [Release policy](10_workflow/release-policy.md)
 - [Caller-owned Action usage](10_workflow/action-usage.md)
+- [Release runbook](10_workflow/release-runbook.md)
 
 The contract lifecycle is especially important before the first release: version numbers identify compatibility families, while a repository revision identifies exact draft semantics. Milestone closure records historical evidence for their exact revision; they do not create an active baseline that later changes must preserve or supersede.
 
