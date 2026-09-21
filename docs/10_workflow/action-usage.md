@@ -36,7 +36,7 @@ authority. Nothing runs without the caller-provided values:
 | Name | Kind | Purpose |
 | --- | --- | --- |
 | `vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE` | repository variable | Plain lineage identifier (e.g. `campaign.docs`). Arms both jobs and feeds the per-campaign concurrency group. |
-| `vars.CONTRACTSCRIBE_CAMPAIGN` | repository variable | JSON caller claims rendered into `github-proposal-request-v1`: `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`, `policyCeilings` (`maximumDocumentationBlocks`, `maximumDistinctChangedFiles`, `maximumCumulativePatchBytes`). Do not put `campaignLineage` inside this JSON — lineage is the separate variable above and the helper inserts it into the request. |
+| `vars.CONTRACTSCRIBE_CAMPAIGN` | repository variable | JSON caller claims rendered into `github-proposal-request-v1`: `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`, `policyCeilings` (`maximumDocumentationBlocks`, `maximumDistinctChangedFiles`, `maximumCumulativePatchBytes`). `targetRef` must equal the run's checked-out ref — the workflow audits the checkout and supplies its `HEAD` as `expectedBaseCommitOid`, so a `targetRef` that differs from the checked-out ref binds the request to the wrong base (for `schedule` that is the repository default branch; to campaign another ref, dispatch the workflow on it). Do not put `campaignLineage` inside this JSON — lineage is the separate variable above and the helper inserts it into the request. |
 | `vars.CONTRACTSCRIBE_ACTIVATION` | repository variable | The explicit consumer activation — JSON naming the producer `runId`/`runNumber`/`runAttempt`, the post-upload `artifactId`/`artifactDigest`, and the asserted consumer slot `runNumber`/`event`. Rewritten by you between hops (see below). |
 | `secrets.CONTRACTSCRIBE_GITHUB_TOKEN` | secret | Product publication credential — the token ContractScribe uses for the proposal PR it publishes. |
 | `secrets.CONTRACTSCRIBE_PROVIDER_API_KEY` | secret | Provider credential for the proposal model endpoint. |
@@ -44,8 +44,10 @@ authority. Nothing runs without the caller-provided values:
 
 The ordinary file edits in the workflow — `CS_INPUT`, `CS_POLICY`,
 `CS_CONFIGURATION` — name the audited target surface and an optional
-consumer configuration layer (provider endpoint, budgets). A minimal layer
-ships as `examples/github-actions/campaign-layer.example.json`; see
+consumer configuration layer (provider endpoint, budgets). `CS_CONFIGURATION`
+may stay empty to use the payload defaults; to supply a layer, copy
+`examples/github-actions/campaign-layer.example.json` to a path of your
+choice inside the checkout and set `CS_CONFIGURATION` to that path. See
 [Consumer configuration](../20_architecture/consumer-configuration.md) for
 the layer format.
 

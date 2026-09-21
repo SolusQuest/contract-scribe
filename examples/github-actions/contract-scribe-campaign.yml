@@ -63,10 +63,13 @@ env:
   CS_STATE_DIR: ${{ runner.temp }}/contract-scribe-state
   CS_CAMPAIGN_LINEAGE: ${{ vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE }}
   # The checked-out target revision, input surface, policy file and optional
-  # consumer configuration layer are ordinary file edits for the caller:
+  # consumer configuration layer are ordinary file edits for the caller.
+  # CS_CONFIGURATION may stay empty to use the payload defaults; to supply a
+  # layer, copy examples/github-actions/campaign-layer.example.json to a path
+  # of your choice and point this variable at it:
   CS_INPUT: Fixture.slnx
   CS_POLICY: policy.json
-  CS_CONFIGURATION: .github/contract-scribe/campaign-layer.json
+  CS_CONFIGURATION: ""
   CS_RUN_CONTEXT: >-
     {"runId":${{ toJSON(github.run_id) }},"runNumber":${{ toJSON(github.run_number) }},
     "runAttempt":${{ toJSON(github.run_attempt) }},"event":${{ toJSON(github.event_name) }},

@@ -764,6 +764,18 @@ def register(r):
                       "--out", os.path.join(r.workdir, "r.json")], env,
                      ok=False, reason="base-oid")
 
+    @leg("request_target_mismatch")
+    def _():
+        # targetRef must equal the run's checked-out ref; the caller's
+        # expectedBaseCommitOid binds the request to that ref's HEAD.
+        campaign = json.loads(CAMPAIGN)
+        campaign["targetRef"] = "refs/heads/release"
+        env = request_env(campaign=json.dumps(campaign))
+        r.run_helper(["request", "--base-oid", SHA_A,
+                      "--state", os.path.join(r.workdir, "s.json"),
+                      "--out", os.path.join(r.workdir, "r.json")], env,
+                     ok=False, reason="campaign-target")
+
     @leg("request_repo_mismatch")
     def _():
         campaign = json.loads(CAMPAIGN)

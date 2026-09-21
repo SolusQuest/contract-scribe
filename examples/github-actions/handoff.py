@@ -599,6 +599,10 @@ def cmd_request(base_oid, state_path, out_path):
     require(len(snapshot) <= 512, "campaign-snapshot")
     target_ref = str_field(campaign, "targetRef")
     require(target_ref.startswith(EXPECTED_REF_PREFIX), "campaign-targetref")
+    # The caller supplies the checked-out HEAD as expectedBaseCommitOid, so
+    # the campaign target must be the run's checked-out ref; a different
+    # targetRef would bind the request to the wrong base.
+    require(target_ref == ctx["ref"], "campaign-target")
     owner = str_field(campaign, "repositoryOwner")
     name = str_field(campaign, "repositoryName")
     require(re.fullmatch(r"[A-Za-z0-9_.-]+", owner), "campaign-owner")
