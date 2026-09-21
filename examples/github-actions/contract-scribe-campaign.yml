@@ -28,13 +28,14 @@
 #                                       previous run's "Render activation"
 #                                       step. Empty/absent skips the resume
 #                                       job cleanly.
-#   secrets.CONTRACTSCRIBE_GITHUB_TOKEN   product publication credential.
 #   secrets.CONTRACTSCRIBE_PROVIDER_API_KEY provider credential.
 #   secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN optional release-asset channel.
 #
-# The job GITHUB_TOKEN is confined to contents:read/actions:read and is the
-# read-only artifact/run authentication channel; it is never the publication
-# credential.
+# The job GITHUB_TOKEN carries actions:read plus contents:write and
+# pull-requests:write. The helper uses it read-only for run/artifact
+# authentication, and the Action receives it as the product publication
+# credential — only the per-job token authenticates as the pinned
+# github-actions[bot] publisher, so no stored secret can substitute.
 #
 # Sealed-slot contract: a successful run uploads `contract-scribe-handoff`
 # sealed for this workflow's run_number+1 on the `schedule` event. The
@@ -90,8 +91,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: read
       actions: read
+      contents: write
+      pull-requests: write
     steps:
       - name: Check out trusted revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -102,7 +104,7 @@ jobs:
       - name: Assert exact workflow head
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
-      - name: Producer admission gate (credential-free)
+      - name: Producer admission gate
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 "$CS_HELPER" gate
@@ -132,7 +134,7 @@ jobs:
           request: ${{ steps.request.outputs.request-json }}
           configuration: ${{ env.CS_CONFIGURATION }}
           provider-api-key: ${{ secrets.CONTRACTSCRIBE_PROVIDER_API_KEY }}
-          github-token: ${{ secrets.CONTRACTSCRIBE_GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           acquisition-token: ${{ secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN }}
 
       - name: Emit sealed handoff
@@ -172,8 +174,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: read
       actions: read
+      contents: write
+      pull-requests: write
     steps:
       - name: Check out trusted revision
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -184,7 +187,7 @@ jobs:
       - name: Assert exact workflow head
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
-      - name: Authenticate activation (credential-free)
+      - name: Authenticate activation
         id: select
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -227,7 +230,7 @@ jobs:
           request: ${{ steps.request.outputs.request-json }}
           configuration: ${{ env.CS_CONFIGURATION }}
           provider-api-key: ${{ secrets.CONTRACTSCRIBE_PROVIDER_API_KEY }}
-          github-token: ${{ secrets.CONTRACTSCRIBE_GITHUB_TOKEN }}
+          github-token: ${{ github.token }}
           acquisition-token: ${{ secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN }}
 
       - name: Emit successor handoff

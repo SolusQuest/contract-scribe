@@ -35,7 +35,9 @@ Inputs arrive only through explicit arguments and the documented environment:
   CS_ACTIONS_API_URL  Test seam override for the API root. GITHUB_* names
                   are reserved on hosted runners — their env overrides are
                   ignored — so tests must use this name instead.
-  GITHUB_TOKEN    read-only Actions API authority (the job's github.token).
+  GITHUB_TOKEN    the job's github.token. The helper uses it read-only for
+                  Actions API authority; the job grant is write-capable so
+                  the Action can publish with it.
   CS_ACTIVATION   the caller-owned activation JSON (select only).
   CS_CAMPAIGN     the caller-owned campaign claims JSON (request only).
 

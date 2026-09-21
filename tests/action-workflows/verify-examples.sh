@@ -41,12 +41,17 @@ python "$HERE/check_workflow.py" "$EXAMPLE"
 deactivate
 
 echo "== textual invariants =="
-# The three Action credentials are exactly the documented secrets.
-for name in CONTRACTSCRIBE_GITHUB_TOKEN CONTRACTSCRIBE_PROVIDER_API_KEY \
+# The remaining Action credentials are exactly the documented secrets; the
+# product publication credential is the job's github.token, never a stored
+# secret.
+for name in CONTRACTSCRIBE_PROVIDER_API_KEY \
     CONTRACTSCRIBE_ACQUISITION_TOKEN; do
     grep -q "secrets.$name" "$EXAMPLE" || {
         echo "missing credential input $name"; exit 1; }
 done
+# The obsolete stored-secret product credential must not reappear, even in
+# comments.
+! grep -n 'secrets\.CONTRACTSCRIBE_GITHUB_TOKEN' "$EXAMPLE"
 # No secrets anywhere but inside `with:` blocks (which the YAML checker
 # confines to the Action steps).
 python3 - "$EXAMPLE" <<'PYEOF'
