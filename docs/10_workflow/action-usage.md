@@ -25,8 +25,8 @@ Runner, `actions/checkout`, `actions/setup-*` toolchains, the
 pinned Action revision. The `input`/`policy`/configuration paths inside the
 target checkout are caller-controlled build inputs; ContractScribe's MSBuild
 audit treats them as code, so the workflow always checks out the exact
-`github.sha` of the run and asserts `git rev-parse HEAD` matches before any
-credentials are materialized.
+`github.sha` of the run and asserts `git rev-parse HEAD` matches before the
+Action is invoked.
 
 ## Caller authority surface
 
@@ -38,9 +38,18 @@ authority. Nothing runs without the caller-provided values:
 | `vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE` | repository variable | Plain lineage identifier (e.g. `campaign.docs`). Arms both jobs and feeds the per-campaign concurrency group. |
 | `vars.CONTRACTSCRIBE_CAMPAIGN` | repository variable | JSON caller claims rendered into `github-proposal-request-v1`: `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`, `policyCeilings` (`maximumDocumentationBlocks`, `maximumDistinctChangedFiles`, `maximumCumulativePatchBytes`). `targetRef` must equal the run's checked-out ref — the workflow audits the checkout and supplies its `HEAD` as `expectedBaseCommitOid`, so a `targetRef` that differs from the checked-out ref binds the request to the wrong base. This example is default-branch-only for both jobs: the producer gate authenticates the run on the repository default branch and the consumer authenticates the producer's `head_branch` the same way, so `targetRef` must name the repository default branch for `workflow_dispatch` and `schedule` alike; campaigning a non-default ref is outside this example's scope. Do not put `campaignLineage` inside this JSON — lineage is the separate variable above and the helper inserts it into the request. |
 | `vars.CONTRACTSCRIBE_ACTIVATION` | repository variable | The explicit consumer activation — JSON naming the producer `runId`/`runNumber`/`runAttempt`, the post-upload `artifactId`/`artifactDigest`, and the asserted consumer slot `runNumber`/`event`. Rewritten by you between hops (see below). |
-| `secrets.CONTRACTSCRIBE_GITHUB_TOKEN` | secret | Product publication credential — the token ContractScribe uses for the proposal PR it publishes. |
 | `secrets.CONTRACTSCRIBE_PROVIDER_API_KEY` | secret | Provider credential for the proposal model endpoint. |
 | `secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN` | secret (optional) | Release-asset acquisition channel used only if your payload pin requires it. |
+
+The product publication credential needs no caller-supplied value: both
+jobs declare `actions: read`, `contents: write`, and `pull-requests: write`,
+and the workflow passes the automatically created job `GITHUB_TOKEN` to the
+Action's `github-token` input. The product pins the `github-actions[bot]`
+publisher, so only that per-job token can satisfy it — a stored secret
+would publish under a foreign principal and be rejected. The target
+repository must permit GitHub Actions to create and approve pull requests
+(the repository/organization Actions policy); otherwise the publication
+step cannot create the proposal PR regardless of job permissions.
 
 The ordinary file edits in the workflow — `CS_INPUT`, `CS_POLICY`,
 `CS_CONFIGURATION` — name the audited target surface and an optional
@@ -53,19 +62,34 @@ the layer format.
 
 ### Credential topology
 
-Three distinct authorities are in play and are never conflated:
+Three credential channels are in play and are never conflated:
 
-- The **job `GITHUB_TOKEN`** (`contents: read` + `actions: read` on both
-  jobs) is the ambient, read-only
-  channel the helper uses to authenticate run records and artifact metadata
-  and that `download-artifact` uses for acquisition. It cannot publish.
-- `secrets.CONTRACTSCRIBE_GITHUB_TOKEN` is the **product publication
-  credential** — passed only to the Action step's `with:` and used only
-  inside the product for the proposal PR.
+- The **job `GITHUB_TOKEN`** — granted `actions: read`, `contents: write`,
+  and `pull-requests: write` on both jobs — is the channel the helper uses
+  read-only to authenticate run records and artifact metadata, the channel
+  `download-artifact` uses for acquisition, and the **product publication
+  credential** passed to the Action step's `with:`.
 - `secrets.CONTRACTSCRIBE_PROVIDER_API_KEY` is the provider credential,
   confined to the same `with:`.
 - `secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN` is the optional release-asset
-  channel — distinct from both, confined to the same `with:`.
+  channel — distinct from the product token, confined to the same `with:`.
+
+The write-capable job token exists for the whole job lifetime, so the old
+"credential-free admission" wording no longer applies: a provenance or
+activation mismatch still stops before the Action is invoked, before the
+provider and acquisition secrets reach it, before CLI admission, and
+before any GitHub product mutation — while the helper's own use of the job
+token stays read-only. Granting `contents`/`pull-requests` write elevates
+the ambient token for the job's lifetime; this is acceptable only under
+this example's trusted-workflow and trusted-target boundary (default
+branch, pinned third-party actions, `persist-credentials: false`) — never
+extend the pattern to untrusted PR-checkout jobs.
+
+Proposal PRs authored by `github-actions[bot]` follow `GITHUB_TOKEN` event
+semantics: pushes never trigger `push` workflows, and `pull_request`
+events (`opened`/`synchronize`/`reopened`) create runs that require
+approval before execution. This example does not promise unattended
+downstream PR CI.
 
 The workflow never places secrets in `env:`, `if:`, or step outputs, and
 the handoff artifact contains only `handoff.json` transport/activation
@@ -99,7 +123,9 @@ way after a successful (exit-0) Action invocation:
    exactly the sealed `run_number + 1`) presents that activation; the
    helper requires it to match the authenticated producer record, the
    unique named artifact, its digest/expiry/bounds, and the embedded seal —
-   any disagreement stops before credentials reach the Action.
+   any disagreement stops before the Action is invoked — before the
+   provider and acquisition secrets reach it, before CLI admission, and
+   before any GitHub product mutation.
 
 Only an exit-0 invocation produces a handoff: a nonzero Action exit fails
 the step and the job, consumes the slot, and halts the chain. There is no

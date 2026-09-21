@@ -34,7 +34,7 @@ inputs:
     description: "Campaign provider credential (CONTRACTSCRIBE_PROVIDER_API_KEY); supply from secrets.* — a literal value renders in the workflow log"
     required: false
   github-token:
-    description: "Product GitHub credential (CONTRACTSCRIBE_GITHUB_TOKEN); supply from secrets.*; never the acquisition credential"
+    description: "Product GitHub credential (CONTRACTSCRIBE_GITHUB_TOKEN); supply the automatically created job GITHUB_TOKEN (the github.token context or built-in secrets.GITHUB_TOKEN) — the pinned github-actions[bot] publisher requires it; never the acquisition credential"
     required: false
   acquisition-token:
     description: "Optional release-asset acquisition credential (read-only release scope); supply from secrets.*; must differ from github-token"

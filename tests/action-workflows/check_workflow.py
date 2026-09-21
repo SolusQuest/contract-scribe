@@ -120,9 +120,11 @@ def main():
     resume = jobs["resume"]
     require("matrix" not in start and "matrix" not in resume, "matrix")
     require(start.get("permissions") ==
-            {"contents": "read", "actions": "read"}, "start-permissions")
+            {"actions": "read", "contents": "write",
+             "pull-requests": "write"}, "start-permissions")
     require(resume.get("permissions") ==
-            {"contents": "read", "actions": "read"}, "resume-permissions")
+            {"actions": "read", "contents": "write",
+             "pull-requests": "write"}, "resume-permissions")
     require("workflow_dispatch" in str(start.get("if", "")),
             "start-event-gate")
     require("'schedule'" in str(resume.get("if", ""))
@@ -168,12 +170,14 @@ def main():
             require("secrets." not in blob, f"secrets-outside-action")
 
         wit = action_steps[0].get("with", {})
-        require(wit.get("github-token") ==
-                "${{ secrets.CONTRACTSCRIBE_GITHUB_TOKEN }}",
+        require(wit.get("github-token") == "${{ github.token }}",
                 "publication-token")
         require(wit.get("provider-api-key") ==
                 "${{ secrets.CONTRACTSCRIBE_PROVIDER_API_KEY }}",
                 "provider-token")
+        require(wit.get("acquisition-token") ==
+                "${{ secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN }}",
+                "acquisition-token")
         require(wit.get("operation") in
                 ("github-proposal-start", "github-proposal-resume"),
                 "operation")
@@ -248,7 +252,8 @@ def main():
     all_strings = collect_strings(doc, [])
     blob = "\n".join(all_strings)
     for forbidden in ("actions/cache", "merge-multiple", "pull_request",
-                      "id-token:", "attest", "continue-on-error"):
+                      "id-token:", "attest", "continue-on-error",
+                      "secrets.CONTRACTSCRIBE_GITHUB_TOKEN"):
         require(forbidden not in blob, f"forbidden-{forbidden}")
     env_block = str(doc.get("env", {}))
     require("secrets." not in env_block, "env-secrets")

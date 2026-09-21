@@ -111,13 +111,17 @@ permits. A wrapper failure exits 1 with `action-status` set.
 ## Credentials
 
 - **Interface precondition:** every credential input must be supplied from a
-  GitHub masked context — `${{ secrets.* }}` or an equivalent
-  runner-registered secret. The runner's secret masker is what prevents an
-  input from being rendered in the workflow log; the composite steps'
-  `::add-mask::` is defense in depth only and cannot protect a value that was
-  never registered. A caller that passes a literal token as an input has
-  already leaked it before the Action runs — the contract therefore requires
-  secrets contexts, and every example under A3 must use them.
+  GitHub masked context — `${{ secrets.* }}`, the built-in masked `${{
+  github.token }}`, or an equivalent runner-registered secret. The runner's
+  secret masker is what prevents an input from being rendered in the
+  workflow log; the composite steps' `::add-mask::` is defense in depth only
+  and cannot protect a value that was never registered. A caller that passes
+  a literal token as an input has already leaked it before the Action runs —
+  the contract therefore requires masked contexts. `provider-api-key` and
+  `acquisition-token` always come from `${{ secrets.* }}`; `github-token`
+  takes the automatically created job `GITHUB_TOKEN` because the product
+  pins the `github-actions[bot]` publisher, which no stored secret can
+  authenticate as.
 - `provider-api-key` and `github-token` are visible only to the `invoke` step's
   process environment. They never appear in argv, files, `GITHUB_ENV`,
   `GITHUB_OUTPUT`, annotations, or request/plan JSON.
