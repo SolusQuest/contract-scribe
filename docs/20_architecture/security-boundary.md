@@ -90,3 +90,7 @@ Within those channels the wrapper remains thin:
 - It records the wrapper identity and exact payload identity separately.
 
 The caller workflow grants least-privilege permissions. The wrapper cannot silently widen them. Token-trigger behavior, bot-created pull-request checks, and any GitHub App or alternative credential requirement must be validated in the M5/M6 synthetic workflow matrix; changing host language does not change those platform semantics.
+
+## Release control-plane boundary (M6-R1)
+
+The release workflow adds one bounded channel separate from the wrapper's acquisition channel: `prepare` runs credential-free, while `stage-draft` and `promote` read the candidate artifact and perform release/tag mutations under the dedicated `RELEASE_PUBLICATION_TOKEN` — never the product token — exposed only to the mutation step's environment. Actions artifacts are transport, never authorization: release authority is the recomputed candidate digest plus the checked-in `payload-map.json` pair read at the published tag's own source revision, gated by the maintainer-provisioned environments and approval bound to that digest. No automation deletes, moves, or replaces release objects; ambiguous mutation outcomes stop for a fresh separately authorized dispatch.
