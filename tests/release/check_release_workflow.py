@@ -149,6 +149,84 @@ def main():
                 fail("candidate",
                      "dispatch inputs must reach run steps via env")
 
+    # Producer-side provenance (issue #198): a dedicated attest job holds
+    # the prepare path's only OIDC/attestation-write authority. PR CI
+    # cannot execute the dispatch-only path, so the exact wiring is
+    # asserted here rather than merely the presence of key strings.
+    attest = job_block(text, "attest")
+    if not attest:
+        fail("attest", "missing attest job")
+    else:
+        perm_block = re.search(r"^    permissions:\n((?:      \S[^\n]*\n)+)",
+                               attest, re.M)
+        perms = {}
+        if perm_block:
+            for line in perm_block.group(1).splitlines():
+                key, _, value = line.strip().partition(":")
+                perms[key.strip()] = value.strip()
+        expected = {"actions": "read", "contents": "read",
+                    "id-token": "write", "attestations": "write"}
+        if perms != expected:
+            fail("attest", f"permissions must be exactly {sorted(expected)}")
+        for needle in ("needs: candidate", "runs-on: ubuntu-latest"):
+            if needle not in attest:
+                fail("attest", f"missing: {needle}")
+        for gate in ("github.event_name == 'workflow_dispatch'",
+                     "inputs.operation == 'prepare'",
+                     "github.ref == 'refs/heads/main'",
+                     "github.repository == 'SolusQuest/contract-scribe'"):
+            if gate not in attest:
+                fail("attest", f"missing job gate: {gate}")
+        for banned in ("concurrency:", "environment:", "secrets.",
+                       "artifact-metadata", "github-token",
+                       "CONTRACTSCRIBE_RELEASE_TOKEN",
+                       "CONTRACTSCRIBE_RELEASE_READ_TOKEN",
+                       "needs.candidate.outputs.artifact-digest",
+                       "continue-on-error", "attest-build-provenance",
+                       "subject-digest", "subject-checksums", "subject-name",
+                       "push-to-registry", "skip-decompress", "run-id",
+                       "if: always()"):
+            if banned in attest:
+                fail("attest", f"forbidden: {banned}")
+        for needle in ("needs.candidate.outputs.artifact-id",
+                       "digest-mismatch: error",
+                       "candidate.json", "assetName", "archiveSha256",
+                       "sha256", "id: subject", "id: attest",
+                       "actions/attest@",
+                       "subject-path: ${{ steps.subject.outputs.archive-path }}",
+                       "gh attestation verify "
+                       "\"${{ steps.subject.outputs.archive-path }}\"",
+                       "--bundle \"${{ steps.attest.outputs.bundle-path }}\"",
+                       "--repo SolusQuest/contract-scribe",
+                       "--signer-workflow SolusQuest/contract-scribe"
+                       "/.github/workflows/release.yml",
+                       "--source-ref refs/heads/main",
+                       "--source-digest \"$GITHUB_SHA\"",
+                       "--deny-self-hosted-runners"):
+            if needle not in attest:
+                fail("attest", f"missing exact wiring: {needle}")
+        order = [attest.find(marker) for marker in (
+            "Download the candidate bundle",
+            "Verify the payload archive digest",
+            "Attest the payload archive",
+            "Verify the emitted attestation")]
+        if any(p < 0 for p in order) or order != sorted(order):
+            fail("attest",
+                 "step order must be download < subject < attest < verify")
+        for body in run_bodies(attest):
+            if re.search(r"\$\{\{\s*inputs\.", body):
+                fail("attest",
+                     "dispatch inputs must reach run steps via env")
+
+    # OIDC/attestation authority stays confined to the attest job.
+    for name in ("offline", "candidate", "stage", "promote"):
+        job = job_block(text, name)
+        if job:
+            for banned in ("id-token:", "attestations:", "artifact-metadata:"):
+                if banned in job:
+                    fail(name, "OIDC/attestation authority must stay "
+                               f"confined to attest: {banned}")
+
     for name, env_name, var_name in (
             ("stage", "release-candidate", "RELEASE_DRAFT_ENABLED"),
             ("promote", "release-publication", "RELEASE_PROMOTION_ENABLED")):

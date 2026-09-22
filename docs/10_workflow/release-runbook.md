@@ -60,6 +60,25 @@ The artifact bundle contains `candidate.json`, `candidate.sha256`, the
 payload archive + sidecar + manifest, `payload-map.json` (the proposed
 map content), and `summary.md`.
 
+A dedicated `attest` job then attests the payload archive bytes with
+Sigstore provenance (`actions/attest`, OIDC + `attestations: write`
+confined to that job on a hosted runner) and verifies the emitted bundle
+with `gh attestation verify` before the run may conclude. The attestation
+claims only that these exact bytes were attested by the trusted
+`release.yml` run at that repository revision — `candidate.json` remains
+what binds `payloadSourceRevision`, and `payload-map.json`'s sha256
+remains the sole acquisition authority. Because the repository is public,
+the subject digest and signer metadata enter the public transparency log
+for every `prepare`, including the provisional map-proposal run whose
+digest is not yet in a reviewed map; the asset bytes themselves stay
+unpublished. Attestation failure fails the run, so a stageable candidate
+always carries provenance. For the first release, this attestation-capable
+workflow revision must be merged before the first real `prepare` dispatch;
+#188 authorization and preflight proceed independently. Whether consumers
+*verify* the attestation is a separate R3-gated decision (#189); adding
+acquisition-path enforcement later changes the wrapper revision and would
+require its own issue and re-qualification.
+
 ## Recording the authorized pair (required before staging)
 
 `prepare` emits the proposed `payload-map.json`. A maintainer reviews it,
