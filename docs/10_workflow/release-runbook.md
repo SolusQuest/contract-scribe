@@ -89,6 +89,10 @@ require its own issue and re-qualification.
 
 ## Recording the authorized pair (required before staging)
 
+The payload revision and the current main checkout must have identical `.github/workflows/` trees. GitHub can require Workflows write authority when a Release targets a revision with different workflow contents ([Create a release](https://docs.github.com/en/rest/releases/releases#create-a-release)). This pipeline does not expand `RELEASE_PUBLICATION_TOKEN` permissions: verification stops with `payload-workflows-differ-refresh-required` before Release/tag mutations. If workflows change after preparation, refresh the payload revision, review the newly built map, and prepare again against the map-authorizing revision.
+
+For #201 → #188, the maintainer approved refreshing the payload/map identity while retaining the token permission boundary. After #201 merges, #188 must build from the merged revision, record its new map in a reviewed change, and perform final `prepare` as `v0.1.0-internal.1`. The previous payload revision `a969345605eb835e9338b74319660f4b57f8861f` and earlier `v0.1.0` prepare remain historical evidence; they are not the next staging candidate. This approval does not authorize publication or credential provisioning.
+
 `prepare` emits the proposed `payload-map.json`. A maintainer reviews it,
 records it as a normal reviewed change to `scripts/action/payload-map.json`
 on main, and CI's `action_packaged` job must pass its byte-equality rebuild

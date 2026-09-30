@@ -729,6 +729,14 @@ def verify_candidate(args):
                           rev, "HEAD")
         check(stage, code == 0, "not-main-reachable")
 
+    # Targeting older workflow contents can require Workflows: write on
+    # GitHub. Keep the publication credential boundary unchanged: refresh
+    # the payload/map instead of silently requiring broader authority.
+    code, _ = run_git(args.repo, "diff", "--quiet",
+                      identity["payloadSourceRevision"], "HEAD", "--",
+                      ".github/workflows/")
+    check(stage, code == 0, "payload-workflows-differ-refresh-required")
+
     marker(stage, "ok", digest)
     return candidate
 

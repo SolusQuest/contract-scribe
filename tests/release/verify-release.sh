@@ -635,6 +635,25 @@ case_stage_repo_id_drift() {
     state_edit 's["repository"]["id"]=999999'
     expect_fail release_env x stage-draft $(vc_args "$CAND2")
 }
+case_stage_payload_workflow_drift() {
+    fresh_state
+    local clone="$WORK/workflow-drift-repo"
+    git clone -q "$FIXTURE" "$clone"
+    git -C "$clone" config user.email test@example.invalid
+    git -C "$clone" config user.name test
+    mkdir -p "$clone/.github/workflows"
+    echo 'name: changed' > "$clone/.github/workflows/other.yml"
+    git -C "$clone" add .github/workflows/other.yml
+    git -C "$clone" commit -qm 'workflow changed after payload'
+    expect_fail release_env x stage-draft $(vc_args "$CAND2") --repo "$clone"
+    [ "$(mutations)" = "0" ]
+    git -C "$clone" revert --no-edit HEAD >/dev/null
+    echo 'unrelated' > "$clone/note.txt"
+    git -C "$clone" add note.txt
+    git -C "$clone" commit -qm 'non-workflow change after payload'
+    release_env x stage-draft $(vc_args "$CAND2") --repo "$clone"
+}
+run_case stage-payload-workflow-drift case_stage_payload_workflow_drift
 run_case stage-happy case_stage_happy
 run_case stage-exact-retry case_stage_exact_retry
 run_case stage-ambiguous-create case_stage_ambiguous_create
