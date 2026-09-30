@@ -58,6 +58,9 @@ run_case() {
         echo "PASS $name"
     else
         echo "FAIL $name  (log: $log)"
+        # Offline fixture diagnostics must survive the temporary-directory
+        # cleanup on CI. Keep console output bounded to the failing leg.
+        tail -n 60 "$log"
         CASES_FAILED=$((CASES_FAILED + 1))
         FAILED_CASES+=("$name")
     fi
@@ -469,7 +472,12 @@ run_case prepare-workflow-drift case_prepare_workflow_drift
 
 case_resolve_happy() {
     fresh_state
-    release_env x resolve-artifact --candidate-run-id "$RUN_ID" | grep -q 777
+    # Drain the producer before inspecting its output. A grep -q pipeline
+    # can exit on the flushed status marker while Python still writes the ID,
+    # causing BrokenPipeError and a spurious failure under pipefail.
+    local output
+    output="$(release_env x resolve-artifact --candidate-run-id "$RUN_ID")"
+    grep -qx 777 <<<"${output//$'\r'/}"
 }
 case_resolve_wrong_event() {
     fresh_state
