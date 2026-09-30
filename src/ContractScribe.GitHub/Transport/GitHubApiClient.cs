@@ -106,12 +106,21 @@ internal sealed class GitHubApiClient : IDisposable
             return new(RepoPath() + "/git/blobs/" + oid, element => Blob(element, oid));
         }, cancellationToken);
 
-    internal ValueTask<GitHubApiResult<GitHubTree>> GetTreeAsync(string oid, CancellationToken cancellationToken = default) =>
-        RunAsync<GitHubTree>(() =>
+    internal async ValueTask<GitHubApiResult<GitHubTree>> GetTreeAsync(string oid, CancellationToken cancellationToken = default)
+    {
+        var direct = await RunAsync<GitHubTree>(() =>
         {
             Input(IsOid(oid));
             return new(RepoPath() + "/git/trees/" + oid, element => Tree(element, oid));
-        }, cancellationToken);
+        }, cancellationToken).ConfigureAwait(false);
+        if (direct.Failure?.Code != GitHubFailureCode.NotFound) return direct;
+        // GitHub can return a persistent 404 on the shallow route for a tree
+        // already visible through its documented recursive route. Project only
+        // the root entries; owners still hash that tree and read every subtree.
+        // Truncated, malformed or conflicting observations remain failures.
+        return await RunAsync<GitHubTree>(() => new(RepoPath() + "/git/trees/" + oid + "?recursive=1",
+            element => Tree(element, oid, recursive: true)), cancellationToken).ConfigureAwait(false);
+    }
 
     internal ValueTask<GitHubApiResult<GitHubCommit>> GetCommitAsync(string oid, CancellationToken cancellationToken = default) =>
         RunAsync<GitHubCommit>(() =>

@@ -213,6 +213,66 @@ public sealed class GitHubApiClientTests
         Assert.All(harness.Handler.Requests, item => Assert.Equal("GET", item.Method));
     }
 
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("truncated")]
+    [InlineData("wrong-oid")]
+    [InlineData("duplicate")]
+    [InlineData("traversal")]
+    [InlineData("empty-segment")]
+    [InlineData("wrong-type")]
+    [InlineData("wrong-child-oid")]
+    [InlineData("wrong-url")]
+    [InlineData("absent")]
+    public async Task Missing_shallow_tree_uses_one_bounded_recursive_observation_with_validated_root_projection(string scenario)
+    {
+        using var harness = await Harness.Create();
+        var recursive = Tree();
+        var entries = (JsonArray)recursive["tree"]!;
+        entries.Add(new JsonObject { ["path"] = "docs", ["mode"] = "040000", ["type"] = "tree", ["sha"] = Oid('5') });
+        var child = new JsonObject { ["path"] = "docs/note.md", ["mode"] = "100644", ["type"] = "blob", ["sha"] = Oid('6') };
+        entries.Add(child);
+        switch (scenario)
+        {
+            case "truncated": recursive["truncated"] = true; break;
+            case "wrong-oid": recursive["sha"] = Oid('7'); break;
+            case "duplicate": entries.Add(child.DeepClone()); break;
+            case "traversal": child["path"] = "docs/../note.md"; break;
+            case "empty-segment": child["path"] = "docs//note.md"; break;
+            case "wrong-type": child["type"] = "tree"; break;
+            case "wrong-child-oid": child["sha"] = "invalid"; break;
+            case "wrong-url": child["url"] = Origin + "repos/elsewhere/repo/git/blobs/" + Oid('6'); break;
+        }
+        harness.Handler.Reply = (request, _) => Task.FromResult(request.RequestUri!.Query.Length == 0 || scenario == "absent"
+            ? Json("{}", 404) : Json(recursive));
+        var result = await harness.Client.GetTreeAsync(Oid('2'));
+        if (scenario == "valid")
+        {
+            Assert.Null(result.Failure);
+            Assert.Equal(new[] { "readme.md", "docs" }, result.Value!.Entries.Select(e => e.Path));
+        }
+        else Assert.Equal(scenario == "absent" ? GitHubFailureCode.NotFound : GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+        Assert.Equal(new[] { "/repos/Owner/repo/git/trees/" + Oid('2'), "/repos/Owner/repo/git/trees/" + Oid('2') + "?recursive=1" },
+            harness.Handler.Requests.Select(r => r.Path));
+        Assert.All(harness.Handler.Requests, r => Assert.Equal("GET", r.Method));
+    }
+
+    [Theory]
+    [InlineData(200)]
+    [InlineData(401)]
+    [InlineData(403)]
+    [InlineData(409)]
+    [InlineData(422)]
+    [InlineData(429)]
+    public async Task Recursive_tree_read_never_bypasses_a_non_missing_result(int status)
+    {
+        using var harness = await Harness.Create();
+        harness.Handler.Reply = (_, _) => Task.FromResult(Json("{}", status));
+        var result = await harness.Client.GetTreeAsync(Oid('2'));
+        Assert.NotNull(result.Failure);
+        Assert.Single(harness.Handler.Requests);
+    }
+
     [Fact]
     public async Task Repository_allows_initial_ascii_case_alias_then_pins_all_identity_components()
     {

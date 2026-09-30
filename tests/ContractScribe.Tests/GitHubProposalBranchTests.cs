@@ -62,6 +62,35 @@ public sealed class GitHubProposalBranchTests
         Assert.Equal(0, remote.ProposalAttempts);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Recursive_readback_preserves_exact_objects_and_single_writes_when_shallow_reads_stay_missing(bool corrupt)
+    {
+        var remote = new Remote { ShallowTreesMissing = true };
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
+        if (corrupt) remote.CorruptAfter = "tree";
+        var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        Assert.True(remote.RecursiveTreeReads > 0);
+        Assert.All(remote.TreePosts.Values, count => Assert.Equal(1, count));
+        if (corrupt)
+        {
+            Assert.Null(result.Content);
+            Assert.Equal(GitHubProposalFailureKind.Integrity, result.Failure!.Kind);
+            Assert.Equal(0, remote.ProposalAttempts);
+            return;
+        }
+        Assert.NotNull(result.Content);
+        var stage = await session.Coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(result.Content.CommitOid));
+        Assert.Equal(GitHubProposalOutcome.RefVerified,
+            (await session.Proposal.AdvanceRefAsync(result.Content, stage.State!, stage.ProposalRefEntitlement)).Outcome);
+        Assert.Equal(1, remote.ProposalWrites);
+        Assert.All(remote.TreePosts.Values, count => Assert.Equal(1, count));
+    }
+
     [Fact]
     public async Task Same_operation_with_a_new_checkpoint_cannot_replace_a_claim_but_exact_resume_can_recover_it()
     {
@@ -969,6 +998,10 @@ public sealed class GitHubProposalBranchTests
         internal int HiddenObservations;
         internal int DelayedObjectWrites;
         private string? delayedOid;
+        private string? hiddenRecursiveOid;
+        internal bool ShallowTreesMissing;
+        internal int RecursiveTreeReads;
+        internal Dictionary<string, int> TreePosts { get; } = [];
         internal string? LateFailure;
         private string? lateCommit;
         private int lateReads;
@@ -1072,7 +1105,7 @@ public sealed class GitHubProposalBranchTests
                 if (method == "GET")
                 {
                     Assert.True(request.Headers.CacheControl?.NoCache);
-                    return Get(path);
+                    return Get(path, request.RequestUri.Query == "?recursive=1");
                 }
                 Assert.Equal("POST", method);
                 using var doc = JsonDocument.Parse(text!);
@@ -1098,6 +1131,7 @@ public sealed class GitHubProposalBranchTests
                         e.GetProperty("path").GetString()!, ParseMode(e.GetProperty("mode").GetString()!),
                         e.GetProperty("sha").GetString()!, null)).ToImmutableArray();
                     var oid = AddTree(entries); response = TreeResponse(oid); kind = "tree";
+                    TreePosts[oid] = TreePosts.GetValueOrDefault(oid) + 1;
                 }
                 else if (path.EndsWith("/git/commits", StringComparison.Ordinal))
                 {
@@ -1162,7 +1196,7 @@ public sealed class GitHubProposalBranchTests
                 return Json(status, response);
             }
         }
-        private HttpResponseMessage Get(string path)
+        private HttpResponseMessage Get(string path, bool recursive = false)
         {
             if (path == "/repos/Owner/repo") return Json(HttpStatusCode.OK, new
             {
@@ -1182,14 +1216,21 @@ public sealed class GitHubProposalBranchTests
                     new { @ref = name, node_id = "REF_node", @object = new { type = "commit", sha = head } }) : Missing();
             }
             var oid = path[(path.LastIndexOf('/') + 1)..];
+            if (recursive)
+            {
+                RecursiveTreeReads++;
+                if (oid == hiddenRecursiveOid) { hiddenRecursiveOid = null; return Missing(); }
+            }
             if (oid == delayedOid && DelayedReads-- > 0)
             {
                 HiddenObservations++;
+                if (path.Contains("/git/trees/", StringComparison.Ordinal)) hiddenRecursiveOid = oid;
                 return Missing();
             }
             if (path.Contains("/git/blobs/", StringComparison.Ordinal) && Blobs.TryGetValue(oid, out var bytes))
                 return Json(HttpStatusCode.OK, new { sha = oid, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
-            if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid)) return Json(HttpStatusCode.OK, TreeResponse(oid));
+            if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid))
+                return ShallowTreesMissing && !recursive ? Missing() : Json(HttpStatusCode.OK, TreeResponse(oid, recursive));
             if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(oid, out var commit))
             {
                 if (oid == lateCommit && --lateReads == 0)
@@ -1202,11 +1243,11 @@ public sealed class GitHubProposalBranchTests
             }
             return Missing();
         }
-        private object TreeResponse(string oid) => new
+        private object TreeResponse(string oid, bool recursive = false) => new
         {
             sha = oid,
             truncated = oid == TruncatedOid,
-            tree = Trees[oid].Select(e => new
+            tree = (recursive ? Descendants(oid, "") : Trees[oid]).Select(e => new
             {
                 path = e.Path,
                 mode = e.Mode == GitHubTreeMode.Directory ? "040000" : Mode(e.Mode),
@@ -1214,6 +1255,16 @@ public sealed class GitHubProposalBranchTests
                 sha = e.Oid
             }).ToArray(),
         };
+        private IEnumerable<GitHubTreeEntry> Descendants(string oid, string prefix)
+        {
+            foreach (var entry in Trees[oid])
+            {
+                var path = prefix + entry.Path;
+                yield return entry with { Path = path };
+                if (entry.Mode == GitHubTreeMode.Directory)
+                    foreach (var child in Descendants(entry.Oid, path + "/")) yield return child;
+            }
+        }
         private static object CommitResponse(GitHubCommit c) => new
         {
             sha = c.Oid,
