@@ -8,7 +8,8 @@ name: Release
 #                   dedicated OIDC job emits and verifies the attestation)
 #   stage-draft  -> separately authorized unpublished draft for R2 (#188)
 #   promote      -> separately authorized publication of the exact
-#                   qualified candidate (R3, #189)
+#                   qualified normal-version candidate (R3, #189);
+#                   internal versions are draft-only and rejected
 #
 # Ordinary push/PR CI has no publication path: the operational jobs require
 # a workflow_dispatch on refs/heads/main, a maintainer-provisioned
@@ -43,7 +44,7 @@ on:
         type: string
         default: contract-scribe-action
       release_version:
-        description: Fixed public version, vX.Y.Z
+        description: vX.Y.Z or draft-only vX.Y.Z-internal.N (N >= 1)
         required: false
         type: string
       candidate_run_id:
@@ -341,6 +342,29 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  promotion-admission:
+    # Reject internal/invalid versions before any environment, credential,
+    # checkout, or candidate acquisition can be reached.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.operation == 'promote'
+      && github.repository == 'SolusQuest/contract-scribe'
+      && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Admit only a canonical normal version
+        shell: bash
+        env:
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          core = r"(?:0|[1-9][0-9]*)"
+          if re.fullmatch(rf"v{core}\.{core}\.{core}", os.environ.get("CS_RELEASE_VERSION", "")) is None:
+              sys.exit("normal-version-required: internal candidates are draft-only")
+          PY
+
   promote:
     # Separately authorized publication (R3). Requires the maintainer-
     # provisioned release-publication environment, the repository-level
@@ -352,6 +376,7 @@ jobs:
       && github.repository == 'SolusQuest/contract-scribe'
       && github.ref == 'refs/heads/main'
       && vars.RELEASE_PROMOTION_ENABLED == 'true'
+    needs: promotion-admission
     environment: release-publication
     runs-on: ubuntu-latest
     timeout-minutes: 15

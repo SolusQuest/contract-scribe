@@ -9,6 +9,8 @@ Exits nonzero with a FAIL line per violated invariant.
 import os
 import re
 import sys
+import subprocess
+import textwrap
 
 REPO = os.path.abspath(
     os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -76,6 +78,39 @@ def main():
     except OSError:
         print("FAIL release.yml: missing")
         return 1
+
+    # Execute the actual checkout-free admission program and prove that
+    # the entire secret-bearing promotion job depends on its success.
+    admission = job_block(text, "promotion-admission") or ""
+    promotion = job_block(text, "promote") or ""
+    if not re.search(r"^    needs: promotion-admission$", promotion, re.M):
+        fail("admission", "promotion must depend on admission success")
+    promotion_header = promotion.split("    steps:", 1)[0]
+    if re.search(r"\b(always|failure|cancelled)\s*\(", promotion_header):
+        fail("admission", "promotion must not bypass failed dependency")
+    for forbidden in ("uses:", "secrets.", "github.token", "environment:",
+                      "continue-on-error:"):
+        if forbidden in admission:
+            fail("admission", f"admission must not contain {forbidden}")
+    if "    permissions: {}" not in admission:
+        fail("admission", "admission must have no token permissions")
+    match = re.search(r"          python3 - <<'PY'\n(.*?)          PY\n",
+                      admission, re.S)
+    if not match:
+        fail("admission", "missing executable admission program")
+    else:
+        program = textwrap.dedent(match.group(1))
+        for version, allowed in (("v0.1.0", True), ("v12.0.34", True),
+                                 ("v0.1.0-internal.1", False),
+                                 ("v0.1.0-internal.12", False),
+                                 ("v01.1.0", False), ("v0.1.0-rc.1", False),
+                                 ("v0.1.0+build", False), ("", False),
+                                 ("v0.1.0\n", False)):
+            result = subprocess.run([sys.executable, "-c", program],
+                                    env={**os.environ, "CS_RELEASE_VERSION": version},
+                                    capture_output=True, text=True)
+            if (result.returncode == 0) != allowed:
+                fail("admission", f"unexpected admission for {version!r}")
 
     on_start = re.search(r"^on:\n", text, re.M)
     on_end = re.search(r"^permissions:", text, re.M)

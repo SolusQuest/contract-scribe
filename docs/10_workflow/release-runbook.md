@@ -5,6 +5,14 @@ Operator procedure for the manually initiated release candidate pipeline in
 via `workflow_dispatch` on `refs/heads/main`; nothing is automatic, and
 ordinary push/PR CI cannot publish.
 
+## Version and visibility
+
+Use `v0.1.0-internal.1` for internal testing. Supported versions are canonical ASCII `vMAJOR.MINOR.PATCH` or `vMAJOR.MINOR.PATCH-internal.N`. Core numbers have no leading zeros; `N` starts at 1 and has no leading zeros. Other suffixes (including alpha/beta/rc), build metadata and malformed versions are rejected.
+
+The version determines the candidate's existing `prerelease` field: internal versions require `true`, normal versions require `false`. Verification rejects any mismatch, even if the candidate digest was recomputed. Internal drafts include the version and "internal testing only" in their title. `prepare` creates an Actions artifact and provenance, not a public Release or tag.
+
+Internal candidates remain `draft: true` and `prerelease: true`. `promote` rejects them before credentials or remote reads with `normal-version-required`, even with publication approval. A checkout-free admission job with no token permissions rejects internal or invalid versions before the publication environment and all checkout/artifact acquisition steps; the Python command repeats the normal-version check as defense in depth. A suffix or GitHub's Pre-release flag is not access control: only the draft state keeps the assets unpublished. Public preview publication is outside this workflow's supported version policy.
+
 ## Provisioning prerequisites (maintainer, once)
 
 Before `stage-draft` or `promote` can run, a maintainer must provision:
@@ -39,15 +47,15 @@ do not run or fail closed without a credential.
 Dispatch `release.yml` with:
 
 - `operation=prepare`
-- `source_revision` — 40-hex commit that will be tagged `vX.Y.Z` (the
-  public wrapper revision; for the first release it must equal the wrapper
-  revision claim).
+- `source_revision` — 40-hex wrapper/candidate commit; for a normal public
+  release this is the version-tag target. It must equal the wrapper
+  revision claim. Internal candidates do not create a version tag.
 - `payload_source_revision` — the A1 build revision; becomes
   `payload.sourceRevision` in the map.
 - `wrapper` — `contract-scribe-action` (the map's `wrapper` identity; the
   action display name `contract-scribe` in `action.yml` is a separate
   identity and is checked independently).
-- `release_version` — `vX.Y.Z` only.
+- `release_version` — `vX.Y.Z` or draft-only `vX.Y.Z-internal.N` (`N >= 1`).
 
 Both revisions must be ancestors of `origin/main`. The job builds the
 payload from a detached worktree at `payload_source_revision`, computes the
@@ -81,6 +89,10 @@ require its own issue and re-qualification.
 
 ## Recording the authorized pair (required before staging)
 
+The payload revision and the current main checkout must have identical `.github/workflows/` trees. GitHub can require Workflows write authority when a Release targets a revision with different workflow contents ([Create a release](https://docs.github.com/en/rest/releases/releases#create-a-release)). This pipeline does not expand `RELEASE_PUBLICATION_TOKEN` permissions: verification stops with `payload-workflows-differ-refresh-required` before Release/tag mutations. If workflows change after preparation, refresh the payload revision, review the newly built map, and prepare again against the map-authorizing revision.
+
+For #201 → #188, the maintainer approved refreshing the payload/map identity while retaining the token permission boundary. After #201 merges, #188 must build from the merged revision, record its new map in a reviewed change, and perform final `prepare` as `v0.1.0-internal.1`. The previous payload revision `a969345605eb835e9338b74319660f4b57f8861f` and earlier `v0.1.0` prepare remain historical evidence; they are not the next staging candidate. This approval does not authorize publication or credential provisioning.
+
 `prepare` emits the proposed `payload-map.json`. A maintainer reviews it,
 records it as a normal reviewed change to `scripts/action/payload-map.json`
 on main, and CI's `action_packaged` job must pass its byte-equality rebuild
@@ -94,7 +106,11 @@ For the first release this means the real sequence is:
 2. Reviewed PR lands the map pair → new main revision `M`.
 3. `prepare` again at `(source=M, payload_source=<original payload rev>)`
    so the candidate's `sourceRevision` is the revision whose own map
-   authorizes the pair. The published `vX.Y.Z` tag will point at `M`.
+   authorizes the pair. A normal candidate's published `vX.Y.Z` tag will point at `M`; an internal candidate stays unpublished.
+
+The wrapper's `releaseVersion` and payload's `toolVersion` are separate identities. Changing the former does not rename or rebuild the latter's bytes by definition: reuse remains conditional on the pinned payload source/hash and reviewed map. The existing payload tag remains `payload-<toolVersion>`. Because the draft metadata also binds the wrapper revision/version, another candidate already staged at that tag is a conflict, even if its archive bytes are identical. The tooling never overwrites, relabels, deletes or publishes that draft to make room for the next candidate. Use a separately reviewed new payload identity, or stop for an explicit maintainer disposition of the retained draft; do not bypass the exact-match check.
+
+A normal release after internal testing is a separately prepared candidate, not an in-place removal of `-internal.N`. Version or workflow changes produce a new candidate digest. Keep previous prepare/qualification records as historical evidence, qualify the affected path against the new identity under #188, and obtain #189's governance/publication approval for that exact normal candidate. Internal qualification alone never authorizes normal publication.
 
 ## Operation 2: stage-draft — unpublished draft staging (R2 vehicle)
 
@@ -119,7 +135,7 @@ fires) and `RELEASE_DRAFT_ENABLED=true`. The job:
    `source_revision` to authorize the exact pair, requires main ancestry,
    and requires the current workflow sha to equal the producer's.
 4. `stage-draft`: creates the unpublished draft payload Release
-   (`payload-<toolVersion>`, `draft`, `prerelease:false`) or adopts the
+   (`payload-<toolVersion>`, `draft:true`, and the version-derived `prerelease` flag) or adopts the
    exact existing draft, then converges assets to exactly `{assetName}` —
    any extra, duplicate, starter (size-0), or wrong-digest asset stops it.
    No public tag is created.
@@ -139,7 +155,11 @@ the wrapper candidate, and it does not exist until promotion. Qualification
 records `qualified_release_id` and `qualified_asset_id` from `staged.json`
 plus evidence per #188.
 
+For internal testing, pin the internal candidate's full wrapper SHA in the same way. There is no public `vX.Y.Z-internal.N` tag and no internal-to-public promotion step.
+
 ## Operation 3: promote — guarded publication (R3, #189)
+
+Only normal `vX.Y.Z` candidates are eligible. The internal suffix is not an approval shortcut: an internal candidate must stay a draft.
 
 Dispatch with `operation=promote` plus the identity inputs above and:
 
@@ -176,7 +196,8 @@ stale-authorization).
 | State found | Meaning | Recovery |
 |---|---|---|
 | No draft, no tags | staging never ran | dispatch `stage-draft` |
-| Exact draft only | staged, not promoted | qualify (R2), then `promote` |
+| Exact internal draft only | internal testing candidate | qualify (R2); retain unpublished, no `promote` |
+| Exact normal draft only | staged, not promoted | qualify (R2), then separately authorized `promote` |
 | Payload tag + draft | publish never ran | dispatch `promote` again |
 | Payload tag + published, no `v` tag | version tag never ran | dispatch `promote` again |
 | Both tags + published | complete | none |

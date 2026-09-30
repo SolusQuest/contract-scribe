@@ -277,6 +277,13 @@ run_prepare "$CAND2" "$MAP_REV" "$BASE_REV" "v0.1.0" >"$WORK/prepare-final.log" 
     echo "FAIL final prepare (log: $WORK/prepare-final.log)"; exit 1; }
 CAND2_DIGEST="$(cut -d' ' -f1 "$CAND2/candidate.sha256")"
 
+# Same payload/map, distinct internal candidate identity.
+CAND_INTERNAL="$WORK/candidate-internal"
+INTERNAL_VERSION="v0.1.0-internal.1"
+run_prepare "$CAND_INTERNAL" "$MAP_REV" "$BASE_REV" "$INTERNAL_VERSION" >"$WORK/prepare-internal.log" 2>&1 || {
+    echo "FAIL internal prepare (log: $WORK/prepare-internal.log)"; exit 1; }
+INTERNAL_DIGEST="$(cut -d' ' -f1 "$CAND_INTERNAL/candidate.sha256")"
+
 # point_run_state <sha>: pin the fake run/artifact/CI fixtures at the
 # head sha the candidate under test was produced from.
 fresh_state() {
@@ -325,9 +332,11 @@ release_env() {
 vc_args() {
     echo --candidate "$1" --repo "$FIXTURE" \
         --source-revision "$MAP_REV" --payload-source-revision "$BASE_REV" \
-        --release-version v0.1.0 --wrapper contract-scribe-action \
-        --candidate-digest "$CAND2_DIGEST" --candidate-run-id "$RUN_ID"
+        --release-version "${2:-v0.1.0}" --wrapper contract-scribe-action \
+        --candidate-digest "${3:-$CAND2_DIGEST}" --candidate-run-id "$RUN_ID"
 }
+
+internal_args() { vc_args "$CAND_INTERNAL" "$INTERNAL_VERSION" "$INTERNAL_DIGEST"; }
 
 count_log() { grep -c "$1" "$WORK/fake-requests.log" || true; }
 mutations() { grep -cE '^(POST|PATCH|DELETE|PUT)' "$WORK/fake-requests.log" || true; }
@@ -626,6 +635,25 @@ case_stage_repo_id_drift() {
     state_edit 's["repository"]["id"]=999999'
     expect_fail release_env x stage-draft $(vc_args "$CAND2")
 }
+case_stage_payload_workflow_drift() {
+    fresh_state
+    local clone="$WORK/workflow-drift-repo"
+    git clone -q "$FIXTURE" "$clone"
+    git -C "$clone" config user.email test@example.invalid
+    git -C "$clone" config user.name test
+    mkdir -p "$clone/.github/workflows"
+    echo 'name: changed' > "$clone/.github/workflows/other.yml"
+    git -C "$clone" add .github/workflows/other.yml
+    git -C "$clone" commit -qm 'workflow changed after payload'
+    expect_fail release_env x stage-draft $(vc_args "$CAND2") --repo "$clone"
+    [ "$(mutations)" = "0" ]
+    git -C "$clone" revert --no-edit HEAD >/dev/null
+    echo 'unrelated' > "$clone/note.txt"
+    git -C "$clone" add note.txt
+    git -C "$clone" commit -qm 'non-workflow change after payload'
+    release_env x stage-draft $(vc_args "$CAND2") --repo "$clone"
+}
+run_case stage-payload-workflow-drift case_stage_payload_workflow_drift
 run_case stage-happy case_stage_happy
 run_case stage-exact-retry case_stage_exact_retry
 run_case stage-ambiguous-create case_stage_ambiguous_create
@@ -886,6 +914,175 @@ case_verify_draft_mismatch() {
 }
 run_case verify-draft-happy case_verify_draft_happy
 run_case verify-draft-mismatch case_verify_draft_mismatch
+
+# ---------------------------------------------------------------------------
+# Internal candidates: production entrypoints against the same remote fake.
+# ---------------------------------------------------------------------------
+
+case_internal_prepare() {
+    python3 - "$CAND_INTERNAL" "$CAND2" "$INTERNAL_VERSION" <<'PY'
+import json, pathlib, sys
+internal, normal = [json.loads((pathlib.Path(p) / "candidate.json").read_text())
+                    for p in sys.argv[1:3]]
+i, n = internal["identity"], normal["identity"]
+assert i["releaseVersion"] == sys.argv[3] and i["prerelease"] is True
+assert n["prerelease"] is False
+assert sys.argv[3] in i["releaseName"]
+for key in ("archiveSha256", "assetName", "payloadSourceRevision", "releaseTag"):
+    assert i[key] == n[key], key
+for name in ("candidate.sha256", "summary.md"):
+    assert (pathlib.Path(sys.argv[1]) / name).read_bytes() != (pathlib.Path(sys.argv[2]) / name).read_bytes()
+assert "promote denied" in (pathlib.Path(sys.argv[1]) / "summary.md").read_text()
+PY
+}
+
+case_version_inputs() {
+    local version
+    for version in "" "0.1.0" "v01.1.0" "v0.01.0" "v0.1.00" \
+        "v0.1" "v0.1.0.0" "v0.1.0-internal" "v0.1.0-internal.0" \
+        "v0.1.0-internal.01" "v0.1.0-internal.-1" "v0.1.0-internal.1.2" \
+        "v0.1.0-alpha.1" "v0.1.0+build" "v0.1.0-internal.1+build" \
+        "v0.1.0-INTERNAL.1" "v１.0.0" "v0.1.0-internal.１" \
+        " v0.1.0" "v0.1.0 " $'v0.1.0\n'; do
+        expect_fail prepare_env "" --repo "$FIXTURE" --output "$WORK/bad-version" \
+            --source-revision "$MAP_REV" --payload-source-revision "$BASE_REV" \
+            --release-version "$version" --wrapper contract-scribe-action
+    done
+    # Canonical multi-digit counters and zero core components are allowed.
+    run_prepare "$WORK/internal-ten" "$MAP_REV" "$BASE_REV" "v0.0.0-internal.10"
+}
+
+case_internal_stage_readback() {
+    fresh_state
+    release_env x stage-draft $(internal_args)
+    release_env x verify-draft $(internal_args)
+    python3 - "$STATE" "$INTERNAL_VERSION" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    state = json.load(f)
+release, = state["releases"]
+assert release["draft"] is True and release["prerelease"] is True
+assert sys.argv[2] in release["name"] and sys.argv[2] in release["body"]
+assert not state["refs"]
+PY
+    : > "$WORK/fake-requests.log"
+    release_env x stage-draft $(internal_args)
+    [ "$(mutations)" = "0" ]
+}
+
+case_internal_ambiguous_create() {
+    fresh_state
+    state_edit 's["overrides"]["drop_after_write"]=["release-create"]'
+    release_env x stage-draft $(internal_args)
+    release_env x verify-draft $(internal_args)
+    [ "$(count_log 'POST /repos/.*/releases ')" = "1" ]
+}
+
+case_internal_promotion_denied() {
+    fresh_state
+    release_env x stage-draft $(internal_args)
+    local rel asset
+    rel="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["releaseId"])' "$CAND_INTERNAL/staged.json")"
+    asset="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["assetId"])' "$CAND_INTERNAL/staged.json")"
+    : > "$WORK/fake-requests.log"
+    expect_fail release_env x promote $(internal_args) \
+        --qualified-release-id "$rel" --qualified-asset-id "$asset" \
+        --approval-reference a --governance-reference g
+    # Even read-only API traffic is unnecessary for this local rejection.
+    [ ! -s "$WORK/fake-requests.log" ]
+    # Normal input cannot launder an internal candidate into publication.
+    expect_fail release_env x promote $(vc_args "$CAND_INTERNAL" v0.1.0 "$INTERNAL_DIGEST") \
+        --qualified-release-id "$rel" --qualified-asset-id "$asset" \
+        --approval-reference a --governance-reference g
+    [ ! -s "$WORK/fake-requests.log" ]
+    release_env x verify-draft $(internal_args)
+}
+
+case_prerelease_substitution() {
+    local base version flag directory digest index=0
+    # Re-sign the test sidecar AND pass the new claimed digest. Rejection
+    # must be semantic, not merely a stale sidecar/digest mismatch.
+    for base in "$CAND_INTERNAL" "$CAND2"; do
+        version="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["identity"]["releaseVersion"])' "$base/candidate.json")"
+        for flag in opposite 0 1 null '"true"' '"false"' missing; do
+            index=$((index + 1))
+            directory="$WORK/substitute-$index"
+            python3 - "$base" "$directory" "$flag" <<'PY'
+import hashlib, json, pathlib, shutil, sys
+source, dest, flag = sys.argv[1:]
+shutil.copytree(source, dest, dirs_exist_ok=True)
+path = pathlib.Path(dest) / "candidate.json"
+doc = json.loads(path.read_text())
+if flag == "missing":
+    del doc["identity"]["prerelease"]
+else:
+    doc["identity"]["prerelease"] = (not doc["identity"]["prerelease"]
+                                      if flag == "opposite" else json.loads(flag))
+identity = (json.dumps(doc["identity"], indent=2, sort_keys=True, ensure_ascii=False) + "\n").encode()
+digest = hashlib.sha256(identity).hexdigest()
+path.write_text(json.dumps(doc))
+(path.parent / "candidate.sha256").write_text(digest + "  candidate.json\n")
+PY
+            digest="$(cut -d' ' -f1 "$directory/candidate.sha256")"
+            fresh_state
+            expect_fail release_env x stage-draft $(vc_args "$directory" "$version" "$digest")
+            [ ! -s "$WORK/fake-requests.log" ]
+        done
+    done
+}
+
+case_internal_remote_conflicts() {
+    local change
+    for change in 's["releases"][0]["prerelease"]=False' \
+        's["releases"][0]["draft"]=False' \
+        's["releases"][0]["body"]="another version"' \
+        's["releases"][0]["name"]="another version"'; do
+        fresh_state
+        release_env x stage-draft $(internal_args)
+        state_edit "$change"
+        : > "$WORK/fake-requests.log"
+        expect_fail release_env x stage-draft $(internal_args)
+        expect_fail release_env x verify-draft $(internal_args)
+        [ "$(mutations)" = "0" ]
+    done
+}
+
+case_internal_normal_collision() {
+    fresh_state
+    release_env x stage-draft $(internal_args)
+    : > "$WORK/fake-requests.log"
+    expect_fail release_env x stage-draft $(vc_args "$CAND2")
+    [ "$(mutations)" = "0" ]
+    fresh_state
+    release_env x stage-draft $(vc_args "$CAND2")
+    : > "$WORK/fake-requests.log"
+    expect_fail release_env x stage-draft $(internal_args)
+    [ "$(mutations)" = "0" ]
+}
+
+case_internal_version_change() {
+    local next="$WORK/internal-next" digest
+    run_prepare "$next" "$MAP_REV" "$BASE_REV" "v0.1.0-internal.2"
+    digest="$(cut -d' ' -f1 "$next/candidate.sha256")"
+    [ "$digest" != "$INTERNAL_DIGEST" ]
+    fresh_state
+    release_env x stage-draft $(internal_args)
+    : > "$WORK/fake-requests.log"
+    expect_fail release_env x stage-draft $(vc_args "$next" v0.1.0-internal.2 "$digest")
+    [ "$(mutations)" = "0" ]
+    expect_fail release_env x verify-candidate $(vc_args "$next" v0.1.0-internal.2 "$INTERNAL_DIGEST")
+    [ "$(mutations)" = "0" ]
+}
+
+run_case internal-prepare case_internal_prepare
+run_case release-version-inputs case_version_inputs
+run_case internal-stage-readback case_internal_stage_readback
+run_case internal-ambiguous-create case_internal_ambiguous_create
+run_case internal-promotion-denied case_internal_promotion_denied
+run_case prerelease-substitution case_prerelease_substitution
+run_case internal-remote-conflicts case_internal_remote_conflicts
+run_case internal-normal-collision case_internal_normal_collision
+run_case internal-version-change case_internal_version_change
 
 case_log_no_delete() {
     cat "$WORK/fake-requests.log" >> "$WORK/fake-requests-all.log"
