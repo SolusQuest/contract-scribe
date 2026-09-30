@@ -45,6 +45,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+from release_version import prerelease_for_version
+
 BOUND_METADATA_JSON = 2 * 1024 * 1024
 BOUND_DOWNLOAD = 256 * 1024 * 1024
 BOUND_MAX_PAGES = 5
@@ -66,7 +68,6 @@ UPLOAD_HOST_PRODUCTION = "uploads.github.com"
 
 _HEX40 = re.compile(r"[0-9a-f]{40}")
 _SHA256 = re.compile(r"[0-9a-f]{64}")
-_RELEASE_VERSION = re.compile(r"v\d+\.\d+\.\d+")
 _WRAPPER_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _SAFE_REASON = re.compile(r"[a-z0-9-]{1,48}")
 
@@ -607,9 +608,14 @@ def verify_candidate(args):
           == args.payload_source_revision
           and _HEX40.fullmatch(args.payload_source_revision or ""),
           "payload-source-revision")
+    prerelease = prerelease_for_version(args.release_version)
     check(stage, identity.get("releaseVersion") == args.release_version
-          and _RELEASE_VERSION.fullmatch(args.release_version or ""),
+          and prerelease is not None,
           "release-version")
+    # A digest binds bytes, not their validity. Even coherently re-digested
+    # metadata cannot select a channel independent of the version policy.
+    check(stage, identity.get("prerelease") is prerelease,
+          "prerelease-version")
     check(stage, isinstance(identity.get("wrapper"), dict)
           and identity["wrapper"].get("name") == args.wrapper
           and _WRAPPER_NAME.fullmatch(args.wrapper or ""),
@@ -902,7 +908,7 @@ def cmd_stage_draft(args):
                 "name": identity["releaseName"],
                 "body": body,
                 "draft": True,
-                "prerelease": False,
+                "prerelease": identity["prerelease"],
             }, "release-create")
             check(stage, isinstance(created, dict)
                   and isinstance(created.get("id"), int),
@@ -1000,6 +1006,11 @@ def cmd_promote(args):
     global _STAGE
     _STAGE = "promote"
     stage = _STAGE
+    # Reject internal/invalid versions before credentials or remote reads.
+    # Normal input cannot relabel an internal artifact: verify_candidate
+    # still binds the exact version, classification and approved digest.
+    check(stage, prerelease_for_version(args.release_version) is False,
+          "normal-version-required")
     candidate = verify_candidate(args)
     identity = candidate["identity"]
     read = read_token()

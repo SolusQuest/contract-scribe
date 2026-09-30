@@ -31,11 +31,12 @@ import subprocess
 import sys
 import tarfile
 
+from release_version import prerelease_for_version
+
 BOUND_METADATA_JSON = 2 * 1024 * 1024
 BOUND_FILE_TEXT = 512 * 1024
 
 _HEX40 = re.compile(r"[0-9a-f]{40}")
-_RELEASE_VERSION = re.compile(r"v\d+\.\d+\.\d+")
 _WRAPPER_NAME = re.compile(r"[a-z0-9][a-z0-9-]{0,63}")
 _SAFE_REASON = re.compile(r"[a-z0-9-]{1,48}")
 
@@ -239,7 +240,7 @@ def main():
     parser.add_argument("--payload-source-revision", required=True,
                         help="40-hex A1 build revision (map sourceRevision)")
     parser.add_argument("--release-version", required=True,
-                        help="Fixed release version, vX.Y.Z")
+                        help="vX.Y.Z or draft-only vX.Y.Z-internal.N (N >= 1)")
     parser.add_argument("--wrapper", required=True,
                         help="Wrapper component name (payload-map wrapper)")
     parser.add_argument("--repository", default="SolusQuest/contract-scribe")
@@ -249,8 +250,8 @@ def main():
     check(stage, _HEX40.fullmatch(args.source_revision), "source-revision")
     check(stage, _HEX40.fullmatch(args.payload_source_revision),
           "payload-source-revision")
-    check(stage, _RELEASE_VERSION.fullmatch(args.release_version),
-          "release-version")
+    prerelease = prerelease_for_version(args.release_version)
+    check(stage, prerelease is not None, "release-version")
     check(stage, _WRAPPER_NAME.fullmatch(args.wrapper), "wrapper-name")
     check(stage, re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+",
                               args.repository), "repository-name")
@@ -355,6 +356,8 @@ def main():
 
     release_tag = f"payload-{tool_version}"
     release_name = f"contract-scribe payload {tool_version}"
+    if prerelease:
+        release_name += f" ({args.release_version}; internal testing only)"
     release_body = (
         f"ContractScribe payload candidate for release "
         f"{args.release_version}.\n\n"
@@ -383,7 +386,7 @@ def main():
         "defaultsJsonSha256": defaults_sha,
         "releaseName": release_name,
         "releaseBodySha256": sha256_bytes(release_body.encode("utf-8")),
-        "prerelease": False,
+        "prerelease": prerelease,
         "toolchain": {
             "dotnetSdk": dotnet_sdk,
             "dotnetRuntimes": dotnet_runtimes(),
@@ -444,6 +447,8 @@ def main():
         "",
         f"- candidateDigest: `{candidate_digest}`",
         f"- releaseVersion: `{args.release_version}`",
+        "- publication: " + ("internal testing only; draft-only, promote denied"
+                             if prerelease else "normal; separate approval required"),
         f"- sourceRevision (tag/wrapper): `{args.source_revision}`",
         f"- payloadSourceRevision: `{args.payload_source_revision}`",
         f"- releaseTag: `{release_tag}`",

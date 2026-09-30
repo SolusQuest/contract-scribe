@@ -8,7 +8,8 @@ name: Release
 #                   dedicated OIDC job emits and verifies the attestation)
 #   stage-draft  -> separately authorized unpublished draft for R2 (#188)
 #   promote      -> separately authorized publication of the exact
-#                   qualified candidate (R3, #189)
+#                   qualified normal-version candidate (R3, #189);
+#                   internal versions are draft-only and rejected
 #
 # Ordinary push/PR CI has no publication path: the operational jobs require
 # a workflow_dispatch on refs/heads/main, a maintainer-provisioned
@@ -43,7 +44,7 @@ on:
         type: string
         default: contract-scribe-action
       release_version:
-        description: Fixed public version, vX.Y.Z
+        description: vX.Y.Z or draft-only vX.Y.Z-internal.N (N >= 1)
         required: false
         type: string
       candidate_run_id:
