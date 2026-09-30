@@ -54,6 +54,7 @@ BOUND_REDIRECTS = 3
 BOUND_CONNECT_SECONDS = 25
 BOUND_DOWNLOAD_SECONDS = 300
 BOUND_REFERENCE = 1024
+BOUND_READBACK_OBSERVATIONS = 4
 
 API_ROOT_PRODUCTION = "https://api.github.com"
 REPOSITORY = "SolusQuest/contract-scribe"
@@ -302,6 +303,8 @@ def _parse(data, what):
 def _request(method, url, token, what, body=None):
     data = None
     headers = api_headers(token)
+    if method == "GET":
+        headers["Cache-Control"] = "no-cache"
     if body is not None:
         data = canonical_bytes(body)
         headers["Content-Type"] = "application/json"
@@ -496,13 +499,55 @@ def run_git(repo, *args):
 
 
 def release_body(identity):
-    return (
+    body = (
         f"ContractScribe payload candidate for release "
         f"{identity['releaseVersion']}.\n\n"
         f"- toolVersion: {tool_version(identity)}\n"
         f"- payloadSourceRevision: {identity['payloadSourceRevision']}\n"
         f"- sourceRevision: {identity['sourceRevision']}\n"
         f"- archiveSha256: {identity['archiveSha256']}\n")
+    qualification = identity.get("qualification")
+    if qualification is not None:
+        body += (f"- qualificationPullRequest: {qualification['pullRequest']}\n"
+                 f"- draftTargetRevision: {qualification['baseRevision']}\n"
+                 "- draft-only PR qualification; no public promotion\n")
+    return body
+
+
+def draft_target(identity):
+    qualification = identity.get("qualification")
+    return qualification["baseRevision"] if qualification else identity["payloadSourceRevision"]
+
+
+def read_qualification(number, token):
+    """Authenticate the current open, same-repository PR and main baseline.
+
+    This is an explicit draft-only mode, never an arbitrary ref selector.
+    Callers separately bind head SHA, dispatch ref, workflow and archive.
+    """
+    stage = "qualification"
+    check(stage, isinstance(number, str) and re.fullmatch(r"[1-9][0-9]*", number), "pull-request")
+    base = f"{api_root()}/repos/{REPOSITORY}"
+    status, pr = get_json(f"{base}/pulls/{number}", token, "pull-request")
+    check(stage, status == 200 and isinstance(pr, dict)
+          and pr.get("number") == int(number) and pr.get("state") == "open",
+          "pull-request-readback")
+    head, target = pr.get("head") or {}, pr.get("base") or {}
+    for side in (head, target):
+        repository = side.get("repo") or {}
+        check(stage, repository.get("full_name") == REPOSITORY
+              and str(repository.get("id")) == env_text("GITHUB_REPOSITORY_ID"),
+              "foreign-pull-request")
+    check(stage, target.get("ref") == "main"
+          and isinstance(head.get("ref"), str) and head["ref"] != "main"
+          and _HEX40.fullmatch(head.get("sha", ""))
+          and _HEX40.fullmatch(target.get("sha", "")), "pull-request-refs")
+    status, main = get_json(f"{base}/git/ref/heads/main", token, "main-ref")
+    check(stage, status == 200 and isinstance(main, dict)
+          and main.get("object", {}).get("type") == "commit"
+          and main["object"].get("sha") == target["sha"], "main-drift")
+    return ({"pullRequest": int(number), "headRef": head["ref"],
+             "baseRevision": target["sha"]}, head["sha"])
 
 
 def release_matches(identity, release, draft_expected):
@@ -518,7 +563,7 @@ def release_matches(identity, release, draft_expected):
         return False
     if release.get("name") != identity["releaseName"]:
         return False
-    if release.get("target_commitish") != identity["payloadSourceRevision"]:
+    if release.get("target_commitish") != draft_target(identity):
         return False
     body = release.get("body")
     if not isinstance(body, str):
@@ -559,6 +604,7 @@ def cmd_resolve_artifact(args):
     repo_base = f"{root}/repos/{REPOSITORY}"
 
     run_id = args.candidate_run_id
+    qualification, head = read_qualification(args.pull_request, read) if args.pull_request else (None, None)
     check(stage, isinstance(run_id, str) and run_id.isdigit(), "run-id")
     status, run = get_json(f"{repo_base}/actions/runs/{run_id}",
                            read, "run")
@@ -567,7 +613,8 @@ def cmd_resolve_artifact(args):
           and run.get("path") == WORKFLOW_PATH
           and run.get("status") == "completed"
           and run.get("conclusion") == "success"
-          and run.get("head_branch") == "main"
+          and run.get("head_branch") == (qualification["headRef"] if qualification else "main")
+          and (qualification is None or run.get("head_sha") == head)
           and isinstance(run.get("repository"), dict)
           and run["repository"].get("full_name") == REPOSITORY,
           "run-readback")
@@ -623,6 +670,16 @@ def verify_candidate(args):
     check(stage, identity.get("repository") == REPOSITORY, "repository-name")
     check(stage, isinstance(identity.get("repositoryId"), str)
           and identity["repositoryId"].isdigit(), "repository-id")
+    qualification = identity.get("qualification")
+    check(stage, bool(args.pull_request) == (qualification is not None), "qualification-mode")
+    if qualification is not None:
+        check(stage, prerelease is True, "qualification-draft-only")
+        current, head = read_qualification(args.pull_request, read_token())
+        check(stage, qualification == current and head == args.source_revision
+              and env_text("GITHUB_SHA") == head
+              and env_text("GITHUB_REF") == "refs/heads/" + current["headRef"]
+              and identity["workflowRevision"] == head
+              and provenance.get("sha") == head, "qualification-drift")
 
     # Local artifact re-verification: the downloaded bytes must match the
     # frozen identity exactly.
@@ -657,7 +714,7 @@ def verify_candidate(args):
           and run.get("path") == WORKFLOW_PATH
           and run.get("status") == "completed"
           and run.get("conclusion") == "success"
-          and run.get("head_branch") == "main"
+          and run.get("head_branch") == (qualification["headRef"] if qualification else "main")
           and run.get("head_sha") == provenance.get("sha")
           and str(run.get("run_attempt"))
           == str(provenance.get("runAttempt"))
@@ -723,6 +780,12 @@ def verify_candidate(args):
           and env_text("GITHUB_WORKFLOW_SHA")
           == identity.get("workflowRevision"), "workflow-revision")
 
+    if qualification is not None:
+        code, checkout = run_git(args.repo, "rev-parse", "HEAD")
+        check(stage, code == 0 and checkout.strip() == args.source_revision, "qualification-checkout")
+        code, _ = run_git(args.repo, "merge-base", "--is-ancestor", qualification["baseRevision"], "HEAD")
+        check(stage, code == 0, "qualification-update-from-main")
+
     # Both revisions must remain ancestors of the current main (HEAD).
     for rev in (identity["sourceRevision"], identity["payloadSourceRevision"]):
         code, _ = run_git(args.repo, "merge-base", "--is-ancestor",
@@ -732,10 +795,16 @@ def verify_candidate(args):
     # Targeting older workflow contents can require Workflows: write on
     # GitHub. Keep the publication credential boundary unchanged: refresh
     # the payload/map instead of silently requiring broader authority.
-    code, _ = run_git(args.repo, "diff", "--quiet",
-                      identity["payloadSourceRevision"], "HEAD", "--",
-                      ".github/workflows/")
-    check(stage, code == 0, "payload-workflows-differ-refresh-required")
+    if qualification is None:
+        code, _ = run_git(args.repo, "diff", "--quiet",
+                          identity["payloadSourceRevision"], "HEAD", "--",
+                          ".github/workflows/")
+        check(stage, code == 0, "payload-workflows-differ-refresh-required")
+    else:
+        # The draft target is the authenticated main baseline, not a PR
+        # commit containing unmerged workflows. Payload identity remains
+        # the actual PR revision and is still authorized by its exact map.
+        ci_gate(root, read, identity, stage)
 
     marker(stage, "ok", digest)
     return candidate
@@ -752,6 +821,7 @@ def common_args(parser):
     parser.add_argument("--wrapper", required=True)
     parser.add_argument("--candidate-digest", required=True)
     parser.add_argument("--candidate-run-id", required=True)
+    parser.add_argument("--pull-request", default="")
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +835,20 @@ def find_release(root, token, identity):
                          token, "releases")
     return [r for r in releases
             if r.get("tag_name") == identity["releaseTag"]]
+
+
+def observe_created(read):
+    """After one dispatched create, tolerate bounded empty observations.
+
+    Return any visible state immediately for the caller's exact validation.
+    A conflicting or duplicate object is never hidden by another attempt;
+    exhaustion remains unresolved and never authorizes another mutation.
+    """
+    for attempt in range(BOUND_READBACK_OBSERVATIONS):
+        rows = read()
+        if rows or attempt == BOUND_READBACK_OBSERVATIONS - 1:
+            return rows
+        time.sleep(0.25 * 2 ** attempt)
 
 
 def ref_state(root, token, tag):
@@ -823,12 +907,14 @@ def asset_digest(root, token, asset, expected_sha, stage):
           "asset-digest")
 
 
-def check_assets(root, token, identity, release, stage):
+def check_assets(root, token, identity, release, stage, after_create=False):
     """Read-only: the release's asset set must be exactly {assetName} with
     the frozen digest. Returns the asset id."""
-    assets = list_json(
-        f"{root}/repos/{REPOSITORY}/releases/{release['id']}/assets",
-        token, "assets")
+    def read():
+        return list_json(
+            f"{root}/repos/{REPOSITORY}/releases/{release['id']}/assets",
+            token, "assets")
+    assets = observe_created(read) if after_create else read()
     expected = identity["assetName"]
     same = [a for a in assets if a.get("name") == expected]
     check(stage, len(same) == 1, "asset-missing")
@@ -875,9 +961,9 @@ def converge_assets(root, token, identity, release, directory, stage):
         if error.reason in _AMBIGUOUS:
             # The upload may have landed: adopt only the exact desired
             # state (exactly one asset with the frozen digest), else stop.
-            return check_assets(root, token, identity, release, stage)
+            return check_assets(root, token, identity, release, stage, after_create=True)
         fail(stage, error.reason)
-    return check_assets(root, token, identity, release, stage)
+    return check_assets(root, token, identity, release, stage, after_create=True)
 
 
 def cmd_stage_draft(args):
@@ -912,7 +998,7 @@ def cmd_stage_draft(args):
         try:
             created = post_json(f"{repo_base}/releases", token, {
                 "tag_name": identity["releaseTag"],
-                "target_commitish": identity["payloadSourceRevision"],
+                "target_commitish": draft_target(identity),
                 "name": identity["releaseName"],
                 "body": body,
                 "draft": True,
@@ -923,7 +1009,7 @@ def cmd_stage_draft(args):
                   "release-create")
             # pre-read -> one write -> exact readback: the mutation
             # response is not proof; enumerate and require the exact draft.
-            after = find_release(root, token, identity)
+            after = observe_created(lambda: find_release(root, token, identity))
             check(stage, len(after) == 1
                   and after[0]["id"] == created["id"]
                   and release_matches(identity, after[0], True),
@@ -932,7 +1018,7 @@ def cmd_stage_draft(args):
             recovered = False
         except ReleaseHttp as error:
             if error.reason in _AMBIGUOUS:
-                after = find_release(root, token, identity)
+                after = observe_created(lambda: find_release(root, token, identity))
                 check(stage, len(after) == 1
                       and release_matches(identity, after[0], True),
                       "release-ambiguous")
@@ -995,7 +1081,9 @@ def ci_gate(root, read, identity, stage):
         f"{CI_WORKFLOW_ID}/runs?head_sha={identity['sourceRevision']}"
         "&status=completed", read, "ci-runs", key="workflow_runs")
     for run in runs:
-        if run.get("conclusion") != "success"                 or run.get("path") != CI_WORKFLOW_PATH:
+        if (run.get("conclusion") != "success" or run.get("path") != CI_WORKFLOW_PATH
+                or run.get("head_sha") != identity["sourceRevision"]
+                or run.get("status") != "completed"):
             continue
         jobs = list_json(
             f"{root}/repos/{REPOSITORY}/actions/runs/{run['id']}/jobs",
@@ -1019,6 +1107,9 @@ def cmd_promote(args):
     # still binds the exact version, classification and approved digest.
     check(stage, prerelease_for_version(args.release_version) is False,
           "normal-version-required")
+    check(stage, not args.pull_request
+          and load_candidate(args.candidate)["identity"].get("qualification") is None,
+          "qualification-draft-only")
     candidate = verify_candidate(args)
     identity = candidate["identity"]
     read = read_token()
@@ -1130,6 +1221,7 @@ def main():
 
     p = sub.add_parser("resolve-artifact")
     p.add_argument("--candidate-run-id", required=True)
+    p.add_argument("--pull-request", default="")
     p = sub.add_parser("verify-candidate")
     common_args(p)
     p = sub.add_parser("stage-draft")

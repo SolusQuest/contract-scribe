@@ -38,6 +38,20 @@ python3 -m venv "$VENV"
 if [ -f "$VENV/bin/activate" ]; then . "$VENV/bin/activate"; else . "$VENV/Scripts/activate"; fi
 python -m pip install --quiet PyYAML==6.0.3
 python "$HERE/check_workflow.py" "$EXAMPLE"
+python - "$HERE/check_workflow.py" "$EXAMPLE" "$WORK" <<'PY'
+import copy, pathlib, subprocess, sys, yaml
+checker, example, work = sys.argv[1:]
+document = yaml.safe_load(pathlib.Path(example).read_text(encoding="utf-8"))
+for level in ("workflow", "start", "resume"):
+    changed = copy.deepcopy(document)
+    scope = changed if level == "workflow" else changed["jobs"][level]
+    scope.setdefault("env", {})["CS_STATE_DIR"] = "${{ runner.temp }}/contract-scribe-state"
+    path = pathlib.Path(work) / ("invalid-runner-" + level + ".yml")
+    path.write_text(yaml.safe_dump(changed), encoding="utf-8")
+    result = subprocess.run([sys.executable, checker, str(path)], capture_output=True, text=True)
+    assert result.returncode != 0 and "runner-env-context" in result.stderr, result
+print("invalid workflow/job runner contexts rejected")
+PY
 deactivate
 
 echo "== textual invariants =="

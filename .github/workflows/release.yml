@@ -12,8 +12,8 @@ name: Release
 #                   internal versions are draft-only and rejected
 #
 # Ordinary push/PR CI has no publication path: the operational jobs require
-# a workflow_dispatch on refs/heads/main, a maintainer-provisioned
-# environment with required reviewers and a main-only deployment
+# a workflow_dispatch on main or an explicitly admitted qualification PR,
+# a maintainer-provisioned environment with required reviewers and a fixed deployment
 # restriction, the repository-level RELEASE_DRAFT_ENABLED /
 # RELEASE_PROMOTION_ENABLED variables, and the RELEASE_PUBLICATION_TOKEN
 # environment secret. None of those are provisioned by this workflow.
@@ -29,13 +29,17 @@ on:
         description: Release operation
         required: true
         type: choice
-        options: [prepare, stage-draft, promote]
+        options: [prepare, prepare-pr, stage-draft, stage-draft-pr, promote]
+      qualification_pr:
+        description: Open same-repository PR number (prepare-pr/stage-draft-pr only; draft-only)
+        required: false
+        type: string
       source_revision:
-        description: 40-hex main-reachable release/tag target and wrapper revision
+        description: 40-hex wrapper revision (main-reachable normally; exact PR head for qualification)
         required: false
         type: string
       payload_source_revision:
-        description: 40-hex main-reachable A1 payload build revision (map sourceRevision)
+        description: 40-hex A1 payload build revision reachable from the admitted source
         required: false
         type: string
       wrapper:
@@ -113,9 +117,9 @@ jobs:
     # Candidate build stage: contents read only, no release credential.
     if: >-
       github.event_name == 'workflow_dispatch'
-      && inputs.operation == 'prepare'
+      && ((inputs.operation == 'prepare' && inputs.qualification_pr == '' && github.ref == 'refs/heads/main')
+          || (inputs.operation == 'prepare-pr' && inputs.qualification_pr != '' && github.ref != 'refs/heads/main'))
       && github.repository == 'SolusQuest/contract-scribe'
-      && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -144,6 +148,8 @@ jobs:
         shell: bash
         env:
           GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_PULL_REQUEST: ${{ inputs.qualification_pr }}
           CS_SOURCE_REVISION: ${{ inputs.source_revision }}
           CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
           CS_RELEASE_VERSION: ${{ inputs.release_version }}
@@ -155,6 +161,7 @@ jobs:
           --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
           --release-version "$CS_RELEASE_VERSION"
           --wrapper "$CS_WRAPPER"
+          --pull-request "$CS_PULL_REQUEST"
       - name: Upload the candidate bundle
         id: upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -183,9 +190,9 @@ jobs:
     # sole acquisition authority.
     if: >-
       github.event_name == 'workflow_dispatch'
-      && inputs.operation == 'prepare'
+      && ((inputs.operation == 'prepare' && inputs.qualification_pr == '' && github.ref == 'refs/heads/main')
+          || (inputs.operation == 'prepare-pr' && inputs.qualification_pr != '' && github.ref != 'refs/heads/main'))
       && github.repository == 'SolusQuest/contract-scribe'
-      && github.ref == 'refs/heads/main'
     needs: candidate
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -240,7 +247,7 @@ jobs:
           --repo SolusQuest/contract-scribe
           --bundle "${{ steps.attest.outputs.bundle-path }}"
           --signer-workflow SolusQuest/contract-scribe/.github/workflows/release.yml
-          --source-ref refs/heads/main
+          --source-ref "$GITHUB_REF"
           --source-digest "$GITHUB_SHA"
           --deny-self-hosted-runners
 
@@ -252,6 +259,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && inputs.operation == 'stage-draft'
+      && inputs.qualification_pr == ''
       && github.repository == 'SolusQuest/contract-scribe'
       && github.ref == 'refs/heads/main'
       && vars.RELEASE_DRAFT_ENABLED == 'true'
@@ -342,12 +350,121 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  stage-pr:
+    # Separately authorized unpublished-draft staging (R2 qualification
+    # vehicle). The environment + repository variable + environment secret
+    # are provisioned only by a maintainer; absent any of them this job
+    # cannot run or fails closed without a credential.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      && inputs.operation == 'stage-draft-pr'
+      && inputs.qualification_pr != ''
+      && github.repository == 'SolusQuest/contract-scribe'
+      && github.ref != 'refs/heads/main'
+      && vars.RELEASE_PR_DRAFT_ENABLED == 'true'
+    environment: release-candidate-pr
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+    concurrency:
+      group: contract-scribe-release
+      cancel-in-progress: false
+    steps:
+      - name: Require a fresh dispatch, not a rerun
+        shell: bash
+        run: |
+          test "${{ github.run_attempt }}" = "1"
+          test "${{ github.actor }}" = "${{ github.triggering_actor }}"
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.sha }}
+      - name: Assert exact workflow head
+        shell: bash
+        run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+      - name: Resolve the producer run's release-candidate artifact
+        id: resolve
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          CS_PULL_REQUEST: ${{ inputs.qualification_pr }}
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py resolve-artifact
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+          --pull-request "$CS_PULL_REQUEST"
+      - name: Download the exact candidate artifact
+        uses: actions/download-artifact@484a0b528fb4d7bd804637ccb632e47a0e638317
+        with:
+          artifact-ids: ${{ steps.resolve.outputs.artifact-id }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: ${{ runner.temp }}/release-candidate
+          digest-mismatch: error
+      - name: Verify the exact candidate against current authority
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          CS_PULL_REQUEST: ${{ inputs.qualification_pr }}
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py verify-candidate
+          --candidate "$RUNNER_TEMP/release-candidate" --repo .
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+          --pull-request "$CS_PULL_REQUEST"
+      - name: Stage the unpublished draft candidate
+        shell: bash
+        env:
+          GITHUB_REPOSITORY_ID: ${{ github.repository_id }}
+          CS_PULL_REQUEST: ${{ inputs.qualification_pr }}
+          CONTRACTSCRIBE_RELEASE_READ_TOKEN: ${{ github.token }}
+          CONTRACTSCRIBE_RELEASE_TOKEN: ${{ secrets.RELEASE_PUBLICATION_TOKEN }}
+          CS_SOURCE_REVISION: ${{ inputs.source_revision }}
+          CS_PAYLOAD_SOURCE_REVISION: ${{ inputs.payload_source_revision }}
+          CS_RELEASE_VERSION: ${{ inputs.release_version }}
+          CS_WRAPPER: ${{ inputs.wrapper }}
+          CS_CANDIDATE_DIGEST: ${{ inputs.candidate_digest }}
+          CS_CANDIDATE_RUN_ID: ${{ inputs.candidate_run_id }}
+        run: >-
+          python3 scripts/release/promote-candidate.py stage-draft
+          --candidate "$RUNNER_TEMP/release-candidate" --repo .
+          --source-revision "$CS_SOURCE_REVISION"
+          --payload-source-revision "$CS_PAYLOAD_SOURCE_REVISION"
+          --release-version "$CS_RELEASE_VERSION"
+          --wrapper "$CS_WRAPPER"
+          --candidate-digest "$CS_CANDIDATE_DIGEST"
+          --candidate-run-id "$CS_CANDIDATE_RUN_ID"
+          --pull-request "$CS_PULL_REQUEST"
+      - name: Upload the staged receipt
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: release-staged
+          path: ${{ runner.temp }}/release-candidate/staged.json
+          if-no-files-found: error
+          retention-days: 30
+
   promotion-admission:
     # Reject internal/invalid versions before any environment, credential,
     # checkout, or candidate acquisition can be reached.
     if: >-
       github.event_name == 'workflow_dispatch'
       && inputs.operation == 'promote'
+      && inputs.qualification_pr == ''
       && github.repository == 'SolusQuest/contract-scribe'
       && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -373,6 +490,7 @@ jobs:
     if: >-
       github.event_name == 'workflow_dispatch'
       && inputs.operation == 'promote'
+      && inputs.qualification_pr == ''
       && github.repository == 'SolusQuest/contract-scribe'
       && github.ref == 'refs/heads/main'
       && vars.RELEASE_PROMOTION_ENABLED == 'true'

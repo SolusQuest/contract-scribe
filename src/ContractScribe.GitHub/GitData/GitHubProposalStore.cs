@@ -505,7 +505,7 @@ internal sealed class GitHubProposalStore
     {
         if (mutation.Delivery == GitHubDelivery.NotDispatched) Throw(mutation);
         using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var observed = await read(recovery.Token);
+        var observed = await GitHubObjectReadback.ObserveAsync(read, recovery.Token);
         bool matches;
         try
         {

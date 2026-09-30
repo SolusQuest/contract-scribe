@@ -61,7 +61,6 @@ concurrency:
 
 env:
   CS_HELPER: ${{ github.workspace }}/.github/contract-scribe/handoff.py
-  CS_STATE_DIR: ${{ runner.temp }}/contract-scribe-state
   CS_CAMPAIGN_LINEAGE: ${{ vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE }}
   # The checked-out target revision, input surface, policy file and optional
   # consumer configuration layer are ordinary file edits for the caller.
@@ -103,6 +102,9 @@ jobs:
 
       - name: Assert exact workflow head
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Bind runner state directory
+        run: printf 'CS_STATE_DIR=%s/contract-scribe-state\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Producer admission gate
         env:
@@ -186,6 +188,9 @@ jobs:
 
       - name: Assert exact workflow head
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
+
+      - name: Bind runner state directory
+        run: printf 'CS_STATE_DIR=%s/contract-scribe-state\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Authenticate activation
         id: select

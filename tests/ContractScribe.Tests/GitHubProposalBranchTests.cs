@@ -21,6 +21,77 @@ public sealed class GitHubProposalBranchTests
     private static string Oid(char c) => new(c, 40);
 
     [Theory]
+    [InlineData("blob", true, 1, false)]
+    [InlineData("tree", true, 3, false)]
+    [InlineData("commit", true, 1, false)]
+    [InlineData("tree", true, 4, false)]
+    [InlineData("blob", false, 1, false)]
+    [InlineData("tree", false, 3, false)]
+    [InlineData("commit", false, 1, false)]
+    [InlineData("tree", false, 4, false)]
+    [InlineData("tree", true, 3, true)]
+    [InlineData("tree", false, 3, true)]
+    public async Task Newly_written_objects_allow_bounded_absence_without_replaying_the_write(
+        string kind, bool coordination, int missingReads, bool loseResponse)
+    {
+        var remote = new Remote();
+        using var session = new Session(Authority(remote), remote);
+        IGitHubCoordinationStateCapability? claim = null;
+        if (!coordination) claim = await Claim(session);
+        remote.DelayAfter = kind;
+        remote.DelayedReads = missingReads;
+        if (loseResponse) remote.LoseAfter = kind;
+        var before = remote.Writes;
+        if (coordination)
+        {
+            var read = await session.Coordination.ReadCurrentAsync();
+            var result = await session.Coordination.ClaimAsync(read.Read!);
+            Assert.Equal(missingReads < GitHubObjectReadback.MaximumObservations, result.State is not null);
+            if (result.State is null) Assert.Equal(GitHubCoordinationFailureKind.Unresolved, result.Failure!.Kind);
+        }
+        else
+        {
+            var prepared = await session.Proposal.PrepareAsync(claim!, Payload(session.Authority));
+            var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim!);
+            Assert.Equal(missingReads < GitHubObjectReadback.MaximumObservations, result.Content is not null);
+            if (result.Content is null) Assert.Equal(GitHubProposalFailureKind.Unresolved, result.Failure!.Kind);
+        }
+        Assert.Equal(Math.Min(missingReads, GitHubObjectReadback.MaximumObservations), remote.HiddenObservations);
+        Assert.Equal(1, remote.DelayedObjectWrites);
+        Assert.InRange(remote.Writes - before, 1, coordination ? 5 : 3);
+        Assert.Equal(0, remote.ProposalAttempts);
+    }
+
+    [Fact]
+    public async Task Same_operation_with_a_new_checkpoint_cannot_replace_a_claim_but_exact_resume_can_recover_it()
+    {
+        var remote = new Remote();
+        var authority = Authority(remote);
+        using (var initial = new Session(authority, remote)) await Claim(initial);
+        var writes = remote.Writes;
+        var refs = remote.Refs.ToArray();
+        var freshStart = Authority(remote, checkpoint: Hash('9'));
+        Assert.Equal(authority.OperationId, freshStart.OperationId);
+        Assert.Equal(authority.CandidateCommitmentSha256, freshStart.CandidateCommitmentSha256);
+        Assert.NotEqual(authority.AuthorityCommitmentSha256, freshStart.AuthorityCommitmentSha256);
+        using (var fresh = new Session(freshStart, remote))
+        {
+            var read = await fresh.Coordination.ReadCurrentAsync();
+            Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, read.Failure!.Kind);
+            Assert.Null(read.State);
+        }
+        Assert.Equal(writes, remote.Writes);
+        Assert.Equal(refs, remote.Refs.ToArray());
+        using var resumed = new Session(authority, remote);
+        var recovered = await resumed.Coordination.ReadCurrentAsync();
+        Assert.NotNull(recovered.State);
+        Assert.Equal(writes, remote.Writes);
+        var prepared = await resumed.Proposal.PrepareAsync(recovered.State!, Payload(authority));
+        var content = await resumed.Proposal.CreateContentAsync(prepared.Prepared!, recovered.State!);
+        Assert.Equal(GitHubProposalOutcome.ContentVerified, content.Outcome);
+    }
+
+    [Theory]
     [InlineData("missing")]
     [InlineData("corrupt")]
     [InlineData("truncated")]
@@ -831,9 +902,10 @@ public sealed class GitHubProposalBranchTests
         return (claim, content.Content!);
     }
     internal static ValidatedGitHubPublicationAuthority Authority(Remote remote, string operation = "initial",
-        ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false) => GitHubPublicationFactory.CreateAuthority(new(
+        ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false,
+        string? checkpoint = null) => GitHubPublicationFactory.CreateAuthority(new(
             "Owner", "repo", "refs/heads/main", remote.BaseOid, "campaign", Hash('1'), Hash('2'), Hash('3'), previous is null ? 1 : 2,
-            Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
+            checkpoint ?? Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
             previous?.OperationId, previous?.AuthorityCommitmentSha256, previous?.CandidateCommitmentSha256,
             previous?.GenerationId, previous?.SnapshotCommitmentSha256, previous?.PolicyCommitmentSha256, null,
             previous is null ? GitHubPublicationTransitionKind.Initial : GitHubPublicationTransitionKind.SameSnapshotAppend,
@@ -892,6 +964,11 @@ public sealed class GitHubProposalBranchTests
         internal string? LoseBefore;
         internal string? CancelAfter;
         internal string? CorruptAfter;
+        internal string? DelayAfter;
+        internal int DelayedReads;
+        internal int HiddenObservations;
+        internal int DelayedObjectWrites;
+        private string? delayedOid;
         internal string? LateFailure;
         private string? lateCommit;
         private int lateReads;
@@ -992,7 +1069,11 @@ public sealed class GitHubProposalBranchTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             lock (gate)
             {
-                if (method == "GET") return Get(path);
+                if (method == "GET")
+                {
+                    Assert.True(request.Headers.CacheControl?.NoCache);
+                    return Get(path);
+                }
                 Assert.Equal("POST", method);
                 using var doc = JsonDocument.Parse(text!);
                 var body = doc.RootElement;
@@ -1052,6 +1133,14 @@ public sealed class GitHubProposalBranchTests
                     response = new { data = new { updateRefs = new { clientMutationId = input.GetProperty("clientMutationId").GetString() } } };
                     status = HttpStatusCode.OK;
                 }
+                if (DelayAfter == kind)
+                {
+                    DelayAfter = null;
+                    delayedOid = kind switch { "blob" => Blobs.Keys.Last(), "tree" => Trees.Keys.Last(), _ => Commits.Keys.Last() };
+                }
+                if (kind is "blob" or "tree" or "commit"
+                    && JsonSerializer.SerializeToElement(response).GetProperty("sha").GetString() == delayedOid)
+                    DelayedObjectWrites++;
                 if (LoseAfter == kind) { LoseAfter = null; throw new IOException("synthetic response loss"); }
                 if (CorruptAfter == kind)
                 {
@@ -1093,6 +1182,11 @@ public sealed class GitHubProposalBranchTests
                     new { @ref = name, node_id = "REF_node", @object = new { type = "commit", sha = head } }) : Missing();
             }
             var oid = path[(path.LastIndexOf('/') + 1)..];
+            if (oid == delayedOid && DelayedReads-- > 0)
+            {
+                HiddenObservations++;
+                return Missing();
+            }
             if (path.Contains("/git/blobs/", StringComparison.Ordinal) && Blobs.TryGetValue(oid, out var bytes))
                 return Json(HttpStatusCode.OK, new { sha = oid, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
             if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid)) return Json(HttpStatusCode.OK, TreeResponse(oid));

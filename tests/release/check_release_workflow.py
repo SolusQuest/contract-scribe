@@ -141,7 +141,7 @@ def main():
     for name in ("source_revision", "payload_source_revision", "wrapper",
                  "release_version", "candidate_run_id", "candidate_digest",
                  "qualified_release_id", "qualified_asset_id",
-                 "approval_reference", "governance_reference"):
+                 "approval_reference", "governance_reference", "qualification_pr"):
         if not re.search(rf"^\s+{name}:", inputs, re.M):
             fail("inputs", f"missing dispatch input {name}")
 
@@ -235,7 +235,7 @@ def main():
                        "--repo SolusQuest/contract-scribe",
                        "--signer-workflow SolusQuest/contract-scribe"
                        "/.github/workflows/release.yml",
-                       "--source-ref refs/heads/main",
+                       '--source-ref "$GITHUB_REF"',
                        "--source-digest \"$GITHUB_SHA\"",
                        "--deny-self-hosted-runners"):
             if needle not in attest:
@@ -254,7 +254,7 @@ def main():
                      "dispatch inputs must reach run steps via env")
 
     # OIDC/attestation authority stays confined to the attest job.
-    for name in ("offline", "candidate", "stage", "promote"):
+    for name in ("offline", "candidate", "stage", "stage-pr", "promote"):
         job = job_block(text, name)
         if job:
             for banned in ("id-token:", "attestations:", "artifact-metadata:"):
@@ -264,6 +264,7 @@ def main():
 
     for name, env_name, var_name in (
             ("stage", "release-candidate", "RELEASE_DRAFT_ENABLED"),
+            ("stage-pr", "release-candidate-pr", "RELEASE_PR_DRAFT_ENABLED"),
             ("promote", "release-publication", "RELEASE_PROMOTION_ENABLED")):
         job = job_block(text, name)
         if not job:
@@ -278,7 +279,7 @@ def main():
         if f"vars.{var_name} == 'true'" not in job:
             fail(name, f"repository variable {var_name} gate required")
         for gate in ("github.event_name == 'workflow_dispatch'",
-                     "github.ref == 'refs/heads/main'",
+                     "github.ref != 'refs/heads/main'" if name == "stage-pr" else "github.ref == 'refs/heads/main'",
                      "github.repository == 'SolusQuest/contract-scribe'"):
             if gate not in job:
                 fail(name, f"missing job gate: {gate}")
@@ -321,6 +322,26 @@ def main():
             fail(name, "job-level env must not hold the token")
         if "secrets.GITHUB_TOKEN" in job and "contents: write" in job:
             fail(name, "automatic token must not be publication-capable")
+
+    # Explicit PR qualification selects a fixed protected environment,
+    # never caller-controlled environment or credentials. Public promotion
+    # and ordinary main preparation reject the PR selector entirely.
+    for name in ("candidate", "attest"):
+        job = job_block(text, name) or ""
+        for gate in ("inputs.operation == 'prepare-pr'", "inputs.qualification_pr != ''",
+                     "inputs.operation == 'prepare' && inputs.qualification_pr == '' && github.ref == 'refs/heads/main'"):
+            if gate not in job:
+                fail(name, f"missing qualification gate: {gate}")
+    pr = job_block(text, "stage-pr") or ""
+    for gate in ("inputs.operation == 'stage-draft-pr'", "inputs.qualification_pr != ''",
+                 '--pull-request "$CS_PULL_REQUEST"', "GITHUB_REPOSITORY_ID:"):
+        if gate not in pr:
+            fail("stage-pr", f"missing qualification binding: {gate}")
+    if pr.count('--pull-request "$CS_PULL_REQUEST"') != 3:
+        fail("stage-pr", "resolve, verify and stage must all bind the PR")
+    for name in ("stage", "promotion-admission", "promote"):
+        if "inputs.qualification_pr == ''" not in (job_block(text, name) or ""):
+            fail(name, "main-only operation must reject qualification selector")
 
     try:
         with open(CI, encoding="utf-8") as fh:

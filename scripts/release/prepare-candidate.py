@@ -22,6 +22,7 @@ Marker contract: release-prepare stage=<name> result=ok|fail reason=<short>
 """
 import argparse
 import hashlib
+import importlib
 import json
 import os
 import re
@@ -244,6 +245,8 @@ def main():
     parser.add_argument("--wrapper", required=True,
                         help="Wrapper component name (payload-map wrapper)")
     parser.add_argument("--repository", default="SolusQuest/contract-scribe")
+    parser.add_argument("--pull-request", default="",
+                        help="Open same-repository PR number for draft-only qualification")
     args = parser.parse_args()
 
     stage = "validate"
@@ -267,9 +270,30 @@ def main():
     _, main_tip = run_git(args.repo, "rev-parse", "refs/remotes/origin/main")
     main_tip = main_tip.strip()
     check(stage, _HEX40.fullmatch(main_tip), "main-ref")
+    qualification = None
+    if args.pull_request:
+        check(stage, prerelease is True, "qualification-draft-only")
+        # Reuse the production staging admission/readback implementation;
+        # preparation holds only the job's read credential.
+        release = importlib.import_module("promote-candidate")
+        try:
+            qualification, head = release.read_qualification(args.pull_request, release.read_token())
+        except release.ReleaseHttp as error:
+            fail(stage, error.reason)
+        check(stage, args.repository == release.REPOSITORY
+              and head == args.source_revision
+              and head == env_text("GITHUB_SHA")
+              and head == env_text("GITHUB_WORKFLOW_SHA")
+              and env_text("GITHUB_REF") == "refs/heads/" + qualification["headRef"]
+              and qualification["baseRevision"] == main_tip,
+              "qualification-drift")
+        code, checkout = run_git(args.repo, "rev-parse", "HEAD")
+        check(stage, code == 0 and checkout.strip() == head, "qualification-checkout")
+        code, _ = run_git(args.repo, "merge-base", "--is-ancestor", main_tip, head)
+        check(stage, code == 0, "qualification-update-from-main")
     for rev in (args.source_revision, args.payload_source_revision):
         code, _ = run_git(args.repo, "merge-base", "--is-ancestor",
-                          rev, "refs/remotes/origin/main")
+                          rev, args.source_revision if qualification else "refs/remotes/origin/main")
         check(stage, code == 0, "not-main-reachable")
 
     stage = "wrapper"
@@ -365,6 +389,10 @@ def main():
         f"- payloadSourceRevision: {args.payload_source_revision}\n"
         f"- sourceRevision: {args.source_revision}\n"
         f"- archiveSha256: {archive_sha}\n")
+    if qualification is not None:
+        release_body += (f"- qualificationPullRequest: {qualification['pullRequest']}\n"
+                         f"- draftTargetRevision: {qualification['baseRevision']}\n"
+                         "- draft-only PR qualification; no public promotion\n")
     identity = {
         "repository": args.repository,
         "workflowRevision": env_text("GITHUB_WORKFLOW_SHA"),
@@ -408,6 +436,8 @@ def main():
         "runAttempt": env_text("GITHUB_RUN_ATTEMPT"),
         "actor": env_text("GITHUB_ACTOR"),
     }
+    if qualification is not None:
+        identity["qualification"] = qualification
     candidate = {
         "candidateVersion": 1,
         "identity": identity,

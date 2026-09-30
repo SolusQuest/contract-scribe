@@ -2,7 +2,7 @@
 
 Operator procedure for the manually initiated release candidate pipeline in
 `.github/workflows/release.yml`. Everything here is invoked by a maintainer
-via `workflow_dispatch` on `refs/heads/main`; nothing is automatic, and
+via `workflow_dispatch`; normal release operations run on `refs/heads/main`, while the explicit draft-only PR qualification mode below runs on an approved PR branch. Nothing is automatic, and
 ordinary push/PR CI cannot publish.
 
 ## Version and visibility
@@ -145,6 +145,29 @@ assetId). Nothing is publicly visible — drafts are not exposed by the
 by-tag route.
 
 ## R2 qualification (#188)
+
+### Pre-merge qualification (#204)
+
+Precedent check: GitHub's [deployment environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments) provide required reviewers and branch restrictions before secrets become accessible; [scheduled workflows](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onschedule) execute on the default branch. Adopt those native controls with a sandbox workflow pinning the Action's PR SHA. No custom deployment controller or certification store is added. ContractScribe additionally binds the separate draft target and payload source because the existing publication PAT must retain its Contents-only permission scope.
+
+Use `prepare-pr` and `stage-draft-pr` with `qualification_pr=<open PR number>` to qualify an exact PR head before merging. These operations reuse the same builder, artifact verification, draft staging and Action acquisition paths. They accept only an open PR from `SolusQuest/contract-scribe` targeting `main`; the dispatch branch, checkout, workflow revision and wrapper `source_revision` must equal that PR's current head. Forks and arbitrary revision overrides are refused. The payload revision must be reachable from that head. Ordinary PR CI carries no release secret.
+
+Provision the separate `release-candidate-pr` environment with required reviewers and a deployment branch policy restricted to the specific approved PR branch, the existing `RELEASE_PUBLICATION_TOKEN`, and `RELEASE_PR_DRAFT_ENABLED=true`. Approval covers the exact candidate digest and reviewed workflow at the fixed head. Do not broaden the token's repository or permission scope. The candidate build remains read-only; only the dedicated staging mutation step receives the publication token. Disable the variable after the bounded qualification.
+
+1. Commit the implementation at payload revision `P`, open its PR, then dispatch `prepare-pr` on that branch with `source_revision=P`, `payload_source_revision=P` and an internal version. This produces the proposed map.
+2. Record the map on that same PR, producing head `H`. Dispatch final `prepare-pr` with `source_revision=H`, `payload_source_revision=P`. Final staging requires complete successful `ci.yml` for `H`, including `action_packaged`, plus the exact map pair at `H`.
+3. `stage-draft-pr` verifies the successful producer run/artifact, approved digest, current PR head and current main baseline again. Its frozen `qualification` identity records the PR number, head ref and main baseline. The Release's `target_commitish` is that main baseline, so staging does not require Workflows write access for unmerged workflows. Its body separately binds the actual PR payload revision `P`, wrapper `H`, archive hash and draft target. This draft target is not a claim that the payload was built from main.
+4. Pin the sandbox Action to `H` and qualify this draft through production acquisition and the real manual-start → sealed handoff → actual scheduled resume → inactive schedule chain, including the publication/ref/PR/checkpoint observations in #188. Keep the original qualified sandbox base fixed throughout that chain. Record exact revisions, candidate digest, release/asset IDs and run/attempt evidence.
+5. Any change to head, map, payload, workflow or main baseline invalidates that candidate's merge evidence. Correct failures on the same PR and qualify the final head, with CI and Relay converged before the human merge decision. PR candidates cannot enter `promote`, even if their version and digest are rewritten coherently.
+6. After merge, prepare a new main-based candidate under the normal main-only path (with a reviewed refreshed payload/map when needed), then repeat the complete live chain. The PR evidence remains pre-merge evidence; #204/#188 final acceptance requires the actual main candidate's results.
+
+### Checkpoint continuity and readback failures
+
+Staging and Git object publication dispatch each write once. After a dispatched create, an empty Release/asset list or Git object 404 allows at most four read-only observations with 250/500/1000 ms waits. GET requests request cache revalidation; this does not guarantee GitHub consistency. A visible conflict, malformed response, denied permission or mismatching object stops immediately; exhaustion preserves the unresolved result and never authorizes another write. Exact existing objects remain recoverable by a separately authorized dispatch. This addresses the immediate-readback gap observed in #204; the underlying GitHub visibility mechanism was not established by the later successful probe.
+
+A fresh `start` with the same campaign/operation names is not a checkpoint resume. Publication authority includes the accepted checkpoint revision and digest; changed timing/charges can produce a distinct digest even for identical proposed bytes. An existing claim rejects that substituted authority with `ObjectMismatch` without changing the remote ref. That result alone does not prove a human edited anything. Continue through the authenticated sealed checkpoint handoff. If the failed producer emitted no eligible handoff, preserve its resources and investigate; do not invent a checkpoint or relax identity checks to restart over the claim. An independently approved new qualification uses a new campaign/operation identity.
+
+### Main candidate qualification
 
 During qualification the public `vX.Y.Z` tag does not exist yet, so the
 consumer repo pins the Action to the exact `source_revision` sha

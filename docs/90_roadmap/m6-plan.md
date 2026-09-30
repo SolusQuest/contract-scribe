@@ -34,6 +34,8 @@ The public field inventory, precedence, merge/null semantics, defaults and their
 
 ## Track R — release
 
+`#204` repairs the observed draft/readback and Action example failures and adds protected draft-only qualification of an exact PR head. The same PR must converge CI, the complete real synthetic start/handoff/scheduled-resume/inactive chain and Relay before the human merge decision. After merge, repeat against the actual newly prepared main candidate; only that evidence can close #204/#188. PR qualification cannot promote a release or expand token permissions. See the release runbook for head/base identity and checkpoint continuity rules.
+
 `#187`–`#189` prepare, prove, and publish the first release under the release policy gates: payload, host, provenance, permissions, secrets, smoke evidence, and maintainer approval. The first release establishes the external compatibility freeze; nothing before it carries a compatibility promise.
 
 `#201` adds explicitly versioned internal candidates before `#188`'s next qualification. A `vX.Y.Z-internal.N` candidate remains an unpublished draft and cannot be promoted. The maintainer approved a fresh payload/map after #201 merges, followed by new internal preparation under #188, keeping token permissions unchanged; old payload/workflow differences fail closed rather than requiring Workflows write authority. A later normal `vX.Y.Z` release requires a separately prepared identity, affected qualification and the existing `#189`/`#29` publication gates; internal evidence does not certify a renamed candidate. The completed `#187` implementation and earlier prepare runs remain historical.

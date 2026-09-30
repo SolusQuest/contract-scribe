@@ -353,6 +353,10 @@ internal sealed class GitHubApiClient : IDisposable
                     Content = prepared.Body is null ? null : new SingleUseContent(prepared.Body),
                 };
                 message.Headers.ExpectContinue = false;
+                // Publication decisions require revalidated observations, not a
+                // still-fresh cached absence or an older mutable resource.
+                if (prepared.Body is null)
+                    message.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
                 if (message.Content is not null)
                     message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
                 message.Headers.UserAgent.ParseAdd("ContractScribe/0.1");

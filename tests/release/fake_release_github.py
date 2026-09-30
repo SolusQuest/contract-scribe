@@ -210,9 +210,20 @@ def make_api_handler(server):
                     return self._json(401, {"message": "auth"})
                 return self._json(200, state["repository"])
 
+            match = re.fullmatch(base + r"/pulls/(\d+)", path)
+            if match:
+                if not server.auth(self, state, "read"):
+                    return self._json(401, {"message": "auth"})
+                pr = state.get("pull_requests", {}).get(match.group(1))
+                return self._json(200 if pr else 404, pr or {})
+
             if path == base + "/releases":
                 if not server.auth(self, state, "release"):
                     return self._json(401, {"message": "auth"})
+                if state["releases"] and state["overrides"].get("hidden_release_reads", 0) > 0:
+                    state["overrides"]["hidden_release_reads"] -= 1
+                    save_state(server.state_path, state)
+                    return self._json(200, [])
                 page = int(query.get("page", ["1"])[0])
                 per = int(query.get("per_page", ["30"])[0])
                 rows = [release_doc(state, r, server)
@@ -240,6 +251,10 @@ def make_api_handler(server):
                 release = find_release(state, int(match.group(1)))
                 if release is None:
                     return self._json(404, {"message": "Not Found"})
+                if release["assets"] and state["overrides"].get("hidden_asset_reads", 0) > 0:
+                    state["overrides"]["hidden_asset_reads"] -= 1
+                    save_state(server.state_path, state)
+                    return self._json(200, [])
                 return self._json(
                     200, [asset_doc(state, server, a) for a in release["assets"]])
 
@@ -274,7 +289,8 @@ def make_api_handler(server):
 
             match = re.fullmatch(base + r"/git/ref/(.+)", path)
             if match:
-                if not server.auth(self, state, "release"):
+                required = "read" if match.group(1).startswith("heads/") else "release"
+                if not server.auth(self, state, required):
                     return self._json(401, {"message": "auth"})
                 ref = urllib.parse.unquote(match.group(1))
                 sha = state["refs"].get(ref)
