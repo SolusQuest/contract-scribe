@@ -11,7 +11,7 @@ Use `v0.1.0-internal.1` for internal testing. Supported versions are canonical A
 
 The version determines the candidate's existing `prerelease` field: internal versions require `true`, normal versions require `false`. Verification rejects any mismatch, even if the candidate digest was recomputed. Internal drafts include the version and "internal testing only" in their title. `prepare` creates an Actions artifact and provenance, not a public Release or tag.
 
-Internal candidates remain `draft: true` and `prerelease: true`. `promote` rejects them before credentials or remote reads with `normal-version-required`, even with publication approval. A suffix or GitHub's Pre-release flag is not access control: only the draft state keeps the assets unpublished. Public preview publication is outside this workflow's supported version policy.
+Internal candidates remain `draft: true` and `prerelease: true`. `promote` rejects them before credentials or remote reads with `normal-version-required`, even with publication approval. A checkout-free admission job with no token permissions rejects internal or invalid versions before the publication environment and all checkout/artifact acquisition steps; the Python command repeats the normal-version check as defense in depth. A suffix or GitHub's Pre-release flag is not access control: only the draft state keeps the assets unpublished. Public preview publication is outside this workflow's supported version policy.
 
 ## Provisioning prerequisites (maintainer, once)
 
