@@ -63,18 +63,21 @@ public sealed class GitHubProposalBranchTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Recursive_readback_preserves_exact_objects_and_single_writes_when_shallow_reads_stay_missing(bool corrupt)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Tree_creation_and_recursive_readback_preserve_exact_objects_when_absent_recursive_reads_are_invalid(
+        bool shallowMissing, bool corrupt)
     {
-        var remote = new Remote { ShallowTreesMissing = true };
+        var remote = new Remote { ShallowTreesMissing = shallowMissing };
         using var session = new Session(Authority(remote), remote);
         var claim = await Claim(session);
         var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
         Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
         if (corrupt) remote.CorruptAfter = "tree";
         var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
-        Assert.True(remote.RecursiveTreeReads > 0);
+        Assert.Equal(shallowMissing, remote.RecursiveTreeReads > 0);
         Assert.All(remote.TreePosts.Values, count => Assert.Equal(1, count));
         if (corrupt)
         {
@@ -1231,6 +1234,9 @@ public sealed class GitHubProposalBranchTests
                 return Json(HttpStatusCode.OK, new { sha = oid, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
             if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid))
                 return ShallowTreesMissing && !recursive ? Missing() : Json(HttpStatusCode.OK, TreeResponse(oid, recursive));
+            if (path.Contains("/git/trees/", StringComparison.Ordinal) && recursive)
+                return Json(HttpStatusCode.UnprocessableEntity,
+                    new { message = "Invalid object requested. SHA must identify a commit or a tree." });
             if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(oid, out var commit))
             {
                 if (oid == lateCommit && --lateReads == 0)

@@ -224,6 +224,7 @@ public sealed class GitHubApiClientTests
     [InlineData("wrong-child-oid")]
     [InlineData("wrong-url")]
     [InlineData("absent")]
+    [InlineData("validation")]
     public async Task Missing_shallow_tree_uses_one_bounded_recursive_observation_with_validated_root_projection(string scenario)
     {
         using var harness = await Harness.Create();
@@ -244,17 +245,32 @@ public sealed class GitHubApiClientTests
             case "wrong-url": child["url"] = Origin + "repos/elsewhere/repo/git/blobs/" + Oid('6'); break;
         }
         harness.Handler.Reply = (request, _) => Task.FromResult(request.RequestUri!.Query.Length == 0 || scenario == "absent"
-            ? Json("{}", 404) : Json(recursive));
+            ? Json("{}", 404) : scenario == "validation" ? Json("{}", 422) : Json(recursive));
         var result = await harness.Client.GetTreeAsync(Oid('2'));
         if (scenario == "valid")
         {
             Assert.Null(result.Failure);
             Assert.Equal(new[] { "readme.md", "docs" }, result.Value!.Entries.Select(e => e.Path));
         }
-        else Assert.Equal(scenario == "absent" ? GitHubFailureCode.NotFound : GitHubFailureCode.InvalidResponse, result.Failure!.Code);
+        else Assert.Equal(scenario switch
+        {
+            "absent" => GitHubFailureCode.NotFound,
+            "validation" => GitHubFailureCode.Validation,
+            _ => GitHubFailureCode.InvalidResponse,
+        }, result.Failure!.Code);
         Assert.Equal(new[] { "/repos/Owner/repo/git/trees/" + Oid('2'), "/repos/Owner/repo/git/trees/" + Oid('2') + "?recursive=1" },
             harness.Handler.Requests.Select(r => r.Path));
         Assert.All(harness.Handler.Requests, r => Assert.Equal("GET", r.Method));
+    }
+
+    [Fact]
+    public async Task Prospective_tree_probe_preserves_shallow_absence_without_recursive_validation()
+    {
+        using var harness = await Harness.Create();
+        harness.Handler.Reply = (request, _) => Task.FromResult(Json("{}", request.RequestUri!.Query.Length == 0 ? 404 : 422));
+        var result = await harness.Client.GetTreeAsync(Oid('2'), allowRecursiveFallback: false);
+        Assert.Equal(GitHubFailureCode.NotFound, result.Failure!.Code);
+        Assert.Equal("/repos/Owner/repo/git/trees/" + Oid('2'), Assert.Single(harness.Handler.Requests).Path);
     }
 
     [Theory]
