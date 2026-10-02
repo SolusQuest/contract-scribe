@@ -21,6 +21,109 @@ public sealed class GitHubProposalBranchTests
     private static string Oid(char c) => new(c, 40);
 
     [Theory]
+    [InlineData("blob", true, 1, false)]
+    [InlineData("tree", true, 3, false)]
+    [InlineData("commit", true, 1, false)]
+    [InlineData("tree", true, 4, false)]
+    [InlineData("blob", false, 1, false)]
+    [InlineData("tree", false, 3, false)]
+    [InlineData("commit", false, 1, false)]
+    [InlineData("tree", false, 4, false)]
+    [InlineData("tree", true, 3, true)]
+    [InlineData("tree", false, 3, true)]
+    public async Task Newly_written_objects_allow_bounded_absence_without_replaying_the_write(
+        string kind, bool coordination, int missingReads, bool loseResponse)
+    {
+        var remote = new Remote();
+        using var session = new Session(Authority(remote), remote);
+        IGitHubCoordinationStateCapability? claim = null;
+        if (!coordination) claim = await Claim(session);
+        remote.DelayAfter = kind;
+        remote.DelayedReads = missingReads;
+        if (loseResponse) remote.LoseAfter = kind;
+        var before = remote.Writes;
+        if (coordination)
+        {
+            var read = await session.Coordination.ReadCurrentAsync();
+            var result = await session.Coordination.ClaimAsync(read.Read!);
+            Assert.Equal(missingReads < GitHubObjectReadback.MaximumObservations, result.State is not null);
+            if (result.State is null) Assert.Equal(GitHubCoordinationFailureKind.Unresolved, result.Failure!.Kind);
+        }
+        else
+        {
+            var prepared = await session.Proposal.PrepareAsync(claim!, Payload(session.Authority));
+            var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim!);
+            Assert.Equal(missingReads < GitHubObjectReadback.MaximumObservations, result.Content is not null);
+            if (result.Content is null) Assert.Equal(GitHubProposalFailureKind.Unresolved, result.Failure!.Kind);
+        }
+        Assert.Equal(Math.Min(missingReads, GitHubObjectReadback.MaximumObservations), remote.HiddenObservations);
+        Assert.Equal(1, remote.DelayedObjectWrites);
+        Assert.InRange(remote.Writes - before, 1, coordination ? 5 : 3);
+        Assert.Equal(0, remote.ProposalAttempts);
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Tree_creation_and_recursive_readback_preserve_exact_objects_when_absent_recursive_reads_are_invalid(
+        bool shallowMissing, bool corrupt)
+    {
+        var remote = new Remote { ShallowTreesMissing = shallowMissing };
+        using var session = new Session(Authority(remote), remote);
+        var claim = await Claim(session);
+        var prepared = await session.Proposal.PrepareAsync(claim, Payload(session.Authority));
+        Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
+        if (corrupt) remote.CorruptAfter = "tree";
+        var result = await session.Proposal.CreateContentAsync(prepared.Prepared!, claim);
+        Assert.Equal(shallowMissing, remote.RecursiveTreeReads > 0);
+        Assert.All(remote.TreePosts.Values, count => Assert.Equal(1, count));
+        if (corrupt)
+        {
+            Assert.Null(result.Content);
+            Assert.Equal(GitHubProposalFailureKind.Integrity, result.Failure!.Kind);
+            Assert.Equal(0, remote.ProposalAttempts);
+            return;
+        }
+        Assert.NotNull(result.Content);
+        var stage = await session.Coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(result.Content.CommitOid));
+        Assert.Equal(GitHubProposalOutcome.RefVerified,
+            (await session.Proposal.AdvanceRefAsync(result.Content, stage.State!, stage.ProposalRefEntitlement)).Outcome);
+        Assert.Equal(1, remote.ProposalWrites);
+        Assert.All(remote.TreePosts.Values, count => Assert.Equal(1, count));
+    }
+
+    [Fact]
+    public async Task Same_operation_with_a_new_checkpoint_cannot_replace_a_claim_but_exact_resume_can_recover_it()
+    {
+        var remote = new Remote();
+        var authority = Authority(remote);
+        using (var initial = new Session(authority, remote)) await Claim(initial);
+        var writes = remote.Writes;
+        var refs = remote.Refs.ToArray();
+        var freshStart = Authority(remote, checkpoint: Hash('9'));
+        Assert.Equal(authority.OperationId, freshStart.OperationId);
+        Assert.Equal(authority.CandidateCommitmentSha256, freshStart.CandidateCommitmentSha256);
+        Assert.NotEqual(authority.AuthorityCommitmentSha256, freshStart.AuthorityCommitmentSha256);
+        using (var fresh = new Session(freshStart, remote))
+        {
+            var read = await fresh.Coordination.ReadCurrentAsync();
+            Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, read.Failure!.Kind);
+            Assert.Null(read.State);
+        }
+        Assert.Equal(writes, remote.Writes);
+        Assert.Equal(refs, remote.Refs.ToArray());
+        using var resumed = new Session(authority, remote);
+        var recovered = await resumed.Coordination.ReadCurrentAsync();
+        Assert.NotNull(recovered.State);
+        Assert.Equal(writes, remote.Writes);
+        var prepared = await resumed.Proposal.PrepareAsync(recovered.State!, Payload(authority));
+        var content = await resumed.Proposal.CreateContentAsync(prepared.Prepared!, recovered.State!);
+        Assert.Equal(GitHubProposalOutcome.ContentVerified, content.Outcome);
+    }
+
+    [Theory]
     [InlineData("missing")]
     [InlineData("corrupt")]
     [InlineData("truncated")]
@@ -831,9 +934,10 @@ public sealed class GitHubProposalBranchTests
         return (claim, content.Content!);
     }
     internal static ValidatedGitHubPublicationAuthority Authority(Remote remote, string operation = "initial",
-        ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false) => GitHubPublicationFactory.CreateAuthority(new(
+        ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false,
+        string? checkpoint = null) => GitHubPublicationFactory.CreateAuthority(new(
             "Owner", "repo", "refs/heads/main", remote.BaseOid, "campaign", Hash('1'), Hash('2'), Hash('3'), previous is null ? 1 : 2,
-            Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
+            checkpoint ?? Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
             previous?.OperationId, previous?.AuthorityCommitmentSha256, previous?.CandidateCommitmentSha256,
             previous?.GenerationId, previous?.SnapshotCommitmentSha256, previous?.PolicyCommitmentSha256, null,
             previous is null ? GitHubPublicationTransitionKind.Initial : GitHubPublicationTransitionKind.SameSnapshotAppend,
@@ -892,6 +996,15 @@ public sealed class GitHubProposalBranchTests
         internal string? LoseBefore;
         internal string? CancelAfter;
         internal string? CorruptAfter;
+        internal string? DelayAfter;
+        internal int DelayedReads;
+        internal int HiddenObservations;
+        internal int DelayedObjectWrites;
+        private string? delayedOid;
+        private string? hiddenRecursiveOid;
+        internal bool ShallowTreesMissing;
+        internal int RecursiveTreeReads;
+        internal Dictionary<string, int> TreePosts { get; } = [];
         internal string? LateFailure;
         private string? lateCommit;
         private int lateReads;
@@ -992,7 +1105,11 @@ public sealed class GitHubProposalBranchTests
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             lock (gate)
             {
-                if (method == "GET") return Get(path);
+                if (method == "GET")
+                {
+                    Assert.True(request.Headers.CacheControl?.NoCache);
+                    return Get(path, request.RequestUri.Query == "?recursive=1");
+                }
                 Assert.Equal("POST", method);
                 using var doc = JsonDocument.Parse(text!);
                 var body = doc.RootElement;
@@ -1017,6 +1134,7 @@ public sealed class GitHubProposalBranchTests
                         e.GetProperty("path").GetString()!, ParseMode(e.GetProperty("mode").GetString()!),
                         e.GetProperty("sha").GetString()!, null)).ToImmutableArray();
                     var oid = AddTree(entries); response = TreeResponse(oid); kind = "tree";
+                    TreePosts[oid] = TreePosts.GetValueOrDefault(oid) + 1;
                 }
                 else if (path.EndsWith("/git/commits", StringComparison.Ordinal))
                 {
@@ -1052,6 +1170,14 @@ public sealed class GitHubProposalBranchTests
                     response = new { data = new { updateRefs = new { clientMutationId = input.GetProperty("clientMutationId").GetString() } } };
                     status = HttpStatusCode.OK;
                 }
+                if (DelayAfter == kind)
+                {
+                    DelayAfter = null;
+                    delayedOid = kind switch { "blob" => Blobs.Keys.Last(), "tree" => Trees.Keys.Last(), _ => Commits.Keys.Last() };
+                }
+                if (kind is "blob" or "tree" or "commit"
+                    && JsonSerializer.SerializeToElement(response).GetProperty("sha").GetString() == delayedOid)
+                    DelayedObjectWrites++;
                 if (LoseAfter == kind) { LoseAfter = null; throw new IOException("synthetic response loss"); }
                 if (CorruptAfter == kind)
                 {
@@ -1073,7 +1199,7 @@ public sealed class GitHubProposalBranchTests
                 return Json(status, response);
             }
         }
-        private HttpResponseMessage Get(string path)
+        private HttpResponseMessage Get(string path, bool recursive = false)
         {
             if (path == "/repos/Owner/repo") return Json(HttpStatusCode.OK, new
             {
@@ -1093,9 +1219,24 @@ public sealed class GitHubProposalBranchTests
                     new { @ref = name, node_id = "REF_node", @object = new { type = "commit", sha = head } }) : Missing();
             }
             var oid = path[(path.LastIndexOf('/') + 1)..];
+            if (recursive)
+            {
+                RecursiveTreeReads++;
+                if (oid == hiddenRecursiveOid) { hiddenRecursiveOid = null; return Missing(); }
+            }
+            if (oid == delayedOid && DelayedReads-- > 0)
+            {
+                HiddenObservations++;
+                if (path.Contains("/git/trees/", StringComparison.Ordinal)) hiddenRecursiveOid = oid;
+                return Missing();
+            }
             if (path.Contains("/git/blobs/", StringComparison.Ordinal) && Blobs.TryGetValue(oid, out var bytes))
                 return Json(HttpStatusCode.OK, new { sha = oid, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
-            if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid)) return Json(HttpStatusCode.OK, TreeResponse(oid));
+            if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid))
+                return ShallowTreesMissing && !recursive ? Missing() : Json(HttpStatusCode.OK, TreeResponse(oid, recursive));
+            if (path.Contains("/git/trees/", StringComparison.Ordinal) && recursive)
+                return Json(HttpStatusCode.UnprocessableEntity,
+                    new { message = "Invalid object requested. SHA must identify a commit or a tree." });
             if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(oid, out var commit))
             {
                 if (oid == lateCommit && --lateReads == 0)
@@ -1108,11 +1249,11 @@ public sealed class GitHubProposalBranchTests
             }
             return Missing();
         }
-        private object TreeResponse(string oid) => new
+        private object TreeResponse(string oid, bool recursive = false) => new
         {
             sha = oid,
             truncated = oid == TruncatedOid,
-            tree = Trees[oid].Select(e => new
+            tree = (recursive ? Descendants(oid, "") : Trees[oid]).Select(e => new
             {
                 path = e.Path,
                 mode = e.Mode == GitHubTreeMode.Directory ? "040000" : Mode(e.Mode),
@@ -1120,6 +1261,16 @@ public sealed class GitHubProposalBranchTests
                 sha = e.Oid
             }).ToArray(),
         };
+        private IEnumerable<GitHubTreeEntry> Descendants(string oid, string prefix)
+        {
+            foreach (var entry in Trees[oid])
+            {
+                var path = prefix + entry.Path;
+                yield return entry with { Path = path };
+                if (entry.Mode == GitHubTreeMode.Directory)
+                    foreach (var child in Descendants(entry.Oid, path + "/")) yield return child;
+            }
+        }
         private static object CommitResponse(GitHubCommit c) => new
         {
             sha = c.Oid,

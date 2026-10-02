@@ -1,16 +1,16 @@
 {
   "mapVersion": 1,
   "payload": {
-    "assetName": "contract-scribe-0.1.0-dev+89b4c40ebee48627645ec7092c0c0ccf41662c0f-linux-x64.tar.gz",
+    "assetName": "contract-scribe-0.1.0-dev+0cdd56bf89665fa78ac3a1c2a5810b3675285254-linux-x64.tar.gz",
     "assets": [
-      "contract-scribe-0.1.0-dev+89b4c40ebee48627645ec7092c0c0ccf41662c0f-linux-x64.tar.gz"
+      "contract-scribe-0.1.0-dev+0cdd56bf89665fa78ac3a1c2a5810b3675285254-linux-x64.tar.gz"
     ],
-    "releaseTag": "payload-0.1.0-dev+89b4c40ebee48627645ec7092c0c0ccf41662c0f",
+    "releaseTag": "payload-0.1.0-dev+0cdd56bf89665fa78ac3a1c2a5810b3675285254",
     "repository": "SolusQuest/contract-scribe",
     "runtimeIdentifier": "linux-x64",
-    "sha256": "28b83e827bcea512c069e9e441eb9399cee71f4e75893afb7a81ca496e48f359",
-    "sourceRevision": "89b4c40ebee48627645ec7092c0c0ccf41662c0f",
-    "toolVersion": "0.1.0-dev+89b4c40ebee48627645ec7092c0c0ccf41662c0f"
+    "sha256": "b8fb205213907f5f4f622943c0ed0034d4045c942365d5cc0a0008ad7628ff8c",
+    "sourceRevision": "0cdd56bf89665fa78ac3a1c2a5810b3675285254",
+    "toolVersion": "0.1.0-dev+0cdd56bf89665fa78ac3a1c2a5810b3675285254"
   },
   "wrapper": "contract-scribe-action"
 }

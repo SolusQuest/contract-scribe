@@ -828,7 +828,7 @@ internal sealed class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
                 mutation.Failure, mutation.Delivery, mutation.Context, mutation.RequiredPermissions);
         using var recovery = new CancellationTokenSource(RecoveryTimeout);
-        var observed = await read(recovery.Token).ConfigureAwait(false);
+        var observed = await GitHubObjectReadback.ObserveAsync(read, recovery.Token).ConfigureAwait(false);
         var readbackFailure = RecoveryFailure(observed.Failure, recovery);
         if (observed.Value is not null)
             return exact(observed.Value) ? null

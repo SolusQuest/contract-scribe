@@ -125,7 +125,7 @@ internal static class GitHubResponseReader
         return new(expected, ImmutableArray.CreateRange(bytes));
     }
 
-    internal static GitHubTree Tree(JsonElement value, string expected)
+    internal static GitHubTree Tree(JsonElement value, string expected, bool recursive = false)
     {
         Require(Oid(value, "sha") == expected && !Boolean(value, "truncated"));
         var entries = Property(value, "tree");
@@ -135,7 +135,7 @@ internal static class GitHubResponseReader
         foreach (var entry in entries.EnumerateArray())
         {
             var path = String(entry, "path", 1024);
-            Require(TreeName(path) && paths.Add(path));
+            Require((recursive ? path.Split('/').All(TreeName) : TreeName(path)) && paths.Add(path));
             var mode = String(entry, "mode", 6) switch
             {
                 "100644" => GitHubTreeMode.File,
@@ -147,9 +147,10 @@ internal static class GitHubResponseReader
             };
             Require(String(entry, "type", 16) == ObjectType(mode));
             long? size = entry.TryGetProperty("size", out _) ? Integer(entry, "size", 0, long.MaxValue) : null;
-            result.Add(new(path, mode, Oid(entry, "sha"), size));
+            var oid = Oid(entry, "sha");
+            if (!recursive || !path.Contains('/')) result.Add(new(path, mode, oid, size));
         }
-        return new(expected, result.MoveToImmutable());
+        return new(expected, result.ToImmutable());
     }
 
     internal static GitHubCommit Commit(JsonElement value, string expected)

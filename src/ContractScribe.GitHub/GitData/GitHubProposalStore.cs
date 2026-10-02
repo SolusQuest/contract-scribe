@@ -309,7 +309,10 @@ internal sealed class GitHubProposalStore
             // Preparation authenticated inherited objects; only prospective trees need materialization.
             // Final content verification still rereads the complete graph before success.
             if (plan.BaseTreeOids.Contains(oid)) continue;
-            var observed = await client.GetTreeAsync(oid, cancellationToken);
+            // A prospective tree may not exist yet. GitHub's recursive route
+            // returns 422 for that absence, so reserve it for known objects
+            // and post-create readback; do not reinterpret validation errors.
+            var observed = await client.GetTreeAsync(oid, cancellationToken, allowRecursiveFallback: false);
             if (observed.Value is not null)
             {
                 Require(ExactTree(observed.Value, oid, tree.Value));
@@ -505,7 +508,7 @@ internal sealed class GitHubProposalStore
     {
         if (mutation.Delivery == GitHubDelivery.NotDispatched) Throw(mutation);
         using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
-        var observed = await read(recovery.Token);
+        var observed = await GitHubObjectReadback.ObserveAsync(read, recovery.Token);
         bool matches;
         try
         {

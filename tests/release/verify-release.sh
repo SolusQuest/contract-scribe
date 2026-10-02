@@ -58,6 +58,9 @@ run_case() {
         echo "PASS $name"
     else
         echo "FAIL $name  (log: $log)"
+        # Offline fixture diagnostics must survive the temporary-directory
+        # cleanup on CI. Keep console output bounded to the failing leg.
+        tail -n 60 "$log"
         CASES_FAILED=$((CASES_FAILED + 1))
         FAILED_CASES+=("$name")
     fi
@@ -200,8 +203,10 @@ state_init
 python3 - "$STATE" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))
+head = s["runs"][0]["head_sha"]
 s["ci_runs"][s["runs"][0]["head_sha"]] = [
     {"id": 888, "conclusion": "success", "run_attempt": 1,
+     "head_sha": head, "status": "completed",
      "path": ".github/workflows/ci.yml",
      "jobs": [{"name": "action_packaged", "status": "completed",
                "conclusion": "success"},
@@ -303,6 +308,7 @@ s["runs"][0]["head_sha"] = head
 s["artifacts"][0]["workflow_run"]["head_sha"] = head
 s["ci_runs"] = {head: [
     {"id": 888, "conclusion": "success", "run_attempt": 1,
+     "head_sha": head, "status": "completed",
      "path": ".github/workflows/ci.yml",
      "jobs": [{"name": "action_packaged", "status": "completed",
                "conclusion": "success"}]}]}
@@ -466,7 +472,12 @@ run_case prepare-workflow-drift case_prepare_workflow_drift
 
 case_resolve_happy() {
     fresh_state
-    release_env x resolve-artifact --candidate-run-id "$RUN_ID" | grep -q 777
+    # Drain the producer before inspecting its output. A grep -q pipeline
+    # can exit on the flushed status marker while Python still writes the ID,
+    # causing BrokenPipeError and a spurious failure under pipefail.
+    local output
+    output="$(release_env x resolve-artifact --candidate-run-id "$RUN_ID")"
+    grep -qx 777 <<<"${output//$'\r'/}"
 }
 case_resolve_wrong_event() {
     fresh_state
@@ -541,6 +552,27 @@ case_stage_ambiguous_create() {
     release_env x stage-draft $(vc_args "$CAND2")
     [ "$(count_log 'POST /repos/.*/releases ')" = "1" ]  # single POST, adopted
     state_edit 's["overrides"]["drop_after_write"]=[]'
+}
+case_stage_delayed_readback() {
+    for loss in false true; do
+        for hidden in 1 3 4; do
+            fresh_state
+            state_edit 's["overrides"]["hidden_release_reads"]='"$hidden"'; s["overrides"]["hidden_asset_reads"]=3'
+            if [ "$loss" = true ]; then
+                state_edit 's["overrides"]["drop_after_write"]=["release-create","asset-upload"]'
+            fi
+            if [ "$hidden" -lt 4 ]; then
+                release_env x stage-draft $(vc_args "$CAND2")
+                [ "$(count_log 'POST /uploads/')" = "1" ]
+            else
+                expect_fail release_env x stage-draft $(vc_args "$CAND2")
+                [ "$(count_log 'POST /uploads/')" = "0" ]
+            fi
+            [ "$(count_log 'POST /repos/.*/releases ')" = "1" ]
+            [ "$(count_log 'GET /repos/.*/releases?')" = "$((hidden < 4 ? hidden + 2 : 5))" ]
+            [ "$(count_log 'POST /repos/.*/git/refs')" = "0" ]
+        done
+    done
 }
 case_stage_published_conflict() {
     fresh_state
@@ -653,10 +685,16 @@ case_stage_payload_workflow_drift() {
     git -C "$clone" commit -qm 'non-workflow change after payload'
     release_env x stage-draft $(vc_args "$CAND2") --repo "$clone"
 }
+case_pr_qualification() {
+    fresh_state
+    python3 "$SCRIPT_DIR/verify_pr_qualification.py" "$RELEASE_SCRIPTS" "$WORK" "$FIXTURE" "$STATE" "$API_ROOT" "$STUB"
+}
+run_case pr-qualification case_pr_qualification
 run_case stage-payload-workflow-drift case_stage_payload_workflow_drift
 run_case stage-happy case_stage_happy
 run_case stage-exact-retry case_stage_exact_retry
 run_case stage-ambiguous-create case_stage_ambiguous_create
+run_case stage-delayed-readback case_stage_delayed_readback
 run_case stage-published-conflict case_stage_published_conflict
 run_case stage-tag-present case_stage_tag_present
 run_case stage-field-mismatch case_stage_field_mismatch

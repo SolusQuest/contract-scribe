@@ -118,6 +118,11 @@ def main():
 
     start = jobs["start"]
     resume = jobs["resume"]
+    # runner is unavailable in workflow/job env expressions. Resolve its
+    # shell equivalent at step execution before the state directory is used.
+    for environment in (doc.get("env", {}), start.get("env", {}), resume.get("env", {})):
+        require(not any(re.search(r"\$\{\{[^}]*\brunner\.", str(value))
+                        for value in environment.values()), "runner-env-context")
     require("matrix" not in start and "matrix" not in resume, "matrix")
     require(start.get("permissions") ==
             {"actions": "read", "contents": "write",
@@ -136,17 +141,23 @@ def main():
     for job_name, job, order in (
             ("start", start,
              ["Check out trusted revision", "Assert exact workflow head",
+              "Bind runner state directory",
               "Producer admission gate", "Prepare private state directory",
               "Build invocation request",
               "ContractScribe github-proposal", "Emit",
               "Upload", "Render next activation"]),
             ("resume", resume,
              ["Check out trusted revision", "Assert exact workflow head",
+              "Bind runner state directory",
               "Authenticate activation", "Download sealed producer handoff",
               "Verify handoff and restore checkpoint",
               "Build invocation request", "ContractScribe github-proposal",
               "Emit", "Upload", "Render next activation"])):
         steps = job.get("steps") or []
+        binding = [s for s in steps if s.get("name") == "Bind runner state directory"]
+        require(len(binding) == 1 and binding[0].get("run") ==
+                'printf \'CS_STATE_DIR=%s/contract-scribe-state\\n\' "$RUNNER_TEMP" >> "$GITHUB_ENV"',
+                "runner-state-binding")
         require(all(isinstance(s, dict) for s in steps), "step-shape")
         check_step_order(step_names(steps), order)
         for step in steps:
@@ -245,7 +256,7 @@ def main():
             "verify-invocation")
 
     # The restored state must live outside the checkout.
-    require("runner.temp" in str(doc.get("env", {})), "state-outside")
+    require("CS_STATE_DIR" not in doc.get("env", {}), "state-outside")
 
     # -- no latest-state selection / caches / batching --------------------------
     # (parsed content only — comments are not inspected)
