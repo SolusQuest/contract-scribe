@@ -6,7 +6,8 @@ This directory is the durable source for product, workflow, architecture, contra
 
 - [Project context](00_project/project-context.md) — current product purpose and implementation status.
 - [Origin and scope](00_project/origin-and-scope.md) — product boundaries, non-goals, and open decisions.
-- [Roadmap](90_roadmap/roadmap.md) — completed M0–M6 engineering, the M7 direction awaiting refinement, release gates, and deferred research.
+- [Roadmap](90_roadmap/roadmap.md) — completed M0–M6 engineering, adopted M7 planning with implementation pending, release gates, and deferred research.
+- [M7 plan](90_roadmap/m7-plan.md) — accepted product decisions, defaults, exclusions and exit evidence for caller-owned scheduling and automatic bounded continuation.
 - [M6 closeout](90_roadmap/m6-plan.md) — engineering delivery, exact internal qualification, limitations, and deferred first publication.
 - [M1 plan](90_roadmap/m1-plan.md) — detailed deterministic-audit scope and planned tracker changes.
 - [Architecture](20_architecture/architecture.md) — pipeline, component responsibilities, and authority matrix.

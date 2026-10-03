@@ -2,6 +2,8 @@
 
 ## Product pipeline
 
+[M7 plan](../90_roadmap/m7-plan.md) owns the adopted automatic-entrypoint, fixed-batch and shared-conversation direction. C1 adopts planning, not executable behavior. The existing protocol documents remain current-state references until their owning code/schema issues update them; completed M4–M6 evidence remains revision-bound.
+
 ContractScribe separates deterministic correctness from model-assisted writing and platform side effects:
 
 ```text
@@ -40,17 +42,17 @@ ADR 0001 selects the framework-dependent semantic execution baseline. [ADR 0002]
 
 ### Work planner and campaign state
 
-M4 will select deterministic work ordering and the independent work, provider, patch, attempt, and time budgets required by its executable workflow.
+Core owns platform-neutral work ordering, state transitions and resource accounting. The current M4 contracts describe the implemented snapshot-scoped plan/checkpoint/reducer. M7 selects a fixed semantic subset from the complete ordered plan, shares renewable invocation resources across all targets/retries, and makes campaign aggregate caps optional/default unlimited. Stable identity and complete recovery facts prevent duplicate or incompatible continuation; schemas and exact layouts belong to their implementing issues.
 
-Any resumable state remains platform-neutral, rejects a stale or incompatible repository base, and prevents duplicate accepted work. Snapshot, work-plan, batch, cursor, checkpoint, replay, branch, and generation representations remain M4/M5 candidates until a reproduced continuation or idempotency failure demonstrates the minimum necessary shape. A GitHub Issue is an adapter surface, not the state model.
+M7's consumer coordination ref is the complete recovery authority, with exact-predecessor CAS and authenticated readback. Diagnostic artifacts and GitHub Issues are not the state model. CLI authenticates ledger/PR lifecycle facts before new Audit/plan discovery or provider dispatch; compatible recovery may freshly load Roslyn to reconstruct and validate already accepted results without selecting new targets or regenerating proposals.
 
 ### Documentation Scribe
 
-The Documentation Scribe is the project-owned, narrow model-assisted role. Its Scribe Runtime receives an allowlisted context pack, may call bounded semantic and repository-read tools, and terminates by submitting a structured documentation proposal or a structured skip.
+The Documentation Scribe is the project-owned, narrow model-assisted role. The current runtime accepts one selected target and terminates on a structured proposal/skip. M7 instead provides the complete selected batch manifest to one bounded conversation, validates and acknowledges incremental per-target/small-batch submissions, and checks final coverage deterministically. Submission does not itself imply conversation completion, patch acceptance or publication.
 
 It has no shell, arbitrary file edit, GitHub mutation, web search, subagent, or automatic-merge capability. A model runtime adapter handles provider transport, but provider behavior does not own the product contracts or tool policy.
 
-Repository-entrypoint discovery, nested-instruction applicability, evidence selection, and target grouping are deterministic runtime behavior rather than separate model agents. The same Scribe may complete semantic context routing with read-only tools. Independent runs do not share mutable conversation history; M3 selects any context identity, storage, or prompt-prefix mechanism only when executable evidence needs it.
+Repository-entrypoint discovery, nested-instruction applicability, evidence selection, and target grouping are deterministic runtime behavior rather than separate model agents. The same Scribe may complete semantic context routing with read-only tools. M7 reuses bounded evidence inside the selected conversation while preserving each target's instruction/style authority; it does not restore complete hidden conversations or reasoning across Actions or automatically compact context.
 
 M3 selects the smallest provider transport and bounded evaluation set that can validate the executable Scribe path. Provider names, compatibility corpora, normalization formats, and prompt-prefix mechanisms remain candidate implementation details; provider cache availability is never correctness state.
 
@@ -72,7 +74,7 @@ The closed internal factory receives a Core-validated publication authority and 
 
 R3-R6 own coordination/content/PR reconciliation and publication orchestration over the R1 Core contracts; R2 does not decide remote ownership, operation transitions, legal replay or active-PR uniqueness. There is no public adapter API or CLI project edge in R2. CLI remains the sole production composition root; H2 owns the later CLI edge, single credential resolution and process startup-hook bridge. H3 owns live credential/platform proof. Scripted transport tests are not that proof. See [Security boundary](security-boundary.md#implemented-github-transport-boundary-m5-r2) for exact bounds, failure privacy, and recovery-context rules.
 
-The initial workflow permits at most one compatible active bot-owned proposal pull request for current work, creates proposals as drafts, never merges automatically, and refuses unsafe mutation after ownership mismatch, base drift, conflicts, ambiguous active work, or human modification. M5 selects any checkpoint, ledger, generation, operation-ID, append, or continuation representation from reproduced retry and idempotency failures.
+The workflow creates drafts and never merges automatically. M7 adopts at most one PR per fixed batch and one active PR per campaign; publication seals the validated subset and disallows further target append to draft or ready PRs. Open same-base PRs await review; open old-base PRs pause. Closed-unmerged on the same base pauses even after configuration changes; a different HEAD with no active PR permits fresh Audit. Ownership loss, conflicts, human changes and ambiguous active work pause. Lost responses recover only the exact original operation/PR. The complete precedence is owned by the M7 plan.
 
 See [Campaign and GitHub workflow](campaign-and-github-workflow.md).
 
@@ -103,7 +105,7 @@ The Documentation Scribe must not receive source-write, state-persistence, or pu
 
 ## Current implementation status
 
-M0 contracts and experiments are complete. M1 has implemented the production Roslyn/MSBuild loading, classification, documentation observation, policy/evidence, canonical result, atomic `ProductionAuditHost`, and production CLI path, and #75 removed the retired validation and experiment machinery. Completed #41 and #30 remain revision-bound implementation and validation evidence; #42 is the only remaining executable M1 step before #33 closure. M2 has implemented the `ContractScribe.Patching` boundary, exact resolution and rendering, complete isolated candidate materialization, session-bound Roslyn and generator validation, root-state fail-closed results, and immutable accepted-candidate handoff. M3 now has the Core-only Agent runtime, bounded context and repository/Roslyn read tools, provider transport, and an internal CLI one-target Scribe-to-patch composition seam. The seam accepts only an opaque selected-audit capability bound to the exact live M1 session, injects a closed read-only tool registry into Agent, revalidates the terminal proposal, and delegates candidate creation exclusively to the existing M2 engine. It adds no public CLI command, live-provider claim, campaign state, or write-back to the original checkout. This implementation status does not authorize later milestone behavior; evaluation, campaign state, GitHub adaptation, and the consumable Action remain later work.
+M0–M6 engineering is complete, including deterministic Audit and Patching, the Core-only read-only Agent, resumable local campaigns, the GitHub adapter, CLI proposal composition, layered consumer configuration and the thin composite Action. [M6 plan](../90_roadmap/m6-plan.md) records exact unpublished internal-candidate qualification and its limits. Current production code still uses single-target Scribe runs, explicit proposal start/resume, current finite configuration ceilings and M5 publication semantics. C1 adopts the M7 plan without implementing its automatic entrypoint, fixed batches, shared conversation, complete remote checkpoint or per-invocation usage outputs. Historical evidence does not authorize a public release or imply those new behaviors exist.
 
 M0 experiment questions, conditions, results, limitations, and exact revisions remain historical evidence. PR #77 removed their preservation tests and historical Roslyn experiment project from ordinary test and solution authority. Issue #75 removed the remaining current-tree runners, manifests, and compatibility paths; concrete production regressions and reusable semantic fixtures live under their current production owners.
 
