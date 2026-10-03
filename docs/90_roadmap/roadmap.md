@@ -23,7 +23,7 @@ The product is not complete when it can only report missing documentation. Its u
 
 - Deterministic audit stays independent of a model provider, provider secret, GitHub write token, and declared network-dependent operation.
 - The Documentation Scribe is a self-developed, narrow model-assisted role with bounded read-only tools and structured output. It is not a general coding-agent dependency.
-- Project-context selection and repository confinement are deterministic product behavior. The exact snapshot, manifest, grouping, and cache identities remain M3 implementation decisions until executable evidence requires them.
+- Project-context selection and repository confinement are deterministic product behavior. [M7 plan](m7-plan.md) owns snapshot, fixed-manifest and semantic-grouping product semantics. Exact representations, algorithms, identity/hash composition and cache mechanisms remain choices for their owning implementation issues within that plan's boundaries.
 - M3 selects the smallest provider transport and evaluation set that can validate the current Scribe path. Provider names, compatibility corpora, normalization formats, and cache mechanisms are not frozen by the pre-M3 roadmap.
 - Provider caching is never correctness or resume state. Observe cost and uncached input to the degree needed for the current product decision without creating a permanent economics protocol in advance.
 - A model never emits or applies the source diff. The deterministic M2 patch engine owns every source modification.

@@ -154,16 +154,9 @@ one matching asset, rejects additional payload-shaped assets, verifies the
 downloaded bytes against the pinned SHA-256, and retains the verified archive
 under the install root.
 
-The payload archive is byte-reproducible: `build-payload.sh` publishes with
-`ContinuousIntegrationBuild=true`, so a clean ubuntu build of a given
-revision always produces the same bytes and the pinned `sha256` is a rebuild
-expectation. Pre-release the map carries `payload: null` and acquisition
-fails closed with `no-authorized-payload`; `action_packaged` proves
-reproducibility every run (producer artifact vs. independent clean rebuild)
-and exercises the Action through a strictly gated test map. Once a pair is
-recorded, the same job rebuilds the mapped `sourceRevision` and requires
-byte equality — a mismatch halts release work until a separately reviewed
-map change; CI never edits the map.
+The payload archive is byte-reproducible: `build-payload.sh` publishes with `ContinuousIntegrationBuild=true`, so a clean ubuntu build of a given revision always produces the same bytes and the pinned `sha256` is a rebuild expectation.
+
+A map with `payload: null` fails closed with `no-authorized-payload`. The current checked-in map records an unpublished payload pair; acquisition authority for that pair is not public-release or M7 implementation authority. `action_packaged` proves reproducibility every run (producer artifact vs. independent clean rebuild) and exercises the Action through a strictly gated test map. Once a pair is recorded, the same job rebuilds the mapped `sourceRevision` and requires byte equality — a mismatch halts release work until a separately reviewed map change; CI never edits the map.
 
 Install follows the frozen A1 semantics (`payload-install` stage markers):
 bounded copy → digest → member-policy scan → extraction of validated regular
