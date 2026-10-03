@@ -2,7 +2,7 @@
 
 ## Product direction
 
-ContractScribe is built as six ordered product milestones after the completed M0 validation:
+ContractScribe completed six ordered engineering milestones after M0 validation. The maintainer accepted a seventh direction before first public publication:
 
 ```text
 M1 deterministic audit
@@ -10,7 +10,9 @@ M1 deterministic audit
   -> M3 Documentation Scribe
   -> M4 resumable campaign orchestration
   -> M5 GitHub proposal workflow
-  -> M6 consumable GitHub Action release
+  -> M6 Action engineering and internal qualification
+  -> M7 caller-owned scheduling and automatic bounded continuation (refinement pending)
+  -> governance disposition and first public publication
 ```
 
 Release governance, payload distribution, and deferred topology research are separate tracks. They must not block source-based product work that does not depend on them, but their explicit gates apply before the first consumable release.
@@ -36,14 +38,16 @@ The product is not complete when it can only report missing documentation. Its u
 | Track | Status | Primary outcome |
 | --- | --- | --- |
 | M0 — Product, contracts, and architecture validation | Done | Evidence-backed execution and topology inputs |
-| M1 — Deterministic audit MVP | Current | Production read-only audit and CLI |
-| M2 — Deterministic XML documentation patch engine | Implemented; closure pending | Safe documentation-only source changes |
-| M3 — Documentation Scribe and proposal engine | Planned | Useful evidence-grounded structured documentation |
-| M4 — Resumable campaign orchestration | Planned | Deterministic budgeting, resume, and lineage |
-| M5 — GitHub proposal workflow | Planned | Idempotent ledger, branch, commit, and draft PR workflow |
-| M6 — GitHub Action release | Planned | Downstream-consumable Action and payload |
-| Release Gate — Governance | Open | License and contribution disposition |
-| Release Gate — Payload Distribution | Open | Selected payload channel and ADR |
+| M1 — Deterministic audit MVP | Done | Production read-only audit and CLI |
+| M2 — Deterministic XML documentation patch engine | Done | Safe documentation-only source changes |
+| M3 — Documentation Scribe and proposal engine | Done | Useful evidence-grounded structured documentation |
+| M4 — Resumable campaign orchestration | Done | Deterministic budgeting, resume, and lineage |
+| M5 — GitHub proposal workflow | Done | Idempotent ledger, branch, commit, and draft PR workflow |
+| M6 — Action engineering and internal qualification | Engineering complete; closeout under revised scope | Verified payload/Action, release controls, and exact unpublished internal-candidate evidence |
+| M7 — Caller-owned scheduling and automatic bounded continuation | Direction accepted; detailed refinement pending | Practical repeated-run progress independent of native cron delivery |
+| Release Gate — Governance | Deferred until after M7 | License and contribution disposition before publication or external contribution intake |
+| Release Gate — First Publication | Deferred until after M7; #189 remains open | Newly prepared, qualified, explicitly approved public candidate |
+| Release Gate — Payload Distribution | Payload/host selection implemented through M6; separate tracker retained | D2/composite decisions and exact-candidate publication obligations |
 | Research — Deferred Process Topology | Triggered only | Eligibility evidence for child-process alternatives |
 
 ## Production-project evolution
@@ -284,18 +288,19 @@ Exact checkpoint, append-only record, ledger, generation, operation-ID, and adap
 
 See [Campaign and GitHub workflow](../20_architecture/campaign-and-github-workflow.md).
 
-## M6 — GitHub Action release
+## M6 — Action engineering and internal qualification
 
 ### Goal
 
-Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound to a selected payload and release policy. The accepted execution plan and track routing are recorded in [m6-plan.md](m6-plan.md).
+Deliver the selected payload, thin Action host, consumer configuration, caller examples, release controls, and exact unpublished internal-candidate qualification. On 2026-10-03 the maintainer approved this engineering closeout scope and deferred the original first-publication outcome until after M7. The accepted closeout, historical evidence, limitations, and tracker routing are recorded in [m6-plan.md](m6-plan.md).
 
 ### Dependencies
 
 - M5 complete.
-- Release Gate — Governance permits publication and its obligations are satisfied.
 - Release Gate — Payload Distribution selects a compatible payload.
 - The wrapper/payload composition passes release-grade validation.
+
+Governance and maintainer publication approval remain required for the separate first-publication track, not M6's unpublished engineering closeout.
 
 ### Exit criteria
 
@@ -307,10 +312,22 @@ Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound
 - Provider secrets and GitHub permissions are scoped and separated.
 - Concurrency, cancellation, failure, retry, ownership, and active-pull-request uniqueness match the accepted M5 behavior.
 - Exact-version pinning, update, rollback, retirement, and provenance behavior are documented and validated.
-- A consumer repository completes the selected installation and workflow smoke.
-- License, notice, inventory, package metadata, and release-control obligations pass on the exact release candidate.
-- Maintainer review approves the release; green CI alone is insufficient.
-- Marketplace publication occurs only through an explicit later decision.
+- A controlled consumer repository completes exact unpublished-candidate acquisition, actual manual Action execution, native scheduled checkpoint recovery/replay, and a real inactive follow-up.
+- Maintainer review accepts the bounded internal engineering evidence; green CI alone does not establish release authority.
+- License/contribution disposition and first public publication remain deferred open outcomes owned by #29/#189 after M7. Closing M6 does not create released support or compatibility.
+- Marketplace publication remains outside scope and requires an explicit later decision.
+
+M6 recovery/replay evidence does not establish automatic consumption of the remaining work or reliable wall-clock schedule delivery. Completed leaf evidence remains bound to its original revision rather than being reopened for M7's new user experience.
+
+## M7 — Caller-owned scheduling and automatic bounded continuation
+
+### Accepted direction
+
+The maintainer intends to separate trigger scheduling from product execution and complete the repeated-run experience: restore compatible progress, process a bounded amount per invocation, continue remaining work on later invocations, and stop model work when resolved. Native GitHub schedule is an optional caller integration with no timing guarantee; caller-selected trigger sources should be replaceable without bypassing product/state/publication safeguards.
+
+### Refinement boundary
+
+Detailed semantics, quota/aggregate-budget distinctions, snapshot and configuration matching, state storage, automatic start/resume/append selection, changed-base handling, PR lifecycle, scope, tests, and execution issues will be refined in a separate session. No M7 implementation or dependency graph is admitted by the M6 closeout. The first public version/channel also remains undecided. M7 source-based development does not depend on licensing or publication, and its completion becomes a prerequisite of the deferred first-publication track when the actual M7 graph is created.
 
 ## Release Gate — Governance
 
@@ -318,7 +335,11 @@ Deliver the validated M5 workflow as a downstream-consumable GitHub Action bound
 
 Record the license, contribution, authority, third-party inventory, and publication disposition required before downstream consumption or external contribution intake.
 
-This gate may proceed in parallel. It does not block M1 through M5 source development. It blocks M6 publication.
+This gate remains owned by #29 and is deferred until after M7 by maintainer direction. It does not block source-based M7 development or M6's unpublished engineering closeout. Its license, contribution, authority, inventory, and notice obligations still apply before first downstream-consumable publication or external contribution intake.
+
+## Release Gate — First Publication
+
+#189 remains open in a separate deferred publication track after M7. It requires actual M7 completion, governance #29, qualification of the then-current candidate, and fresh explicit maintainer publication approval. M6's completed internal evidence is retained as historical proof, not approval for a changed candidate. Moving the issue does not publish a Release/tag, waive a gate, or authorize a public preview channel.
 
 ## Release Gate — Payload Distribution
 
@@ -326,7 +347,7 @@ This gate may proceed in parallel. It does not block M1 through M5 source develo
 
 Select or explicitly defer the framework-dependent payload channel that the GitHub Action wraps.
 
-The first-consumer scenario is a GitHub workflow. Candidate evidence must use the validated production CLI path. A no-selection outcome blocks M6 without invalidating M1 through M5 source results.
+The first-consumer scenario is a GitHub workflow. M6's adopted #18 and #185 implemented D2/composite selection and engineering evidence. Exact-candidate distribution obligations still apply before public publication; the separate tracker is retained and is not an extra empty prerequisite to M6 closeout. A future no-selection outcome blocks the affected public release without invalidating historical source results.
 
 ## Research — Deferred Process Topology
 
@@ -338,7 +359,7 @@ This track never counts toward M1 progress while it remains non-gating.
 
 ## Post-MVP candidates
 
-These are non-gating, unscheduled candidates outside M1 through M6. They may be considered after M6, but listing them does not commit implementation or delivery. Promoting any candidate into M1 through M6 requires a separately reviewed roadmap amendment. They do not retroactively change the direct-observation semantics or exit evidence of M1 through M6.
+These are non-gating, unscheduled candidates outside the accepted M0–M6 engineering scope. They are not automatically included in the separately refined M7 direction. Listing them does not commit implementation or delivery; promotion into an active milestone requires a reviewed roadmap amendment. They do not retroactively change historical direct-observation semantics or exit evidence.
 
 - effective-documentation resolution and completeness audit:
   - preserve M1 direct observations as a separate factual input rather than relabeling direct absence or marker presence as resolved effective documentation;

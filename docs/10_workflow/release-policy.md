@@ -4,7 +4,7 @@ The repository has not published a downstream-consumable package, binary, GitHub
 
 ADR 0001 selected a framework-dependent semantic execution baseline for the tested profile, and ADR 0002 selected an in-process M1 topology. Native AOT, self-contained publication, and child-process topologies are deferred alternatives, not preferred release targets. The payload channel and artifact layout remain separate distribution decisions.
 
-ADR 0004 selects GitHub-hosted Ubuntu x64 as the sole required M1-M5 pre-release source-validation runner and the planned initial M6 target. It is not a released support claim. Native Windows and other unvalidated environments remain unsupported and non-gating; the future M6 wrapper must reject unsupported runners clearly and quickly.
+ADR 0004 selects GitHub-hosted Ubuntu x64 as the sole required M1-M5 pre-release source-validation runner and the initial M6 engineering target. It is not a released support claim. Native Windows and other unvalidated environments remain unsupported and non-gating; the implemented wrapper rejects unsupported runners clearly and quickly.
 
 Before the first downstream-consumable release, NuGet package or GitHub Action publication, or merge of external code contributions, the project must make and record a license and contribution-policy decision. Until then, do not solicit contributions or encourage third-party adoption.
 
@@ -24,6 +24,12 @@ The first consumable GitHub Action release requires:
 - maintainer approval of the release candidate.
 
 The exact release candidate must pass these gates on GitHub-hosted Ubuntu x64 against a target repository whose caller-prepared prerequisites and design-time load satisfy ADR 0004. Green source CI or successful pre-release validation does not constitute release approval.
+
+## Release sequencing after M6
+
+The maintainer approved closing M6 on its delivered engineering and exact unpublished internal-candidate qualification. License/contribution disposition (#29) and first public publication (#189) are deferred until after M7, whose accepted direction is caller-owned scheduling and automatic bounded continuation. M7's detailed scope will be refined separately; it is not authorized for execution by the M6 closeout. Governance does not block source-based M7 work, but remains required before first downstream-consumable publication or external contribution intake. A public preview or alpha is also a public publication, not an exemption from this gate.
+
+M6 completion, tracker closure, and the retained `v0.1.0-internal.6` evidence grant no publication authority. The post-M7 release owner must prepare the then-current candidate, select affected qualification, satisfy the exact-candidate governance obligations, and obtain fresh maintainer publication approval. Closed #188/#204 records remain historical evidence; they are not reopened or treated as certification of M7's changed behavior. Release automation and its current version grammar are unchanged by this sequencing decision.
 
 ## Contract compatibility freeze
 
@@ -55,4 +61,4 @@ Internal candidates such as `v0.1.0-internal.1` can be prepared and staged only 
 
 Publication mechanics for normal versions remain fixed `vX.Y.Z`; the payload tag `payload-<toolVersion>` points at the payload build revision and the version tag points at `source_revision`; both are created through `/git/refs` and must point directly at commit objects. Every mutation is pre-read → one write → exact readback; an ambiguous (lost) response permits exact-state adoption only, never a same-run retry, and recovery is a fresh separately authorized dispatch. No tag is moved, no same-version release or asset is replaced, and no release object is deleted. See [release-runbook.md](release-runbook.md) for the operator procedure and recovery matrix.
 
-An internal candidate cannot be relabeled into a normal release or reuse its qualification as approval for a changed identity. Prepare a new normal candidate, refresh affected qualification under #188, and obtain #189's exact-candidate publication approval. Payload bytes may be reused only with their pinned source/hash and reviewed map, and an existing different draft at the same payload tag remains a conflict requiring explicit maintainer disposition or a new payload identity. Historical candidates and evidence remain unchanged.
+An internal candidate cannot be relabeled into a normal release or reuse its qualification as approval for a changed identity. After M7, prepare a new candidate under the then-current release policy, refresh affected qualification through the first-publication owner, and obtain #189's exact-candidate publication approval. A future public-preview channel requires its own reviewed policy and implementation change; the current grammar does not support it. Payload bytes may be reused only with their pinned source/hash and reviewed map, and an existing different draft at the same payload tag remains a conflict requiring explicit maintainer disposition or a new payload identity. Historical candidates and evidence remain unchanged.
