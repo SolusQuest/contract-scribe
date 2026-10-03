@@ -1,7 +1,4 @@
-using System.Buffers.Binary;
 using System.Collections.Immutable;
-using System.Security.Cryptography;
-using System.Text;
 using ContractScribe.Core;
 using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
@@ -31,6 +28,7 @@ internal enum GitHubCoordinationFailureKind
     HumanChange,
     Conflict,
     ObjectMismatch,
+    Incompatible,
     Bounds,
     Unresolved,
     Transport,
@@ -145,14 +143,13 @@ internal sealed class GitHubCoordinationStore
     private const int MaximumSameOperationTransitions = 6;
     internal const int MaximumHistoryStates = 1024;
     private readonly GitHubApiClient client;
-    private readonly ValidatedGitHubPublicationAuthority authority;
+    private ValidatedGitHubPublicationAuthority authority => client.Authority;
     private readonly string coordinationRef;
 
     private GitHubCoordinationStore(GitHubApiClient client)
     {
         this.client = client;
-        authority = client.Authority;
-        coordinationRef = GitHubPublicationFactory.CreateCoordinationRef(authority);
+        coordinationRef = GitHubPublicationFactory.CreateCoordinationRef(client.ReadAuthority);
     }
 
     internal static GitHubCoordinationStore Create(GitHubApiClient client)
@@ -164,6 +161,7 @@ internal sealed class GitHubCoordinationStore
     internal async ValueTask<GitHubCoordinationResult> ReadCurrentAsync(
         CancellationToken cancellationToken = default)
     {
+        if (!client.HasMutationAuthority) return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
         try
         {
             var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
@@ -207,6 +205,32 @@ internal sealed class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.Transport,
                 new(GitHubFailureCode.HostFailure));
         }
+    }
+
+    internal ValueTask<GitHubCoordinationResult> ReadObservedStateAsync(
+        GitHubRepositoryIdentity repository, GitHubRef target, string headOid, CancellationToken token) =>
+        !client.HasMutationAuthority && repository == client.AuthenticatedRepository
+            && target.Name == client.ReadAuthority.TargetRef
+            ? ReadStateAsync(repository, target, headOid, token, matchAuthority: false)
+            : ValueTask.FromResult(DomainFailure(GitHubCoordinationFailureKind.InvalidInput));
+
+    internal ImmutableArray<GitHubCampaignGeneration> ObservedGenerations(IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this) ? owned.Generations : [];
+
+    internal GitHubCampaignGeneration? ObservedCurrentGeneration(IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this)
+            && CreationSource(owned) is StateCapability source && source.ProposalCommitOid is not null
+            ? ObserveGeneration(owned.State, source.State) : null;
+
+    private GitHubCampaignGeneration ObserveGeneration(GitHubCoordinationState latest, GitHubCoordinationState creation)
+    {
+        var reference = ProposalRef(creation);
+        var commitment = GitHubCoordinationCodec.PullRequestCreationCommitment(creation, reference);
+        var metadata = GitHubProposalPullRequestStore.CreateMetadata(client.ReadAuthority, reference,
+            creation.SnapshotCommitmentSha256, creation.PolicyCommitmentSha256, creation.TargetRef,
+            creation.OperationCommitmentSha256, commitment);
+        return new(reference, latest.ProposalCommitOid!, latest.ProposalTreeOid!, latest.TargetCommitOid,
+            latest.ObservedBaseOid ?? latest.TargetCommitOid, latest.PullRequestNumber, latest.Stage, metadata);
     }
 
     internal async ValueTask<GitHubCoordinationResult> ClaimAsync(
@@ -917,7 +941,7 @@ internal sealed class GitHubCoordinationStore
         GitHubRepositoryIdentity repository,
         GitHubRef target,
         string headOid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool matchAuthority = true)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(90));
@@ -932,6 +956,7 @@ internal sealed class GitHubCoordinationStore
         var currentGeneration = true;
         var sameOperationTransitions = 0;
         var visited = new HashSet<string>(StringComparer.Ordinal) { headOid };
+        var generations = ImmutableArray.CreateBuilder<GitHubCampaignGeneration>();
         while (true)
         {
             // Intermediate object observations never escape this complete proof.
@@ -952,6 +977,7 @@ internal sealed class GitHubCoordinationStore
                     }
                     catch (GitHubCoordinationException)
                     { return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch); }
+                    if (!sourceFound) generations.Add(ObserveGeneration(generationMarker.State, cursor.State));
                     sourceFound = true;
                     if (currentGeneration) creation = cursor;
                 }
@@ -961,11 +987,11 @@ internal sealed class GitHubCoordinationStore
             {
                 if (cursor.Stage != GitHubCoordinationStage.Claimed || cursor.Transition != "initial"
                     || generationMarker is not null && !sourceFound
-                    || cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, null))
+                    || matchAuthority && cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, null))
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
                 return new(GitHubCoordinationOutcome.Current, state: new StateCapability(this, repository, target,
                     headOid, currentState.State, currentState.CanonicalBytes, creation)
-                { AdmissionSource = currentState.AdmissionSource });
+                { AdmissionSource = currentState.AdmissionSource, Generations = generations.ToImmutable() });
             }
             if (!visited.Add(predecessorOid)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             if (visited.Count > MaximumHistoryStates) return DomainFailure(GitHubCoordinationFailureKind.Bounds);
@@ -977,7 +1003,7 @@ internal sealed class GitHubCoordinationStore
             if (previous.OperationId != cursor.OperationId)
             {
                 if (cursor.Stage != GitHubCoordinationStage.Claimed
-                    || cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, previous.State))
+                    || matchAuthority && cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, previous.State))
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
                 // Preserve R4's immediate admission predecessor while continuing R5's complete proof.
                 operationState.AdmissionSource = previous;
@@ -1032,15 +1058,16 @@ internal sealed class GitHubCoordinationStore
             var expected = GitHubCoordinationObjects.Prepare(state);
             GitHubCoordinationObjects.Authenticate(expected, commit.Value, root.Value, leaf.Value, blob.Value);
             if (!RepositoryMatches(state.RepositoryId, repository)
-                || state.TargetRef != authority.TargetRef)
+                || state.TargetRef != client.ReadAuthority.TargetRef)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
             return new(GitHubCoordinationOutcome.Current,
                 state: new StateCapability(this, repository, target, headOid,
                     state, expected.StateBytes));
         }
-        catch (GitHubCoordinationException)
+        catch (GitHubCoordinationException exception)
         {
-            return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            return DomainFailure(exception.Incompatible ? GitHubCoordinationFailureKind.Incompatible
+                : GitHubCoordinationFailureKind.ObjectMismatch);
         }
     }
 
@@ -1326,33 +1353,8 @@ internal sealed class GitHubCoordinationStore
 
     private string ProposalRef(GitHubCoordinationState state)
     {
-        var parts = state.RepositoryId.Split('/');
-        var campaign = IdentityKey("proposal-campaign", parts[0].ToLowerInvariant(),
-            parts[1].ToLowerInvariant(), state.TargetRef, authority.CampaignLineage);
-        var generation = IdentityKey("proposal-generation", authority.CampaignLineage,
+        return GitHubPublicationFactory.CreateProposalRef(client.ReadAuthority,
             state.GenerationId, state.SnapshotCommitmentSha256, state.PolicyCommitmentSha256);
-        return "refs/heads/contract-scribe/proposals/" + campaign + "/" + generation;
-    }
-
-    private static string IdentityKey(string domain, params string[] values)
-    {
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        Append(hash, Encoding.UTF8.GetBytes("domain"));
-        Append(hash, Encoding.UTF8.GetBytes("contract-scribe/github-" + domain + "/v1"));
-        foreach (var value in values)
-        {
-            Append(hash, Encoding.UTF8.GetBytes("value"));
-            Append(hash, Encoding.UTF8.GetBytes(value));
-        }
-        return Convert.ToHexStringLower(hash.GetHashAndReset());
-    }
-
-    private static void Append(IncrementalHash hash, ReadOnlySpan<byte> value)
-    {
-        Span<byte> length = stackalloc byte[4];
-        BinaryPrimitives.WriteInt32BigEndian(length, value.Length);
-        hash.AppendData(length);
-        hash.AppendData(value);
     }
 
     private static bool RepositoryMatches(string repositoryId, GitHubRepositoryIdentity repository) =>
@@ -1460,6 +1462,7 @@ internal sealed class GitHubCoordinationStore
         public ImmutableArray<GitHubCoordinationChangedFile> CumulativeChangedFiles =>
             state.CumulativeChangedFiles;
         internal StateCapability? Creation { get; }
+        internal ImmutableArray<GitHubCampaignGeneration> Generations { get; init; } = [];
         internal GitHubCoordinationState State => state;
         internal ImmutableArray<byte> CanonicalBytes => canonicalBytes;
         public override string ToString() => nameof(StateCapability);

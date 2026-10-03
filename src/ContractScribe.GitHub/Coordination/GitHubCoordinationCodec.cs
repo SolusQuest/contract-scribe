@@ -175,6 +175,11 @@ internal static class GitHubCoordinationCodec
         var root = document.RootElement;
         Require(root.ValueKind == JsonValueKind.Object);
         var properties = root.EnumerateObject().ToArray();
+        // An unsupported discriminator is observed, never read through an older codec.
+        var versions = properties.Where(property => property.NameEquals("version")).ToArray();
+        Require(versions.Length == 1 && versions[0].Value.TryGetInt32(out _));
+        if (versions[0].Value.GetInt32() != GitHubPublicationContract.Version)
+            throw new GitHubCoordinationException(incompatible: true);
         Require(properties.Length == PropertyNames.Length);
         for (var index = 0; index < PropertyNames.Length; index++)
             Require(properties[index].NameEquals(PropertyNames[index]));
@@ -506,6 +511,8 @@ internal static class GitHubCoordinationCodec
 
 internal sealed class GitHubCoordinationException : Exception
 {
-    internal GitHubCoordinationException() : base("The GitHub coordination boundary rejected the operation.") { }
+    internal GitHubCoordinationException(bool incompatible = false)
+        : base("The GitHub coordination boundary rejected the operation.") => Incompatible = incompatible;
+    internal bool Incompatible { get; }
     public override string ToString() => Message;
 }

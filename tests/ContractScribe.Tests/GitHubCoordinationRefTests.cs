@@ -4,8 +4,10 @@ using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Reflection;
 using ContractScribe.Core;
+using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Coordination;
 using ContractScribe.GitHub.Transport;
 
@@ -13,6 +15,522 @@ namespace ContractScribe.Tests;
 
 public sealed partial class GitHubCoordinationRefTests
 {
+    [Fact]
+    public async Task G1_first_run_observes_actual_HEAD_without_candidate_or_expected_base()
+    {
+        var remote = new G1Remote();
+        remote.Coordination.TargetHead = Oid('9');
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.FirstRun, result.Kind);
+        Assert.Equal(GitHubCampaignLedgerKind.Missing, result.LedgerKind);
+        Assert.Equal(Oid('9'), result.TargetOid);
+        Assert.Equal(42, result.Repository!.Id);
+        Assert.Null(result.CoordinationOid);
+        Assert.True(result.CollectionExhausted);
+        Assert.Empty(result.PullRequests);
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G1_current_unpublished_ledger_is_authenticated_without_matching_a_candidate()
+    {
+        var remote = new G1Remote();
+        var claim = GitHubCoordinationCodec.CreateClaim(Authority(), Oid('0'));
+        remote.Coordination.Seed(claim);
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unpublished, result.Kind);
+        Assert.Equal(GitHubCampaignLedgerKind.Current, result.LedgerKind);
+        Assert.Equal(claim.CurrentCandidateCommitmentSha256, result.Ledger!.CandidateCommitmentSha256);
+        Assert.Equal(claim.OperationId, result.Ledger.OperationId);
+        Assert.Equal(remote.Coordination.CoordinationHead, result.CoordinationOid);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("draft", "OpenDraft", "Active")]
+    [InlineData("ready", "OpenReady", "Active")]
+    [InlineData("closed", "ClosedUnmerged", "Terminal")]
+    [InlineData("merged", "Merged", "Terminal")]
+    public async Task G1_observes_live_owned_PR_facts_without_candidate_or_user_endpoint(
+        string lifecycle, string expectedPr, string expectedCampaign)
+    {
+        var remote = G1Remote.Published(lifecycle);
+        if (lifecycle == "merged") remote.Coordination.TargetHead = Oid('9');
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Null(result.Failure);
+        Assert.Equal(expectedCampaign, result.Kind.ToString());
+        var pr = Assert.Single(result.PullRequests);
+        Assert.Equal(expectedPr, pr.Kind.ToString());
+        Assert.Equal(17, pr.Number);
+        Assert.Equal(1017, pr.Id);
+        Assert.Equal("PR_17", pr.NodeId);
+        Assert.Equal(Oid('1'), pr.BaseOid);
+        Assert.True(pr.OwnershipVerified);
+        Assert.Equal(GitHubPublicationPrincipal.ActionsBot, pr.Author);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("closed")]
+    [InlineData("merged")]
+    public async Task G1_rereads_reopened_terminal_PR_and_preserves_actual_active_identity(string terminal)
+    {
+        var remote = G1Remote.Published(terminal);
+        G1Remote.Lifecycle(remote.Prs[0], "draft");
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Equal(GitHubCampaignFailureKind.StaleLedger, result.Failure!.Kind);
+        Assert.Equal(GitHubCampaignPullRequestKind.OpenDraft, Assert.Single(result.PullRequests).Kind);
+        Assert.Equal(17, result.Failure.PullRequestNumber);
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G1_missing_ledger_with_managed_PR_never_becomes_first_run()
+    {
+        var remote = G1Remote.Published("draft", seed: false);
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignLedgerKind.Missing, result.LedgerKind);
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.True(result.CollectionExhausted);
+        var pr = Assert.Single(result.PullRequests);
+        Assert.Equal(GitHubCampaignPullRequestKind.OpenDraft, pr.Kind);
+        Assert.False(pr.OwnershipVerified);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task G1_complete_pagination_sees_later_managed_PR_and_unknown_last_page_never_proves_absence(bool failure)
+    {
+        var remote = G1Remote.Published("draft");
+        var other = (JsonObject)remote.Prs[0].DeepClone();
+        other["id"] = 1002; other["node_id"] = "PR_2"; other["number"] = 2;
+        other["head"]!["ref"] = "unrelated"; other["body"] = null;
+        remote.Prs.Insert(0, other);
+        remote.Paginate = true;
+        remote.FailLastPage = failure;
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(failure ? GitHubCampaignKind.Unverifiable : GitHubCampaignKind.Active, result.Kind);
+        Assert.Equal(!failure, result.CollectionExhausted);
+        if (!failure) { Assert.Equal(2, result.CollectionPages); Assert.Equal(17, Assert.Single(result.PullRequests).Number); }
+        Assert.Contains(remote.Requests, path => path.Contains("page=2", StringComparison.Ordinal));
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G1_multiple_active_or_same_generation_duplicates_are_ambiguous_without_ledger()
+    {
+        foreach (var lifecycle in new[] { "draft", "closed" })
+        {
+            var remote = G1Remote.Published(lifecycle, seed: false);
+            var duplicate = (JsonObject)remote.Prs[0].DeepClone();
+            duplicate["id"] = 1018; duplicate["node_id"] = "PR_18"; duplicate["number"] = 18;
+            remote.Prs.Add(duplicate);
+            using var observer = remote.Observer();
+            var result = await observer.ObserveAsync();
+            Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+            Assert.Equal(lifecycle == "draft" ? GitHubCampaignFailureKind.MultipleActive : GitHubCampaignFailureKind.Ambiguous, result.Failure!.Kind);
+            Assert.Equal(2, result.PullRequests.Length);
+            remote.AssertReadOnly();
+        }
+    }
+
+    [Theory]
+    [InlineData("User")]
+    [InlineData("Bot")]
+    [InlineData("Mannequin")]
+    [InlineData("null")]
+    [InlineData("unknown")]
+    public async Task G1_untrusted_or_unavailable_author_never_acquires_managed_ownership(string actor)
+    {
+        var remote = G1Remote.Published("draft");
+        remote.Prs[0]["user"] = actor == "null" ? null : JsonSerializer.SerializeToNode(new
+        { id = 77, node_id = "U_77", login = "synthetic-other", type = actor == "unknown" ? "FutureActor" : actor });
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.All(result.PullRequests, pr => Assert.False(pr.OwnershipVerified));
+        Assert.NotNull(result.Failure);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("body")]
+    [InlineData("title")]
+    [InlineData("fork")]
+    [InlineData("deleted")]
+    [InlineData("base")]
+    public async Task G1_human_or_foreign_PR_changes_are_source_free_unverifiable_facts(string change)
+    {
+        var remote = G1Remote.Published("draft");
+        if (change is "body" or "title") remote.Prs[0][change] = "SYNTHETIC_PRIVATE_BODY_DO_NOT_PROJECT";
+        if (change == "fork") remote.Prs[0]["head"]!["repo"]!["id"] = 55;
+        if (change == "deleted") remote.Prs[0]["head"]!["repo"] = null;
+        if (change == "base") remote.Prs[0]["base"]!["sha"] = Oid('9');
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Equal(GitHubCampaignFailureKind.Ownership, result.Failure!.Kind);
+        Assert.Equal(17, Assert.Single(result.PullRequests).Number);
+        Assert.DoesNotContain("SYNTHETIC_PRIVATE_BODY_DO_NOT_PROJECT", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        Assert.Equal(nameof(GitHubCampaignObservation), result.ToString());
+        Assert.Equal(nameof(GitHubCampaignFailure), result.Failure.ToString());
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("target")]
+    [InlineData("proposal")]
+    [InlineData("pr")]
+    [InlineData("transport")]
+    public async Task G1_missing_or_unknown_remote_facts_fail_closed_with_exact_identity(string missing)
+    {
+        var remote = G1Remote.Published("draft");
+        if (missing == "target") remote.RejectPath = "/git/ref/heads/main";
+        if (missing == "proposal") remote.Refs.Clear();
+        if (missing == "pr") remote.Prs.Clear();
+        if (missing == "transport") { remote.RejectPath = "/pulls"; remote.RejectStatus = HttpStatusCode.Forbidden; }
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.NotNull(result.Failure);
+        Assert.Equal("refs/heads/main", result.TargetRef);
+        Assert.Equal(42, result.Repository!.Id);
+        if (missing is "target" or "proposal") Assert.Equal(GitHubCampaignFailureKind.MissingRef, result.Failure.Kind);
+        if (missing == "pr") { Assert.Equal(GitHubCampaignFailureKind.MissingPullRequest, result.Failure.Kind); Assert.Equal(17, result.Failure.PullRequestNumber); }
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task G1_target_movement_and_late_read_window_drift_preserve_the_observed_PR(bool late)
+    {
+        var remote = G1Remote.Published("draft");
+        if (!late) remote.Coordination.TargetHead = Oid('9');
+        else
+        {
+            var reads = 0;
+            remote.BeforeRead = path =>
+            { if (path.EndsWith("/git/ref/heads/main", StringComparison.Ordinal) && ++reads == 2) remote.Coordination.TargetHead = Oid('9'); };
+        }
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Equal(late ? GitHubCampaignFailureKind.RefChanged : GitHubCampaignFailureKind.TargetMoved, result.Failure!.Kind);
+        Assert.Equal(17, Assert.Single(result.PullRequests).Number);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task G1_unsupported_contract_and_corrupt_canonical_bytes_are_distinct_closed_observations(bool incompatible)
+    {
+        var remote = new G1Remote();
+        var state = GitHubCoordinationCodec.CreateClaim(Authority(), Oid('0'));
+        var text = Encoding.UTF8.GetString(GitHubCoordinationCodec.Encode(state));
+        var bytes = Encoding.UTF8.GetBytes(incompatible ? text.Replace("\"version\":1", "\"version\":2", StringComparison.Ordinal) : text + " ");
+        remote.Coordination.SeedRaw(bytes, state.OperationCommitmentSha256, "claimed", state.TargetCommitOid);
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Equal(incompatible ? GitHubCampaignLedgerKind.Incompatible : GitHubCampaignLedgerKind.Corrupt, result.LedgerKind);
+        Assert.NotNull(result.CoordinationOid);
+        Assert.Null(result.Ledger);
+        Assert.False(result.CollectionExhausted);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData(ObjectTamper.Blob)]
+    [InlineData(ObjectTamper.LeafTree)]
+    [InlineData(ObjectTamper.RootTree)]
+    [InlineData(ObjectTamper.Parent)]
+    [InlineData(ObjectTamper.Tree)]
+    [InlineData(ObjectTamper.Actor)]
+    [InlineData(ObjectTamper.Time)]
+    [InlineData(ObjectTamper.Message)]
+    public async Task G1_candidate_free_reader_retains_complete_Git_object_authentication(ObjectTamper tamper)
+    {
+        var remote = new G1Remote();
+        remote.Coordination.Seed(GitHubCoordinationCodec.CreateClaim(Authority(), Oid('0')));
+        remote.Coordination.Tamper(tamper);
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Null(result.Ledger);
+        Assert.NotNull(result.Failure);
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G1_terminal_detail_reopening_during_read_window_is_not_cached_completion()
+    {
+        var remote = G1Remote.Published("closed");
+        remote.AfterDetail = () => G1Remote.Lifecycle(remote.Prs[0], "draft");
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Equal(GitHubCampaignFailureKind.StaleLedger, result.Failure!.Kind);
+        Assert.Equal(17, result.Failure.PullRequestNumber);
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G1_observes_old_terminal_and_current_active_generations_from_complete_history()
+    {
+        var first = Authority();
+        var chain = PublishedChain(first);
+        var terminal = G1Terminal(chain[^1], GitHubCoordinationStage.Merged);
+        var next = SuccessorAuthority(first, terminal, GitHubCoordinationStage.Merged);
+        var claim = GitHubCoordinationCodec.CreateClaim(next, GitHubCoordinationObjects.Prepare(terminal).CommitOid);
+        var content = GitHubCoordinationCodec.WithStage(claim, GitHubCoordinationStage.ContentCreated,
+            GitHubCoordinationObjects.Prepare(claim).CommitOid, Oid('2'));
+        var proposal = GitHubCoordinationCodec.WithStage(content, GitHubCoordinationStage.ProposalRefAdvanced,
+            GitHubCoordinationObjects.Prepare(content).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'));
+        var creation = PullRequestCreationCommitment(claim, GitHubPublicationFactory.CreateProposalRef(next), Oid('2'), Oid('3'));
+        var published = GitHubCoordinationCodec.WithStage(proposal, GitHubCoordinationStage.Published,
+            GitHubCoordinationObjects.Prepare(proposal).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'), creation, 18,
+            Oid('9'), Oid('9'), OwnershipMarker(creation));
+        var remote = new G1Remote();
+        remote.Coordination.TargetHead = Oid('9');
+        remote.Coordination.SeedChain([.. chain, terminal, claim, content, proposal, published]);
+        remote.AddPr(first, chain[^1], "merged");
+        remote.AddPr(next, published, "draft");
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Null(result.Failure);
+        Assert.Equal(GitHubCampaignKind.Active, result.Kind);
+        Assert.Equal(2, result.PullRequests.Length);
+        Assert.Equal(GitHubCampaignPullRequestKind.Merged, result.PullRequests[0].Kind);
+        Assert.Equal(GitHubCampaignPullRequestKind.OpenDraft, result.PullRequests[1].Kind);
+        Assert.All(result.PullRequests, pr => Assert.True(pr.OwnershipVerified));
+        Assert.Equal("generation-2", result.Ledger!.GenerationId);
+        remote.AssertReadOnly();
+    }
+
+    private static GitHubCoordinationState G1Terminal(GitHubCoordinationState state, GitHubCoordinationStage stage) =>
+        GitHubCoordinationCodec.WithStage(state, stage, GitHubCoordinationObjects.Prepare(state).CommitOid,
+            state.ContentCommitOid, state.ProposalRefOid, state.ProposalCommitOid, state.ProposalTreeOid,
+            state.PullRequestCreationOperationCommitmentSha256, state.PullRequestNumber,
+            state.ExpectedBaseOid, state.ObservedBaseOid, state.OwnershipMarkerSha256);
+
+    [Theory]
+    [InlineData("prefix")]
+    [InlineData("marker")]
+    [InlineData("number")]
+    public async Task G1_relevance_never_discards_a_potentially_managed_PR(string relevance)
+    {
+        var remote = G1Remote.Published("draft", seed: relevance == "number");
+        if (relevance != "prefix") remote.Prs[0]["head"]!["ref"] = "foreign-valid-head";
+        if (relevance != "marker") remote.Prs[0]["body"] = null;
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.Equal(17, Assert.Single(result.PullRequests).Number);
+        Assert.True(result.CollectionExhausted);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("coordination")]
+    [InlineData("proposal")]
+    [InlineData("history")]
+    public async Task G1_ref_and_history_drift_cannot_become_absence_or_ownership(string drift)
+    {
+        var remote = drift == "coordination" ? new G1Remote() : G1Remote.Published("draft");
+        if (drift == "history") remote.Coordination.RemoveCommit(PublishedChain(Authority())[0]);
+        else
+        {
+            var reads = 0;
+            remote.BeforeRead = path =>
+            {
+                if (path.Contains("/git/ref/heads/contract-scribe/" + drift + "/", StringComparison.Ordinal) && ++reads == 2)
+                {
+                    if (drift == "coordination") remote.Coordination.Seed(GitHubCoordinationCodec.CreateClaim(Authority(), Oid('0')));
+                    else remote.Refs[GitHubPublicationFactory.CreateProposalRef(Authority())] = Oid('9');
+                }
+            };
+            // The wire namespace is plural for proposals.
+            if (drift == "proposal") remote.BeforeRead = path =>
+            {
+                if (path.Contains("/git/ref/heads/contract-scribe/proposals/", StringComparison.Ordinal) && ++reads == 2)
+                    remote.Refs[GitHubPublicationFactory.CreateProposalRef(Authority())] = Oid('9');
+            };
+        }
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+        Assert.NotNull(result.Failure);
+        Assert.Equal(drift == "history" ? GitHubCampaignFailureKind.Transport : GitHubCampaignFailureKind.RefChanged, result.Failure.Kind);
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G1_old_terminal_PR_does_not_turn_a_new_unpublished_generation_into_terminal_work()
+    {
+        var first = Authority();
+        var chain = PublishedChain(first);
+        var terminal = G1Terminal(chain[^1], GitHubCoordinationStage.Merged);
+        var next = SuccessorAuthority(first, terminal, GitHubCoordinationStage.Merged);
+        var claim = GitHubCoordinationCodec.CreateClaim(next, GitHubCoordinationObjects.Prepare(terminal).CommitOid);
+        var remote = new G1Remote();
+        remote.Coordination.TargetHead = Oid('9');
+        remote.Coordination.SeedChain([.. chain, terminal, claim]);
+        remote.AddPr(first, chain[^1], "merged");
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Null(result.Failure);
+        Assert.Equal(GitHubCampaignKind.Unpublished, result.Kind);
+        Assert.Equal("generation-2", result.Ledger!.GenerationId);
+        Assert.Equal(GitHubCampaignPullRequestKind.Merged, Assert.Single(result.PullRequests).Kind);
+        remote.AssertReadOnly();
+    }
+
+    private sealed class G1Remote : HttpMessageHandler
+    {
+        internal CoordinationRemote Coordination { get; } = new();
+        internal List<JsonObject> Prs { get; } = [];
+        internal Dictionary<string, string> Refs { get; } = new(StringComparer.Ordinal);
+        internal List<string> Requests { get; } = [];
+        internal bool Paginate, FailLastPage;
+        internal string? RejectPath;
+        internal HttpStatusCode RejectStatus = HttpStatusCode.NotFound;
+        internal Action<string>? BeforeRead;
+        internal Action? AfterDetail;
+
+        internal static G1Remote Published(string lifecycle, bool seed = true)
+        {
+            var remote = new G1Remote();
+            var authority = Authority();
+            var chain = PublishedChain(authority);
+            if (seed)
+            {
+                remote.Coordination.SeedChain(chain);
+                if (lifecycle is "merged" or "closed") remote.Coordination.Seed(G1Terminal(chain[^1],
+                    lifecycle == "merged" ? GitHubCoordinationStage.Merged : GitHubCoordinationStage.ClosedUnmerged));
+            }
+            remote.AddPr(authority, chain[^1], lifecycle);
+            return remote;
+        }
+
+        internal void AddPr(ValidatedGitHubPublicationAuthority authority, GitHubCoordinationState state, string lifecycle)
+        {
+            var read = GitHubPublicationFactory.CreateCampaignReadAuthority(authority);
+            var reference = GitHubPublicationFactory.CreateProposalRef(authority);
+            var metadata = GitHubProposalPullRequestStore.CreateMetadata(read, reference, state.SnapshotCommitmentSha256,
+                state.PolicyCommitmentSha256, state.TargetRef, state.OperationCommitmentSha256,
+                state.PullRequestCreationOperationCommitmentSha256!);
+            var publisher = GitHubPublicationPrincipal.ActionsBot;
+            var repository = JsonSerializer.SerializeToNode(new
+            {
+                id = 42,
+                node_id = "R_42",
+                name = "repo",
+                full_name = "Owner/repo",
+                @private = true,
+                archived = false,
+                disabled = false,
+                owner = new { id = 7, node_id = "U_7", login = "Owner", type = "User" }
+            });
+            var number = state.PullRequestNumber!.Value;
+            var pr = (JsonObject)JsonSerializer.SerializeToNode(new
+            {
+                id = 1000 + number,
+                node_id = "PR_" + number,
+                number,
+                state = "open",
+                draft = true,
+                merged = false,
+                merged_at = (string?)null,
+                closed_at = (string?)null,
+                created_at = "2026-01-01T00:00:00Z",
+                title = metadata.Title,
+                body = metadata.Body,
+                maintainer_can_modify = false,
+                user = new { id = publisher.Id, node_id = publisher.NodeId, login = publisher.Login, type = "Bot" },
+                head = new { repo = repository, @ref = reference[11..], sha = state.ProposalCommitOid },
+                @base = new { repo = repository, @ref = "main", sha = state.ObservedBaseOid },
+            })!;
+            Lifecycle(pr, lifecycle);
+            Prs.Add(pr);
+            Refs[reference] = state.ProposalCommitOid!;
+        }
+
+        internal static void Lifecycle(JsonObject pr, string lifecycle)
+        {
+            var closed = lifecycle is "closed" or "merged";
+            pr["state"] = closed ? "closed" : "open";
+            pr["draft"] = lifecycle == "draft";
+            pr["merged"] = lifecycle == "merged";
+            pr["closed_at"] = closed ? "2026-01-02T00:00:00Z" : null;
+            pr["merged_at"] = lifecycle == "merged" ? "2026-01-02T00:00:00Z" : null;
+        }
+
+        internal GitHubCampaignObserver Observer()
+        {
+            using var registration = (IDisposable)typeof(GitHubTransportTestHook).GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, [Origin, this, 30_000])!;
+            return GitHubCampaignObserver.Create(GitHubPublicationFactory.CreateCampaignReadAuthority(
+                "Owner", "repo", "refs/heads/main", "campaign-1"), GitHubTransportTestHook.Placeholder);
+        }
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            Assert.Equal(HttpMethod.Get, request.Method);
+            var path = request.RequestUri!.AbsolutePath;
+            Requests.Add(request.RequestUri.PathAndQuery);
+            BeforeRead?.Invoke(path);
+            if (path == "/user" || RejectPath is { } rejected && path.EndsWith(rejected, StringComparison.Ordinal))
+                return Reply(RejectStatus, new { message = "synthetic unavailable route" });
+            if (path.EndsWith("/pulls", StringComparison.Ordinal))
+            {
+                var page2 = request.RequestUri.Query.Contains("page=2", StringComparison.Ordinal);
+                if (page2 && FailLastPage) return Reply(HttpStatusCode.ServiceUnavailable, new { message = "synthetic" });
+                var response = Reply(HttpStatusCode.OK, Paginate && Prs.Count > 1 ? (page2 ? Prs.Skip(1) : Prs.Take(1)).ToArray() : Prs.ToArray());
+                if (Paginate && Prs.Count > 1 && !page2)
+                    response.Headers.TryAddWithoutValidation("Link", "<" + Origin + "repos/Owner/repo/pulls?state=all&sort=created&direction=asc&per_page=100&page=2>; rel=\"next\"");
+                return response;
+            }
+            if (path.Contains("/pulls/", StringComparison.Ordinal))
+            {
+                var number = int.Parse(path.Split('/')[^1], System.Globalization.CultureInfo.InvariantCulture);
+                var pr = Prs.SingleOrDefault(pr => pr["number"]!.GetValue<int>() == number);
+                var response = pr is null ? Reply(HttpStatusCode.NotFound, new { message = "missing" }) : Reply(HttpStatusCode.OK, pr);
+                AfterDetail?.Invoke(); AfterDetail = null;
+                return response;
+            }
+            if (path.Contains("/git/ref/heads/contract-scribe/proposals/", StringComparison.Ordinal))
+            {
+                var reference = "refs/" + Uri.UnescapeDataString(path[(path.IndexOf("/git/ref/", StringComparison.Ordinal) + 9)..]);
+                return Refs.TryGetValue(reference, out var oid) ? Reply(HttpStatusCode.OK,
+                    new { @ref = reference, node_id = "REF_" + reference.Split('/')[^1], @object = new { type = "commit", sha = oid } })
+                    : Reply(HttpStatusCode.NotFound, new { message = "missing" });
+            }
+            token.ThrowIfCancellationRequested();
+            return await Coordination.Reply(request);
+        }
+
+        private static HttpResponseMessage Reply(HttpStatusCode status, object value) => new(status)
+        { Content = new StringContent(JsonSerializer.Serialize(value), Encoding.UTF8, "application/json") };
+
+        internal void AssertReadOnly()
+        {
+            Assert.DoesNotContain("/user", Requests);
+            Assert.Equal(0, Coordination.ObjectMutationAttempts);
+            Assert.Equal(0, Coordination.RefMutationAttempts);
+        }
+    }
+
     [Fact]
     public void R1_and_R3_coordination_known_answers_round_trip_through_the_production_codec()
     {

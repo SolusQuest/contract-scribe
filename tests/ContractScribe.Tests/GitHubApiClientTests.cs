@@ -17,6 +17,52 @@ public sealed class GitHubTransportCollection;
 [Collection("GitHub transport hook")]
 public sealed class GitHubApiClientTests
 {
+    [Fact]
+    public async Task Campaign_read_client_rejects_every_mutation_before_dispatch_or_payload_use()
+    {
+        var read = GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", "campaign-1");
+        var handler = new ScriptedHandler { Reply = (_, _) => Task.FromResult(Json(Repository())) };
+        using var registration = Register(new Uri(Origin), handler, 30_000);
+        using var client = GitHubApiClient.CreateReadOnly(read, GitHubTransportTestHook.Placeholder);
+        Assert.False(client.HasMutationAuthority);
+        Assert.Throws<GitHubProtocolException>(() => client.Authority);
+        Assert.NotNull((await client.GetRepositoryAsync()).Value);
+        handler.Requests.Clear();
+        // Null/malformed payloads still fail at the authority fence, never at serialization.
+        var results = new[]
+        {
+            Observe(await client.CreateBlobAsync(Oid('2'), "synthetic candidate"u8.ToArray())),
+            Observe(await client.CreateTreeAsync(Oid('2'), default)),
+            Observe(await client.CreateCommitAsync(null!)),
+            Observe(await client.CreatePullRequestAsync(null!)),
+            Observe(await client.UpdateRefAsync(null!)),
+        };
+        Assert.All(results, result =>
+        {
+            Assert.Equal(GitHubFailureCode.InvalidRequest, result.Failure!.Code);
+            Assert.Equal(GitHubDelivery.NotDispatched, result.Delivery);
+            Assert.Null(result.Context);
+            Assert.Null(result.Value);
+        });
+        Assert.Empty(handler.Requests);
+    }
+
+    [Fact]
+    public void Campaign_read_identity_is_candidate_free_and_reuses_publication_naming()
+    {
+        var publication = Authority();
+        var read = GitHubPublicationFactory.CreateCampaignReadAuthority("owner", "REPO", "refs/heads/main", "campaign-1");
+        Assert.Equal(GitHubPublicationFactory.CreateCoordinationRef(publication), GitHubPublicationFactory.CreateCoordinationRef(read));
+        Assert.Equal(GitHubPublicationFactory.CreateProposalRef(publication), GitHubPublicationFactory.CreateProposalRef(read,
+            publication.GenerationId, publication.SnapshotCommitmentSha256, publication.PolicyCommitmentSha256));
+        Assert.StartsWith(GitHubPublicationFactory.CreateProposalRefPrefix(read), GitHubPublicationFactory.CreateProposalRef(publication), StringComparison.Ordinal);
+        Assert.Equal(nameof(ValidatedGitHubCampaignReadAuthority), read.ToString());
+        foreach (var bad in new[] { "", "../owner", "owner/private", "owner\n" })
+            Assert.Throws<GitHubPublicationValidationException>(() => GitHubPublicationFactory.CreateCampaignReadAuthority(bad, "repo", "refs/heads/main", "campaign-1"));
+        Assert.Throws<GitHubPublicationValidationException>(() => GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", "invalid lineage"));
+        Assert.Throws<GitHubPublicationValidationException>(() => GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/../main", "campaign-1"));
+    }
+
     private const string Origin = "http://127.0.0.1:18765/";
     private static string Oid(char c) => new(c, 40);
     private static string Hash(char c) => new(c, 64);
