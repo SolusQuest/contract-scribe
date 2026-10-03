@@ -14,7 +14,7 @@ deterministic Roslyn audit
 
 The Documentation Scribe is the project's narrow model-assisted role rather than a general coding agent. Its Scribe Runtime can inspect bounded repository evidence and submit structured documentation content, but it cannot edit arbitrary files or mutate GitHub. A deterministic patch engine owns source changes and rejects anything outside selected XML-documentation blocks.
 
-M0 through M5 are complete. M6 delivered the layered consumer configuration, verified DLL payload, thin composite Action, caller workflow examples, release controls, and exact internal-candidate qualification. M6 closes under this engineering and internal-testing scope; no public release or released support is claimed. The accepted next direction is M7: caller-owned scheduling and automatic bounded continuation. Its detailed plan will be refined separately. Licensing and first public publication are deferred until after M7. See the [M6 closeout](docs/90_roadmap/m6-plan.md), [documentation index](docs/README.md), and [roadmap](docs/90_roadmap/roadmap.md).
+M0 through M5 are complete. M6 delivered the layered consumer configuration, verified DLL payload, thin composite Action, caller workflow examples, release controls, and exact internal-candidate qualification. M6 closes under this engineering and internal-testing scope; no public release or released support is claimed. The adopted [M7 plan](docs/90_roadmap/m7-plan.md) defines caller-owned scheduling and automatic bounded continuation, with implementation and exit evidence still pending. Licensing (#29) and first public publication (#189) remain separate gates deferred until after M7. See the [M6 closeout](docs/90_roadmap/m6-plan.md), [documentation index](docs/README.md), and [roadmap](docs/90_roadmap/roadmap.md).
 
 Machine contracts are still pre-release. Their exact draft meaning is identified by repository commit, and compatible-family version numbers are not incremented for every design correction. The first downstream-consumable release establishes the external compatibility freeze. See [Contract lifecycle](docs/00_project/contract-lifecycle.md).
 
@@ -26,7 +26,7 @@ Initial target repositories must expose an explicit C# solution or project whose
 
 A caller-owned GitHub Actions example for manually and periodically running the Action with verified campaign-state handoff lives under `examples/github-actions/`; see [Caller-owned Action usage](docs/10_workflow/action-usage.md).
 
-The current example requires explicit per-hop activation and replays an existing publication on its default resume path. M6 qualification proved checkpoint recovery and idempotent replay, not automatic consumption of all remaining work or punctual GitHub cron delivery. M7 will refine that user experience without treating native schedule timing as a product guarantee.
+The current example requires explicit per-hop activation and replays an existing publication on its default resume path. M6 qualification proved checkpoint recovery and idempotent replay, not automatic consumption of all remaining work or punctual GitHub cron delivery. The M7 plan adopts automatic bounded continuation while retaining best-effort caller scheduling without a timing guarantee; those new behaviors await implementation.
 
 Licensing and contribution policy are to be decided before the first downstream-consumable release, NuGet package or GitHub Action publication, or merge of external code contributions.
 
