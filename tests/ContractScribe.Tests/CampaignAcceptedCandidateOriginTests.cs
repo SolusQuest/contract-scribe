@@ -13,11 +13,11 @@ public sealed partial class CampaignStateContractTests
         CampaignProviderFinalDisposition disposition, bool noWork)
     {
         var basis = CreateAcceptedCandidateScenario().State;
-        var key = "campaign-work." + Hash('e');
+        var key = basis.WorkItems.Single(item => item.Status == CampaignWorkStatus.Planned).WorkItemKey;
         var closed = new CampaignWorkItemState(key, 1, 0, CampaignWorkStatus.Closed, null,
             new(CampaignWorkOutcomeStage.Scribe, CampaignWorkOutcomeCode.ProviderFailure, disposition,
                 Hash('a'), null, null, null, Hash('b'), key));
-        // Selection inspects work status only; this does not manufacture a checkpoint or admission.
+        // Selection uses the existing batch's work keys; this does not manufacture a checkpoint or admission.
         var state = new CampaignCheckpointState(basis.ProductRevision, basis.CampaignLineage, basis.Snapshot,
             basis.CheckpointRevision, basis.ConfiguredCeilings, basis.LineageCharges,
             [basis.WorkItems.Single(item => item.Status == CampaignWorkStatus.Accepted), closed],
@@ -32,6 +32,22 @@ public sealed partial class CampaignStateContractTests
             new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
             _ => throw new InvalidOperationException("Selection must not access credentials."));
         Assert.Equal(noWork, continuation.HasNoAppendWork(state));
+    }
+
+    [Fact]
+    public void Append_selection_stops_on_an_accepted_fixed_batch_with_deferred_full_plan_work()
+    {
+        var state = CreateAcceptedCandidateScenario(targetLimit: 1).State;
+        Assert.Contains(state.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
+        var configuration = new GitHubPublicationConfiguration("Owner", "repo", "refs/heads/main", new('a', 40),
+            "append", "generation", new(128, 128, 4194304), GitHubPublicationTransitionKind.SameSnapshotAppend,
+            new("previous", Hash('a'), state.CandidateObservation!.PatchResultCommitmentSha256,
+                "generation", Hash('b'), Hash('c'), []));
+        var continuation = new CampaignAcceptedCandidateContinuation(null!, null!,
+            new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
+            _ => throw new InvalidOperationException("Selection must not access credentials."));
+        Assert.False(continuation.ReconstructAccepted(state));
+        Assert.True(continuation.HasNoAppendWork(state));
     }
 
     [Theory]

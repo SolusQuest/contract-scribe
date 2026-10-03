@@ -5569,9 +5569,9 @@ public sealed partial class CampaignStateContractTests
         Assert.IsType<JsonObject>(JsonNode.Parse(
             CampaignStateJson.CreateArtifact(CreateProposalCompleteState()).ExactUtf8Json.AsSpan()));
 
-    private static AcceptedCandidateScenario CreateAcceptedCandidateScenario()
+    private static AcceptedCandidateScenario CreateAcceptedCandidateScenario(int targetLimit = 100)
     {
-        var scenario = CreateProposalScenario();
+        var scenario = CreateProposalScenario(targetLimit: targetLimit);
         var work = scenario.Plan.WorkItems[0];
         var exchange = CreateScribeExchange(work);
         var proposal = AdmitProposal(

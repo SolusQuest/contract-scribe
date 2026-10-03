@@ -29,6 +29,17 @@ public sealed partial class CampaignCliProcessTests
             File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var statePath = Path.Join(stateDirectory, "checkpoint.json");
             await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
+            var layer = JsonNode.Parse(await File.ReadAllTextAsync(configurationPath))!.AsObject();
+            // Ten cumulative acceptances revalidate the first block ten times, then reconstruction once.
+            layer["budgets"] = new JsonObject
+            {
+                ["campaign"] = new JsonObject
+                {
+                    ["maximumCandidatesPerBlock"] = 12,
+                    ["maximumElapsedMilliseconds"] = 300_000,
+                },
+            };
+            await File.WriteAllTextAsync(configurationPath, layer.ToJsonString(), new UTF8Encoding(false, true));
             var preflight = CampaignPreflight.Run(new(CampaignOperation.Start, fixture.Root, "App/App.csproj", "policy.json",
                 "snapshot.batch", statePath, configurationPath, null, "campaign.integration"), RepositoryRoot);
             CampaignCheckpointArtifact? initial = null;

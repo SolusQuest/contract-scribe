@@ -268,10 +268,18 @@ public sealed partial class GitHubProposalCliProcessTests
         internal required Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)> GovernedFiles;
         internal string Snapshot = "snapshot.github";
 
-        internal static async Task<Fixture> CreateAsync(bool required = true, bool twoWorks = false, bool newPath = false, bool rejectNewPath = false)
+        internal static async Task<Fixture> CreateAsync(bool required = true, bool twoWorks = false, bool newPath = false, bool rejectNewPath = false,
+            bool unsupportedProperty = false)
         {
             var repository = await LoaderFixture.CreateAsync();
             await CampaignCliProcessTests.SetSingleWorkItemSourceAsync(repository.Root);
+            if (unsupportedProperty)
+            {
+                var path = Path.Join(repository.Root, "App", "App.cs");
+                var sourceText = await File.ReadAllTextAsync(path);
+                await File.WriteAllTextAsync(path, sourceText.Replace("    public static void Run() { }",
+                    "    public static void Run() { }\n    public static int Value { get; set; }", StringComparison.Ordinal));
+            }
             if (twoWorks)
             {
                 var path = Path.Join(repository.Root, "App", "App.cs");

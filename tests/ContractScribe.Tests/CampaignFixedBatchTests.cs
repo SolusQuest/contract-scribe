@@ -93,6 +93,51 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Theory]
+    [InlineData(0)]
+    [InlineData(10)]
+    public void Restored_retryable_target_reuses_its_distinct_slot_beside_the_current_new_target_subset(int limit)
+    {
+        var scenario = CreateProposalScenario(workItemCount: 12, costEnforced: false, maximumElapsedMilliseconds: 300_000);
+        var work = scenario.Plan.WorkItems[0];
+        var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var first = CreateScribeExchange(work);
+        var admitted = CampaignStateReducer.AdmitProviderInvocation(predecessor, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey, first.Request,
+            CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)));
+        Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
+        var attempt = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation).AttemptId;
+        var failure = CreateScribeExchange(work, attemptId: attempt.Value, resultFixture: "retryable-failure-result.json");
+        var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(predecessor, admitted),
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, failure.Request);
+        Assert.True(invocation.TryBeginDispatch(out _));
+        var completion = OrdinaryCompletion(invocation,
+            DocumentationScribeValidation.BindValidatedRunOutcome(failure.Request, attempt, failure.Result),
+            failure.Result.RunEnvelope.ElapsedMilliseconds);
+        var completed = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact, completion,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
+        Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+        var restored = CampaignStateJson.Parse(completed.Artifact.ExactUtf8Json.AsMemory()).Artifact!;
+        var allowance = CampaignStateFactory.CreateInvocationTargetAllowance(restored.State, new(limit));
+        Assert.Contains(work.WorkItemKey, allowance.WorkItemKeys);
+        Assert.Equal(limit + 1, allowance.WorkItemKeys.Length);
+        Assert.Equal(limit, restored.State.WorkItems.Count(item => item.OuterAttemptCount == 0
+            && allowance.WorkItemKeys.Contains(item.WorkItemKey, StringComparer.Ordinal)));
+        Assert.True(restored.State.Batch.SelectedTargetKeys.Select(key => restored.State.Batch.CompleteTargets.Single(target => target.TargetKey == key).WorkItemKey)
+            .Where(key => allowance.WorkItemKeys.Contains(key, StringComparer.Ordinal)).SequenceEqual(allowance.WorkItemKeys));
+        var blocked = scenario.Plan.WorkItems.First(item => !allowance.WorkItemKeys.Contains(item.WorkItemKey, StringComparer.Ordinal));
+        var rejected = CampaignStateReducer.AdmitProviderInvocation(restored, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, blocked.WorkItemKey,
+            CreateScribeExchange(blocked).Request, allowance);
+        Assert.Equal(CampaignTransitionKind.Rejected, rejected.Kind);
+        var retry = CampaignStateReducer.RetryProviderInvocation(restored, null, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
+            CreateFreshContextExchange(work).Request, allowance);
+        Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
+        Assert.Equal(work.WorkItemKey, Assert.IsType<CampaignProviderReservation>(retry.Artifact.State.ActiveReservation).WorkItemKey);
+        Assert.Equal(2, retry.Artifact.State.WorkItems.Single(item => item.WorkItemKey == work.WorkItemKey).OuterAttemptCount);
+    }
+
+    [Theory]
     [InlineData("missing")]
     [InlineData("project")]
     [InlineData("instruction")]

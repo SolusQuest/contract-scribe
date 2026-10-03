@@ -107,9 +107,10 @@ public sealed partial class DocumentationScribeCompositionTests
         var campaign = fixture.CreateCampaign();
         var store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
         var exchange = new RetryableBatchExchange();
-        var allowance = CampaignStateFactory.CreateInvocationTargetAllowance(campaign.InitialState, new(1));
         for (var attempt = 0; attempt < 3; attempt++)
         {
+            store = new MemoryCampaignStore(CampaignStateJson.Parse(store.Current!.ExactUtf8Json.AsMemory()).Artifact!);
+            var allowance = CampaignStateFactory.CreateInvocationTargetAllowance(store.Current!.State, new(attempt == 0 ? 1 : 0));
             var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
                 campaign.Input(fixture, store, exchange, RuntimeOptions()) with { TargetAllowance = allowance });
             Assert.NotEqual(DocumentationCampaignProposalOutcomeKind.HostContractError, outcome.Kind);

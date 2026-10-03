@@ -28,12 +28,8 @@ internal sealed class CampaignAcceptedCandidateContinuation(
         && state.CumulativeOutcome?.Kind == CampaignCumulativeOutcomeKind.Accepted
         && state.TerminalOutcome is null or { Kind: CampaignTerminalKind.Complete }
         && state.ActiveReservation is null
-        && state.WorkItems.All(item => item.Status == CampaignWorkStatus.Accepted
-            || item.Status == CampaignWorkStatus.Closed && item.ClosedOutcome is not
-            {
-                Code: CampaignWorkOutcomeCode.ProviderFailure,
-                ProviderDisposition: CampaignProviderFinalDisposition.Retryable,
-            });
+        && CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems) is
+        { Kind: CampaignTerminalKind.Complete };
 
     internal CampaignTerminal? PersistedStop(CampaignCheckpointState state)
     {

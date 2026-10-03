@@ -13,15 +13,16 @@ internal static class GitHubProposalPresentation
     {
         var outcome = terminal.Outcome switch
         {
-            "campaign.complete" or "campaign.no-work" => "no-op",
-            "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous" => "conflict",
+            "campaign.complete" or "campaign.batch-complete" or "campaign.no-work" => "no-op",
+            "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous"
+                or "campaign.target-limit" => "conflict",
             "campaign.invalid-configuration" or "campaign.state-missing" or "campaign.state-present"
                 or "campaign.state-corrupt" or "campaign.state-unsafe" or "campaign.state-conflict"
                 or "campaign.lease-conflict" or "campaign.lease-unverifiable" or "campaign.unsupported-revision" => "local-invalid",
             "campaign.incompatible-snapshot" or "campaign.patch-stale" => "stale",
             "campaign.load-failure" or "campaign.target-terminal" or "campaign.provider-terminal"
                 or "campaign.proposal-invalid" or "campaign.patch-rejected" or "campaign.patch-host-failure"
-                or "campaign.state-publication-failure" or "campaign.host-contract-error" => "host-failure",
+                or "campaign.state-publication-failure" or "campaign.host-contract-error" or "campaign.unresolved" => "host-failure",
             "campaign.cancelled" => "cancelled",
             "campaign.timeout" => "timeout",
             _ => null,

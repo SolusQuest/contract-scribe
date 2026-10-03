@@ -300,10 +300,10 @@ internal static class CampaignCommandRunner
             if (continuation?.PersistedStop(stateNow) is { } persistedStop) return persistedStop;
 
             if (continuation?.HasNoAppendWork(stateNow) == true)
-                return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
+                return Terminal(preflight.Operation, "campaign", CompletionOutcome(stateNow), current);
             var reconstructAccepted = continuation?.ReconstructAccepted(stateNow) == true
                 || reconstructPriorAccepted && stateNow.ActiveReservation is null;
-            var reconstructAcceptedTerminal = stateNow.TerminalOutcome is
+            var reconstructAcceptedTerminal = continuation is null && stateNow.TerminalOutcome is
             { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved }
                 && stateNow.WorkItems.Any(item => item.Status == CampaignWorkStatus.Accepted);
             if (stateNow.ActiveReservation is CampaignPatchReservation
@@ -350,7 +350,7 @@ internal static class CampaignCommandRunner
                     if (!continuation.ReconstructAccepted(current.Artifact.State))
                     {
                         if (continuation.HasNoAppendWork(current.Artifact.State))
-                            return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
+                            return Terminal(preflight.Operation, "campaign", CompletionOutcome(current.Artifact.State), current);
                         continue;
                     }
                     return await continuation.ContinueAsync(new GitHubPublicationContext(
@@ -471,7 +471,8 @@ internal static class CampaignCommandRunner
             .FirstOrDefault();
 
     private static string CompletionOutcome(CampaignCheckpointState state) =>
-        state.TerminalOutcome?.Reason == CampaignTerminalReason.Unresolved ? "campaign.unresolved"
+        (state.TerminalOutcome ?? CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems))?.Reason
+            == CampaignTerminalReason.Unresolved ? "campaign.unresolved"
             : state.TargetProgress.Any(progress => progress.Kind == CampaignTargetProgressKind.Deferred)
                 ? "campaign.batch-complete" : "campaign.complete";
 

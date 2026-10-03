@@ -60,10 +60,17 @@ public static partial class CampaignStateFactory
         Validate(state);
         var progress = ReadTargetProgress(state);
         var byKey = progress.ToDictionary(item => item.Target.TargetKey, StringComparer.Ordinal);
-        var keys = state.Batch.SelectedTargetKeys.Select(key => byKey[key])
+        var workByKey = state.WorkItems.ToDictionary(item => item.WorkItemKey, StringComparer.Ordinal);
+        var remaining = state.Batch.SelectedTargetKeys.Select(key => byKey[key])
             .Where(item => item.Target.Dispatchable && item.Kind is
                 CampaignTargetProgressKind.Pending or CampaignTargetProgressKind.Retryable)
-            .Take(limit.MaximumTargets).Select(item => item.Target.WorkItemKey).ToImmutableArray();
+            .ToImmutableArray();
+        var newTargets = remaining.Where(item => workByKey[item.Target.WorkItemKey].OuterAttemptCount == 0)
+            .Take(limit.MaximumTargets).Select(item => item.Target.TargetKey).ToHashSet(StringComparer.Ordinal);
+        // Persisted starts already consumed their distinct-target slot, including across invocations.
+        var keys = remaining.Where(item => workByKey[item.Target.WorkItemKey].OuterAttemptCount > 0
+                || newTargets.Contains(item.Target.TargetKey))
+            .Select(item => item.Target.WorkItemKey).ToImmutableArray();
         return new CampaignInvocationTargetAllowance(state, keys);
     }
 
