@@ -166,6 +166,104 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Theory]
+    [InlineData(1, 0, "none")]
+    [InlineData(1, 1, "none")]
+    [InlineData(1, 2, "none")]
+    [InlineData(1, 3, "none")]
+    [InlineData(2, 0, "none")]
+    [InlineData(2, 1, "none")]
+    [InlineData(2, 2, "none")]
+    [InlineData(2, 3, "none")]
+    [InlineData(1, 0, "initial")]
+    [InlineData(1, 1, "initial")]
+    [InlineData(1, 2, "initial")]
+    [InlineData(1, 3, "initial")]
+    [InlineData(2, 0, "initial")]
+    [InlineData(2, 1, "initial")]
+    [InlineData(2, 2, "initial")]
+    [InlineData(2, 3, "initial")]
+    [InlineData(1, 0, "late")]
+    [InlineData(1, 1, "late")]
+    [InlineData(1, 2, "late")]
+    [InlineData(1, 3, "late")]
+    [InlineData(2, 0, "late")]
+    [InlineData(2, 1, "late")]
+    [InlineData(2, 2, "late")]
+    [InlineData(2, 3, "late")]
+    [InlineData(1, 0, "missing")]
+    [InlineData(1, 1, "missing")]
+    [InlineData(1, 2, "missing")]
+    [InlineData(1, 3, "missing")]
+    [InlineData(2, 0, "missing")]
+    [InlineData(2, 1, "missing")]
+    [InlineData(2, 2, "missing")]
+    [InlineData(2, 3, "missing")]
+    public async Task G1_append_windows_use_latest_head_and_original_PR_provenance(int appendCount, int stage, string fault)
+    {
+        var first = InitialAuthority("creation-operation", '5');
+        var original = PublishedChain(first);
+        var history = original.ToList();
+        var authority = first;
+        GitHubCoordinationState current = original[^1], preceding = current;
+        for (var index = 0; index < appendCount; index++)
+        {
+            preceding = history[^1];
+            authority = AppendAuthority(authority, "append-" + index, (char)('6' + index),
+                precedingFileCandidate: (char)('5' + index));
+            var claim = GitHubCoordinationCodec.CreateClaim(authority, GitHubCoordinationObjects.Prepare(preceding).CommitOid);
+            var head = Oid((char)('4' + index));
+            var content = GitHubCoordinationCodec.WithStage(claim, GitHubCoordinationStage.ContentCreated,
+                GitHubCoordinationObjects.Prepare(claim).CommitOid, head);
+            var proposal = GitHubCoordinationCodec.WithStage(content, GitHubCoordinationStage.ProposalRefAdvanced,
+                GitHubCoordinationObjects.Prepare(content).CommitOid, head, head, head, Oid('9'));
+            var published = GitHubCoordinationCodec.WithStage(proposal, GitHubCoordinationStage.Published,
+                GitHubCoordinationObjects.Prepare(proposal).CommitOid, head, head, head, Oid('9'),
+                original[^1].PullRequestCreationOperationCommitmentSha256, 17, Oid('1'), Oid('1'), original[^1].OwnershipMarkerSha256);
+            var steps = new[] { claim, content, proposal, published };
+            var last = index == appendCount - 1 ? stage : 3;
+            history.AddRange(steps.Take(last + 1));
+            current = steps[last];
+        }
+        var expectedOid = stage < 2 ? preceding.ProposalCommitOid! : current.ProposalRefOid!;
+        var reference = GitHubPublicationFactory.CreateProposalRef(first);
+        var remote = new G1Remote();
+        remote.Coordination.SeedChain(history);
+        remote.AddPr(first, original[^1], "draft");
+        remote.Prs[0]["head"]!["sha"] = expectedOid;
+        remote.Refs[reference] = expectedOid;
+        if (fault == "initial") remote.Refs[reference] = Oid('8');
+        if (fault == "missing") remote.Refs.Remove(reference);
+        var reads = 0;
+        remote.BeforeRead = path =>
+        {
+            if (fault == "late" && path.EndsWith(reference[5..], StringComparison.Ordinal) && ++reads == 2)
+                remote.Refs[reference] = Oid('8');
+        };
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Equal(current.OperationId, result.Ledger!.OperationId);
+        Assert.Equal("generation-1", result.Ledger.GenerationId);
+        if (fault == "none")
+        {
+            Assert.Null(result.Failure);
+            Assert.Equal(GitHubCampaignKind.Active, result.Kind);
+            Assert.Equal(expectedOid, result.ProposalRef!.Oid);
+            var pr = Assert.Single(result.PullRequests);
+            Assert.Equal(17, pr.Number);
+            Assert.Equal(expectedOid, pr.Head.Oid);
+            Assert.True(pr.OwnershipVerified);
+        }
+        else
+        {
+            Assert.Equal(GitHubCampaignKind.Unverifiable, result.Kind);
+            Assert.Equal(fault == "missing" ? GitHubCampaignFailureKind.MissingRef : GitHubCampaignFailureKind.RefChanged,
+                result.Failure!.Kind);
+            Assert.Equal(reference, result.Failure.Ref);
+        }
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task G1_incompatible_current_or_ancestor_keeps_existing_publication_diagnostic(bool ancestor)

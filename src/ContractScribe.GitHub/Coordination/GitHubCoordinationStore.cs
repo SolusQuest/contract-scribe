@@ -220,17 +220,26 @@ internal sealed class GitHubCoordinationStore
     internal GitHubCampaignGeneration? ObservedCurrentGeneration(IGitHubCoordinationStateCapability state) =>
         state is StateCapability owned && ReferenceEquals(owned.Owner, this)
             && CreationSource(owned) is StateCapability source && source.ProposalCommitOid is not null
-            ? ObserveGeneration(owned.State, source.State) : null;
+            ? ObserveGeneration(owned.State, source.State,
+                owned.Transition == "same-snapshot-append" ? owned.AdmissionSource?.State : null) : null;
 
-    private GitHubCampaignGeneration ObserveGeneration(GitHubCoordinationState latest, GitHubCoordinationState creation)
+    internal string? ObservedProposalOid(IGitHubCoordinationStateCapability state) =>
+        state is StateCapability owned && ReferenceEquals(owned.Owner, this)
+            ? owned.ProposalRefOid ?? (owned.Transition == "same-snapshot-append"
+                ? owned.AdmissionSource?.ProposalCommitOid : null) : null;
+
+    private GitHubCampaignGeneration ObserveGeneration(GitHubCoordinationState latest, GitHubCoordinationState creation,
+        GitHubCoordinationState? admission = null)
     {
         var reference = ProposalRef(creation);
         var commitment = GitHubCoordinationCodec.PullRequestCreationCommitment(creation, reference);
         var metadata = GitHubProposalPullRequestStore.CreateMetadata(client.ReadAuthority, reference,
             creation.SnapshotCommitmentSha256, creation.PolicyCommitmentSha256, creation.TargetRef,
             creation.OperationCommitmentSha256, commitment);
-        return new(reference, latest.ProposalCommitOid!, latest.ProposalTreeOid!, latest.TargetCommitOid,
-            latest.ObservedBaseOid ?? latest.TargetCommitOid, latest.PullRequestNumber, latest.Stage, metadata);
+        return new(reference, (latest.ProposalCommitOid ?? admission?.ProposalCommitOid)!,
+            (latest.ProposalTreeOid ?? admission?.ProposalTreeOid)!, creation.TargetCommitOid,
+            latest.ObservedBaseOid ?? admission?.ObservedBaseOid ?? latest.TargetCommitOid,
+            latest.PullRequestNumber ?? admission?.PullRequestNumber, latest.Stage, metadata);
     }
 
     internal async ValueTask<GitHubCoordinationResult> ClaimAsync(

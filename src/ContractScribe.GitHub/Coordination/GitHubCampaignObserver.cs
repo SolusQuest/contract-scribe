@@ -69,8 +69,12 @@ internal sealed class GitHubCampaignObserver : IDisposable
                     state.OperationCommitmentSha256, state.CurrentCandidateCommitmentSha256,
                     coordination.ProposalRefFor(state), state.PullRequestNumber);
                 generations.AddRange(coordination.ObservedGenerations(state));
-                if (coordination.ObservedCurrentGeneration(state) is { } current
-                    && !generations.Any(item => item.Ref == current.Ref)) generations.Add(current);
+                if (coordination.ObservedCurrentGeneration(state) is { } current)
+                {
+                    var index = generations.FindIndex(item => item.Ref == current.Ref);
+                    if (index < 0) generations.Add(current);
+                    else generations[index] = current;
+                }
             }
             var collection = await client.ListPullRequestsAsync(cancellation).ConfigureAwait(false);
             if (collection.Value is not { Exhausted: true } set) return Transport(collection.Failure);
@@ -103,14 +107,15 @@ internal sealed class GitHubCampaignObserver : IDisposable
             // Derived names are expectations; only a remote read establishes existence/OID.
             if (currentRef is not null)
             {
+                var expectedOid = coordination.ObservedProposalOid(state!);
                 var read = await client.GetRefAsync(currentRef, cancellation).ConfigureAwait(false);
                 proposalRef = read.Value;
-                if (proposalRef is null && (state!.ProposalRefOid is not null || read.Failure?.Code != GitHubFailureCode.NotFound))
+                if (proposalRef is null && (expectedOid is not null || read.Failure?.Code != GitHubFailureCode.NotFound))
                     return RefFailure(read.Failure, currentRef);
                 if (proposalRef is not null)
                 {
                     refs.Add(currentRef, proposalRef);
-                    if (proposalRef.Oid != state!.ProposalRefOid)
+                    if (proposalRef.Oid != expectedOid)
                         return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: currentRef));
                 }
             }
