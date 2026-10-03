@@ -6,7 +6,8 @@ This directory is the durable source for product, workflow, architecture, contra
 
 - [Project context](00_project/project-context.md) — current product purpose and implementation status.
 - [Origin and scope](00_project/origin-and-scope.md) — product boundaries, non-goals, and open decisions.
-- [Roadmap](90_roadmap/roadmap.md) — M0 through M6, release gates, and deferred research.
+- [Roadmap](90_roadmap/roadmap.md) — completed M0–M6 engineering, the M7 direction awaiting refinement, release gates, and deferred research.
+- [M6 closeout](90_roadmap/m6-plan.md) — engineering delivery, exact internal qualification, limitations, and deferred first publication.
 - [M1 plan](90_roadmap/m1-plan.md) — detailed deterministic-audit scope and planned tracker changes.
 - [Architecture](20_architecture/architecture.md) — pipeline, component responsibilities, and authority matrix.
 
@@ -70,10 +71,11 @@ These are pre-release v1 drafts backed by schemas or registries where applicable
 ## Roadmap
 
 - [Product roadmap](90_roadmap/roadmap.md)
+- [M6 engineering closeout](90_roadmap/m6-plan.md)
 - [M1 detailed plan](90_roadmap/m1-plan.md)
 - [Completed M0 issue plan](90_roadmap/initial-issue-plan.md)
 
-Repository docs are updated and merged before the corresponding GitHub milestone descriptions and issue graph are changed. Tracker repository-file links use the full SHA of a merged commit reachable from `main`; live issue and milestone URLs remain mutable tracker references.
+Repository docs are updated and merged before the corresponding GitHub milestone descriptions and issue graph are changed. Living planning guidance may link the current `main` path; immutable historical evidence uses the full SHA of a merged commit reachable from `main`. Live issue and milestone URLs remain mutable tracker references.
 
 ## Agent collaboration
 
