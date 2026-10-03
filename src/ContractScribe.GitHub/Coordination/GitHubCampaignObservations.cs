@@ -20,7 +20,7 @@ internal sealed record GitHubCampaignFailure(GitHubCampaignFailureKind Kind,
 internal sealed record GitHubCampaignLedger(string HeadOid, GitHubCoordinationStage Stage,
     string OriginalBaseOid, string GenerationId, string SnapshotCommitmentSha256,
     string PolicyCommitmentSha256, string OperationId, string OperationCommitmentSha256,
-    string CandidateCommitmentSha256, string? ProposalRef, int? PullRequestNumber) : GitHubValue;
+    string CandidateCommitmentSha256, string? ExpectedProposalRef, int? PullRequestNumber) : GitHubValue;
 
 internal sealed record GitHubCampaignPullRequest(long Id, string NodeId, int Number,
     GitHubCampaignPullRequestKind Kind, GitHubPullRequestHead Head,
@@ -31,7 +31,7 @@ internal sealed record GitHubCampaignPullRequest(long Id, string NodeId, int Num
 internal sealed record GitHubCampaignObservation(GitHubCampaignKind Kind,
     GitHubCampaignLedgerKind LedgerKind, GitHubRepositoryIdentity? Repository,
     string TargetRef, string? TargetOid, string CoordinationRef, string? CoordinationOid,
-    GitHubCampaignLedger? Ledger, ImmutableArray<GitHubCampaignPullRequest> PullRequests,
+    GitHubCampaignLedger? Ledger, GitHubRef? ProposalRef, ImmutableArray<GitHubCampaignPullRequest> PullRequests,
     bool CollectionExhausted, int CollectionPages, GitHubCampaignFailure? Failure = null) : GitHubValue;
 
 // Derived only during the already bounded complete history proof; not exported in the observation.

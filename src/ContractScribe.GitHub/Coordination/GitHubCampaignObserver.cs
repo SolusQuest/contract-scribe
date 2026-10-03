@@ -26,6 +26,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
         GitHubRepositoryIdentity? repository = null;
         GitHubRef? target = null;
         GitHubRef? ledgerRef = null;
+        GitHubRef? proposalRef = null;
         GitHubCampaignLedger? ledger = null;
         var ledgerKind = GitHubCampaignLedgerKind.Unverifiable;
         var facts = new List<GitHubCampaignPullRequest>();
@@ -76,7 +77,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
             exhausted = true;
             pages = set.Pages;
             var knownNumbers = generations.Where(item => item.Number is not null).Select(item => item.Number!.Value).ToHashSet();
-            var currentRef = ledger?.ProposalRef;
+            var currentRef = ledger?.ExpectedProposalRef;
             var currentCreation = generations.FirstOrDefault(item => item.Ref == currentRef)?.Metadata.CreationCommitment;
             var relevant = set.Items.Where(pr => Relevant(pr)).OrderBy(pr => pr.Number).ToArray();
             var details = new List<GitHubPullRequest>();
@@ -99,14 +100,19 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 return Fail(new(GitHubCampaignFailureKind.Ambiguous));
             var generationByRef = generations.ToDictionary(item => item.Ref, StringComparer.Ordinal);
             var refs = new Dictionary<string, GitHubRef>(StringComparer.Ordinal);
-            // A recorded proposal ref is required even if the complete PR set is empty.
-            if (state?.ProposalRefOid is { } proposalOid)
+            // Derived names are expectations; only a remote read establishes existence/OID.
+            if (currentRef is not null)
             {
-                var reference = coordination.ProposalRefFor(state)!;
-                var read = await client.GetRefAsync(reference, cancellation).ConfigureAwait(false);
-                if (read.Value is null) return RefFailure(read.Failure, reference);
-                refs.Add(reference, read.Value);
-                if (read.Value.Oid != proposalOid) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: reference));
+                var read = await client.GetRefAsync(currentRef, cancellation).ConfigureAwait(false);
+                proposalRef = read.Value;
+                if (proposalRef is null && (state!.ProposalRefOid is not null || read.Failure?.Code != GitHubFailureCode.NotFound))
+                    return RefFailure(read.Failure, currentRef);
+                if (proposalRef is not null)
+                {
+                    refs.Add(currentRef, proposalRef);
+                    if (proposalRef.Oid != state!.ProposalRefOid)
+                        return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: currentRef));
+                }
             }
             foreach (var generation in generations.Where(item => item.Number is not null))
                 if (!details.Any(pr => pr.Number == generation.Number))
@@ -152,6 +158,16 @@ internal sealed class GitHubCampaignObserver : IDisposable
             if (finalLedger.Value is null && finalLedger.Failure?.Code != GitHubFailureCode.NotFound)
                 return Transport(finalLedger.Failure, coordinationRef);
             if (finalLedger.Value != ledgerRef) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: coordinationRef));
+            if (currentRef is not null && proposalRef is null)
+            {
+                var read = await client.GetRefAsync(currentRef, cancellation).ConfigureAwait(false);
+                if (read.Value is not null)
+                {
+                    proposalRef = read.Value;
+                    return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: currentRef));
+                }
+                if (read.Failure?.Code != GitHubFailureCode.NotFound) return Transport(read.Failure, currentRef);
+            }
             foreach (var pair in refs)
             {
                 var read = await client.GetRefAsync(pair.Key, cancellation).ConfigureAwait(false);
@@ -180,7 +196,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
 
         GitHubCampaignObservation Result(GitHubCampaignKind kind, GitHubCampaignFailure? failure = null) =>
             new(kind, ledgerKind, repository, authority.TargetRef, target?.Oid, coordinationRef, ledgerRef?.Oid,
-                ledger, facts.ToImmutableArray(), exhausted, pages, failure);
+                ledger, proposalRef, facts.ToImmutableArray(), exhausted, pages, failure);
         GitHubCampaignObservation Fail(GitHubCampaignFailure failure) => Result(GitHubCampaignKind.Unverifiable, failure);
         GitHubCampaignObservation Transport(GitHubFailure? failure, string? reference = null, int? number = null) =>
             Fail(new(GitHubCampaignFailureKind.Transport,

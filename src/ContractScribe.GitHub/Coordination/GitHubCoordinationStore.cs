@@ -1025,7 +1025,10 @@ internal sealed class GitHubCoordinationStore
 
         GitHubCoordinationResult Normalize(GitHubCoordinationResult result) =>
             !cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested
-                ? DomainFailure(GitHubCoordinationFailureKind.Transport, new(GitHubFailureCode.Timeout)) : result;
+                ? DomainFailure(GitHubCoordinationFailureKind.Transport, new(GitHubFailureCode.Timeout))
+                // Candidate-bound publication keeps its existing closed failure vocabulary.
+                : matchAuthority && result.Failure?.Kind == GitHubCoordinationFailureKind.Incompatible
+                    ? DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch) : result;
     }
 
     private async ValueTask<GitHubCoordinationResult> ReadStateObjectAsync(
@@ -1117,9 +1120,11 @@ internal sealed class GitHubCoordinationStore
                     StringComparison.OrdinalIgnoreCase)
                 && current.TargetRef == predecessor.TargetRef,
             (GitHubCoordinationStage.Merged, "successor-after-merge") =>
-                SameRepositoryAndRef(predecessor, current),
+                current.GenerationId != predecessor.GenerationId
+                && SameRepositoryAndRef(predecessor, current),
             (GitHubCoordinationStage.ClosedUnmerged, "successor-after-closed-unmerged") =>
-                SameRepositoryAndRef(predecessor, current),
+                current.GenerationId != predecessor.GenerationId
+                && SameRepositoryAndRef(predecessor, current),
             (GitHubCoordinationStage.Stale, "initial") =>
                 current.GenerationId != predecessor.GenerationId
                 && SameRepositoryAndRef(predecessor, current),
