@@ -1,5 +1,6 @@
 using System.Globalization;
 using ContractScribe.Core;
+using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.GitHub.Publication;
@@ -30,7 +31,7 @@ internal static class GitHubPublicationFacade
         try
         {
             var reconciler = GitHubPublicationReconciler.Create(client,
-                new GitHubActor(41898282, "MDM6Qm90NDE4OTgyODI=", "github-actions[bot]", GitHubActorKind.Bot));
+                GitHubPublicationPrincipal.ActionsBot);
             var result = await reconciler.PublishObservedAsync(authority, payload, token).ConfigureAwait(false);
             // Only this same lifetime can carry R6's private PR-create entitlement.
             if (result.Result.Kind == GitHubPublicationResultKind.RecoveredRefPartial)

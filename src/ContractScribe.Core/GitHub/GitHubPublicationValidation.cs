@@ -9,6 +9,24 @@ namespace ContractScribe.Core;
 
 public static class GitHubPublicationFactory
 {
+    public static ValidatedGitHubCampaignReadAuthority CreateCampaignReadAuthority(
+        string repositoryOwner, string repositoryName, string targetRef, string campaignLineage)
+    {
+        ValidateRepositoryPart(repositoryOwner);
+        ValidateRepositoryPart(repositoryName);
+        Require(IsRefName(targetRef), GitHubPublicationValidationCode.InvalidVocabulary);
+        RequireCampaignLineage(campaignLineage);
+        return new(repositoryOwner, repositoryName, targetRef, campaignLineage);
+    }
+
+    public static ValidatedGitHubCampaignReadAuthority CreateCampaignReadAuthority(
+        ValidatedGitHubPublicationAuthority authority)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        return CreateCampaignReadAuthority(authority.RepositoryOwner, authority.RepositoryName,
+            authority.TargetRef, authority.CampaignLineage);
+    }
+
     public static ValidatedGitHubPublicationAuthority CreateAuthority(
         GitHubPublicationAuthorityInput input)
     {
@@ -170,6 +188,9 @@ public static class GitHubPublicationFactory
     }
 
     public static string CreateCoordinationRef(ValidatedGitHubPublicationAuthority authority)
+        => CreateCoordinationRef(CreateCampaignReadAuthority(authority));
+
+    public static string CreateCoordinationRef(ValidatedGitHubCampaignReadAuthority authority)
     {
         ArgumentNullException.ThrowIfNull(authority);
         var key = GitHubPublicationCommitments.CreateIdentityKey(
@@ -182,14 +203,31 @@ public static class GitHubPublicationFactory
     public static string CreateProposalRef(ValidatedGitHubPublicationAuthority authority)
     {
         ArgumentNullException.ThrowIfNull(authority);
+        return CreateProposalRef(CreateCampaignReadAuthority(authority), authority.GenerationId,
+            authority.SnapshotCommitmentSha256, authority.PolicyCommitmentSha256);
+    }
+
+    public static string CreateProposalRefPrefix(ValidatedGitHubCampaignReadAuthority authority)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
         var campaign = GitHubPublicationCommitments.CreateIdentityKey(
             "proposal-campaign", CanonicalRepositoryPart(authority.RepositoryOwner),
             CanonicalRepositoryPart(authority.RepositoryName),
             authority.TargetRef, authority.CampaignLineage);
+        return $"refs/heads/contract-scribe/proposals/{campaign}/";
+    }
+
+    public static string CreateProposalRef(ValidatedGitHubCampaignReadAuthority authority,
+        string generationId, string snapshotCommitmentSha256, string policyCommitmentSha256)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        RequireOpaque(generationId);
+        RequireSha256(snapshotCommitmentSha256);
+        RequireSha256(policyCommitmentSha256);
         var generation = GitHubPublicationCommitments.CreateIdentityKey(
-            "proposal-generation", authority.CampaignLineage, authority.GenerationId,
-            authority.SnapshotCommitmentSha256, authority.PolicyCommitmentSha256);
-        return $"refs/heads/contract-scribe/proposals/{campaign}/{generation}";
+            "proposal-generation", authority.CampaignLineage, generationId,
+            snapshotCommitmentSha256, policyCommitmentSha256);
+        return CreateProposalRefPrefix(authority) + generation;
     }
 
     internal static bool IsOpaqueIdentifier(string? value)

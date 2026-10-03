@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using ContractScribe.Core;
 using ContractScribe.GitHub.Coordination;
+using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.Tests;
@@ -49,7 +50,7 @@ public sealed class GitHubArchitectureTests
             "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
         var properties = client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(new[] { "AuthenticatedRepository", "Authority" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "HasMutationAuthority", "ReadAuthority" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
         var authority = Assert.Single(properties, p => p.Name == "Authority");
         Assert.Equal("Authority", authority.Name);
         Assert.Equal(typeof(ValidatedGitHubPublicationAuthority), authority.PropertyType);
@@ -57,6 +58,35 @@ public sealed class GitHubArchitectureTests
         var hook = typeof(GitHubTransportTestHook).GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!;
         Assert.True(hook.IsPrivate);
         Assert.False(hook.DeclaringType!.IsPublic);
+    }
+
+    [Fact]
+    public void Campaign_observer_exposes_only_source_free_observation_and_disposal_without_mutation_entitlements()
+    {
+        var observer = typeof(GitHubCampaignObserver);
+        Assert.All(observer.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance), constructor => Assert.True(constructor.IsPrivate));
+        Assert.Equal(new[] { typeof(ValidatedGitHubCampaignReadAuthority), typeof(string) }, observer
+            .GetMethod("Create", BindingFlags.Static | BindingFlags.NonPublic)!.GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.Equal(new[] { "Dispose", "ObserveAsync", "ToString" }, observer
+            .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)
+            .Where(method => method.IsPublic || method.IsAssembly).Select(method => method.Name).Order(StringComparer.Ordinal));
+        Assert.Empty(observer.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic));
+        Assert.DoesNotContain(observer.GetInterfaces(), type => type != typeof(IDisposable));
+        Assert.Equal(new[] { "CampaignLineage", "RepositoryName", "RepositoryOwner", "TargetRef" }, typeof(ValidatedGitHubCampaignReadAuthority)
+            .GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
+        foreach (var type in new[] { typeof(GitHubCampaignObservation), typeof(GitHubCampaignLedger), typeof(GitHubCampaignPullRequest), typeof(GitHubCampaignFailure) })
+        {
+            Assert.DoesNotContain(type.GetInterfaces(), item => item.Namespace == typeof(IGitHubCoordinationReadCapability).Namespace);
+            Assert.DoesNotContain(type.GetProperties(), property => property.Name is "Body" or "Title" or "Credential" or "Bytes" or "State" or "Client");
+            Assert.DoesNotContain(type.GetProperties(), property => property.PropertyType == typeof(GitHubApiClient)
+                || property.PropertyType == typeof(ValidatedGitHubPublicationAuthority)
+                || property.PropertyType == typeof(IGitHubCoordinationStateCapability));
+        }
+        var principal = GitHubPublicationPrincipal.ActionsBot;
+        Assert.Equal(new GitHubActor(41898282, "MDM6Qm90NDE4OTgyODI=", "github-actions[bot]", GitHubActorKind.Bot), principal);
+        var source = File.ReadAllText(Path.Join(Root(), "src/ContractScribe.GitHub/Publication/GitHubPublicationFacade.cs"));
+        Assert.Contains("GitHubPublicationPrincipal.ActionsBot", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("41898282", source, StringComparison.Ordinal);
     }
 
     [Fact]

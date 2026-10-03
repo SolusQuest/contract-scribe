@@ -17,7 +17,8 @@ internal sealed class GitHubApiClient : IDisposable
     internal const string ApiVersion = "2026-03-10";
     internal const string ProductionOrigin = "https://api.github.com/";
     internal const string UpdateRefsDocument = "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
-    private readonly ValidatedGitHubPublicationAuthority authority;
+    private readonly ValidatedGitHubPublicationAuthority? mutationAuthority;
+    private readonly ValidatedGitHubCampaignReadAuthority readAuthority;
     private readonly Uri origin;
     private readonly HttpMessageInvoker invoker;
     private readonly int requestTimeoutMilliseconds;
@@ -27,16 +28,23 @@ internal sealed class GitHubApiClient : IDisposable
     private string? credential;
     private int disposed;
 
-    internal ValidatedGitHubPublicationAuthority Authority => authority;
+    internal ValidatedGitHubPublicationAuthority Authority
+    {
+        get { Input(mutationAuthority is not null); return mutationAuthority!; }
+    }
+    internal ValidatedGitHubCampaignReadAuthority ReadAuthority => readAuthority;
+    internal bool HasMutationAuthority => mutationAuthority is not null;
     internal GitHubRepositoryIdentity? AuthenticatedRepository
     {
         get { lock (identityGate) return repository; }
     }
 
-    private GitHubApiClient(ValidatedGitHubPublicationAuthority authority, string credential,
+    private GitHubApiClient(ValidatedGitHubCampaignReadAuthority readAuthority,
+        ValidatedGitHubPublicationAuthority? authority, string credential,
         Uri origin, HttpMessageHandler handler, int timeoutMilliseconds)
     {
-        this.authority = authority;
+        mutationAuthority = authority;
+        this.readAuthority = readAuthority;
         this.credential = credential;
         this.origin = origin;
         requestTimeoutMilliseconds = timeoutMilliseconds;
@@ -47,11 +55,24 @@ internal sealed class GitHubApiClient : IDisposable
     {
         Require(authority is not null && RepositoryPart(authority.RepositoryOwner)
             && RepositoryPart(authority.RepositoryName), GitHubFailureCode.InvalidRequest);
+        return CreateCore(GitHubPublicationFactory.CreateCampaignReadAuthority(authority!), authority, credential);
+    }
+
+    internal static GitHubApiClient CreateReadOnly(ValidatedGitHubCampaignReadAuthority authority, string credential)
+    {
+        Require(authority is not null && RepositoryPart(authority.RepositoryOwner)
+            && RepositoryPart(authority.RepositoryName), GitHubFailureCode.InvalidRequest);
+        return CreateCore(authority!, null, credential);
+    }
+
+    private static GitHubApiClient CreateCore(ValidatedGitHubCampaignReadAuthority readAuthority,
+        ValidatedGitHubPublicationAuthority? authority, string credential)
+    {
         Require(credential is { Length: > 0 and <= 8192 }
             && credential.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_' or '~' or '+' or '/' or '='),
             GitHubFailureCode.InvalidRequest);
         var test = GitHubTransportTestHook.Take(credential);
-        return new(authority!, credential, test?.Endpoint ?? new Uri(ProductionOrigin),
+        return new(readAuthority, authority, credential, test?.Endpoint ?? new Uri(ProductionOrigin),
             test?.Handler ?? CreateProductionHandler(), test?.TimeoutMilliseconds ?? 30_000);
     }
 
@@ -70,11 +91,11 @@ internal sealed class GitHubApiClient : IDisposable
     };
 
     internal ValueTask<GitHubApiResult<GitHubRepository>> GetRepositoryAsync(CancellationToken cancellationToken = default) =>
-        RunAsync<GitHubRepository>(() => new("repos/" + authority.RepositoryOwner + "/" + authority.RepositoryName, element =>
+        RunAsync<GitHubRepository>(() => new("repos/" + readAuthority.RepositoryOwner + "/" + readAuthority.RepositoryName, element =>
         {
             var value = Repository(element);
-            Require(AsciiCaseEqual(value.Identity.Owner, authority.RepositoryOwner)
-                && AsciiCaseEqual(value.Identity.Name, authority.RepositoryName));
+            Require(AsciiCaseEqual(value.Identity.Owner, readAuthority.RepositoryOwner)
+                && AsciiCaseEqual(value.Identity.Name, readAuthority.RepositoryName));
             lock (identityGate)
             {
                 Require(repository is null || repository == value.Identity);
@@ -146,8 +167,9 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubObjectIdentity>> CreateBlobAsync(string expectedOid,
         ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken = default) => RunAsync<GitHubObjectIdentity>(() =>
     {
+        Input(HasMutationAuthority);
         Input(IsOid(expectedOid) && bytes.Length <= MaximumBlobBytes);
-        var context = new GitHubObjectContext(Identity(), authority.OperationCommitmentSha256, GitHubObjectKind.Blob, expectedOid);
+        var context = new GitHubObjectContext(Identity(), Authority.OperationCommitmentSha256, GitHubObjectKind.Blob, expectedOid);
         var copy = bytes.ToArray();
         var body = Encode(writer =>
         {
@@ -160,6 +182,7 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubTree>> CreateTreeAsync(string expectedOid,
         ImmutableArray<GitHubTreeEntry> entries, CancellationToken cancellationToken = default) => RunAsync<GitHubTree>(() =>
     {
+        Input(HasMutationAuthority);
         Input(IsOid(expectedOid) && !entries.IsDefault && entries.Length <= MaximumTreeEntries);
         var paths = new HashSet<string>(StringComparer.Ordinal);
         // Default JSON escaping can use six bytes per UTF-16 code unit. Bound
@@ -172,7 +195,7 @@ internal sealed class GitHubApiClient : IDisposable
             Input(inputBytes <= MaximumBodyBytes);
             _ = WireMode(entry.Mode);
         }
-        var context = new GitHubObjectContext(Identity(), authority.OperationCommitmentSha256, GitHubObjectKind.Tree, expectedOid);
+        var context = new GitHubObjectContext(Identity(), Authority.OperationCommitmentSha256, GitHubObjectKind.Tree, expectedOid);
         var body = Encode(writer =>
         {
             writer.WriteStartArray("tree");
@@ -193,11 +216,12 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubCommit>> CreateCommitAsync(GitHubCreateCommit request,
         CancellationToken cancellationToken = default) => RunAsync<GitHubCommit>(() =>
     {
+        Input(HasMutationAuthority);
         Input(request is not null && IsOid(request.ExpectedOid) && IsOid(request.TreeOid) && IsOid(request.ParentOid));
         InputText(request!.Message, 65536, allowEmpty: true);
         ValidateActor(request.Author);
         ValidateActor(request.Committer);
-        var context = new GitHubObjectContext(Identity(), authority.OperationCommitmentSha256, GitHubObjectKind.Commit, request.ExpectedOid);
+        var context = new GitHubObjectContext(Identity(), Authority.OperationCommitmentSha256, GitHubObjectKind.Commit, request.ExpectedOid);
         var body = Encode(writer =>
         {
             writer.WriteString("message", request.Message);
@@ -214,13 +238,14 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubPullRequest>> CreatePullRequestAsync(GitHubCreatePullRequest request,
         CancellationToken cancellationToken = default) => RunAsync<GitHubPullRequest>(() =>
     {
+        Input(HasMutationAuthority);
         Input(request is not null && Hex(request.CreationCommitment, 64) && IsOid(request.HeadOid)
-            && IsOid(request.ExpectedBaseOid) && request.ExpectedBaseOid == authority.ExpectedBaseCommitOid
-            && request.HeadRef == GitHubPublicationFactory.CreateProposalRef(authority) && request.BaseRef == authority.TargetRef);
+            && IsOid(request.ExpectedBaseOid) && request.ExpectedBaseOid == Authority.ExpectedBaseCommitOid
+            && request.HeadRef == GitHubPublicationFactory.CreateProposalRef(Authority) && request.BaseRef == Authority.TargetRef);
         InputText(request!.Title, 256);
         InputText(request.Body, 65536, allowEmpty: true);
         var identity = Identity();
-        var context = new GitHubPullRequestContext(identity, authority.OperationCommitmentSha256,
+        var context = new GitHubPullRequestContext(identity, Authority.OperationCommitmentSha256,
             request.CreationCommitment, request.HeadRef, request.HeadOid, request.BaseRef, request.ExpectedBaseOid,
             Digest(request.Title), Digest(request.Body));
         var body = Encode(writer =>
@@ -238,13 +263,14 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubAcknowledgement>> UpdateRefAsync(GitHubUpdateRef request,
         CancellationToken cancellationToken = default) => RunAsync<GitHubAcknowledgement>(() =>
     {
+        Input(HasMutationAuthority);
         Input(request is not null && IsOid(request.BeforeOid, zero: true) && IsOid(request.AfterOid)
             && request.ExpectedAbsence == (request.BeforeOid == new string('0', 40))
-            && (request.Ref == GitHubPublicationFactory.CreateCoordinationRef(authority)
-                || request.Ref == GitHubPublicationFactory.CreateProposalRef(authority)));
+            && (request.Ref == GitHubPublicationFactory.CreateCoordinationRef(Authority)
+                || request.Ref == GitHubPublicationFactory.CreateProposalRef(Authority)));
         var identity = Identity();
         var mutationId = MutationId(identity, request!);
-        var context = new GitHubRefContext(identity, authority.OperationCommitmentSha256,
+        var context = new GitHubRefContext(identity, Authority.OperationCommitmentSha256,
             request!.Ref, request.BeforeOid, request.AfterOid, mutationId);
         var body = Encode(writer =>
         {
@@ -548,7 +574,7 @@ internal sealed class GitHubApiClient : IDisposable
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var field in new[] { "contract-scribe/github-ref-transport/v1", identity.Id.ToString(CultureInfo.InvariantCulture),
-            identity.NodeId, identity.Owner, identity.Name, authority.OperationCommitmentSha256, update.Ref, update.BeforeOid, update.AfterOid })
+            identity.NodeId, identity.Owner, identity.Name, Authority.OperationCommitmentSha256, update.Ref, update.BeforeOid, update.AfterOid })
         {
             var bytes = Utf8.GetBytes(field);
             var length = new byte[4];

@@ -61,16 +61,23 @@ internal sealed class GitHubProposalPullRequestStore
         var reference = coordination.ProposalRefFor(state);
         var commitment = coordination.CreationCommitment(state);
         if (source is null || reference is null || commitment is null) return null;
-        var campaign = GitHubPublicationFactory.CreateCoordinationRef(client.Authority).Split('/')[^1];
+        return CreateMetadata(client.ReadAuthority, reference, source.SnapshotCommitmentSha256,
+            source.PolicyCommitmentSha256, source.TargetRef, source.OperationCommitmentSha256, commitment);
+    }
+
+    internal static GitHubProposalMetadata CreateMetadata(ValidatedGitHubCampaignReadAuthority authority,
+        string reference, string snapshot, string policy, string targetRef, string operation, string commitment)
+    {
+        var campaign = GitHubPublicationFactory.CreateCoordinationRef(authority).Split('/')[^1];
         var generation = reference.Split('/')[^1];
         var marker = "<!-- contract-scribe-publication-v1 ownership=sha256:" + commitment + " -->\n";
         var body = marker + "campaign=sha256:" + campaign + "\n"
             + "generation=sha256:" + generation + "\n"
-            + "snapshot=sha256:" + source.SnapshotCommitmentSha256 + "\n"
-            + "policy=sha256:" + source.PolicyCommitmentSha256 + "\n"
+            + "snapshot=sha256:" + snapshot + "\n"
+            + "policy=sha256:" + policy + "\n"
             + "headRef=sha256:" + Hash(reference) + "\n"
-            + "baseRef=sha256:" + Hash(source.TargetRef) + "\n"
-            + "creationOperationId=sha256:" + source.OperationCommitmentSha256 + "\n";
+            + "baseRef=sha256:" + Hash(targetRef) + "\n"
+            + "creationOperationId=sha256:" + operation + "\n";
         return new("ContractScribe proposal " + generation, body, commitment,
             GitHubCoordinationCodec.MarkerHash(commitment), campaign);
     }
@@ -351,7 +358,7 @@ internal sealed class GitHubProposalPullRequestStore
         return HumanChange();
     }
 
-    private static bool Stable(GitHubPullRequest list, GitHubPullRequest detail) =>
+    internal static bool Stable(GitHubPullRequest list, GitHubPullRequest detail) =>
         list.Id == detail.Id && list.NodeId == detail.NodeId && list.Number == detail.Number
         && list.Open == detail.Open && list.Draft == detail.Draft && list.MergedAt == detail.MergedAt
         && list.ClosedAt == detail.ClosedAt && list.CreatedAt == detail.CreatedAt
