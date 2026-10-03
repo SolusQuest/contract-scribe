@@ -1,6 +1,6 @@
 # Documentation Scribe
 
-> **Status:** M3 candidate architecture. The goal, read-only authority, structured-output boundary, deterministic patch ownership, repository confinement, and safety non-goals are current roadmap constraints. Component names, project placement, context/snapshot identities, provider behavior, tool inventory, request shapes, and orchestration details remain candidates until M3 refinement accepts them against executable evidence.
+> **Status:** Current single-target runtime reference with adopted M7 direction. [M7 plan](../90_roadmap/m7-plan.md) owns shared-session/fixed-batch behavior; C1 changes planning only. Current request/result contracts, provider wire behavior and runtime remain unchanged until their code/schema owners update them. Historical M3 evaluation claims remain revision-bound.
 
 ## Goal
 
@@ -28,7 +28,7 @@ The initial Scribe Runtime does not provide:
 - automatic merge;
 - an assertion that a model response is safe to apply.
 
-## Runtime shape
+## Current runtime shape and M7 direction
 
 ```text
 audit target
@@ -44,13 +44,15 @@ audit target
   -> documentation proposal or structured skip
 ```
 
-One run handles one documentation target or a small batch of targets sharing the same containing-type context. The initial runtime is short-lived and does not depend on restoring a complete model conversation. Campaign resume restores deterministic work and context identities and starts a new bounded model run.
+The current production request builder selects exactly one eligible documentation target, and the current loop terminates on its structured proposal/skip. Independent current runs may reuse immutable context inputs and read-only indexes, but do not share mutable conversations. Bounded opaque assistant continuation is private to the current attempt and discarded at attempt/run boundaries; it is not durable recovery state.
 
-Multiple Scribe runs may share immutable repository and scope context snapshots and the same underlying read-only indexes. They do not share hidden reasoning, mutable conversation history, target-specific tool results, or provider session identity. Within one attempt only, the runtime may retain and replay the provider's bounded opaque assistant continuation required to complete that attempt's tool loop; it is discarded at attempt and run boundaries.
+M7 replaces the per-target session direction with one bounded conversation for the complete fixed selected manifest in a normal Action. Necessary target identities, relationships, instruction/style constraints and validated prior progress are visible at the start; detailed evidence is read lazily through bounded tools and reused by content identity/revision/range. Grouping chooses the manifest and provides relationship hints, rather than feeding groups sequentially. Incremental per-target/small-batch proposals and skips receive host validation/acknowledgement while the conversation continues. Foreign/duplicate targets cannot advance state, and the host independently verifies final coverage. Submission, accepted proposal, patch validation, publication and merge remain distinct.
+
+Compatible unpublished recovery reconstructs accepted results without regeneration and starts a new bounded conversation only for remaining original members. Controlled resource/context stops may safely publish a validated subset and seal it pending review; abrupt unpublished stops restore the original fixed batch. No full conversation/reasoning restoration or automatic compaction across Actions is introduced. Exact multi-target protocol shapes and continuation handling belong to their implementation issues.
 
 ## Relationship to audit evidence
 
-The canonical Audit Result and deterministic work plan select the documentation target before the Scribe runs. The Scribe may submit a proposal or a structured insufficient-evidence skip for that target; it cannot add an unselected target, change classification or policy semantics, or reinterpret an audit outcome.
+The canonical Audit Result and deterministic work plan select documentation targets before Scribe runs. The current request admits one; M7 admits the complete fixed batch. Scribe may submit a proposal or structured insufficient-evidence skip only for an admitted target; it cannot add targets, change classification or policy semantics, or reinterpret an audit outcome.
 
 Audit evidence proves that a bounded audit judgment is justified. Scribe target evidence supports writing useful documentation and may require additional signature, relation, implementation, test, usage, maintained-documentation, or style context. The two evidence sets share identity, repository-relative locator, source-revision, hash, authority, and truncation principles, but they are not the same artifact and need not contain the same material.
 
@@ -111,7 +113,7 @@ Tools enforce:
 - explicit truncation;
 - cancellation and per-call timeouts.
 
-The terminal submission tool returns a structured proposal or structured skip. There is no file-edit tool.
+The current terminal submission tool returns a structured proposal or skip and ends that target's loop. M7 separates incremental submission/acknowledgement from final conversation completion; the exact tool/result protocol is updated with its runtime owner. There is no file-edit, state-store or publication tool.
 
 Context traversal additionally enforces route-depth, selected-file, and aggregate-byte budgets; canonical-path deduplication; cycle termination; and source/content identity checks. A file discovered as ordinary evidence never becomes an instruction merely because its text asks the model to read another file or disregard prior rules.
 
@@ -219,9 +221,11 @@ Message, tool, schema, document, and evidence-label ordering before the boundary
 
 The runtime computes a local cacheable-prefix identity from the Scribe protocol, tool registry, repository context, scope context, every other prefix-resident input including a style profile when present, and compatible provider/model configuration. The identity covers the exact normalized logical prefix rather than only a subset of its named inputs. Provider cache hits are observed but never trusted as the sole proof that two requests had the same prefix. A cache miss does not change correctness; it consumes uncached-input and cost budgets and remains visible in evaluation.
 
-The campaign runner groups compatible targets and schedules them close together to improve reuse. This grouping is deterministic request construction, not a parent-agent conversation fork. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
+M7 reuses bounded common context within one selected conversation while keeping instruction/style/evidence scopes explicit. Cache hits are measured and never authorize target/state transitions. No parent-agent fork or cache-driven concurrency/warm-up stage is required. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
 ## Budgets and termination
+
+[M7 resource defaults](../90_roadmap/m7-plan.md#shared-resources-and-initial-defaults) adopt shared per-Action ceilings across all selected targets, tools, requests and retries, with optional/default-unlimited campaign aggregate caps. Zero is not an unlimited sentinel. These defaults are not implemented by C1; current runtime/configuration contracts retain their actual ceilings until the owning changes land. PR-size business quotas are removed by M7 while necessary parser/transport/context/patch safety bounds remain.
 
 Every run has explicit limits for:
 
@@ -235,9 +239,11 @@ Every run has explicit limits for:
 - wall-clock duration;
 - attempts per target.
 
-Budget exhaustion returns a structured partial or skipped outcome according to the proposal contract. The runtime never continues indefinitely and never converts an exhausted or invalid run into an unverified proposal.
+Budget exhaustion never converts an invalid or unfinished run into an unverified proposal. M7 preserves accepted incremental results, permits safe partial publication, and reports remaining/skipped/failed work explicitly. Transient errors and invalid proposals get finite retry/repair; insufficient evidence can skip without automatically looping on the same snapshot. No automatic context compaction extends an exhausted conversation.
 
 Cached and uncached input, output, reasoning, and total-token fields are retained as observations when the selected provider reports them. Post-request usage may stop subsequent attempts even when the completed request could not be rejected in advance.
+
+M7 per-invocation observations distinguish new work from reconstructed historical results and known actual usage from unknowns, in-flight exposure and conservative charges. Reasoning is an output subset; missing usage is not zero. Checkpoints may retain only bounded host-validated structured generated documentation and necessary recovery facts, including unpublished/unmerged proposals, never source-evidence bodies, raw provider responses, transcripts/reasoning, secrets or candidate bytes. Scribe itself receives no persistence authority.
 
 ## Failure taxonomy
 

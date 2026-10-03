@@ -11,7 +11,7 @@ M1 deterministic audit
   -> M4 resumable campaign orchestration
   -> M5 GitHub proposal workflow
   -> M6 Action engineering and internal qualification
-  -> M7 caller-owned scheduling and automatic bounded continuation (refinement pending)
+  -> M7 caller-owned scheduling and automatic bounded continuation (plan adopted; implementation pending)
   -> governance disposition and first public publication
 ```
 
@@ -44,7 +44,7 @@ The product is not complete when it can only report missing documentation. Its u
 | M4 — Resumable campaign orchestration | Done | Deterministic budgeting, resume, and lineage |
 | M5 — GitHub proposal workflow | Done | Idempotent ledger, branch, commit, and draft PR workflow |
 | M6 — Action engineering and internal qualification | Engineering complete; closeout under revised scope | Verified payload/Action, release controls, and exact unpublished internal-candidate evidence |
-| M7 — Caller-owned scheduling and automatic bounded continuation | Direction accepted; detailed refinement pending | Practical repeated-run progress independent of native cron delivery |
+| M7 — Caller-owned scheduling and automatic bounded continuation | Plan adopted; implementation and exit evidence pending | Fixed batches, one shared Scribe conversation per Action, complete-ref recovery and practical caller-triggered progress |
 | Release Gate — Governance | Deferred until after M7 | License and contribution disposition before publication or external contribution intake |
 | Release Gate — First Publication | Deferred until after M7; #189 remains open | Newly prepared, qualified, explicitly approved public candidate |
 | Release Gate — Payload Distribution | Payload/host selection implemented through M6; separate tracker retained | D2/composite decisions and exact-candidate publication obligations |
@@ -175,6 +175,8 @@ See [Documentation patch boundary](../20_architecture/documentation-patch-bounda
 
 ## M3 — Documentation Scribe and proposal engine
 
+The scope and exit criteria below record the completed M3 boundary. M7's adopted shared-conversation direction supersedes per-target execution guidance for future implementation; it does not change what M3 proved at its original revision.
+
 ### Goal
 
 Deliver the self-developed Documentation Scribe, which converts audit targets, bounded evidence, and a style profile into useful structured documentation proposals.
@@ -233,6 +235,8 @@ See [Documentation Scribe](../20_architecture/documentation-scribe.md) and [Scri
 
 ## M4 — Resumable campaign orchestration
 
+The following completed milestone scope remains historical. [M7 planning](m7-plan.md) owns the new fixed-batch, resource and complete-ref recovery direction; C1 alone does not change the current M4 runtime/contracts.
+
 ### Goal
 
 Create deterministic work planning, multi-dimensional budgets, resume, retry, and campaign lineage independently of GitHub.
@@ -258,6 +262,8 @@ Exact snapshot, work-plan, batch, campaign, cursor, checkpoint, and identity for
 - No GitHub mutation is required to validate the core.
 
 ## M5 — GitHub proposal workflow
+
+The following completed scope includes the historical compatible-draft append behavior. M7 adopts one PR per fixed batch with no append after publication; owning implementation issues replace that runtime rather than reinterpret M5 evidence.
 
 ### Goal
 
@@ -321,13 +327,13 @@ M6 recovery/replay evidence does not establish automatic consumption of the rema
 
 ## M7 — Caller-owned scheduling and automatic bounded continuation
 
-### Accepted direction
+### Adopted plan and delivery boundary
 
-The maintainer intends to separate trigger scheduling from product execution and complete the repeated-run experience: restore compatible progress, process a bounded amount per invocation, continue remaining work on later invocations, and stop model work when resolved. Native GitHub schedule is an optional caller integration with no timing guarantee; caller-selected trigger sources should be replaceable without bypassing product/state/publication safeguards.
+[M7 plan](m7-plan.md) is the single repository owner of the maintainer-approved product decisions, initial resource defaults, lifecycle precedence, semantic examples, exclusions and exit evidence in [master #208](https://github.com/SolusQuest/contract-scribe/issues/208). The product uses one automatic caller-triggered entrypoint, an immutable semantic batch and one shared bounded Scribe conversation per normal Action; it checkpoints complete recovery state to the consumer coordination ref and publishes at most one human-reviewed draft PR per batch. Caller scheduling is optional best-effort, without timing guarantees.
 
-### Refinement boundary
+Planning adoption through #213 is distinct from implementation completion. Dependent code/schema work waits for this documentation to merge and updates each real protocol in its owning PR. Existing M4–M6 contracts and evidence remain truthful for their original revisions. M7 removes future same-draft append and PR-size business quotas, defaults optional campaign aggregate caps to unlimited, and adds per-invocation observations; C1 does not make those behaviors executable.
 
-Detailed semantics, quota/aggregate-budget distinctions, snapshot and configuration matching, state storage, automatic start/resume/append selection, changed-base handling, PR lifecycle, scope, tests, and execution issues will be refined in a separate session. No M7 implementation or dependency graph is admitted by the M6 closeout. The first public version/channel also remains undecided. M7 source-based development does not depend on licensing or publication, and its completion becomes a prerequisite of the deferred first-publication track when the actual M7 graph is created.
+M7 exit evidence includes shared-session correctness, fixed selection/recovery, lifecycle gates before Audit/provider work, safe partial publication, resource/unknown-usage accounting and ordinary credential-free production-path CI. Exact merged-revision live GitHub/provider proof remains bounded, opt-in and separately authorized. The full scenarios and constraints live in the plan rather than a second roadmap specification. M7 source-based development does not depend on licensing/publication; actual M7 completion precedes the separate #29/#189 release gates. The first public version/channel remains undecided.
 
 ## Release Gate — Governance
 
@@ -359,7 +365,7 @@ This track never counts toward M1 progress while it remains non-gating.
 
 ## Post-MVP candidates
 
-These are non-gating, unscheduled candidates outside the accepted M0–M6 engineering scope. They are not automatically included in the separately refined M7 direction. Listing them does not commit implementation or delivery; promotion into an active milestone requires a reviewed roadmap amendment. They do not retroactively change historical direct-observation semantics or exit evidence.
+These are non-gating, unscheduled candidates outside the accepted engineering scope. They are not automatically included in the adopted M7 plan. Listing them does not commit implementation or delivery; promotion into an active milestone requires a reviewed roadmap amendment. They do not retroactively change historical direct-observation semantics or exit evidence.
 
 - effective-documentation resolution and completeness audit:
   - preserve M1 direct observations as a separate factual input rather than relabeling direct absence or marker presence as resolved effective documentation;

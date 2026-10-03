@@ -1,5 +1,13 @@
 # Consumer configuration
 
+## M7 planning and current configuration
+
+[M7 plan](../90_roadmap/m7-plan.md) owns the adopted resource and identity semantics. C1 does not change `config/defaults.json`, configuration/schema grammar or runtime readers. The inventory and defaults below describe the current implementation until their owning code/schema issues update them.
+
+M7 selects a fixed semantic batch under a configurable initial 100-target invocation ceiling and shares Action resources across all targets/retries. Campaign aggregate caps become optional/default unlimited while retaining complete accounting history; zero is not an unlimited sentinel. The complete initial numeric values live in [M7 resource defaults](../90_roadmap/m7-plan.md#shared-resources-and-initial-defaults), not this current-defaults inventory. Remove PR block/file/patch-size business quotas while preserving necessary parser/transport/context/patch safety bounds and aligning hidden legacy execution caps.
+
+Separate correctness-bearing inputs from execution budgets. With no active-PR or closed-same-base gate, changed base/policy/profile/style or other correctness inputs require a fresh snapshot/Audit without proposal migration. Execution-budget changes alone preserve compatible original membership: raising quota cannot add targets and lowering quota limits newly started distinct targets. Configuration or quota changes never unlock a same-base closed-unmerged PR or bypass an open-PR pause/wait. Exact schema layouts and the explicit unlimited representation belong to implementation; no compatibility framework is added.
+
 ## Decision
 
 `campaign` invocations resolve their effective configuration from three layers in the production C# CLI:
@@ -68,7 +76,7 @@ Merge walks the declared field tree:
 
 The consumer layer schema is published at `schemas/consumer-configuration/v1.schema.json` and is driven by the same declared-field tree the resolver uses.
 
-## Defaults
+## Current defaults
 
 `config/defaults.json` carries the complete resolved shape minus the two injected fields. Values:
 

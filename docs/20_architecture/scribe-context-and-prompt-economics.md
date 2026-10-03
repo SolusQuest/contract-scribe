@@ -1,6 +1,6 @@
 # Scribe context and prompt economics
 
-> **Status:** The M3-X1 deterministic context-bootstrap decision in this document is accepted and executable. Provider transport, model/tool-loop behavior, durable manifests or snapshots, prompt-prefix construction, campaign scheduling, persistence, and economic evaluation remain candidate design until their owning M3 or M4 work accepts them.
+> **Status:** The M3-X1 bootstrap decision and current single-target runtime/provider boundaries remain implementation references. [M7 plan](../90_roadmap/m7-plan.md) adopts one shared bounded conversation per fixed batch and per-invocation observations; C1 implements neither. Exact request/tool/state shapes are updated by their owning code/schema issues, preserving historical M3–M6 evidence at its original revision.
 
 ## Decision
 
@@ -45,9 +45,9 @@ The context and runtime design must:
 - let a repository define durable writing context through `AGENTS.md` or an explicitly configured entrypoint;
 - apply nested directory-specific instructions to the targets they govern;
 - allow semantic routing such as "read the relevant procedure" without introducing a second model-agent role;
-- reuse common project context across many targets without carrying target-specific conversation history forward;
+- reuse common project context across selected targets within one M7 conversation while confining each target's evidence and instructions;
 - keep repository text from expanding the Scribe's authority;
-- preserve exact, stable prompt prefixes across compatible Scribe runs;
+- preserve stable authorized prompt content and measure prefix/cache observations without making provider cache retention a correctness requirement;
 - make uncached input, cache reuse, tool calls, latency, and cost observable;
 - remain correct when provider caching is unavailable, expired, or missed;
 - support deterministic replay, bounded failure, and sanitized bounded provenance.
@@ -80,7 +80,7 @@ This context is not a provider conversation and is not durable GitHub ledger con
 
 ### Documentation Scribe
 
-The Documentation Scribe is the only initial model-assisted agent role. Within one bounded run it may:
+The Documentation Scribe is the only model-assisted agent role. The current single-target loop may:
 
 1. receive bootstrapped repository and scope context;
 2. use read-only tools to complete semantic context routing;
@@ -91,7 +91,7 @@ Context discovery is a phase of the Scribe loop, not a handoff between two model
 
 ### Campaign runner
 
-The campaign runner groups targets by compatible context identity, constructs requests in stable order, applies provider and cost budgets, and starts independent short-lived Scribe runs. It may warm and then process a context group together, but it does not depend on a long-lived model conversation.
+The current campaign runner starts independent single-target runs under its current contracts. M7 selects a fixed semantic manifest and presents all selected targets to one bounded Scribe conversation. Grouping respects containing-type/direct-member, project/compilation and instruction/style boundaries; nested types are independent, groups are never skipped for quota packing, and oversized groups split to make progress. Grouping is selection and relationship metadata, not sequential runtime feeding, separate context preparation or a cache warm-up/concurrency policy.
 
 ## Context layers
 
@@ -159,7 +159,7 @@ The runtime may reuse that discovery for later targets only when:
 
 Reuse stores the exact accepted document content or reconstructible identity, not a model-written summary or hidden conclusion. Target-specific usages, tests, source excerpts, and inference remain in the dynamic target evidence pack.
 
-The first discovery-bearing Scribe request and later frozen-prefix requests may therefore have different context identities. The runtime must not claim that the earlier request warmed the final prefix unless the locally computed prefix identity is actually equal. For a large context group, the campaign may choose a bounded context-preparation phase using the same Scribe Runtime when its additional request is justified by projected reuse. That is an economic planning choice, not a second agent role or a correctness requirement.
+A discovery-bearing request and later requests may have different context identities. The runtime must not claim that the earlier request warmed a final prefix unless local identity is actually equal. M7 uses the same Scribe's lazy bounded reads inside the selected conversation, without a separate model context-preparation phase. Detailed shared evidence layout and stable-prefix construction are implementation choices subject to identity, scope and byte bounds.
 
 ## Context entrypoints and routing
 
@@ -230,31 +230,24 @@ These tools are implemented directly in C# through repository-confined services.
 
 Roslyn semantic tools remain preferred for C# symbols, relationships, usages, and tests. Text tools exist for context routing, maintained documentation, configuration, examples, and non-Roslyn artifacts.
 
-## Candidate shared context without shared conversation
+## M7 shared context within one bounded conversation
 
-The following request-sharing model belongs to later prompt and campaign composition. M3-X1 establishes only the deterministic facts and semantic content identity that such work may consume.
-
-Independent Scribe runs share immutable context artifacts and tool backends:
+M3-X1 supplies deterministic facts and session-bound read capabilities; it is not itself a multi-target or durable conversation contract. The adopted M7 composition presents the complete fixed selected manifest at the beginning:
 
 ```text
 RepositoryContextSnapshot
-  + ScopeContextOverlay
-       -> Scribe run A + target evidence A
-       -> Scribe run B + target evidence B
-       -> Scribe run C + target evidence C
+  + applicable scope/style constraints per selected target
+  + complete fixed batch manifest and validated prior progress
+       -> one bounded Scribe conversation
+            -> lazy bounded reads reused by identity/revision/range
+            -> per-target or small-batch structured submission
+            -> host validation, acknowledgement and checkpoint
+            -> deterministic coverage check or resource/context stop
 ```
 
-They do not share:
+Shared reads never promote ordinary evidence into instructions or make one target's style/claims applicable to another target. Structured acceptance is separate from patch/publication/merge; foreign, duplicate or omitted targets cannot claim completed coverage. Bounded assistant continuation remains private provider-wire state, never evidence, ledger content or recovery authority.
 
-- hidden model reasoning;
-- a mutable parent conversation;
-- target-specific tool-call history;
-- another target's proposal;
-- provider session identifiers as correctness state.
-
-This is logically similar to forking from a common context, but the fork is implemented by deterministic request construction. It does not require a provider-specific conversation-fork feature or a parent/subagent protocol.
-
-A single ever-growing Scribe conversation is not the default because it serializes unrelated targets, prevents safe parallelism, expands the prompt with prior target history, complicates retry and resume, and risks cross-target contamination.
+M7 does not fork agents or share a hidden parent conversation. A later Action reconstructs validated accepted results and starts a new bounded conversation for unresolved members of the original unpublished batch. It restores neither complete model history nor reasoning, and stops at resource/context limits without automatic compaction. After partial publication, the sealed subset waits for review and remaining work requires a later allowed fresh Audit. The current runtime remains single-target until its owning implementation issue updates it.
 
 ## Candidate cacheable prompt layout
 
@@ -352,7 +345,7 @@ provider and model configuration
 + scope-context identity
 ```
 
-The scheduler should process a group close together so the provider has an opportunity to reuse its prefix. It may run one request before expanding concurrency when a provider requires a cache warm-up, but no correctness transition depends on the warm-up succeeding.
+These identities delimit compatible context reuse, not target completion or separate provider conversations. M7 uses one selected conversation with scope-aware bounded reuse; no correctness transition depends on cache warm-up or concurrency expansion. Targets with incompatible instruction/style scopes must retain those boundaries even when selected in the same manifest.
 
 Provider cache hits are not guaranteed and must not be a hard success condition. The enforceable requirements are:
 
@@ -368,6 +361,8 @@ Pricing is time-dependent provider configuration, not a hard-coded product const
 ## Candidate resume and invalidation
 
 Resume and durable invalidation are M4 concerns. The text below is retained as design direction and is not implemented or frozen by M3-X1.
+
+M7's [fixed-batch recovery and lifecycle](../90_roadmap/m7-plan.md#lifecycle-precedence-before-discovery-or-provider-work) supersedes older per-target scheduling direction. Lifecycle gates precede new discovery/provider work. Correctness-bearing input changes without an active-PR/closed-same-base gate create a fresh snapshot/Audit; execution-budget changes alone preserve compatible original membership. Accepted results may be reconstructed and freshly Roslyn/patch validated without new target discovery or regeneration.
 
 Campaign resume reconstructs context from deterministic state and the pinned repository snapshot. It does not restore a complete provider conversation.
 
@@ -416,7 +411,7 @@ Later M3 work must include deterministic tests for:
 - stable context and prefix identities across fresh processes;
 - distinct scope overlays for targets with different instruction stacks;
 - no target-specific data in the claimed shared prefix;
-- independent Scribe runs sharing the same immutable context;
+- the current single-target baseline's immutable-context reuse, distinct from M7 shared-conversation requirements;
 - fake tool calls and malformed provider tool arguments;
 - the frozen DeepSeek and MiMo request corpus, expected observations, and failure classifications;
 - normalization fixtures for every evidenced response shape, including usage and cache observations when reported;
@@ -426,6 +421,8 @@ Later M3 work must include deterministic tests for:
 Checked-in request and normalization fixtures are reviewed synthetic protocol artifacts. They may encode canonical messages, tool definitions and calls, terminal responses, adversarial injection text, and a fixed continuation marker needed to prove exact credential-free replay. They do not preserve private or live-run prompts, complete conversations or tool transcripts, captured live continuation, hidden reasoning, credentials, raw provider responses, or machine-local data. Live observations are reduced to bounded provenance, closed continuation statuses, field inventories, metrics, and sanitized expected outcomes before publication.
 
 Live synthetic evaluation uses DeepSeek as the primary provider and MiMo as the compatibility provider. It executes the frozen corpus and records observed request, tool, response, failure, cached and uncached usage when available, request count, accepted proposals, validation failures, latency, and cost. Compatibility statements are limited to the paths and observations evidenced by that run. Live credentials are opt-in and are never required by ordinary CI.
+
+The preceding M3 cases remain evidence for their recorded revisions. M7 requires production-path multi-target coverage, instruction/evidence confinement, incremental acknowledgements, fixed-manifest recovery and context-stop tests. Its [usage observations](../90_roadmap/m7-plan.md#per-invocation-observations) separate actual known/unknown usage, exposure and charges; input equals hit plus miss when known, reasoning is an output subset, and restored history is not new invocation consumption. Representative same-target comparisons measure quality/completeness and calls/cache/input/output; cache ratio alone does not prove savings. Live provider proof is bounded and separately authorized.
 
 ## Non-goals
 

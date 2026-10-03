@@ -4,6 +4,14 @@
 > published or supported distribution; this document freezes the external
 > contract so M6-A3 examples and M6-R1 promotion build against it.
 
+## M7 planning boundary
+
+[M7 plan](../90_roadmap/m7-plan.md) adopts one automatic caller-triggered product entrypoint that selects start, compatible unpublished fixed-batch recovery, exact publication recovery, no-op, awaiting review or pause from authenticated ledger/PR state. Manual, optional best-effort native schedule and caller-selected external triggers use the same safeguards, with no schedule timing guarantee or external scheduler built by the product.
+
+C1 adopts that direction only. The inputs, operations, envelope and output table below remain the current implemented M6 interface; they do not yet expose M7 automatic selection or usage outputs. Their owning CLI/Action issues update the real contracts coherently. M7 requires versioned per-invocation usage JSON in the result envelope/Action output and a step summary, distinguishing restored history, known/unknown usage, exposure, charges and zero-provider lifecycle gates. Exact field names remain implementation choices.
+
+The wrapper stays thin: CLI reads complete consumer coordination-ref recovery state and PR facts before new Audit/provider work and owns lifecycle/accounting; artifacts are diagnostic exports, not manual next-run handoff authority. One fixed batch publishes at most one draft PR, published draft/ready PRs accept no additional targets, and human review/ready/merge/close remain explicit boundaries. Nothing in C1 authorizes a public release, payload-map change or new credential path.
+
 ## What the Action is
 
 `action.yml` at the repository root declares a **composite** Action that
@@ -163,7 +171,7 @@ files only → exact inventory check against the archive's own `payload.json` �
 dotnet host/SDK prerequisite → atomic publish → `current` selector repoint.
 Cache reuse re-verifies the retained archive digest and the installed tree
 against the archive manifest; poisoned or foreign state fails rather than
-self-repairing. See [ADR 0006](../decisions/0006-composite-action-host.md).
+self-repairing. See [ADR 0006](decisions/0006-composite-action-host.md).
 
 The install root is shared by every invocation in the same job (hosted
 runners wipe `RUNNER_TEMP` per job, so nothing survives the job). `invoke`
