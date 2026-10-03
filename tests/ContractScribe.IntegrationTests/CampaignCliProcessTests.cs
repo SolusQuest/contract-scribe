@@ -13,7 +13,7 @@ using ContractScribe.Core;
 namespace ContractScribe.Roslyn.IntegrationTests;
 
 [Collection("Integration process lane 1")]
-public sealed class CampaignCliProcessTests
+public sealed partial class CampaignCliProcessTests
 {
     internal static readonly string RepositoryRoot = FindRepositoryRoot();
     private static readonly string Configuration = AppContext.BaseDirectory.Contains(
@@ -119,7 +119,7 @@ public sealed class CampaignCliProcessTests
         else if (required)
         {
             Assert.Equal(CampaignTerminalKind.Complete, state.TerminalOutcome!.Kind);
-            Assert.Equal(CampaignTerminalReason.AllWorkClosed, state.TerminalOutcome.Reason);
+            Assert.Equal(CampaignTerminalReason.Unresolved, state.TerminalOutcome.Reason);
             Assert.NotEmpty(state.WorkItems);
         }
         else

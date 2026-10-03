@@ -21,6 +21,7 @@ public sealed partial class CampaignStateContractTests
         var state = new CampaignCheckpointState(basis.ProductRevision, basis.CampaignLineage, basis.Snapshot,
             basis.CheckpointRevision, basis.ConfiguredCeilings, basis.LineageCharges,
             [basis.WorkItems.Single(item => item.Status == CampaignWorkStatus.Accepted), closed],
+            basis.Batch,
             null, basis.CandidateObservation, basis.CumulativeOutcome, basis.KnownCompletedOperations, null, null)
         { AcceptedCandidateOrigin = basis.AcceptedCandidateOrigin };
         var configuration = new GitHubPublicationConfiguration("Owner", "repo", "refs/heads/main", new('a', 40),

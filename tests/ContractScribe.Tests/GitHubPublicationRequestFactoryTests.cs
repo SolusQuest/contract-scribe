@@ -234,7 +234,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 case "source-drift": await File.AppendAllTextAsync(fixture.Fixture.SourcePath, "// changed after acceptance\n"); break;
                 case "style": context = context with { StyleConfigurationProjection = JsonSerializer.SerializeToElement(new { style = "other" }) }; break;
                 case "execution": context = context with { ExecutionCapability = null! }; break;
-                case "plan": context = context with { AcceptedPlan = new(context.AcceptedPlan.CampaignLineage, "other-snapshot", context.AcceptedPlan.AuditDocumentSha256, context.AcceptedPlan.ExecutionCommitment, context.AcceptedPlan.TargetProfile, context.AcceptedPlan.WorkItems, context.AcceptedPlan.Summary) }; break;
+                case "plan": context = context with { AcceptedPlan = new(context.AcceptedPlan.CampaignLineage, "other-snapshot", context.AcceptedPlan.AuditDocumentSha256, context.AcceptedPlan.ExecutionCommitment, context.AcceptedPlan.TargetProfile, context.AcceptedPlan.WorkItems, context.AcceptedPlan.Summary, context.AcceptedPlan.Batch) }; break;
                 case "audit": context = context with { AcceptedAuditInputs = [] }; break;
                 case "cancelled":
                     using (var cancellation = new CancellationTokenSource())
@@ -500,7 +500,7 @@ public sealed partial class DocumentationScribeCompositionTests
         CampaignTerminalOutcome? terminal = null, CampaignCandidateObservation? observation = null,
         CampaignCumulativeOutcome? cumulative = null, bool removeObservation = false) => new(
         basis.ProductRevision, basis.CampaignLineage, basis.Snapshot, revision ?? basis.CheckpointRevision,
-        basis.ConfiguredCeilings, basis.LineageCharges, basis.WorkItems, basis.ActiveReservation,
+        basis.ConfiguredCeilings, basis.LineageCharges, basis.WorkItems, basis.Batch, basis.ActiveReservation,
         removeObservation ? null : observation ?? basis.CandidateObservation, cumulative ?? basis.CumulativeOutcome,
         basis.KnownCompletedOperations, terminal, basis.Predecessor)
         {

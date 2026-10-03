@@ -949,12 +949,16 @@ public static class DocumentationScribeContextValidation
 
     private static void ValidateSymbolRef(SymbolRef symbolRef)
     {
-        if (!IsCompilationContextRef(symbolRef.CompilationContextRef)
-            || !IsDocumentationCommentId(symbolRef.DocumentationCommentId))
+        if (!IsValidSymbolRef(symbolRef))
         {
             throw new ArgumentException("A valid SymbolRef is required.", nameof(symbolRef));
         }
     }
+
+    internal static bool IsValidSymbolRef(SymbolRef symbolRef) =>
+        symbolRef.CompilationContextRef is not null && symbolRef.DocumentationCommentId is not null
+        && IsCompilationContextRef(symbolRef.CompilationContextRef)
+        && IsDocumentationCommentId(symbolRef.DocumentationCommentId);
 
     private static EvidenceLocator ValidateEvidenceLocator(EvidenceLocator locator) => locator switch
     {

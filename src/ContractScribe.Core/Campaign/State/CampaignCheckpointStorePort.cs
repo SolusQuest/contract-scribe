@@ -303,12 +303,13 @@ public static class CampaignCheckpointAcceptance
             && state.LineageCharges == CampaignStateFactory.EmptyChargesForAcceptance()
             && state.WorkItems.All(item =>
                 item.OuterAttemptCount == 0
+                && item.AttemptDisposition == CampaignAttemptDisposition.Open
                 && item.CandidateAttemptCount == 0
                 && item.TrustedProposal is null
                 && item.Status is CampaignWorkStatus.Planned or CampaignWorkStatus.Closed
                 && (item.Status != CampaignWorkStatus.Closed
                     || item.ClosedOutcome?.Stage == CampaignWorkOutcomeStage.Planning))
-            && state.TerminalOutcome == ExpectedInitialTerminal(state.WorkItems)
+            && state.TerminalOutcome == CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems)
             && ArtifactsEqual(artifact, CampaignStateJson.CreateArtifact(state));
     }
 
@@ -538,10 +539,4 @@ public static class CampaignCheckpointAcceptance
         && string.Equals(left.Sha256, right.Sha256, StringComparison.Ordinal)
         && left.ExactUtf8Json.AsSpan().SequenceEqual(right.ExactUtf8Json.AsSpan());
 
-    private static CampaignTerminalOutcome? ExpectedInitialTerminal(
-        ImmutableArray<CampaignWorkItemState> workItems) => workItems.IsEmpty
-            ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.NoWork)
-            : workItems.All(item => item.Status == CampaignWorkStatus.Closed)
-                ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.AllWorkClosed)
-                : null;
 }

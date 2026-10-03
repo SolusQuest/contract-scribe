@@ -51,6 +51,8 @@ Campaign terminal selection owns the public precedence through host teardown. In
 
 The closed exit groups are: success `0`, usage `2`, bounded resumable stop `3`, configuration/state/compatibility `4`, terminal execution/publication `5`, cancellation `6`, and timeout `7`. Tests freeze the complete outcome vocabulary and mapping. No raw argument, path, credential, proposal, provider value, exception, or downstream diagnostic crosses this surface.
 
+`campaign.batch-complete` exits0 when all selected targets have accepted proposal progress but later eligible targets remain deferred. `campaign.unresolved` exits5 when no actionable selected target remains and skips, failures, suppressed or unsupported/excluded targets remain unresolved. `campaign.target-limit` exits3 when this invocation has no remaining allowance for a new target. A saved batch never expands on resume, and accepted-only candidate reconstruction consumes no new-target slot. These outcomes describe checkpoint/proposal progress; they do not assert merged-main compliance or start another batch automatically. C2's internal typed invocation limit is independent of accepted-patch capacity; C4 owns its public configuration/default wiring.
+
 ## Security and non-goals
 
 The configuration is non-secret. `CONTRACTSCRIBE_PROVIDER_API_KEY` is the only credential name, is read at most when a provider-backed reservation is admissible, and is passed only to the selected existing transport. The command does not enumerate or forward the environment. Help, usage, preflight, unsafe/missing/corrupt/conflicting state, incompatibility, M1/C1 failure, no-work, unsupported-work, and pre-provider budget exhaustion do not read it.

@@ -119,6 +119,7 @@ public enum CampaignTerminalReason
 {
     NoWork,
     AllWorkClosed,
+    Unresolved,
     Budget,
     Caller,
     Deadline,
@@ -313,7 +314,10 @@ public sealed record CampaignWorkItemState(
     int CandidateAttemptCount,
     CampaignWorkStatus Status,
     CampaignTrustedProposal? TrustedProposal,
-    CampaignWorkClosedOutcome? ClosedOutcome);
+    CampaignWorkClosedOutcome? ClosedOutcome)
+{
+    public CampaignAttemptDisposition AttemptDisposition { get; init; }
+}
 
 public sealed record CampaignProviderReservationExposure(
     int ProviderRequests,
@@ -397,6 +401,7 @@ internal sealed record CampaignAcceptedCandidateOrigin(
     string CampaignLineage,
     CampaignStateSnapshotAuthority Snapshot,
     string CampaignConfigurationCommitmentSha256,
+    string BatchIdentity,
     CampaignCandidateObservation CandidateObservation);
 
 public sealed record CampaignCumulativeOutcome
@@ -549,6 +554,7 @@ public sealed record CampaignCheckpointState
         CampaignStateConfiguredCeilings configuredCeilings,
         CampaignLineageCharges lineageCharges,
         ImmutableArray<CampaignWorkItemState> workItems,
+        CampaignFixedBatch batch,
         CampaignActiveReservation? activeReservation,
         CampaignCandidateObservation? candidateObservation,
         CampaignCumulativeOutcome? cumulativeOutcome,
@@ -563,6 +569,7 @@ public sealed record CampaignCheckpointState
         ConfiguredCeilings = configuredCeilings;
         LineageCharges = lineageCharges;
         WorkItems = workItems;
+        Batch = batch;
         ActiveReservation = activeReservation;
         CandidateObservation = candidateObservation;
         CumulativeOutcome = cumulativeOutcome;
@@ -579,6 +586,8 @@ public sealed record CampaignCheckpointState
     public CampaignStateConfiguredCeilings ConfiguredCeilings { get; }
     public CampaignLineageCharges LineageCharges { get; }
     public ImmutableArray<CampaignWorkItemState> WorkItems { get; }
+    public CampaignFixedBatch Batch { get; }
+    public ImmutableArray<CampaignTargetProgress> TargetProgress => CampaignStateFactory.ReadTargetProgress(this);
     public CampaignActiveReservation? ActiveReservation { get; }
     internal CampaignAcceptedCandidateOrigin? AcceptedCandidateOrigin { get; init; }
     public CampaignCandidateObservation? CandidateObservation { get; }

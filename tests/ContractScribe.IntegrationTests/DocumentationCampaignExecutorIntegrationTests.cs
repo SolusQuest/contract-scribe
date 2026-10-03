@@ -673,7 +673,16 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 multiDeclarator: false,
                 primaryConstructor: false,
                 primaryConstructorAlias: false,
-                request.Request.StyleProfile));
+                request.Request.StyleProfile)
+            {
+                GroupingAuthority = new DocumentationDeclarationAuthorityProjector()
+                    .Project(fixture.Observations, target, null).Authority!.GroupingAuthority! with
+                {
+                    InstructionsSha256 = CampaignPlanner.CreateInstructionStackCommitment(request.Request.ContextReferences),
+                    StyleConfigurationSha256 = CampaignStateFactory.CreateStyleConfigurationAuthority("style.public-api.v1",
+                        JsonSerializer.SerializeToElement(new { style = "public-api-v1" })).ContentSha256,
+                },
+            });
         }
         var agentProjection = JsonSerializer.SerializeToElement(new
         {
@@ -720,7 +729,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             evidenceAuthority,
             audit,
             new CampaignPlanningOwnerAuthoritySet(targetAuthorities.Select(target =>
-                new CampaignPlanningOwnerAuthority([target])).ToImmutableArray()));
+                new CampaignPlanningOwnerAuthority([target])).ToImmutableArray()), new CampaignInvocationTargetLimit(100));
         var plan = CampaignPlanner.Plan(planning);
         var executable = plan.WorkItems.Where(item =>
             item.Disposition.Kind == CampaignPlanningDispositionKind.Executable).ToArray();

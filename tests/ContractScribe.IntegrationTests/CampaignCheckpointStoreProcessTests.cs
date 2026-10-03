@@ -897,6 +897,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             state.ConfiguredCeilings,
             state.LineageCharges,
             state.WorkItems,
+            state.Batch,
             terminalOutcome: null));
     }
 

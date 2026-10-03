@@ -237,7 +237,8 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.PlanningInput,
             campaign.Plan,
             planned.WorkItemKey,
-            fixture.Request);
+            fixture.Request,
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
         Assert.True(directAdmission.Kind == CampaignTransitionKind.Applied,
             directAdmission.Failure.ToString());
 
@@ -421,7 +422,7 @@ public sealed partial class DocumentationScribeCompositionTests
             emptyFixture.Observed.ObservationSet!,
             [],
             emptyFixture.AuditDocument,
-            new CampaignPlanningOwnerAuthoritySet([]));
+            new CampaignPlanningOwnerAuthoritySet([]), new CampaignInvocationTargetLimit(100));
         var plan = CampaignPlanner.Plan(planningInput);
         Assert.Empty(plan.WorkItems);
         var initialState = CampaignStateFactory.CreateInitial(
@@ -779,7 +780,8 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.PlanningInput,
             campaign.Plan,
             work.WorkItemKey,
-            fixture.Request);
+            fixture.Request,
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         return admitted;
     }
@@ -1276,9 +1278,13 @@ public sealed partial class DocumentationScribeCompositionTests
                 "M:ProposalStage.ProposalFixture.Execute",
                 nonMethodDocumentationId: null);
 
+        internal static Task<CompositionFixture> CreateBatchGroupingAsync(string source) =>
+            CreateAsync(["documentation-scribe", "end-to-end"], "M:EndToEnd.Fixture.Run", null, source);
+
         internal CampaignExecutionFixture CreateCampaign(
             long maximumPatchElapsedMilliseconds = 120_000,
-            long maximumCampaignElapsedMilliseconds = 300_000)
+            long maximumCampaignElapsedMilliseconds = 300_000,
+            bool includeAllOwners = false)
         {
             var classifications = Classified.Classification.ClassificationSet!;
             var observations = Observed.Observation.ObservationSet!;
@@ -1290,6 +1296,21 @@ public sealed partial class DocumentationScribeCompositionTests
                 .Where(target => target.SupportStatus == SupportStatus.Supported)
                 .Select(target =>
                 {
+                    if (includeAllOwners)
+                    {
+                        var projected = new DocumentationDeclarationAuthorityProjector().Project(Observed, target,
+                            target.PrimaryKind == PrimarySymbolKind.Method ? Request.StyleProfile : null);
+                        Assert.True(projected.IsSuccess, projected.FailureCode);
+                        return projected.Authority! with
+                        {
+                            GroupingAuthority = projected.Authority!.GroupingAuthority! with
+                            {
+                                InstructionsSha256 = CampaignPlanner.CreateInstructionStackCommitment(Request.ContextReferences),
+                                StyleConfigurationSha256 = CampaignStateFactory.CreateStyleConfigurationAuthority("style.public-api.v1",
+                                    JsonSerializer.SerializeToElement(new { style = "public-api-v1" })).ContentSha256,
+                            },
+                        };
+                    }
                     var observation = observations.Observations.Single(item =>
                         item.Subject.ParentSymbolRef == target.SymbolRef
                         && item.Subject.ComponentKind is null);
@@ -1329,7 +1350,16 @@ public sealed partial class DocumentationScribeCompositionTests
                         multiDeclarator: false,
                         primaryConstructor: false,
                         primaryConstructorAlias: false,
-                        target.SymbolRef == Target.SymbolRef ? Request.StyleProfile : null);
+                        target.SymbolRef == Target.SymbolRef ? Request.StyleProfile : null)
+                    {
+                        GroupingAuthority = new DocumentationDeclarationAuthorityProjector()
+                            .Project(Observed, target, null).Authority!.GroupingAuthority! with
+                        {
+                            InstructionsSha256 = CampaignPlanner.CreateInstructionStackCommitment(Request.ContextReferences),
+                            StyleConfigurationSha256 = CampaignStateFactory.CreateStyleConfigurationAuthority("style.public-api.v1",
+                                JsonSerializer.SerializeToElement(new { style = "public-api-v1" })).ContentSha256,
+                        },
+                    };
                 }).ToImmutableArray();
             var agentProjection = JsonSerializer.SerializeToElement(new
             {
@@ -1388,9 +1418,9 @@ public sealed partial class DocumentationScribeCompositionTests
                 evidenceAuthority,
                 AuditDocument,
                 new CampaignPlanningOwnerAuthoritySet(targetAuthorities
-                    .Where(target => target.Target.SymbolRef == Target.SymbolRef)
+                    .Where(target => includeAllOwners || target.Target.SymbolRef == Target.SymbolRef)
                     .Select(target =>
-                    new CampaignPlanningOwnerAuthority([target])).ToImmutableArray()));
+                    new CampaignPlanningOwnerAuthority([target])).ToImmutableArray()), new CampaignInvocationTargetLimit(100));
             var plan = CampaignPlanner.Plan(planningInput);
             var styleProjection = JsonSerializer.SerializeToElement(new { style = "public-api-v1" });
             var executionCapability = CampaignStateFactory.CreateScribeExecutionCapability(
@@ -1422,7 +1452,8 @@ public sealed partial class DocumentationScribeCompositionTests
         private static async Task<CompositionFixture> CreateAsync(
             string[] fixtureSegments,
             string targetDocumentationId,
-            string? nonMethodDocumentationId)
+            string? nonMethodDocumentationId,
+            string? sourceOverride = null)
         {
             var tempRoot = Path.GetFullPath(Path.GetTempPath());
             var root = Descendant(tempRoot, "contract-scribe-issue-138-" + Guid.NewGuid().ToString("N"));
@@ -1440,6 +1471,7 @@ public sealed partial class DocumentationScribeCompositionTests
             {
                 const string repositoryPath = "Fixture.cs";
                 var sourcePath = Descendant(root, repositoryPath);
+                if (sourceOverride is not null) await File.WriteAllTextAsync(sourcePath, sourceOverride);
                 var sourceText = await File.ReadAllTextAsync(sourcePath);
                 var syntaxTree = CSharpSyntaxTree.ParseText(
                     sourceText,
@@ -1489,8 +1521,9 @@ public sealed partial class DocumentationScribeCompositionTests
                 var classifications = classified.Classification.ClassificationSet!;
                 var target = Assert.Single(
                     classifications.Targets,
-                    candidate => candidate.SymbolRef.DocumentationCommentId.StartsWith(
-                            targetDocumentationId, StringComparison.Ordinal)
+                    candidate => (candidate.SymbolRef.DocumentationCommentId.Equals(targetDocumentationId, StringComparison.Ordinal)
+                        || !classifications.Targets.Any(item => item.SymbolRef.DocumentationCommentId == targetDocumentationId)
+                            && candidate.SymbolRef.DocumentationCommentId.StartsWith(targetDocumentationId + "(", StringComparison.Ordinal))
                         && candidate.SupportStatus == SupportStatus.Supported);
                 var nonMethod = nonMethodDocumentationId is null
                     ? null

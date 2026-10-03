@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace ContractScribe.Core;
 
-public static class CampaignPlanner
+public static partial class CampaignPlanner
 {
     private const int MaximumOwners = 4_096;
     private const int MaximumTargets = 16_384;
@@ -130,7 +130,8 @@ public static class CampaignPlanner
             executionCommitment,
             input.Snapshot.TargetProfile,
             workItems,
-            summary);
+            summary,
+            SelectBatch(executionCommitment, workItems, input.TargetLimit));
     }
 
     internal static ImmutableHashSet<SymbolRef> ReadViolationParentSymbols(
@@ -145,7 +146,18 @@ public static class CampaignPlanner
 
     internal static ImmutableHashSet<SymbolRef> ReadExecutableStyleParentSymbols(
         AuditDocument document,
-        ImmutableArray<CampaignPlanningOwnerAuthority> owners)
+        ImmutableArray<CampaignPlanningOwnerAuthority> owners) =>
+        ReadEligibleParentSymbols(document, owners, methodsOnly: true);
+
+    internal static ImmutableHashSet<SymbolRef> ReadBatchCandidateParentSymbols(
+        AuditDocument document,
+        ImmutableArray<CampaignPlanningOwnerAuthority> owners) =>
+        ReadEligibleParentSymbols(document, owners, methodsOnly: false);
+
+    private static ImmutableHashSet<SymbolRef> ReadEligibleParentSymbols(
+        AuditDocument document,
+        ImmutableArray<CampaignPlanningOwnerAuthority> owners,
+        bool methodsOnly)
     {
         ArgumentNullException.ThrowIfNull(document);
         if (owners.IsDefault)
@@ -162,10 +174,12 @@ public static class CampaignPlanner
         return owners
             .Where(owner => owner is not null && owner.Targets.Length == 1)
             .Select(owner => (Owner: owner, Target: owner.Targets[0]))
-            .Where(pair => IsM3Eligible(
+            .Where(pair => IsCanonicalOwnerEligible(
                 pair.Owner.AmbiguousOwner,
                 pair.Owner.Targets,
                 pair.Target)
+                && pair.Target.Target.PrimaryKind != PrimarySymbolKind.Unknown
+                && (!methodsOnly || pair.Target.Target.PrimaryKind == PrimarySymbolKind.Method)
                 && violationReasons.TryGetValue(pair.Target.Target.SymbolRef, out var reasons)
                 && !reasons.IsEmpty
                 && reasons.All(reason => reason == AuditReason.RequiredAbsent))
@@ -969,6 +983,7 @@ public static class CampaignPlanner
         {
             ValidateSourceAuthority(target.Source);
             sourceSession.BindSource(target.Target.SymbolRef, target.Source);
+            ValidateGrouping(target, sourceSession);
         }
 
         var physicalKeys = new HashSet<string>(StringComparer.Ordinal);
@@ -1259,7 +1274,8 @@ public static class CampaignPlanner
                     targetRow.Reason,
                     targetRow.RowSha256,
                     eligible,
-                    authority.ExecutableStyleProfile);
+                    authority.ExecutableStyleProfile,
+                    authority.GroupingAuthority);
             }).ToImmutableArray();
 
         if (causes.Any(cause => cause.Reason == AuditReason.ForbiddenPresent))
@@ -1301,6 +1317,16 @@ public static class CampaignPlanner
                 orderedReasons);
         }
 
+        if (targetFacts.Length == 1 && targetFacts[0].PrimaryKind != PrimarySymbolKind.Unknown
+            && (disposition.Kind == CampaignPlanningDispositionKind.Executable
+                || disposition.TerminalReasons.SequenceEqual([CampaignPlanningTerminalReason.UnsupportedTargetKind])))
+        {
+            Require(targetFacts[0].GroupingAuthority is
+            { InstructionsSha256: not null, StyleConfigurationSha256: not null },
+                CampaignPlanningValidationCode.InvalidOwnerAuthority,
+                "Every batch-eligible target requires complete bound semantic and applicable-context grouping facts.");
+        }
+
         return new PendingWorkItem(
             owner.CanonicalOwnerRef,
             targetFacts,
@@ -1312,6 +1338,13 @@ public static class CampaignPlanner
         bool ambiguousOwner,
         ImmutableArray<CampaignPlanningTargetAuthority> ownerTargets,
         CampaignPlanningTargetAuthority authority) =>
+        authority.Target.PrimaryKind == PrimarySymbolKind.Method
+        && IsCanonicalOwnerEligible(ambiguousOwner, ownerTargets, authority);
+
+    private static bool IsCanonicalOwnerEligible(
+        bool ambiguousOwner,
+        ImmutableArray<CampaignPlanningTargetAuthority> ownerTargets,
+        CampaignPlanningTargetAuthority authority) =>
         ownerTargets.Length == 1
         && !ambiguousOwner
         && !authority.MultiDeclarator
@@ -1319,7 +1352,6 @@ public static class CampaignPlanner
         && !authority.PrimaryConstructorAlias
         && authority.OwnerSymbolRefs.Length == 1
         && authority.OwnerSymbolRefs[0] == authority.Target.SymbolRef
-        && authority.Target.PrimaryKind == PrimarySymbolKind.Method
         && authority.Source.Kind == DocumentationPatchSourceKind.Repository
         && authority.Source.Writable
         && authority.Source.BlockState is DocumentationBlockState.NoBlock
@@ -1526,6 +1558,7 @@ public static class CampaignPlanner
             writer.Add("target.audit-reason", AuditVocabulary.GetId(target.AuditReason));
             writer.Add("target.audit-row", target.AuditRowSha256);
             writer.Add("target.m3-eligible", target.M3Eligible);
+            AddGrouping(writer, target.GroupingAuthority);
             writer.Add("target.style.present", target.StyleProfile is not null);
             if (target.StyleProfile is not null)
             {

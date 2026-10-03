@@ -45,6 +45,12 @@ A nonserialized internal proof first validates the actual fresh request/result a
 
 ## State model
 
+The current v1 root requires `batch` and `targetProgress` immediately after `workItems`. The batch records its identity, complete-plan commitment, original creation quota and immutable ordered selected target keys. The progress array retains every complete-plan target's work association, `SymbolRef`, eligibility, dispatchability, semantic group and member-family commitments, and its visible status. Status is derived from the durable work/reservation/attempt state; contradictory serialized progress fails canonical readback. `acceptedCandidateOrigin` additionally binds `batchIdentity`. Every work row requires `attemptDisposition`, either `open` or `suppressed-at-attempt-limit`. Missing fields from the earlier draft v1 shape fail closed; no legacy reader or migration is provided.
+
+Same-snapshot context validation replans using the saved creation quota. A lower current invocation limit cannot alter snapshot, complete-plan or batch identity; a higher limit cannot add membership. One process-local `CampaignInvocationTargetAllowance` fixes the deterministic remaining dispatchable subset for the entire invocation. Runner selection, proposal execution and Core admission all require selected-batch membership and this allowance. One durable authorized reservation is a target start; retries of that allowed target take no second distinct slot. Recovery of an already active operation and accepted-only reconstruction remain possible at a new-target limit of zero. Accepted proposals remain proposal progress and do not claim that documentation was merged on main.
+
+Target statuses distinguish `pending`, `deferred`, `active`, `retryable`, `proposal-complete`, `accepted-proposal`, `skipped`, `failed`, `suppressed`, `infrastructure-blocked`, `unsupported-current-executor` and `excluded`. Finite exhausted retryable attempts persist suppression per work item without silently renewing invocation quotas or suppressing the rest of the batch. Skipped/failed/unsupported targets remain unresolved. Infrastructure, credentials, cancellation and ambiguous operations retain their existing typed failure and recovery semantics.
+
 Every C1 work item appears exactly once and in exact C1 order. Its closed status is:
 
 - `planned`: no proposal or terminal outcome;
@@ -173,10 +179,9 @@ and clears the active exposure before recording the terminal. Accepted
 M2 completion replaces the complete candidate observation; an over-ceiling
 candidate is omitted and becomes durable budget exhaustion. Patch rejection
 closes only the work proven by the opaque reduction capability. Campaign
-completion is reached when no `planned` or `proposal-complete` work remains;
+completion is reached when no actionable selected-batch work remains;
 accepted rows remain accepted and reconstructible while closed rows retain their
-terminal evidence. The historical `all-work-closed` reason names this resolved
-terminal set and does not authorize rewriting accepted rows as closed.
+terminal evidence. `all-work-closed` requires every selected target to be accepted and no excluded unresolved work. `unresolved` records skips, failures, suppression or unsupported/excluded targets. Deferred targets outside the fixed batch remain visible and cannot dispatch. Neither reason authorizes rewriting accepted rows as closed or claiming main is compliant.
 Rejected, stale, and host-failed cumulative Patch outcomes are durable stops
 unless the exact Patch rejection capability proves a sole removable item;
 cancelled and timed-out Patch host outcomes preserve their exact request and
@@ -233,7 +238,7 @@ The authority-only reducer uses this closed final mapping; X1-only rows retain a
 
 The registered authoritative completion fact wins over a simultaneous generic stop; its explicit host, caller, timeout, or budget terminal also takes precedence over simultaneous settlement exhaustion. Proposal admission and replay require the trusted projection; a retained postflight-rejected M3 proposal is closed as validation failure and never becomes `proposal-complete`.
 
-The in-process proposal executor validates exact live M1/C1/C2/C3 context and reconstructs the canonical current M1 audit authority before the ordered scan, including provider-free replay, request parsing, or dispatch. It copies caller-owned request bytes once into a bounded executor-owned snapshot, and parsing, reservation correlation, X1 reparse, and provider preparation all consume only that snapshot. It checks runtime provider/model/protocol identities before admission and performs one paired plan/state scan in C1 order. Planning-terminal, accepted, and nonretryable closed rows are resolved; only the first encountered `proposal-complete` row replays; active provider recovery, retryable closed work, and planned admission are actionable only when the root terminal is null. A root terminal otherwise rederives the bounded stage outcome. Active Patch or foreign/contradictory reservation state fails closed.
+The in-process proposal executor validates exact live M1/C1/C2/C3 context and reconstructs the canonical current M1 audit authority before selection, including provider-free replay, request parsing, or dispatch. It copies caller-owned request bytes once into a bounded executor-owned snapshot, and parsing, reservation correlation, X1 reparse, and provider preparation all consume only that snapshot. It checks runtime provider/model/protocol identities before admission. Proposal-complete replay uses its already-started authority; new admission and retry use only the fixed invocation allowance in saved batch order. Suppressed, deferred, unsupported and excluded targets cannot dispatch. A root terminal otherwise rederives the bounded stage outcome. Active Patch or foreign/contradictory reservation state fails closed.
 
 Execution cancellation is independent from settlement/readback cancellation. The reducer constructs and validates the complete successor artifact before consuming completion or lifecycle authority. A final fact becomes durable only through one exact-predecessor transition, conditional replacement, and exact readback. Deterministic authority or successor-construction rejection is a host contract error; store/current-state conflict is a state conflict; only uncertain dispatch, acknowledgement, or readback remains ambiguous. The outer host-active interval uses a monotonic clock and remains distinct from M3 envelope elapsed time. The returned proposal-stage outcome is rederived from the accepted artifact and exposes no raw request/result/provider/tool/source content or mutation authority.
 

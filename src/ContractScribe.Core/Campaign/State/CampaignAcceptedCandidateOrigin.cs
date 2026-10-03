@@ -8,7 +8,7 @@ public static partial class CampaignStateFactory
     internal static CampaignAcceptedCandidateOrigin? CreateSelfOrigin(CampaignCheckpointState state) =>
         state.CandidateObservation is not { } candidate ? null : new(
             state.CheckpointRevision, null, state.ProductRevision, state.CampaignLineage,
-            state.Snapshot, state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256, candidate);
+            state.Snapshot, state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256, state.Batch.Identity, candidate);
 
     // Only the exact, externally accepted predecessor supplies the retained digest. Temporary
     // reservation construction states never become origins, even when they share a revision.
@@ -21,6 +21,7 @@ public static partial class CampaignStateFactory
             && successor.ProductRevision == predecessor.State.ProductRevision
             && successor.CampaignLineage == predecessor.State.CampaignLineage
             && successor.Snapshot == predecessor.State.Snapshot
+            && successor.Batch.Identity == prior.BatchIdentity
             && successor.ConfiguredCeilings.CampaignConfigurationCommitmentSha256
                 == prior.CampaignConfigurationCommitmentSha256
             && predecessor.State.CandidateObservation!.AcceptedWorkItemKeys.SequenceEqual(
@@ -50,6 +51,7 @@ public static partial class CampaignStateFactory
         Require(origin.ProductRevision == state.ProductRevision
             && origin.CampaignLineage == state.CampaignLineage
             && origin.Snapshot == state.Snapshot
+            && origin.BatchIdentity == state.Batch.Identity
             && origin.CampaignConfigurationCommitmentSha256
                 == state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256
             && origin.CheckpointRevision >= 0
@@ -61,7 +63,7 @@ public static partial class CampaignStateFactory
         // reconstruction. Admission rejects that disagreement without erasing its charges.
         var historical = new CampaignCheckpointState(
             state.ProductRevision, state.CampaignLineage, state.Snapshot, state.CheckpointRevision,
-            state.ConfiguredCeilings, state.LineageCharges, state.WorkItems, state.ActiveReservation,
+            state.ConfiguredCeilings, state.LineageCharges, state.WorkItems, state.Batch, state.ActiveReservation,
             origin.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             state.TerminalOutcome, state.Predecessor);
         ValidateCandidate(historical);
@@ -133,6 +135,7 @@ public static partial class CampaignStateJson
         writer.WriteString("campaignLineage", origin.CampaignLineage);
         WriteSnapshot(writer, "snapshot", origin.Snapshot);
         writer.WriteString("campaignConfigurationCommitmentSha256", origin.CampaignConfigurationCommitmentSha256);
+        writer.WriteString("batchIdentity", origin.BatchIdentity);
         writer.WritePropertyName("candidateObservation");
         WriteCandidate(writer, origin.CandidateObservation);
         writer.WriteEndObject();
@@ -145,10 +148,11 @@ public static partial class CampaignStateJson
             return null;
         }
         ExpectObject(element, "checkpointRevision", "checkpointSha256", "productRevision",
-            "campaignLineage", "snapshot", "campaignConfigurationCommitmentSha256", "candidateObservation");
+            "campaignLineage", "snapshot", "campaignConfigurationCommitmentSha256", "batchIdentity", "candidateObservation");
         return new(ReadInt64(element, "checkpointRevision"), ReadNullableString(element, "checkpointSha256"),
             ParseProduct(element.GetProperty("productRevision")), ReadString(element, "campaignLineage"),
             ParseSnapshot(element.GetProperty("snapshot")), ReadString(element, "campaignConfigurationCommitmentSha256"),
+            ReadString(element, "batchIdentity"),
             ParseCandidate(element.GetProperty("candidateObservation"))
                 ?? throw CampaignStateFactory.Fail(CampaignStateValidationCode.InvalidShape, "Origin candidate is absent."));
     }
@@ -165,7 +169,7 @@ public static partial class CampaignStateJson
             request.Blocks.Select(block => block.BlockId).ToImmutableArray(), hash, files, hash, hash);
         var origin = new CampaignAcceptedCandidateOrigin(CampaignStateContract.MaximumObservation, hash,
             state.ProductRevision, state.CampaignLineage, state.Snapshot,
-            state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256, candidate);
+            state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256, state.Batch.Identity, candidate);
         using var stream = new MemoryStream();
         using (var writer = new Utf8JsonWriter(stream))
         {

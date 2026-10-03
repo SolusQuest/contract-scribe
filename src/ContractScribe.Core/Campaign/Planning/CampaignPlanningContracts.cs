@@ -468,6 +468,7 @@ public sealed record CampaignPlanningTargetAuthority
     public bool PrimaryConstructor { get; init; }
     public bool PrimaryConstructorAlias { get; init; }
     public DocumentationScribeStyleProfile? ExecutableStyleProfile { get; init; }
+    public CampaignPlanningGroupingAuthority? GroupingAuthority { get; init; }
 }
 
 public sealed record CampaignPlanningOwnerAuthority
@@ -525,7 +526,8 @@ public sealed record CampaignPlanningInput
         DocumentationObservationSet observations,
         ImmutableArray<CampaignPlanningEvidenceAuthority> evidenceAuthority,
         AuditDocument auditDocument,
-        CampaignPlanningOwnerAuthoritySet ownerAuthority)
+        CampaignPlanningOwnerAuthoritySet ownerAuthority,
+        CampaignInvocationTargetLimit targetLimit)
     {
         Snapshot = snapshot;
         ExecutionPolicy = executionPolicy;
@@ -534,6 +536,7 @@ public sealed record CampaignPlanningInput
         EvidenceAuthority = evidenceAuthority;
         AuditDocument = auditDocument;
         OwnerAuthority = ownerAuthority;
+        TargetLimit = targetLimit;
     }
 
     public CampaignPlanningSnapshot Snapshot { get; init; }
@@ -543,6 +546,7 @@ public sealed record CampaignPlanningInput
     public ImmutableArray<CampaignPlanningEvidenceAuthority> EvidenceAuthority { get; init; }
     public AuditDocument AuditDocument { get; init; }
     public CampaignPlanningOwnerAuthoritySet OwnerAuthority { get; init; }
+    public CampaignInvocationTargetLimit TargetLimit { get; init; }
 }
 
 public sealed record CampaignPlanningViolationCause
@@ -582,7 +586,8 @@ public sealed record CampaignPlanningTargetFact
         AuditReason auditReason,
         string auditRowSha256,
         bool m3Eligible,
-        DocumentationScribeStyleProfile? styleProfile)
+        DocumentationScribeStyleProfile? styleProfile,
+        CampaignPlanningGroupingAuthority? groupingAuthority)
     {
         SymbolRef = symbolRef;
         PrimaryKind = primaryKind;
@@ -596,6 +601,7 @@ public sealed record CampaignPlanningTargetFact
         AuditRowSha256 = auditRowSha256;
         M3Eligible = m3Eligible;
         StyleProfile = styleProfile;
+        GroupingAuthority = groupingAuthority;
     }
 
     public SymbolRef SymbolRef { get; }
@@ -610,6 +616,7 @@ public sealed record CampaignPlanningTargetFact
     public string AuditRowSha256 { get; }
     public bool M3Eligible { get; }
     public DocumentationScribeStyleProfile? StyleProfile { get; }
+    public CampaignPlanningGroupingAuthority? GroupingAuthority { get; }
 }
 
 public sealed record CampaignPlanningDisposition
@@ -676,7 +683,8 @@ public sealed record CampaignWorkPlan
         string executionCommitment,
         TargetProfile targetProfile,
         ImmutableArray<CampaignPlanningWorkItem> workItems,
-        CampaignPlanningSummary summary)
+        CampaignPlanningSummary summary,
+        CampaignFixedBatch batch)
     {
         CampaignLineage = campaignLineage;
         OpaqueSnapshotBinding = opaqueSnapshotBinding;
@@ -685,6 +693,7 @@ public sealed record CampaignWorkPlan
         TargetProfile = targetProfile;
         WorkItems = workItems;
         Summary = summary;
+        Batch = batch;
     }
 
     public string CampaignLineage { get; }
@@ -694,4 +703,5 @@ public sealed record CampaignWorkPlan
     public TargetProfile TargetProfile { get; }
     public ImmutableArray<CampaignPlanningWorkItem> WorkItems { get; }
     public CampaignPlanningSummary Summary { get; }
+    public CampaignFixedBatch Batch { get; }
 }
