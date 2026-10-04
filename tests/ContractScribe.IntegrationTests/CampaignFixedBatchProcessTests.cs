@@ -61,9 +61,9 @@ public sealed partial class CampaignCliProcessTests
             Assert.NotNull(initial);
             Assert.Equal(100, initial.State.Batch.SelectedTargetKeys.Length);
             Assert.Equal(105, initial.State.Batch.CompleteTargets.Length);
-            var schemaNode = JsonNode.Parse(await File.ReadAllTextAsync(Path.Join(RepositoryRoot, "schemas", "campaign-state", "v1.schema.json")))!.AsObject();
-            schemaNode.Remove("$id");
-            var schema = JsonSchema.FromText(schemaNode.ToJsonString());
+            var schemaOptions = new BuildOptions { SchemaRegistry = new SchemaRegistry() };
+            _ = JsonSchema.FromText(await File.ReadAllTextAsync(Path.Join(RepositoryRoot, "schemas", "documentation-patch", "v1.request.schema.json")), schemaOptions);
+            var schema = JsonSchema.FromText(await File.ReadAllTextAsync(Path.Join(RepositoryRoot, "schemas", "campaign-state", "v1.schema.json")), schemaOptions);
             using var initialDocument = JsonDocument.Parse(initial.ExactUtf8Json.ToArray());
             Assert.True(schema.Evaluate(initialDocument.RootElement).IsValid);
             await File.WriteAllBytesAsync(statePath, initial.ExactUtf8Json.ToArray());
