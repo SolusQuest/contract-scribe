@@ -114,7 +114,8 @@ public static class CampaignBudgetAccounting
                 InputTokens = AddObservation(
                     state.LineageCharges.InputTokens,
                     usage?.InputTokens,
-                    reservation.Exposure.InputTokens,
+                    ParentExposure(reservation.Exposure.InputTokens, usage?.InputTokens,
+                        checked((usage?.CachedInputTokens ?? 0L) + (usage?.UncachedInputTokens ?? 0L)), completeUsage),
                     completeUsage),
                 CachedInputTokens = AddObservation(
                     state.LineageCharges.CachedInputTokens,
@@ -129,7 +130,7 @@ public static class CampaignBudgetAccounting
                 OutputTokens = AddObservation(
                     state.LineageCharges.OutputTokens,
                     usage?.OutputTokens,
-                    Math.Max(reservation.Exposure.OutputTokens, usage?.ReasoningTokens ?? 0),
+                    ParentExposure(reservation.Exposure.OutputTokens, usage?.OutputTokens, usage?.ReasoningTokens ?? 0, completeUsage),
                     completeUsage),
                 ReasoningTokens = AddObservation(
                     state.LineageCharges.ReasoningTokens,
@@ -281,14 +282,17 @@ public static class CampaignBudgetAccounting
         var limits = state.ConfiguredCeilings.ScribeRunLimits;
         var usage = envelope.Usage;
         var bound = Math.Max(reservation.Exposure.CostMicrounits, budget.CostRates!.ConservativeCost(
-            Math.Max(limits.MaximumInputTokens, Math.Max(usage?.InputTokens ?? 0, usage?.CachedInputTokens ?? 0)),
-            Math.Max(limits.MaximumUncachedInputTokens, usage?.UncachedInputTokens ?? 0),
-            Math.Max(limits.MaximumOutputTokens, Math.Max(usage?.OutputTokens ?? 0, usage?.ReasoningTokens ?? 0)),
+            CostTokenExposure(limits.MaximumInputTokens,
+                Math.Max(usage?.InputTokens ?? 0, checked((usage?.CachedInputTokens ?? 0L) + (usage?.UncachedInputTokens ?? 0L))),
+                envelope.ProviderRequestCount),
+            CostTokenExposure(limits.MaximumUncachedInputTokens, usage?.UncachedInputTokens ?? 0, envelope.ProviderRequestCount),
+            CostTokenExposure(limits.MaximumOutputTokens,
+                Math.Max(usage?.OutputTokens ?? 0, usage?.ReasoningTokens ?? 0), envelope.ProviderRequestCount),
             Math.Max(limits.MaximumProviderRequests, envelope.ProviderRequestCount)));
         if (envelope.Cost is not { } reported) return AddUnknown(previous, bound);
         // Aggregated present fields do not prove complete monetary observation for every exchange.
         var known = AddExact(previous, reported.AmountMicrounits);
-        return AddUnknown(known, Math.Max(0, checked(bound - reported.AmountMicrounits)));
+        return AddUnknown(known, bound);
     }
 
     internal static bool FitsSettledBudget(
@@ -346,8 +350,16 @@ public static class CampaignBudgetAccounting
         if (observed is not { } exact) return AddUnknown(charge, conservativeMaximum);
         var known = AddExact(charge, exact);
         // A sum of present fields does not prove that every dispatched exchange reported this dimension.
-        return complete ? known : AddUnknown(known, Math.Max(0, checked(conservativeMaximum - exact)));
+        return complete ? known : AddUnknown(known, conservativeMaximum);
     }
+
+    private static long ParentExposure(long reserved, long? observed, long knownSubset, bool complete) => complete
+        ? Math.Max(reserved, knownSubset)
+        : checked(reserved + Math.Max(0, knownSubset - (observed ?? 0)));
+
+    private static long CostTokenExposure(long reserved, long known, int requests) => requests <= 1
+        ? Math.Max(reserved, known)
+        : checked(reserved + known);
 
     private static CampaignChargeObservation AddUnknown(CampaignChargeObservation charge, long value)
     {

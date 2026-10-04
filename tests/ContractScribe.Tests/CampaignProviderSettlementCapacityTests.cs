@@ -57,7 +57,7 @@ public sealed partial class CampaignStateContractTests
             parsed.Artifact.State.LineageCharges.InputTokens.Observed);
         var inputBound = admitted.Artifact.State.ConfiguredCeilings.ScribeRunLimits.MaximumInputTokens;
         var expectedUnknown = !knownUsage ? inputBound
-            : exchange.Result.RunEnvelope.ProviderRequestCount > 1 ? inputBound - 31 : 0;
+            : exchange.Result.RunEnvelope.ProviderRequestCount > 1 ? inputBound : 0;
         Assert.Equal(expectedUnknown,
             parsed.Artifact.State.LineageCharges.InputTokens.ConservativeUnobserved);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority,

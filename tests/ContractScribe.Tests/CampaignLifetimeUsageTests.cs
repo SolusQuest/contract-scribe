@@ -29,7 +29,7 @@ public sealed partial class CampaignStateContractTests
             maximumCostMicrounits: null, maximumElapsedMilliseconds: null,
             costRates: new CampaignCostRates(1_000_000, 2_000_000, 1_000_000, 3_000_000));
         DocumentationScribeModelUsage Usage(bool missing) => new(
-            inputTokens: missing && dimension == "input" ? null : 100,
+            inputTokens: missing && dimension == "input" ? null : 200,
             outputTokens: missing && dimension == "output" ? null : 100,
             cachedInputTokens: missing && dimension == "cached" ? null : 100,
             uncachedInputTokens: missing && dimension == "uncached" ? null : 100,
@@ -61,9 +61,10 @@ public sealed partial class CampaignStateContractTests
             "uncached" => limits.MaximumUncachedInputTokens,
             _ => limits.MaximumOutputTokens,
         };
-        Assert.Equal(100, charge.Observed);
-        Assert.Equal(bound - 100, charge.ConservativeUnobserved);
-        Assert.Equal(bound, charge.TotalCharged);
+        Assert.Equal(dimension == "input" ? 200 : 100, charge.Observed);
+        var parentSubsetExcess = dimension == "input" ? 200 : dimension == "output" ? 100 : 0;
+        Assert.Equal(bound + parentSubsetExcess, charge.ConservativeUnobserved);
+        Assert.Equal(bound + parentSubsetExcess + charge.Observed, charge.TotalCharged);
         var restored = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
         Assert.True(restored.IsValid);
         Assert.Equal(charges, restored.Artifact!.State.LineageCharges);
@@ -108,8 +109,159 @@ public sealed partial class CampaignStateContractTests
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, exchange);
         Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(bound + 1, artifact.State.LineageCharges.OutputTokens.Observed);
-        Assert.Equal(0, artifact.State.LineageCharges.OutputTokens.ConservativeUnobserved);
-        Assert.Equal(bound + 1, artifact.State.LineageCharges.OutputTokens.TotalCharged);
+        Assert.Equal(bound, artifact.State.LineageCharges.OutputTokens.ConservativeUnobserved);
+        Assert.Equal(2 * bound + 1, artifact.State.LineageCharges.OutputTokens.TotalCharged);
+    }
+
+    [Theory]
+    [InlineData("input", false)]
+    [InlineData("input", true)]
+    [InlineData("cached", false)]
+    [InlineData("cached", true)]
+    [InlineData("uncached", false)]
+    [InlineData("uncached", true)]
+    [InlineData("output", false)]
+    [InlineData("output", true)]
+    [InlineData("reasoning", false)]
+    [InlineData("reasoning", true)]
+    [InlineData("cost", false)]
+    [InlineData("rate-input", false)]
+    [InlineData("rate-input", true)]
+    [InlineData("rate-output", false)]
+    [InlineData("rate-output", true)]
+    public async Task Runtime_missing_then_overrun_preserves_unknown_across_restore_and_changed_base(string dimension, bool actualHttp)
+    {
+        var pricedTokens = dimension.StartsWith("rate-", StringComparison.Ordinal);
+        var scenario = CreateProposalScenario(targetLimit: 1, costCurrency: "currency.usd", maximumProviderRequests: null,
+            maximumInputTokens: null, maximumUncachedInputTokens: null, maximumOutputTokens: null,
+            maximumCostMicrounits: null, maximumElapsedMilliseconds: null,
+            scribeRequestTemplate: ReadScribeRequest(root =>
+            {
+                if (pricedTokens) root["limits"]!["maximumCostMicrounits"] = 0;
+            }),
+            costRates: pricedTokens ? new CampaignCostRates(1_000_000, 2_000_000, 1_000_000, 3_000_000) : new(0, 0, 0, 0));
+        var limits = scenario.InitialState.ConfiguredCeilings.ScribeRunLimits;
+        var bound = dimension switch
+        {
+            "input" or "cached" or "rate-input" => limits.MaximumInputTokens,
+            "uncached" => limits.MaximumUncachedInputTokens,
+            "cost" => limits.MaximumCostMicrounits,
+            _ => limits.MaximumOutputTokens,
+        };
+        var known = checked(bound + 1);
+        DocumentationScribeModelUsage? usage = dimension switch
+        {
+            "input" or "rate-input" => new(inputTokens: checked((int)known)),
+            "cached" => new(cachedInputTokens: checked((int)known)),
+            "uncached" => new(uncachedInputTokens: checked((int)known)),
+            "output" or "rate-output" => new(outputTokens: checked((int)known)),
+            "reasoning" => new(reasoningTokens: checked((int)known)),
+            _ => null,
+        };
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [],
+                failure: new(DocumentationScribeModelFailureCode.TransientUnavailable))),
+            ScriptedDocumentationScribeStep.Return(new([], [new DocumentationScribeModelTerminalSubmission(C3ProposalTerminal(scenario))],
+                usage: usage, cost: dimension == "cost" ? new("currency.usd", known) : null)),
+        ]);
+        var wireUsage = new JsonObject();
+        if (usage?.InputTokens is { } knownInput) wireUsage["prompt_tokens"] = knownInput;
+        if (usage?.CachedInputTokens is { } cached) wireUsage["prompt_cache_hit_tokens"] = cached;
+        if (usage?.UncachedInputTokens is { } uncached) wireUsage["prompt_cache_miss_tokens"] = uncached;
+        if (usage?.OutputTokens is { } output) wireUsage["completion_tokens"] = output;
+        if (usage?.ReasoningTokens is { } reasoning)
+            wireUsage["completion_tokens_details"] = new JsonObject { ["reasoning_tokens"] = reasoning };
+        var wireResponse = new JsonObject
+        {
+            ["choices"] = new JsonArray(new JsonObject
+            {
+                ["index"] = 0,
+                ["message"] = new JsonObject
+                {
+                    ["role"] = "assistant",
+                    ["tool_calls"] = new JsonArray(new JsonObject
+                    {
+                        ["id"] = "call.terminal",
+                        ["type"] = "function",
+                        ["function"] = new JsonObject { ["name"] = "cs_terminal", ["arguments"] = "{}" },
+                    }),
+                },
+                ["finish_reason"] = "tool_calls",
+            }),
+            ["usage"] = wireUsage,
+        };
+        using var handler = new C3UsageHandler(wireResponse.ToJsonString(), transientFirst: true);
+        using var http = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(new Uri("https://example.test/v1"), "model", networkEnabled: true),
+            handler, disposeHandler: false);
+        var (artifact, result) = await CompleteC3RuntimeAsync(scenario, actualHttp ? http : exchange);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(DocumentationScribeFailureCode.Budget,
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        var charges = artifact.State.LineageCharges;
+        var charge = dimension switch
+        {
+            "input" => charges.InputTokens,
+            "cached" => charges.CachedInputTokens,
+            "uncached" => charges.UncachedInputTokens,
+            "output" => charges.OutputTokens,
+            "reasoning" => charges.ReasoningTokens,
+            _ => charges.CostMicrounits,
+        };
+        if (!pricedTokens)
+        {
+            Assert.Equal(known, charge.Observed);
+            Assert.True(charge.ConservativeUnobserved >= bound);
+            Assert.True(charge.TotalCharged >= known + bound);
+        }
+        else Assert.True(charge.ConservativeUnobserved > 0);
+        var restored = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
+        Assert.True(restored.IsValid);
+        Assert.Equal(charges, restored.Artifact!.State.LineageCharges);
+
+        var budget = scenario.Input.ExecutionPolicy.CampaignBudget;
+        var exposure = CampaignBudgetAccounting.ProviderCostExposure(
+            scenario.InitialState.ConfiguredCeilings.CampaignBudget, limits);
+        // These caps admitted equality under the old residual/max rule despite the first missing response.
+        if (pricedTokens)
+        {
+            var rates = budget.CostRates!;
+            var oldRateBound = rates.ConservativeCost(
+                Math.Max(limits.MaximumInputTokens, usage!.InputTokens ?? 0),
+                limits.MaximumUncachedInputTokens,
+                Math.Max(limits.MaximumOutputTokens, usage.OutputTokens ?? 0),
+                limits.MaximumProviderRequests);
+            Assert.True(charge.TotalCharged > oldRateBound);
+            budget = budget with { MaximumCostMicrounits = oldRateBound + exposure };
+        }
+        else budget = dimension switch
+        {
+            "input" or "cached" => budget with { MaximumInputTokens = known + limits.MaximumInputTokens },
+            "uncached" => budget with { MaximumUncachedInputTokens = known + limits.MaximumUncachedInputTokens },
+            "output" or "reasoning" => budget with { MaximumOutputTokens = known + limits.MaximumOutputTokens },
+            _ => budget with { MaximumCostMicrounits = known + exposure },
+        };
+        var input = WithBudget(scenario, budget);
+        input = input with { Snapshot = input.Snapshot with { OpaqueSnapshotBinding = "snapshot.missing-overrun.next" } };
+        var plan = CampaignPlanner.Plan(input);
+        var template = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateSupersessionTemplate(
+            "style.synthetic", scenario.StyleProjection, scenario.ExecutionAuthority, "samples/Synthetic.csproj", input, plan));
+        var next = CampaignStateReducer.Supersede(restored.Artifact, null,
+            CampaignCheckpointAcceptance.CreateInitialAuthority(template), scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, "samples/Synthetic.csproj", input, plan);
+        Assert.Equal(CampaignTransitionKind.Applied, next.Kind);
+        Assert.Equal(charges, next.Artifact.State.LineageCharges);
+        var nextRequest = CreateScribeExchange(plan.WorkItems[0],
+            requestMutation: root => root["limits"]!["maximumCostMicrounits"] = limits.MaximumCostMicrounits,
+            resultMutation: root => root["runEnvelope"]!.AsObject().Remove("cost")).Request;
+        var admission = CampaignStateReducer.AdmitProviderInvocation(next.Artifact, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, input, plan, plan.WorkItems[0].WorkItemKey, nextRequest,
+            CampaignStateFactory.CreateInvocationTargetAllowance(next.Artifact.State, new(100)));
+        Assert.Equal(CampaignTransitionKind.Applied, admission.Kind);
+        Assert.Equal(CampaignTerminalReason.LifetimeCap, admission.Artifact.State.TerminalOutcome!.Reason);
+        Assert.Null(admission.Artifact.State.ActiveReservation);
+        Assert.Equal(charges, admission.Artifact.State.LineageCharges);
+        Assert.Equal(2, actualHttp ? handler.Calls : exchange.Requests.Length);
     }
 
     [Theory]
@@ -216,13 +368,15 @@ public sealed partial class CampaignStateContractTests
         return (complete.Artifact, result);
     }
 
-    private sealed class C3UsageHandler(string body) : HttpMessageHandler
+    private sealed class C3UsageHandler(string body, bool transientFirst = false) : HttpMessageHandler
     {
         public int Calls { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Calls++;
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") });
+            var transient = transientFirst && Calls == 1;
+            return Task.FromResult(new HttpResponseMessage(transient ? HttpStatusCode.ServiceUnavailable : HttpStatusCode.OK)
+            { Content = new StringContent(transient ? "{}" : body, Encoding.UTF8, "application/json") });
         }
     }
 }

@@ -1432,7 +1432,7 @@ public sealed partial class CampaignStateContractTests
     public void Dispatched_X1_postflight_rejection_wins_over_simultaneous_stop(
         CampaignTerminalKind simultaneousStop)
     {
-        var scenario = CreateProposalScenario(costCurrency: "currency.usd");
+        var scenario = CreateProposalScenario(costCurrency: "currency.usd", maximumCostMicrounits: 10_000_000);
         var work = scenario.Plan.WorkItems[0];
         var request = CreateScribeExchange(work);
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
@@ -2447,6 +2447,7 @@ public sealed partial class CampaignStateContractTests
             CampaignStateContract.MaximumPathScalars - 2 - projectSuffix.Length) + projectSuffix;
         var scenario = CreateProposalScenario(
             costCurrency: "currency.usd",
+            maximumCostMicrounits: 10_000_000,
             maximumBlocks: 40,
             maximumChangedFiles: 40,
             scribeRequestTemplate: ReadScribeRequest(ConfigureLargeContentStyle),
