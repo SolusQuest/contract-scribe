@@ -187,20 +187,57 @@ jobs:
           --filter "FullyQualifiedName=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint"
           --logger "trx;LogFilePrefix=integration-campaign-crash-${{ runner.os }}"
           --results-directory TestResults/ci/integration-campaign-crash
-      - name: Require discovered campaign crash-boundary tests
+      - name: Require complete campaign crash-boundary tests
         id: integration_test_count
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
         shell: pwsh
         run: |
           $files = @(Get-ChildItem -Path TestResults/ci/integration-campaign-crash -Filter *.trx -File -ErrorAction SilentlyContinue)
-          if ($files.Count -eq 0) {
-            throw "The campaign crash-boundary command produced no TRX file."
+          if ($files.Count -ne 1) {
+            throw "Expected one integration TRX file, found $($files.Count)."
           }
           [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
-          $total = [int] $trx.TestRun.ResultSummary.Counters.total
-          if ($total -le 0) {
-            throw "The campaign crash-boundary filter discovered zero tests."
+          $counter = $trx.TestRun.ResultSummary.Counters
+          $failureCounters = @('failed', 'error', 'timeout', 'aborted', 'inconclusive', 'passedButRunAborted', 'notRunnable', 'notExecuted', 'disconnected', 'warning', 'inProgress', 'pending')
+          $counts = @{}
+          foreach ($counterName in (@('total', 'executed', 'passed') + $failureCounters)) {
+            $counterValue = 0
+            if ($null -eq $counter -or ![int]::TryParse($counter.GetAttribute($counterName), [ref] $counterValue) -or $counterValue -lt 0) {
+              throw "Missing or invalid integration counter: $counterName."
+            }
+            $counts[$counterName] = $counterValue
+          }
+          $total = $counts.total
+          if ($total -le 0 -or $counts.executed -ne $total -or $counts.passed -ne $total) {
+            throw "Integration results must be nonzero, completely executed, and all passed."
+          }
+          foreach ($counterName in $failureCounters) {
+            if ($counts[$counterName] -ne 0) {
+              throw "Non-success integration counter: $counterName=$($counts[$counterName])."
+            }
+          }
+          $results = @($trx.TestRun.Results.UnitTestResult)
+          if ($results.Count -ne $total) {
+            throw "Integration result row count does not match total=$total."
+          }
+          $definitions = @{}
+          foreach ($definition in $trx.TestRun.TestDefinitions.UnitTest) {
+            $definitionId = $definition.GetAttribute('id')
+            $methods = @($definition.SelectNodes('./*[local-name()="TestMethod"]'))
+            if ([string]::IsNullOrWhiteSpace($definitionId) -or $definitions.ContainsKey($definitionId) -or $methods.Count -ne 1) {
+              throw "Missing or ambiguous integration test definition."
+            }
+            $method = $methods[0]
+            if ([string]::IsNullOrWhiteSpace($method.GetAttribute('className')) -or [string]::IsNullOrWhiteSpace($method.GetAttribute('name'))) {
+              throw "Integration test definition lacks its class or method name."
+            }
+            $definitions[$definitionId] = $definition
+          }
+          foreach ($result in $results) {
+            if ($result.GetAttribute('outcome') -cne 'Passed' -or [string]::IsNullOrWhiteSpace($result.GetAttribute('testName')) -or !$definitions.ContainsKey($result.GetAttribute('testId'))) {
+              throw "Integration result is non-passing or lacks its expanded test identity."
+            }
           }
           Write-Output "integration.campaign-crash.tests.total=$total"
       - name: Upload campaign crash-boundary TRX
@@ -222,7 +259,7 @@ jobs:
             throw "Campaign crash-boundary validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
           }
 
-  integration_remaining:
+  integration_http_loss:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -261,42 +298,79 @@ jobs:
       - name: Build
         id: build
         run: dotnet build ContractScribe.slnx --configuration Release --no-restore
-      - name: Remaining integration partition
+      - name: HTTP mutation response-loss partition
         id: integration_tests
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 45
+        timeout-minutes: 35
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
-          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint"
+          --filter "FullyQualifiedName=ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes"
           --logger "console;verbosity=normal"
-          --logger "trx;LogFilePrefix=integration-remaining-${{ runner.os }}"
-          --results-directory TestResults/ci/integration-remaining
-      - name: Require discovered remaining integration tests
+          --logger "trx;LogFilePrefix=integration-http-loss-${{ runner.os }}"
+          --results-directory TestResults/ci/integration-http-loss
+      - name: Require complete http mutation response-loss tests
         id: integration_test_count
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
         shell: pwsh
         run: |
-          $files = @(Get-ChildItem -Path TestResults/ci/integration-remaining -Filter *.trx -File -ErrorAction SilentlyContinue)
-          if ($files.Count -eq 0) {
-            throw "The remaining-integration command produced no TRX file."
+          $files = @(Get-ChildItem -Path TestResults/ci/integration-http-loss -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -ne 1) {
+            throw "Expected one integration TRX file, found $($files.Count)."
           }
           [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
-          $total = [int] $trx.TestRun.ResultSummary.Counters.total
-          if ($total -le 0) {
-            throw "The remaining-integration filter discovered zero tests."
+          $counter = $trx.TestRun.ResultSummary.Counters
+          $failureCounters = @('failed', 'error', 'timeout', 'aborted', 'inconclusive', 'passedButRunAborted', 'notRunnable', 'notExecuted', 'disconnected', 'warning', 'inProgress', 'pending')
+          $counts = @{}
+          foreach ($counterName in (@('total', 'executed', 'passed') + $failureCounters)) {
+            $counterValue = 0
+            if ($null -eq $counter -or ![int]::TryParse($counter.GetAttribute($counterName), [ref] $counterValue) -or $counterValue -lt 0) {
+              throw "Missing or invalid integration counter: $counterName."
+            }
+            $counts[$counterName] = $counterValue
           }
-          Write-Output "integration.remaining.tests.total=$total"
-      - name: Upload remaining-integration TRX
+          $total = $counts.total
+          if ($total -le 0 -or $counts.executed -ne $total -or $counts.passed -ne $total) {
+            throw "Integration results must be nonzero, completely executed, and all passed."
+          }
+          foreach ($counterName in $failureCounters) {
+            if ($counts[$counterName] -ne 0) {
+              throw "Non-success integration counter: $counterName=$($counts[$counterName])."
+            }
+          }
+          $results = @($trx.TestRun.Results.UnitTestResult)
+          if ($results.Count -ne $total) {
+            throw "Integration result row count does not match total=$total."
+          }
+          $definitions = @{}
+          foreach ($definition in $trx.TestRun.TestDefinitions.UnitTest) {
+            $definitionId = $definition.GetAttribute('id')
+            $methods = @($definition.SelectNodes('./*[local-name()="TestMethod"]'))
+            if ([string]::IsNullOrWhiteSpace($definitionId) -or $definitions.ContainsKey($definitionId) -or $methods.Count -ne 1) {
+              throw "Missing or ambiguous integration test definition."
+            }
+            $method = $methods[0]
+            if ([string]::IsNullOrWhiteSpace($method.GetAttribute('className')) -or [string]::IsNullOrWhiteSpace($method.GetAttribute('name'))) {
+              throw "Integration test definition lacks its class or method name."
+            }
+            $definitions[$definitionId] = $definition
+          }
+          foreach ($result in $results) {
+            if ($result.GetAttribute('outcome') -cne 'Passed' -or [string]::IsNullOrWhiteSpace($result.GetAttribute('testName')) -or !$definitions.ContainsKey($result.GetAttribute('testId'))) {
+              throw "Integration result is non-passing or lacks its expanded test identity."
+            }
+          }
+          Write-Output "integration.http-loss.tests.total=$total"
+      - name: Upload http mutation response-loss TRX
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: integration-remaining-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
-          path: TestResults/ci/integration-remaining/*.trx
+          name: integration-http-loss-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration-http-loss/*.trx
           if-no-files-found: error
-      - name: Aggregate remaining-integration outcomes
+      - name: Aggregate http mutation response-loss outcomes
         if: always()
         shell: pwsh
         env:
@@ -305,7 +379,255 @@ jobs:
           TEST_COUNT_OUTCOME: ${{ steps.integration_test_count.outcome }}
         run: |
           if ($env:BUILD_OUTCOME -ne 'success' -or $env:TEST_OUTCOME -ne 'success' -or $env:TEST_COUNT_OUTCOME -ne 'success') {
-            throw "Remaining-integration validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
+            throw "HTTP response-loss validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
+          }
+
+
+  integration_github_proposal:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact workflow head
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Expected workflow head $env:EXPECTED_SHA but checked out $actual."
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Record runner, toolchain, and concurrency facts
+        shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: ${{ github.event_name == 'pull_request' }}
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
+          dotnet --info
+          dotnet msbuild -version
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Other GitHub proposal partition
+        id: integration_tests
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 35
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --filter "FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.&FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes"
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFilePrefix=integration-github-proposal-${{ runner.os }}"
+          --results-directory TestResults/ci/integration-github-proposal
+      - name: Require complete other github proposal tests
+        id: integration_test_count
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path TestResults/ci/integration-github-proposal -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -ne 1) {
+            throw "Expected one integration TRX file, found $($files.Count)."
+          }
+          [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
+          $counter = $trx.TestRun.ResultSummary.Counters
+          $failureCounters = @('failed', 'error', 'timeout', 'aborted', 'inconclusive', 'passedButRunAborted', 'notRunnable', 'notExecuted', 'disconnected', 'warning', 'inProgress', 'pending')
+          $counts = @{}
+          foreach ($counterName in (@('total', 'executed', 'passed') + $failureCounters)) {
+            $counterValue = 0
+            if ($null -eq $counter -or ![int]::TryParse($counter.GetAttribute($counterName), [ref] $counterValue) -or $counterValue -lt 0) {
+              throw "Missing or invalid integration counter: $counterName."
+            }
+            $counts[$counterName] = $counterValue
+          }
+          $total = $counts.total
+          if ($total -le 0 -or $counts.executed -ne $total -or $counts.passed -ne $total) {
+            throw "Integration results must be nonzero, completely executed, and all passed."
+          }
+          foreach ($counterName in $failureCounters) {
+            if ($counts[$counterName] -ne 0) {
+              throw "Non-success integration counter: $counterName=$($counts[$counterName])."
+            }
+          }
+          $results = @($trx.TestRun.Results.UnitTestResult)
+          if ($results.Count -ne $total) {
+            throw "Integration result row count does not match total=$total."
+          }
+          $definitions = @{}
+          foreach ($definition in $trx.TestRun.TestDefinitions.UnitTest) {
+            $definitionId = $definition.GetAttribute('id')
+            $methods = @($definition.SelectNodes('./*[local-name()="TestMethod"]'))
+            if ([string]::IsNullOrWhiteSpace($definitionId) -or $definitions.ContainsKey($definitionId) -or $methods.Count -ne 1) {
+              throw "Missing or ambiguous integration test definition."
+            }
+            $method = $methods[0]
+            if ([string]::IsNullOrWhiteSpace($method.GetAttribute('className')) -or [string]::IsNullOrWhiteSpace($method.GetAttribute('name'))) {
+              throw "Integration test definition lacks its class or method name."
+            }
+            $definitions[$definitionId] = $definition
+          }
+          foreach ($result in $results) {
+            if ($result.GetAttribute('outcome') -cne 'Passed' -or [string]::IsNullOrWhiteSpace($result.GetAttribute('testName')) -or !$definitions.ContainsKey($result.GetAttribute('testId'))) {
+              throw "Integration result is non-passing or lacks its expanded test identity."
+            }
+          }
+          Write-Output "integration.github-proposal.tests.total=$total"
+      - name: Upload other github proposal TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-github-proposal-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration-github-proposal/*.trx
+          if-no-files-found: error
+      - name: Aggregate other github proposal outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.integration_tests.outcome }}
+          TEST_COUNT_OUTCOME: ${{ steps.integration_test_count.outcome }}
+        run: |
+          if ($env:BUILD_OUTCOME -ne 'success' -or $env:TEST_OUTCOME -ne 'success' -or $env:TEST_COUNT_OUTCOME -ne 'success') {
+            throw "GitHub proposal validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
+          }
+
+
+  integration_other:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+      - name: Assert exact workflow head
+        shell: pwsh
+        env:
+          EXPECTED_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:EXPECTED_SHA) {
+            throw "Expected workflow head $env:EXPECTED_SHA but checked out $actual."
+          }
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - name: Record runner, toolchain, and concurrency facts
+        shell: pwsh
+        env:
+          CI_CONCURRENCY_GROUP: ${{ format('{0}-{1}', github.workflow, github.event.pull_request.number || github.run_id) }}
+          CI_CANCEL_IN_PROGRESS: ${{ github.event_name == 'pull_request' }}
+        run: |
+          Write-Output "runner.os=$env:RUNNER_OS"
+          Write-Output "runner.arch=$env:RUNNER_ARCH"
+          Write-Output "runner.image.os=$env:ImageOS"
+          Write-Output "runner.image.version=$env:ImageVersion"
+          Write-Output "ci.concurrency.group=$env:CI_CONCURRENCY_GROUP"
+          Write-Output "ci.concurrency.cancel-in-progress=$env:CI_CANCEL_IN_PROGRESS"
+          dotnet --info
+          dotnet msbuild -version
+      - name: Restore
+        run: dotnet restore ContractScribe.slnx
+      - name: Build
+        id: build
+        run: dotnet build ContractScribe.slnx --configuration Release --no-restore
+      - name: Other integration partition
+        id: integration_tests
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 35
+        run: >-
+          dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
+          --configuration Release --no-build --no-restore
+          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests."
+          --logger "console;verbosity=normal"
+          --logger "trx;LogFilePrefix=integration-other-${{ runner.os }}"
+          --results-directory TestResults/ci/integration-other
+      - name: Require complete other integration tests
+        id: integration_test_count
+        if: always() && steps.build.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path TestResults/ci/integration-other -Filter *.trx -File -ErrorAction SilentlyContinue)
+          if ($files.Count -ne 1) {
+            throw "Expected one integration TRX file, found $($files.Count)."
+          }
+          [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
+          $counter = $trx.TestRun.ResultSummary.Counters
+          $failureCounters = @('failed', 'error', 'timeout', 'aborted', 'inconclusive', 'passedButRunAborted', 'notRunnable', 'notExecuted', 'disconnected', 'warning', 'inProgress', 'pending')
+          $counts = @{}
+          foreach ($counterName in (@('total', 'executed', 'passed') + $failureCounters)) {
+            $counterValue = 0
+            if ($null -eq $counter -or ![int]::TryParse($counter.GetAttribute($counterName), [ref] $counterValue) -or $counterValue -lt 0) {
+              throw "Missing or invalid integration counter: $counterName."
+            }
+            $counts[$counterName] = $counterValue
+          }
+          $total = $counts.total
+          if ($total -le 0 -or $counts.executed -ne $total -or $counts.passed -ne $total) {
+            throw "Integration results must be nonzero, completely executed, and all passed."
+          }
+          foreach ($counterName in $failureCounters) {
+            if ($counts[$counterName] -ne 0) {
+              throw "Non-success integration counter: $counterName=$($counts[$counterName])."
+            }
+          }
+          $results = @($trx.TestRun.Results.UnitTestResult)
+          if ($results.Count -ne $total) {
+            throw "Integration result row count does not match total=$total."
+          }
+          $definitions = @{}
+          foreach ($definition in $trx.TestRun.TestDefinitions.UnitTest) {
+            $definitionId = $definition.GetAttribute('id')
+            $methods = @($definition.SelectNodes('./*[local-name()="TestMethod"]'))
+            if ([string]::IsNullOrWhiteSpace($definitionId) -or $definitions.ContainsKey($definitionId) -or $methods.Count -ne 1) {
+              throw "Missing or ambiguous integration test definition."
+            }
+            $method = $methods[0]
+            if ([string]::IsNullOrWhiteSpace($method.GetAttribute('className')) -or [string]::IsNullOrWhiteSpace($method.GetAttribute('name'))) {
+              throw "Integration test definition lacks its class or method name."
+            }
+            $definitions[$definitionId] = $definition
+          }
+          foreach ($result in $results) {
+            if ($result.GetAttribute('outcome') -cne 'Passed' -or [string]::IsNullOrWhiteSpace($result.GetAttribute('testName')) -or !$definitions.ContainsKey($result.GetAttribute('testId'))) {
+              throw "Integration result is non-passing or lacks its expanded test identity."
+            }
+          }
+          Write-Output "integration.other.tests.total=$total"
+      - name: Upload other integration TRX
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: integration-other-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          path: TestResults/ci/integration-other/*.trx
+          if-no-files-found: error
+      - name: Aggregate other integration outcomes
+        if: always()
+        shell: pwsh
+        env:
+          BUILD_OUTCOME: ${{ steps.build.outcome }}
+          TEST_OUTCOME: ${{ steps.integration_tests.outcome }}
+          TEST_COUNT_OUTCOME: ${{ steps.integration_test_count.outcome }}
+        run: |
+          if ($env:BUILD_OUTCOME -ne 'success' -or $env:TEST_OUTCOME -ne 'success' -or $env:TEST_COUNT_OUTCOME -ne 'success') {
+            throw "Other-integration validation failure: build=$env:BUILD_OUTCOME, test=$env:TEST_OUTCOME, test_count=$env:TEST_COUNT_OUTCOME."
           }
 
   integration_unfiltered_evidence:
@@ -359,20 +681,57 @@ jobs:
           --logger "console;verbosity=normal"
           --logger "trx;LogFilePrefix=integration-unfiltered-${{ runner.os }}"
           --results-directory TestResults/ci/integration-unfiltered
-      - name: Require discovered unfiltered integration tests
+      - name: Require complete unfiltered integration tests
         id: integration_test_count
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
         shell: pwsh
         run: |
           $files = @(Get-ChildItem -Path TestResults/ci/integration-unfiltered -Filter *.trx -File -ErrorAction SilentlyContinue)
-          if ($files.Count -eq 0) {
-            throw "The unfiltered integration command produced no TRX file."
+          if ($files.Count -ne 1) {
+            throw "Expected one integration TRX file, found $($files.Count)."
           }
           [xml] $trx = Get-Content -Raw -LiteralPath $files[0].FullName
-          $total = [int] $trx.TestRun.ResultSummary.Counters.total
-          if ($total -le 0) {
-            throw "The unfiltered integration command discovered zero tests."
+          $counter = $trx.TestRun.ResultSummary.Counters
+          $failureCounters = @('failed', 'error', 'timeout', 'aborted', 'inconclusive', 'passedButRunAborted', 'notRunnable', 'notExecuted', 'disconnected', 'warning', 'inProgress', 'pending')
+          $counts = @{}
+          foreach ($counterName in (@('total', 'executed', 'passed') + $failureCounters)) {
+            $counterValue = 0
+            if ($null -eq $counter -or ![int]::TryParse($counter.GetAttribute($counterName), [ref] $counterValue) -or $counterValue -lt 0) {
+              throw "Missing or invalid integration counter: $counterName."
+            }
+            $counts[$counterName] = $counterValue
+          }
+          $total = $counts.total
+          if ($total -le 0 -or $counts.executed -ne $total -or $counts.passed -ne $total) {
+            throw "Integration results must be nonzero, completely executed, and all passed."
+          }
+          foreach ($counterName in $failureCounters) {
+            if ($counts[$counterName] -ne 0) {
+              throw "Non-success integration counter: $counterName=$($counts[$counterName])."
+            }
+          }
+          $results = @($trx.TestRun.Results.UnitTestResult)
+          if ($results.Count -ne $total) {
+            throw "Integration result row count does not match total=$total."
+          }
+          $definitions = @{}
+          foreach ($definition in $trx.TestRun.TestDefinitions.UnitTest) {
+            $definitionId = $definition.GetAttribute('id')
+            $methods = @($definition.SelectNodes('./*[local-name()="TestMethod"]'))
+            if ([string]::IsNullOrWhiteSpace($definitionId) -or $definitions.ContainsKey($definitionId) -or $methods.Count -ne 1) {
+              throw "Missing or ambiguous integration test definition."
+            }
+            $method = $methods[0]
+            if ([string]::IsNullOrWhiteSpace($method.GetAttribute('className')) -or [string]::IsNullOrWhiteSpace($method.GetAttribute('name'))) {
+              throw "Integration test definition lacks its class or method name."
+            }
+            $definitions[$definitionId] = $definition
+          }
+          foreach ($result in $results) {
+            if ($result.GetAttribute('outcome') -cne 'Passed' -or [string]::IsNullOrWhiteSpace($result.GetAttribute('testName')) -or !$definitions.ContainsKey($result.GetAttribute('testId'))) {
+              throw "Integration result is non-passing or lacks its expanded test identity."
+            }
           }
           Write-Output "integration.unfiltered.tests.total=$total"
       - name: Upload unfiltered-integration TRX
@@ -1792,7 +2151,9 @@ jobs:
     needs:
       - fast_and_static
       - integration_campaign_crash
-      - integration_remaining
+      - integration_http_loss
+      - integration_github_proposal
+      - integration_other
       - payload_producer
       - packed_payload
       - action_packaged
@@ -1805,7 +2166,9 @@ jobs:
         env:
           FAST_AND_STATIC_RESULT: ${{ needs.fast_and_static.result }}
           CAMPAIGN_CRASH_RESULT: ${{ needs.integration_campaign_crash.result }}
-          REMAINING_INTEGRATION_RESULT: ${{ needs.integration_remaining.result }}
+          HTTP_LOSS_RESULT: ${{ needs.integration_http_loss.result }}
+          GITHUB_PROPOSAL_RESULT: ${{ needs.integration_github_proposal.result }}
+          OTHER_INTEGRATION_RESULT: ${{ needs.integration_other.result }}
           PAYLOAD_PRODUCER_RESULT: ${{ needs.payload_producer.result }}
           PACKED_PAYLOAD_RESULT: ${{ needs.packed_payload.result }}
           ACTION_PACKAGED_RESULT: ${{ needs.action_packaged.result }}
@@ -1815,7 +2178,9 @@ jobs:
           $results = @{
             fast_and_static = $env:FAST_AND_STATIC_RESULT
             integration_campaign_crash = $env:CAMPAIGN_CRASH_RESULT
-            integration_remaining = $env:REMAINING_INTEGRATION_RESULT
+            integration_http_loss = $env:HTTP_LOSS_RESULT
+            integration_github_proposal = $env:GITHUB_PROPOSAL_RESULT
+            integration_other = $env:OTHER_INTEGRATION_RESULT
             payload_producer = $env:PAYLOAD_PRODUCER_RESULT
             packed_payload = $env:PACKED_PAYLOAD_RESULT
             action_packaged = $env:ACTION_PACKAGED_RESULT
