@@ -71,7 +71,7 @@ Merge walks the declared field tree:
 - Objects merge recursively by declared field; absent fields inherit from lower layers.
 - Scalars and arrays are terminal and replace wholesale; arrays never concatenate or deep-merge.
 - Explicit `0`, `false`, and `[]` are real overrides, not absence.
-- `null` is legal only for declared nullable fields: `costPolicy` (object ↔ `null`) and `provider.requestProfile.reasoningEffort` (string ↔ `null`). `null` → object replaces wholesale with no inherited children; object → `null` clears explicitly; a non-null type or kind change is rejected everywhere else.
+- `null` is legal only for declared nullable fields: `costPolicy` (object ↔ `null`), `provider.requestProfile.reasoningEffort` (string ↔ `null`), and the six campaign lifetime caps for provider requests, input/uncached/output tokens, cost and elapsed time (integer ↔ `null`). A missing lifetime field inherits, an explicit upper-layer `null` clears a finite lower-layer cap, and zero remains a finite cap. `null` → object replaces wholesale with no inherited children; object → `null` clears explicitly; a non-null type or kind change is rejected everywhere else.
 - Layer property order is free; the resolved document is emitted in the canonical field order before strict validation.
 
 The consumer layer schema is published at `schemas/consumer-configuration/v1.schema.json` and is driven by the same declared-field tree the resolver uses.
@@ -81,8 +81,8 @@ The consumer layer schema is published at `schemas/consumer-configuration/v1.sch
 `config/defaults.json` carries the complete resolved shape minus the two injected fields. Values:
 
 - Provider: the repository's frozen M3 `deepseek-primary` validation profile (`m3-provider-evaluation-protocol.md`): `https://api.deepseek.com/chat/completions`, `deepseek-v4-flash`, thinking enabled, `reasoningEffort: high`, `toolChoice: omitted`, `continuationPolicy: required-for-tool-calls`, `outputTokenField: max_tokens`. This selects the provider profile the repository's own validation exercised; it is not a provider-support claim and performs no network or credential access by itself.
-- Budgets and style: the bounded conservative ceilings the campaign contract already exercises (at most 128 provider requests per campaign and 8 per target, attempt ceilings of 2).
-- `costPolicy`: `null` — no invented pricing; cost enforcement remains a caller choice.
+- Campaign lifetime provider-request, input/uncached/output-token, cost and elapsed caps default to `null` (unlimited). The five structural/attempt/candidate limits retain their finite defaults, as do all Scribe-run transport, parser, request, token and timeout limits (8 provider requests per run and attempt ceilings of 2) and the Patch deadline.
+- `costPolicy`: `null` — no invented pricing; a finite lifetime cost cap requires configured rate/currency authority; unlimited runs without it retain unpriced history.
 - Authority identifiers: the frozen product-owned `*.v1` vocabulary (`proposal.documentation.v1`, `context.m1.v1`, `m2.projection.v1`, `retry.policy.v1`, `documentation-scribe.agent.v1`, `tools.registry.read-only.v1`, `tool-policy.read-only.v1`) plus the M3-accepted scribe protocol identity `scribe-protocol.v1`; `provider.configured.v1` / `model.configured.v1` source markers remain truthful under any effective endpoint/model because the complete provider object is committed as provider content authority.
 
 ## Errors and admission

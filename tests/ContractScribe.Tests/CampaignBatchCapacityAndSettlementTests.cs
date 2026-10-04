@@ -107,7 +107,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(settlement.Charges, restored.LineageCharges);
         Assert.Null(restored.ActiveReservation);
         Assert.Equal(expected, restored.TerminalOutcome!.Kind);
-        Assert.Equal(expected == CampaignTerminalKind.Exhausted ? CampaignTerminalReason.Budget : CampaignTerminalReason.Unresolved, restored.TerminalOutcome.Reason);
+        Assert.Equal(expected == CampaignTerminalKind.Exhausted ? CampaignTerminalReason.LifetimeCap : CampaignTerminalReason.Unresolved, restored.TerminalOutcome.Reason);
         Assert.Equal(CampaignAttemptDisposition.SuppressedAtAttemptLimit, restored.WorkItems[0].AttemptDisposition);
         Assert.Equal(CampaignTargetProgressKind.Suppressed, restored.TargetProgress[0].Kind);
         Assert.Empty(CampaignStateFactory.CreateInvocationTargetAllowance(restored, new(4096)).WorkItemKeys);
@@ -153,7 +153,8 @@ public sealed partial class CampaignStateContractTests
             CampaignTerminalKind.Failed => CampaignTerminalReason.Host,
             CampaignTerminalKind.Cancelled => CampaignTerminalReason.Caller,
             CampaignTerminalKind.Timeout => CampaignTerminalReason.Deadline,
-            _ => CampaignTerminalReason.Budget
+            _ => kind == CampaignProviderCompletionKind.ProposalInvalid
+                ? CampaignTerminalReason.LifetimeCap : CampaignTerminalReason.Budget
         };
         Assert.Equal(new CampaignTerminalOutcome(expected, reason), restored.TerminalOutcome);
         if (kind == CampaignProviderCompletionKind.ProposalInvalid)

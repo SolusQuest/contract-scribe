@@ -255,7 +255,51 @@ public static partial class CampaignStateFactory
         JsonElement validatedStyleConfigurationProjection,
         string inputIdentity,
         CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan) => ValidateContextCore(state, executionCapability,
+            styleConfigurationId, validatedStyleConfigurationProjection, inputIdentity,
+            planningInput, acceptedPlan, allowLifetimeCapChanges: false);
+
+    internal static CampaignStateConfiguredCeilings ValidateLifetimeCapChangeContext(
+        CampaignCheckpointState state,
+        CampaignScribeExecutionCapability executionCapability,
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan)
+    {
+        ValidateContextCore(state, executionCapability, styleConfigurationId,
+            validatedStyleConfigurationProjection, inputIdentity, planningInput,
+            acceptedPlan, allowLifetimeCapChanges: true);
+        return CreateCeilings(planningInput.ExecutionPolicy,
+            CreateStyleConfigurationAuthority(styleConfigurationId, validatedStyleConfigurationProjection),
+            executionCapability.Projection);
+    }
+
+    internal static bool SameCorrectnessCeilings(
+        CampaignStateConfiguredCeilings left, CampaignStateConfiguredCeilings right) =>
+        left with
+        {
+            CampaignBudget = left.CampaignBudget with
+            {
+                MaximumProviderRequests = right.CampaignBudget.MaximumProviderRequests,
+                MaximumInputTokens = right.CampaignBudget.MaximumInputTokens,
+                MaximumUncachedInputTokens = right.CampaignBudget.MaximumUncachedInputTokens,
+                MaximumOutputTokens = right.CampaignBudget.MaximumOutputTokens,
+                MaximumCostMicrounits = right.CampaignBudget.MaximumCostMicrounits,
+                MaximumElapsedMilliseconds = right.CampaignBudget.MaximumElapsedMilliseconds,
+            },
+        } == right;
+
+    private static void ValidateContextCore(
+        CampaignCheckpointState state,
+        CampaignScribeExecutionCapability executionCapability,
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan,
+        bool allowLifetimeCapChanges)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(executionCapability);
@@ -307,7 +351,9 @@ public static partial class CampaignStateFactory
             || state.Batch.Identity != acceptedPlan.Batch.Identity
             || !state.Batch.CompleteTargets.SequenceEqual(acceptedPlan.Batch.CompleteTargets)
             || !state.Batch.SelectedTargetKeys.SequenceEqual(acceptedPlan.Batch.SelectedTargetKeys, StringComparer.Ordinal)
-            || state.ConfiguredCeilings != expectedCeilings
+            || !(allowLifetimeCapChanges
+                ? SameCorrectnessCeilings(state.ConfiguredCeilings, expectedCeilings)
+                : state.ConfiguredCeilings == expectedCeilings)
             || !string.Equals(
                 state.Snapshot.ExecutionCommitmentSha256,
                 acceptedPlan.ExecutionCommitment,
@@ -1663,7 +1709,7 @@ public static partial class CampaignStateFactory
         CampaignStateValidationCode code,
         string message) => new(code, message);
 
-    private static CampaignStateConfiguredCeilings CreateCeilings(
+    internal static CampaignStateConfiguredCeilings CreateCeilings(
         CampaignPlanningExecutionPolicy policy,
         CampaignStyleConfigurationAuthority style,
         CampaignScribeExecutionAuthority executionAuthority)
@@ -1692,7 +1738,8 @@ public static partial class CampaignStateFactory
             budget.CostEnforced,
             budget.CostCurrency,
             budget.CostRatePolicy?.Id,
-            budget.CostRatePolicy?.ContentSha256);
+            budget.CostRatePolicy?.ContentSha256,
+            budget.CostRates);
         var projectedLimits = new CampaignStateScribeLimits(
             limits.MaximumContextReferences,
             limits.MaximumContextUtf8Bytes,
@@ -1805,23 +1852,28 @@ public static partial class CampaignStateFactory
         Require(budget.MaximumBlocks is >= 0 and <= CampaignStateContract.MaximumWorkItems
             && budget.MaximumChangedFiles is >= 0 and <= CampaignStateContract.MaximumChangedFiles
             && budget.MaximumPatchBytes is >= 0 and <= CampaignStateContract.MaximumPatchBytes
-            && budget.MaximumProviderRequests is >= 0 and <= 1_000_000
+            && budget.MaximumProviderRequests is null or (>= 0 and <= 1_000_000)
             && budget.MaximumAttemptsPerTarget is >= 0 and <= 1_000
-            && budget.MaximumInputTokens is >= 0 and <= CampaignStateContract.MaximumCampaignInputTokens
-            && budget.MaximumUncachedInputTokens is >= 0
-            && budget.MaximumUncachedInputTokens <= budget.MaximumInputTokens
-            && budget.MaximumOutputTokens is >= 0 and <= CampaignStateContract.MaximumCampaignInputTokens
-            && budget.MaximumCostMicrounits is >= 0 and <= CampaignStateContract.MaximumObservation
-            && budget.MaximumElapsedMilliseconds is >= 0 and <= CampaignStateContract.MaximumCampaignElapsedMilliseconds
+            && budget.MaximumInputTokens is null or (>= 0 and <= CampaignStateContract.MaximumCampaignInputTokens)
+            && budget.MaximumUncachedInputTokens is null or (>= 0 and <= CampaignStateContract.MaximumCampaignInputTokens)
+            && (budget.MaximumInputTokens is null || budget.MaximumUncachedInputTokens is null
+                || budget.MaximumUncachedInputTokens <= budget.MaximumInputTokens)
+            && budget.MaximumOutputTokens is null or (>= 0 and <= CampaignStateContract.MaximumCampaignInputTokens)
+            && budget.MaximumCostMicrounits is null or (>= 0 and <= CampaignStateContract.MaximumObservation)
+            && budget.MaximumElapsedMilliseconds is null or (>= 0 and <= CampaignStateContract.MaximumCampaignElapsedMilliseconds)
             && budget.MaximumCandidatesPerBlock is >= 0 and <= 1_000,
             CampaignStateValidationCode.InvalidBound);
         Require(budget.CostEnforced
             ? IsOpaqueId(budget.CostCurrency, 32)
                 && IsOpaqueId(budget.CostRatePolicyId, 512)
                 && IsSha256(budget.CostRatePolicySha256)
+                && budget.CostRates is { IsValid: true }
+                && budget.CostRates.CreateAuthority(budget.CostCurrency!, budget.CostRatePolicyId!)
+                    .ContentSha256 == budget.CostRatePolicySha256
             : budget.CostCurrency is null
                 && budget.CostRatePolicyId is null
-                && budget.CostRatePolicySha256 is null,
+                && budget.CostRatePolicySha256 is null
+                && budget.CostRates is null,
             CampaignStateValidationCode.InvalidConfiguration);
         var limits = ceilings.ScribeRunLimits;
         Require(limits.MaximumContextReferences is >= 0 and <= DocumentationScribeContract.MaximumReferences
@@ -2127,7 +2179,12 @@ public static partial class CampaignStateFactory
                     && provider.Exposure.OutputTokens >= 0
                     && provider.Exposure.OutputTokens <= state.ConfiguredCeilings.ScribeRunLimits.MaximumOutputTokens
                     && provider.Exposure.CostMicrounits >= 0
-                    && provider.Exposure.CostMicrounits <= state.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits
+                    && provider.Exposure.CostMicrounits >= (state.ConfiguredCeilings.CampaignBudget.CostRates
+                        ?.ConservativeCost(provider.Exposure.InputTokens, provider.Exposure.UncachedInputTokens,
+                            provider.Exposure.OutputTokens, Math.Max(1, provider.Exposure.ProviderRequests)) ?? 0)
+                    && provider.Exposure.CostMicrounits <= Math.Max(state.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits,
+                        CampaignBudgetAccounting.ProviderCostExposure(
+                            state.ConfiguredCeilings.CampaignBudget, state.ConfiguredCeilings.ScribeRunLimits))
                     && provider.Exposure.ElapsedMilliseconds >= 0
                     && provider.Exposure.ElapsedMilliseconds <= state.ConfiguredCeilings.ScribeRunLimits.MaximumElapsedMilliseconds,
                     CampaignStateValidationCode.InvalidBound);
@@ -2345,7 +2402,8 @@ public static partial class CampaignStateFactory
                     SelectBatchTerminal(state.Batch, state.WorkItems) == terminal,
                 CampaignTerminalKind.Complete when terminal.Reason == CampaignTerminalReason.Unresolved =>
                     SelectBatchTerminal(state.Batch, state.WorkItems) == terminal,
-                CampaignTerminalKind.Exhausted => terminal.Reason == CampaignTerminalReason.Budget,
+                CampaignTerminalKind.Exhausted => terminal.Reason is CampaignTerminalReason.Budget
+                    or CampaignTerminalReason.LifetimeCap,
                 CampaignTerminalKind.Cancelled => terminal.Reason == CampaignTerminalReason.Caller,
                 CampaignTerminalKind.Timeout => terminal.Reason == CampaignTerminalReason.Deadline,
                 CampaignTerminalKind.Failed => terminal.Reason == CampaignTerminalReason.Host,
@@ -2786,13 +2844,7 @@ public static partial class CampaignStateFactory
         writer.Add("budget.blocks", budget.MaximumBlocks);
         writer.Add("budget.files", budget.MaximumChangedFiles);
         writer.Add("budget.patch-bytes", budget.MaximumPatchBytes);
-        writer.Add("budget.provider-requests", budget.MaximumProviderRequests);
         writer.Add("budget.attempts-per-target", budget.MaximumAttemptsPerTarget);
-        writer.Add("budget.input-tokens", budget.MaximumInputTokens);
-        writer.Add("budget.uncached-input-tokens", budget.MaximumUncachedInputTokens);
-        writer.Add("budget.output-tokens", budget.MaximumOutputTokens);
-        writer.Add("budget.cost", budget.MaximumCostMicrounits);
-        writer.Add("budget.elapsed", budget.MaximumElapsedMilliseconds);
         writer.Add("budget.candidates-per-block", budget.MaximumCandidatesPerBlock);
     }
 

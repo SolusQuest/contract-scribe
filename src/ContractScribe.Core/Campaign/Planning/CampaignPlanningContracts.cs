@@ -225,17 +225,18 @@ public sealed record CampaignPlanningBudgetPolicy
         int maximumBlocks,
         int maximumChangedFiles,
         long maximumPatchBytes,
-        int maximumProviderRequests,
+        int? maximumProviderRequests,
         int maximumAttemptsPerTarget,
-        long maximumInputTokens,
-        long maximumUncachedInputTokens,
-        long maximumOutputTokens,
-        long maximumCostMicrounits,
-        long maximumElapsedMilliseconds,
+        long? maximumInputTokens,
+        long? maximumUncachedInputTokens,
+        long? maximumOutputTokens,
+        long? maximumCostMicrounits,
+        long? maximumElapsedMilliseconds,
         int maximumCandidatesPerBlock,
         bool costEnforced,
         string? costCurrency,
-        CampaignPlanningContentAuthority? costRatePolicy)
+        CampaignPlanningContentAuthority? costRatePolicy,
+        CampaignCostRates? costRates = null)
     {
         MaximumBlocks = maximumBlocks;
         MaximumChangedFiles = maximumChangedFiles;
@@ -251,22 +252,24 @@ public sealed record CampaignPlanningBudgetPolicy
         CostEnforced = costEnforced;
         CostCurrency = costCurrency;
         CostRatePolicy = costRatePolicy;
+        CostRates = costRates;
     }
 
     public int MaximumBlocks { get; }
     public int MaximumChangedFiles { get; }
     public long MaximumPatchBytes { get; }
-    public int MaximumProviderRequests { get; }
+    public int? MaximumProviderRequests { get; init; }
     public int MaximumAttemptsPerTarget { get; }
-    public long MaximumInputTokens { get; }
-    public long MaximumUncachedInputTokens { get; }
-    public long MaximumOutputTokens { get; }
-    public long MaximumCostMicrounits { get; }
-    public long MaximumElapsedMilliseconds { get; }
+    public long? MaximumInputTokens { get; init; }
+    public long? MaximumUncachedInputTokens { get; init; }
+    public long? MaximumOutputTokens { get; init; }
+    public long? MaximumCostMicrounits { get; init; }
+    public long? MaximumElapsedMilliseconds { get; init; }
     public int MaximumCandidatesPerBlock { get; }
     public bool CostEnforced { get; }
     public string? CostCurrency { get; }
     public CampaignPlanningContentAuthority? CostRatePolicy { get; }
+    public CampaignCostRates? CostRates { get; }
 }
 
 public sealed record CampaignPlanningExecutionPolicy

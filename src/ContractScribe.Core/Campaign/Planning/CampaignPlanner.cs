@@ -468,21 +468,22 @@ public static partial class CampaignPlanner
             budget.MaximumBlocks is > 0 and <= MaximumTargets
             && budget.MaximumChangedFiles is > 0 and <= MaximumTargets
             && budget.MaximumPatchBytes is > 0 and <= MaximumByteBudget
-            && budget.MaximumProviderRequests is > 0 and <= MaximumRequestBudget
+            && budget.MaximumProviderRequests is null or (>= 0 and <= MaximumRequestBudget)
             && budget.MaximumAttemptsPerTarget is > 0 and <= MaximumAttemptBudget
-            && budget.MaximumInputTokens is > 0 and <= MaximumTokenBudget
-            && budget.MaximumUncachedInputTokens >= 0
-            && budget.MaximumUncachedInputTokens <= budget.MaximumInputTokens
-            && budget.MaximumOutputTokens is > 0 and <= MaximumTokenBudget
-            && budget.MaximumCostMicrounits is >= 0 and <= MaximumCostBudget
-            && budget.MaximumElapsedMilliseconds is > 0 and <= MaximumElapsedBudget
+            && budget.MaximumInputTokens is null or (>= 0 and <= MaximumTokenBudget)
+            && budget.MaximumUncachedInputTokens is null or (>= 0 and <= MaximumTokenBudget)
+            && (budget.MaximumInputTokens is null || budget.MaximumUncachedInputTokens is null
+                || budget.MaximumUncachedInputTokens <= budget.MaximumInputTokens)
+            && budget.MaximumOutputTokens is null or (>= 0 and <= MaximumTokenBudget)
+            && budget.MaximumCostMicrounits is null or (>= 0 and <= MaximumCostBudget)
+            && budget.MaximumElapsedMilliseconds is null or (>= 0 and <= MaximumElapsedBudget)
             && budget.MaximumCandidatesPerBlock is > 0 and <= MaximumAttemptBudget,
             CampaignPlanningValidationCode.InvalidConfiguration,
             "Campaign budgets must use non-negative bounded values and positive active ceilings.");
         if (budget.CostEnforced)
         {
             RequireOpaqueIdentifier(budget.CostCurrency!, nameof(budget.CostCurrency));
-            Require(budget.CostRatePolicy is not null,
+            Require(budget.CostRatePolicy is not null && budget.CostRates is { IsValid: true },
                 CampaignPlanningValidationCode.InvalidConfiguration,
                 "Cost enforcement requires currency and rate-policy content authority.");
             Require(budget.CostRatePolicy!.Family == CampaignPlanningContentFamily.CostRatePolicy,
@@ -490,10 +491,14 @@ public static partial class CampaignPlanner
                 "Cost enforcement requires cost-rate family authority.");
             RequireOpaqueIdentifier(budget.CostRatePolicy.Id, nameof(budget.CostRatePolicy.Id));
             RequireSha256(budget.CostRatePolicy.ContentSha256, nameof(budget.CostRatePolicy.ContentSha256));
+            Require(budget.CostRates!.CreateAuthority(budget.CostCurrency!, budget.CostRatePolicy.Id)
+                    .ContentSha256 == budget.CostRatePolicy.ContentSha256,
+                CampaignPlanningValidationCode.InvalidConfiguration,
+                "Numeric cost rates must match the rate-policy content authority.");
         }
         else
         {
-            Require(budget.CostCurrency is null && budget.CostRatePolicy is null,
+            Require(budget.CostCurrency is null && budget.CostRatePolicy is null && budget.CostRates is null,
                 CampaignPlanningValidationCode.InvalidConfiguration,
                 "Disabled cost enforcement cannot carry contradictory cost authority.");
         }
@@ -1501,13 +1506,7 @@ public static partial class CampaignPlanner
         writer.Add("campaign.max-blocks", budget.MaximumBlocks);
         writer.Add("campaign.max-files", budget.MaximumChangedFiles);
         writer.Add("campaign.max-patch-bytes", budget.MaximumPatchBytes);
-        writer.Add("campaign.max-provider-requests", budget.MaximumProviderRequests);
         writer.Add("campaign.max-attempts-target", budget.MaximumAttemptsPerTarget);
-        writer.Add("campaign.max-input-tokens", budget.MaximumInputTokens);
-        writer.Add("campaign.max-uncached-input-tokens", budget.MaximumUncachedInputTokens);
-        writer.Add("campaign.max-output-tokens", budget.MaximumOutputTokens);
-        writer.Add("campaign.max-cost", budget.MaximumCostMicrounits);
-        writer.Add("campaign.max-elapsed", budget.MaximumElapsedMilliseconds);
         writer.Add("campaign.max-candidates", budget.MaximumCandidatesPerBlock);
         writer.Add("campaign.cost-enforced", budget.CostEnforced);
         writer.AddOptional("campaign.cost-currency", budget.CostCurrency);

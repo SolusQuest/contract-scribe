@@ -88,10 +88,10 @@ public sealed class CampaignStateTransitionTests
         var state = CreateOpenState();
         var exact = CampaignBudgetAccounting.ReservePatchInvocation(
             state,
-            state.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds);
+            state.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds!.Value);
         var over = CampaignBudgetAccounting.ReservePatchInvocation(
             state,
-            state.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds + 1);
+            state.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds!.Value + 1);
         var zero = CampaignBudgetAccounting.ReservePatchInvocation(state, 0);
 
         Assert.Equal(CampaignBudgetDecisionKind.Admitted, exact.Kind);

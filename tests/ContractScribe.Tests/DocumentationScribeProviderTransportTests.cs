@@ -14,7 +14,7 @@ using ContractScribe.Evaluation;
 
 namespace ContractScribe.Tests;
 
-public sealed class DocumentationScribeProviderTransportTests
+public sealed partial class DocumentationScribeProviderTransportTests
 {
     [Fact]
     [Trait("MinimumRuntime", "10.0.2")]

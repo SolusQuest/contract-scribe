@@ -109,6 +109,86 @@ internal static class ChangedBaseCampaignReconciler
                 CheckpointFailure: accepted.Kind);
     }
 
+    internal static async Task<ChangedBaseCampaignReconciliation> RefreshLifetimeCapsAsync(
+        CampaignAcceptedCheckpoint predecessor,
+        ICampaignCheckpointStore store,
+        CampaignScribeExecutionCapability successorExecution,
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
+        CampaignPlanningInput successorPlanningInput,
+        CampaignWorkPlan successorPlan,
+        Func<bool> configurationRevalidator,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(predecessor);
+        ArgumentNullException.ThrowIfNull(store);
+        ArgumentNullException.ThrowIfNull(successorExecution);
+        ArgumentException.ThrowIfNullOrWhiteSpace(styleConfigurationId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(inputIdentity);
+        ArgumentNullException.ThrowIfNull(successorPlanningInput);
+        ArgumentNullException.ThrowIfNull(successorPlan);
+        ArgumentNullException.ThrowIfNull(configurationRevalidator);
+
+        CampaignTransitionResult transition;
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!configurationRevalidator())
+            {
+                return new(ChangedBaseCampaignReconciliationKind.InvalidConfiguration, predecessor);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+            transition = CampaignStateReducer.RefreshLifetimeCaps(
+                predecessor.Artifact,
+                predecessor,
+                successorExecution,
+                styleConfigurationId,
+                validatedStyleConfigurationProjection,
+                inputIdentity,
+                successorPlanningInput,
+                successorPlan);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new(ChangedBaseCampaignReconciliationKind.Cancelled, predecessor);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return new(ChangedBaseCampaignReconciliationKind.CheckpointCapacity, predecessor);
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return new(ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
+        }
+
+        if (transition.Kind == CampaignTransitionKind.Rejected)
+        {
+            return new(transition.Failure == CampaignTransitionFailure.CheckpointCapacity
+                ? ChangedBaseCampaignReconciliationKind.CheckpointCapacity
+                : ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
+        }
+
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(
+            store,
+            transition,
+            cancellationToken).ConfigureAwait(false);
+        if (accepted.Kind == CampaignCheckpointAcceptanceKind.Cancelled)
+        {
+            return await ReconcileCancelledAcceptanceAsync(
+                store,
+                predecessor,
+                transition.Artifact).ConfigureAwait(false);
+        }
+        return accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted
+            && accepted.AcceptedCheckpoint is { } checkpoint
+            ? new(ChangedBaseCampaignReconciliationKind.Accepted, checkpoint)
+            : new(
+                ChangedBaseCampaignReconciliationKind.CheckpointFailure,
+                CheckpointFailure: accepted.Kind);
+    }
+
     private static async Task<ChangedBaseCampaignReconciliation> ReconcileCancelledAcceptanceAsync(
         ICampaignCheckpointStore store,
         CampaignAcceptedCheckpoint predecessor,

@@ -17,7 +17,7 @@ The exact help bytes are stored in `tests/fixtures/campaign/cli/help-campaign.tx
 
 Audit and campaign use `ProductionRepositorySessionHost` for one production M1 lifecycle. Campaign receives the accepted policy, loaded and observed session, evidence, classifications, canonical Audit Result, and host facts while that session is live; it does not reload or reaggregate them. `DocumentationDeclarationAuthorityProjector` derives planning source and owner authority through the same Roslyn declaration-resolution primitive as M2 without constructing a synthetic Patch Request.
 
-The shared host's `total-audit-timeout` governs M1 only. After M1 result validation succeeds, the host retires that deadline before entering the campaign consumer. Campaign execution receives only caller cancellation and enforces its configured persisted campaign, Scribe, and Patch elapsed ceilings; session shutdown remains independently bounded by the host's graceful-shutdown rule. A campaign may therefore validly exceed the M1 audit ceiling without being reclassified as caller cancellation or host timeout.
+The shared host's `total-audit-timeout` governs M1 only. After M1 result validation succeeds, the host retires that deadline before entering the campaign consumer. Campaign execution receives only caller cancellation and enforces any configured persisted campaign lifetime elapsed cap and its finite Scribe and Patch elapsed ceilings; session shutdown remains independently bounded by the host's graceful-shutdown rule. A campaign may therefore validly exceed the M1 audit ceiling without being reclassified as caller cancellation or host timeout.
 
 The runner then composes the existing boundaries in this order:
 

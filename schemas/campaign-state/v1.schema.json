@@ -73,23 +73,34 @@
     },
     "campaignBudget": {
       "type": "object", "additionalProperties": false,
-      "required": ["maximumBlocks", "maximumChangedFiles", "maximumPatchBytes", "maximumProviderRequests", "maximumAttemptsPerTarget", "maximumInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens", "maximumCostMicrounits", "maximumElapsedMilliseconds", "maximumCandidatesPerBlock", "costEnforced", "costCurrency", "costRatePolicyId", "costRatePolicySha256"],
+      "required": ["maximumBlocks", "maximumChangedFiles", "maximumPatchBytes", "maximumProviderRequests", "maximumAttemptsPerTarget", "maximumInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens", "maximumCostMicrounits", "maximumElapsedMilliseconds", "maximumCandidatesPerBlock", "costEnforced", "costCurrency", "costRatePolicyId", "costRatePolicySha256", "costRates"],
       "properties": {
         "maximumBlocks": { "type": "integer", "minimum": 0, "maximum": 4096 },
         "maximumChangedFiles": { "type": "integer", "minimum": 0, "maximum": 512 },
         "maximumPatchBytes": { "type": "integer", "minimum": 0, "maximum": 1099511627776 },
-        "maximumProviderRequests": { "type": "integer", "minimum": 0, "maximum": 1000000 },
+        "maximumProviderRequests": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000 },
         "maximumAttemptsPerTarget": { "type": "integer", "minimum": 0, "maximum": 1000 },
-        "maximumInputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000000 },
-        "maximumUncachedInputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000000 },
-        "maximumOutputTokens": { "type": "integer", "minimum": 0, "maximum": 1000000000000 },
-        "maximumCostMicrounits": { "$ref": "#/$defs/nonNegativeInt64" },
-        "maximumElapsedMilliseconds": { "type": "integer", "minimum": 0, "maximum": 2678400000 },
+        "maximumInputTokens": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000000 },
+        "maximumUncachedInputTokens": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000000 },
+        "maximumOutputTokens": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000000 },
+        "maximumCostMicrounits": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/nonNegativeInt64" }] },
+        "maximumElapsedMilliseconds": { "type": ["integer", "null"], "minimum": 0, "maximum": 2678400000 },
         "maximumCandidatesPerBlock": { "type": "integer", "minimum": 0, "maximum": 1000 },
         "costEnforced": { "type": "boolean" },
         "costCurrency": { "oneOf": [{ "type": "null" }, { "type": "string", "minLength": 1, "maxLength": 32, "pattern": "^[A-Za-z0-9][A-Za-z0-9._:-]*$" }] },
         "costRatePolicyId": { "$ref": "#/$defs/nullableOpaque" },
-        "costRatePolicySha256": { "$ref": "#/$defs/nullableSha" }
+        "costRatePolicySha256": { "$ref": "#/$defs/nullableSha" },
+        "costRates": { "$ref": "#/$defs/nullableCostRates" }
+      }
+    },
+    "nullableCostRates": {
+      "type": ["object", "null"], "additionalProperties": false,
+      "required": ["cachedInputMicrounitsPerMillion", "uncachedInputMicrounitsPerMillion", "outputMicrounitsPerMillion", "reasoningMicrounitsPerMillion"],
+      "properties": {
+        "cachedInputMicrounitsPerMillion": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 },
+        "uncachedInputMicrounitsPerMillion": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 },
+        "outputMicrounitsPerMillion": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 },
+        "reasoningMicrounitsPerMillion": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 }
       }
     },
     "scribeLimits": {
@@ -129,8 +140,8 @@
     },
     "charges": {
       "type": "object", "additionalProperties": false,
-      "required": ["outerInvocations", "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens", "outputTokens", "reasoningTokens", "costMicrounits", "activeElapsedMilliseconds", "patchValidationInvocations"],
-      "properties": { "outerInvocations": { "$ref": "#/$defs/nonNegativeInt64" }, "providerRequests": { "$ref": "#/$defs/charge" }, "inputTokens": { "$ref": "#/$defs/charge" }, "cachedInputTokens": { "$ref": "#/$defs/charge" }, "uncachedInputTokens": { "$ref": "#/$defs/charge" }, "outputTokens": { "$ref": "#/$defs/charge" }, "reasoningTokens": { "$ref": "#/$defs/charge" }, "costMicrounits": { "$ref": "#/$defs/charge" }, "activeElapsedMilliseconds": { "$ref": "#/$defs/charge" }, "patchValidationInvocations": { "$ref": "#/$defs/nonNegativeInt64" } }
+      "required": ["outerInvocations", "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens", "outputTokens", "reasoningTokens", "costMicrounits", "activeElapsedMilliseconds", "patchValidationInvocations", "hasUnpricedCostHistory"],
+      "properties": { "outerInvocations": { "$ref": "#/$defs/nonNegativeInt64" }, "providerRequests": { "$ref": "#/$defs/charge" }, "inputTokens": { "$ref": "#/$defs/charge" }, "cachedInputTokens": { "$ref": "#/$defs/charge" }, "uncachedInputTokens": { "$ref": "#/$defs/charge" }, "outputTokens": { "$ref": "#/$defs/charge" }, "reasoningTokens": { "$ref": "#/$defs/charge" }, "costMicrounits": { "$ref": "#/$defs/charge" }, "activeElapsedMilliseconds": { "$ref": "#/$defs/charge" }, "hasUnpricedCostHistory": { "type": "boolean" }, "patchValidationInvocations": { "$ref": "#/$defs/nonNegativeInt64" } }
     },
     "work": {
       "type": "object", "additionalProperties": false, "required": ["workItemKey", "outerAttemptCount", "candidateAttemptCount", "status", "attemptDisposition", "trustedProposal", "closedOutcome"],
@@ -267,7 +278,7 @@
     },
     "terminal": {
       "type": "object", "additionalProperties": false, "required": ["kind", "reason"],
-      "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "unresolved", "budget", "caller", "deadline", "host", "new-snapshot"] } }
+      "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "unresolved", "budget", "lifetime-cap", "caller", "deadline", "host", "new-snapshot"] } }
     },
     "predecessor": {
       "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate", "completedOperations"],
