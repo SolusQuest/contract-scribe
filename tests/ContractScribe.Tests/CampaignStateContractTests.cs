@@ -24,7 +24,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("75e45edbb609e7cca338957642acd2046660b6b43f37c92b606ab380f49782dd", artifact.Sha256);
+        Assert.Equal("296443a42c911aac65b3a6ed3f7fc623458e23bb3e1e219c11f99c4e7dc113cb", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }
@@ -1432,7 +1432,7 @@ public sealed partial class CampaignStateContractTests
     public void Dispatched_X1_postflight_rejection_wins_over_simultaneous_stop(
         CampaignTerminalKind simultaneousStop)
     {
-        var scenario = CreateProposalScenario(costCurrency: "currency.usd");
+        var scenario = CreateProposalScenario(costCurrency: "currency.usd", maximumCostMicrounits: 10_000_000);
         var work = scenario.Plan.WorkItems[0];
         var request = CreateScribeExchange(work);
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
@@ -2447,6 +2447,7 @@ public sealed partial class CampaignStateContractTests
             CampaignStateContract.MaximumPathScalars - 2 - projectSuffix.Length) + projectSuffix;
         var scenario = CreateProposalScenario(
             costCurrency: "currency.usd",
+            maximumCostMicrounits: 10_000_000,
             maximumBlocks: 40,
             maximumChangedFiles: 40,
             scribeRequestTemplate: ReadScribeRequest(ConfigureLargeContentStyle),
@@ -2875,7 +2876,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             completionExchange.Request);
         Assert.True(invocation.TryBeginDispatch(out _));
-        var elapsed = scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds + 1;
+        var elapsed = scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds!.Value + 1;
         Assert.Equal(CampaignBudgetDecisionKind.Exhausted,
             CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed).Kind);
         var completion = OrdinaryCompletion(invocation, outcome, elapsed);
@@ -2916,7 +2917,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Request,
             outcomeKind,
             activeElapsedMilliseconds:
-                scenario.Predecessor.State.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds + 1);
+                scenario.Predecessor.State.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds!.Value + 1);
 
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
         Assert.Equal(expectedTerminal, completed.Artifact.State.TerminalOutcome!.Kind);
@@ -3531,8 +3532,9 @@ public sealed partial class CampaignStateContractTests
         var twoKnown = CompleteAcceptedOnly(
             CreateAcceptedPatchResult(acceptedOnlyRequest, firstProposal),
             activeElapsedMilliseconds:
-                scenario.Input.ExecutionPolicy.CampaignBudget.MaximumElapsedMilliseconds + 1);
-        Assert.Equal(2, twoKnown.State.KnownCompletedOperations.Length);
+                scenario.Input.ExecutionPolicy.CampaignBudget.MaximumElapsedMilliseconds!.Value + 1);
+        Assert.Single(twoKnown.State.KnownCompletedOperations);
+        Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, twoKnown.State.CumulativeOutcome!.Kind);
 
         AssertMutationFailure(
             overbound.Artifact.State,
@@ -4588,11 +4590,11 @@ public sealed partial class CampaignStateContractTests
         string firstDocumentationId = "M:Synthetic.Widget.Run(System.String)",
         string costCurrency = "USD",
         bool costEnforced = true,
-        long maximumElapsedMilliseconds = 120_000,
+        long? maximumElapsedMilliseconds = 120_000,
         long maximumPatchBytes = 1_000_000,
         int maximumBlocks = 100,
         int maximumChangedFiles = 20,
-        int maximumProviderRequests = 100,
+        int? maximumProviderRequests = 100,
         DocumentationScribeRequest? scribeRequestTemplate = null,
         int workItemCount = 2,
         string inputIdentity = "samples/Synthetic.csproj",
@@ -4601,10 +4603,11 @@ public sealed partial class CampaignStateContractTests
         Func<int, string>? memberFamily = null,
         bool compactPolicyContributions = false,
         int maximumAttemptsPerTarget = 3,
-        long maximumInputTokens = 1_000_000,
-        long maximumUncachedInputTokens = 500_000,
-        long maximumOutputTokens = 100_000,
-        long maximumCostMicrounits = 5_000_000)
+        long? maximumInputTokens = 1_000_000,
+        long? maximumUncachedInputTokens = 500_000,
+        long? maximumOutputTokens = 100_000,
+        long? maximumCostMicrounits = 5_000_000,
+        CampaignCostRates? costRates = null)
     {
         const string Context = "synthetic.v1";
         var requestTemplate = scribeRequestTemplate ?? ReadScribeRequest();
@@ -4843,6 +4846,7 @@ public sealed partial class CampaignStateContractTests
             providerConfigurationId = "provider.synthetic.v1",
             modelConfigurationId = "model.synthetic.v1",
         });
+        var rates = costEnforced ? costRates ?? new CampaignCostRates(0, 0, 0, 0) : null;
         var executionPolicy = new CampaignPlanningExecutionPolicy(
             requestTemplate.Limits,
             new CampaignPlanningBudgetPolicy(
@@ -4854,14 +4858,15 @@ public sealed partial class CampaignStateContractTests
                 maximumInputTokens,
                 maximumUncachedInputTokens,
                 maximumOutputTokens,
-                maximumCostMicrounits,
+                costEnforced ? maximumCostMicrounits : null,
                 maximumElapsedMilliseconds,
                 8,
                 costEnforced,
                 costEnforced ? costCurrency : null,
                 costEnforced
-                    ? Content(CampaignPlanningContentFamily.CostRatePolicy, "cost", "rates-v1")
-                    : null),
+                    ? rates!.CreateAuthority(costCurrency, "cost")
+                    : null,
+                rates),
             Content(CampaignPlanningContentFamily.ProposalContract, "proposal", "proposal-v1"),
             Content(CampaignPlanningContentFamily.AgentProtocol, "agent", agentProtocolProjection),
             Content(CampaignPlanningContentFamily.ContextSelectionPolicy, "context", "context-v1"),
@@ -5851,7 +5856,7 @@ public sealed partial class CampaignStateContractTests
         new(
             new CampaignStateCampaignBudget(
                 512, 512, 1_048_576, 8, 3, 100_000, 100_000, 100_000,
-                1_000_000, 60_000, 3, false, null, null, null),
+                null, 60_000, 3, false, null, null, null),
             new CampaignStateScribeLimits(
                 32, 262_144, 64, 262_144, 8, 8, 16, 3,
                 100_000, 100_000, 100_000, 1_000_000, 60_000),
@@ -5879,7 +5884,7 @@ public sealed partial class CampaignStateContractTests
             request.Limits,
             new CampaignPlanningBudgetPolicy(
                 512, 512, 1_048_576, 8, 3, 100_000, 100_000, 100_000,
-                1_000_000, 60_000, 3, false, null, null),
+                null, 60_000, 3, false, null, null),
             Content(CampaignPlanningContentFamily.ProposalContract, "proposal", "proposal-v1"),
             Content(CampaignPlanningContentFamily.AgentProtocol, "agent", agent),
             Content(CampaignPlanningContentFamily.ContextSelectionPolicy, "context", "context-v1"),

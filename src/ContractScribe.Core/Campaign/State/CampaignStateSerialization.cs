@@ -237,18 +237,32 @@ public static partial class CampaignStateJson
         writer.WriteNumber("maximumBlocks", budget.MaximumBlocks);
         writer.WriteNumber("maximumChangedFiles", budget.MaximumChangedFiles);
         writer.WriteNumber("maximumPatchBytes", budget.MaximumPatchBytes);
-        writer.WriteNumber("maximumProviderRequests", budget.MaximumProviderRequests);
+        WriteNullableNumber(writer, "maximumProviderRequests", budget.MaximumProviderRequests);
         writer.WriteNumber("maximumAttemptsPerTarget", budget.MaximumAttemptsPerTarget);
-        writer.WriteNumber("maximumInputTokens", budget.MaximumInputTokens);
-        writer.WriteNumber("maximumUncachedInputTokens", budget.MaximumUncachedInputTokens);
-        writer.WriteNumber("maximumOutputTokens", budget.MaximumOutputTokens);
-        writer.WriteNumber("maximumCostMicrounits", budget.MaximumCostMicrounits);
-        writer.WriteNumber("maximumElapsedMilliseconds", budget.MaximumElapsedMilliseconds);
+        WriteNullableNumber(writer, "maximumInputTokens", budget.MaximumInputTokens);
+        WriteNullableNumber(writer, "maximumUncachedInputTokens", budget.MaximumUncachedInputTokens);
+        WriteNullableNumber(writer, "maximumOutputTokens", budget.MaximumOutputTokens);
+        WriteNullableNumber(writer, "maximumCostMicrounits", budget.MaximumCostMicrounits);
+        WriteNullableNumber(writer, "maximumElapsedMilliseconds", budget.MaximumElapsedMilliseconds);
         writer.WriteNumber("maximumCandidatesPerBlock", budget.MaximumCandidatesPerBlock);
         writer.WriteBoolean("costEnforced", budget.CostEnforced);
         WriteNullableString(writer, "costCurrency", budget.CostCurrency);
         WriteNullableString(writer, "costRatePolicyId", budget.CostRatePolicyId);
         WriteNullableString(writer, "costRatePolicySha256", budget.CostRatePolicySha256);
+        writer.WritePropertyName("costRates");
+        if (budget.CostRates is { } rates)
+        {
+            writer.WriteStartObject();
+            writer.WriteNumber("cachedInputMicrounitsPerMillion", rates.CachedInputMicrounitsPerMillion);
+            writer.WriteNumber("uncachedInputMicrounitsPerMillion", rates.UncachedInputMicrounitsPerMillion);
+            writer.WriteNumber("outputMicrounitsPerMillion", rates.OutputMicrounitsPerMillion);
+            writer.WriteNumber("reasoningMicrounitsPerMillion", rates.ReasoningMicrounitsPerMillion);
+            writer.WriteEndObject();
+        }
+        else
+        {
+            writer.WriteNullValue();
+        }
         writer.WriteEndObject();
         writer.WritePropertyName("scribeRunLimits");
         writer.WriteStartObject();
@@ -304,6 +318,7 @@ public static partial class CampaignStateJson
         WriteCharge(writer, "costMicrounits", charges.CostMicrounits);
         WriteCharge(writer, "activeElapsedMilliseconds", charges.ActiveElapsedMilliseconds);
         writer.WriteNumber("patchValidationInvocations", charges.PatchValidationInvocations);
+        writer.WriteBoolean("hasUnpricedCostHistory", charges.HasUnpricedCostHistory);
         writer.WriteEndObject();
     }
 
@@ -968,7 +983,8 @@ public static partial class CampaignStateJson
             "costEnforced",
             "costCurrency",
             "costRatePolicyId",
-            "costRatePolicySha256");
+            "costRatePolicySha256",
+            "costRates");
         var limits = element.GetProperty("scribeRunLimits");
         ExpectObject(
             limits,
@@ -1003,18 +1019,19 @@ public static partial class CampaignStateJson
                 ReadInt32(budget, "maximumBlocks"),
                 ReadInt32(budget, "maximumChangedFiles"),
                 ReadInt64(budget, "maximumPatchBytes"),
-                ReadInt32(budget, "maximumProviderRequests"),
+                ReadNullableInt32(budget, "maximumProviderRequests"),
                 ReadInt32(budget, "maximumAttemptsPerTarget"),
-                ReadInt64(budget, "maximumInputTokens"),
-                ReadInt64(budget, "maximumUncachedInputTokens"),
-                ReadInt64(budget, "maximumOutputTokens"),
-                ReadInt64(budget, "maximumCostMicrounits"),
-                ReadInt64(budget, "maximumElapsedMilliseconds"),
+                ReadNullableInt64(budget, "maximumInputTokens"),
+                ReadNullableInt64(budget, "maximumUncachedInputTokens"),
+                ReadNullableInt64(budget, "maximumOutputTokens"),
+                ReadNullableInt64(budget, "maximumCostMicrounits"),
+                ReadNullableInt64(budget, "maximumElapsedMilliseconds"),
                 ReadInt32(budget, "maximumCandidatesPerBlock"),
                 ReadBoolean(budget, "costEnforced"),
                 ReadNullableString(budget, "costCurrency"),
                 ReadNullableString(budget, "costRatePolicyId"),
-                ReadNullableString(budget, "costRatePolicySha256")),
+                ReadNullableString(budget, "costRatePolicySha256"),
+                ParseCostRates(budget.GetProperty("costRates"))),
             new CampaignStateScribeLimits(
                 ReadInt32(limits, "maximumContextReferences"),
                 ReadInt32(limits, "maximumContextUtf8Bytes"),
@@ -1044,6 +1061,26 @@ public static partial class CampaignStateJson
             ReadString(element, "campaignConfigurationCommitmentSha256"));
     }
 
+    private static void WriteNullableNumber(Utf8JsonWriter writer, string name, long? value)
+    {
+        if (value is { } number) writer.WriteNumber(name, number);
+        else writer.WriteNull(name);
+    }
+
+    private static int? ReadNullableInt32(JsonElement element, string name) =>
+        element.GetProperty(name).ValueKind == JsonValueKind.Null ? null : ReadInt32(element, name);
+
+    private static CampaignCostRates? ParseCostRates(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Null) return null;
+        ExpectObject(element, "cachedInputMicrounitsPerMillion", "uncachedInputMicrounitsPerMillion",
+            "outputMicrounitsPerMillion", "reasoningMicrounitsPerMillion");
+        return new CampaignCostRates(ReadInt64(element, "cachedInputMicrounitsPerMillion"),
+            ReadInt64(element, "uncachedInputMicrounitsPerMillion"),
+            ReadInt64(element, "outputMicrounitsPerMillion"),
+            ReadInt64(element, "reasoningMicrounitsPerMillion"));
+    }
+
     private static CampaignLineageCharges ParseCharges(JsonElement element)
     {
         ExpectObject(
@@ -1057,7 +1094,8 @@ public static partial class CampaignStateJson
             "reasoningTokens",
             "costMicrounits",
             "activeElapsedMilliseconds",
-            "patchValidationInvocations");
+            "patchValidationInvocations",
+            "hasUnpricedCostHistory");
         return new CampaignLineageCharges(
             ReadInt64(element, "outerInvocations"),
             ParseCharge(element.GetProperty("providerRequests")),
@@ -1068,7 +1106,8 @@ public static partial class CampaignStateJson
             ParseCharge(element.GetProperty("reasoningTokens")),
             ParseCharge(element.GetProperty("costMicrounits")),
             ParseCharge(element.GetProperty("activeElapsedMilliseconds")),
-            ReadInt64(element, "patchValidationInvocations"));
+            ReadInt64(element, "patchValidationInvocations"),
+            ReadBoolean(element, "hasUnpricedCostHistory"));
     }
 
     private static CampaignChargeObservation ParseCharge(JsonElement element)
@@ -2101,6 +2140,7 @@ public static partial class CampaignStateJson
         CampaignTerminalReason.AllWorkClosed => "all-work-closed",
         CampaignTerminalReason.Unresolved => "unresolved",
         CampaignTerminalReason.Budget => "budget",
+        CampaignTerminalReason.LifetimeCap => "lifetime-cap",
         CampaignTerminalReason.Caller => "caller",
         CampaignTerminalReason.Deadline => "deadline",
         CampaignTerminalReason.Host => "host",
@@ -2114,6 +2154,7 @@ public static partial class CampaignStateJson
         "all-work-closed" => CampaignTerminalReason.AllWorkClosed,
         "unresolved" => CampaignTerminalReason.Unresolved,
         "budget" => CampaignTerminalReason.Budget,
+        "lifetime-cap" => CampaignTerminalReason.LifetimeCap,
         "caller" => CampaignTerminalReason.Caller,
         "deadline" => CampaignTerminalReason.Deadline,
         "host" => CampaignTerminalReason.Host,

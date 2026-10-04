@@ -122,6 +122,7 @@ public enum CampaignTerminalReason
     AllWorkClosed,
     Unresolved,
     Budget,
+    LifetimeCap,
     Caller,
     Deadline,
     Host,
@@ -149,18 +150,19 @@ public sealed record CampaignStateCampaignBudget(
     int MaximumBlocks,
     int MaximumChangedFiles,
     long MaximumPatchBytes,
-    int MaximumProviderRequests,
+    int? MaximumProviderRequests,
     int MaximumAttemptsPerTarget,
-    long MaximumInputTokens,
-    long MaximumUncachedInputTokens,
-    long MaximumOutputTokens,
-    long MaximumCostMicrounits,
-    long MaximumElapsedMilliseconds,
+    long? MaximumInputTokens,
+    long? MaximumUncachedInputTokens,
+    long? MaximumOutputTokens,
+    long? MaximumCostMicrounits,
+    long? MaximumElapsedMilliseconds,
     int MaximumCandidatesPerBlock,
     bool CostEnforced,
     string? CostCurrency,
     string? CostRatePolicyId,
-    string? CostRatePolicySha256);
+    string? CostRatePolicySha256,
+    CampaignCostRates? CostRates = null);
 
 public sealed record CampaignStateScribeLimits(
     int MaximumContextReferences,
@@ -199,7 +201,8 @@ public sealed record CampaignLineageCharges(
     CampaignChargeObservation ReasoningTokens,
     CampaignChargeObservation CostMicrounits,
     CampaignChargeObservation ActiveElapsedMilliseconds,
-    long PatchValidationInvocations);
+    long PatchValidationInvocations,
+    bool HasUnpricedCostHistory = false);
 
 public sealed record CampaignEvidenceProjection(
     string EvidenceReferenceId,

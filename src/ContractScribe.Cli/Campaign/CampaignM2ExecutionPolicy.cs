@@ -47,7 +47,6 @@ internal sealed record CampaignM2ExecutionPolicy(long MaximumPatchElapsedMillise
         if (names.Count != 2
             || version != ProjectionVersion
             || maximum is not > 0
-            || maximum > acceptedExecutionPolicy.CampaignBudget.MaximumElapsedMilliseconds
             || maximum > CampaignStateContract.MaximumObservation)
         {
             return false;

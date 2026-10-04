@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.Cli;
 using ContractScribe.Core;
 
@@ -18,6 +19,9 @@ public sealed partial class CampaignCliProcessTests
         {
             var configurationPath = Path.Join(outside, "consumer.json");
             await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
+            var layer = JsonNode.Parse(await File.ReadAllTextAsync(configurationPath))!;
+            layer["budgets"] = new JsonObject { ["campaign"] = new JsonObject { ["maximumProviderRequests"] = 128 } };
+            await File.WriteAllTextAsync(configurationPath, layer.ToJsonString());
             await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
             var stateDirectory = Path.Join(outside, "state");
             Directory.CreateDirectory(stateDirectory);
@@ -197,8 +201,8 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(baseline.Artifact.ExactUtf8Json, finalRejected.Artifact.ExactUtf8Json);
             var exhaustedCharges = baseline.Artifact.State.LineageCharges with
             {
-                ProviderRequests = new(0, baseline.Artifact.State.ConfiguredCeilings.CampaignBudget.MaximumProviderRequests,
-                    baseline.Artifact.State.ConfiguredCeilings.CampaignBudget.MaximumProviderRequests),
+                ProviderRequests = new(0, baseline.Artifact.State.ConfiguredCeilings.CampaignBudget.MaximumProviderRequests!.Value,
+                    baseline.Artifact.State.ConfiguredCeilings.CampaignBudget.MaximumProviderRequests!.Value),
             };
             var exhaustedPredecessor = CampaignStateJson.CreateArtifact(ProviderCapacityCopy(
                 baseline.Artifact.State, baseline.Artifact.State.WorkItems, exhaustedCharges));

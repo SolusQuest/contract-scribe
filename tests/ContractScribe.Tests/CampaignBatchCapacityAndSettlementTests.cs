@@ -59,10 +59,11 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario(targetLimit: 1, costCurrency: "currency.usd",
             maximumAttemptsPerTarget: 1,
             maximumProviderRequests: dimension == "requests" ? template.Limits.MaximumProviderRequests : 100,
-            maximumInputTokens: dimension == "input" ? template.Limits.MaximumInputTokens : 1_000_000,
-            maximumUncachedInputTokens: dimension is "input" or "uncached" ? template.Limits.MaximumUncachedInputTokens : 500_000,
-            maximumOutputTokens: dimension == "output" ? template.Limits.MaximumOutputTokens : 100_000,
-            maximumCostMicrounits: dimension == "cost" ? template.Limits.MaximumCostMicrounits : 5_000_000,
+            maximumInputTokens: dimension == "input" ? 2L * template.Limits.MaximumInputTokens : 1_000_000,
+            maximumUncachedInputTokens: dimension == "uncached" ? 2L * template.Limits.MaximumUncachedInputTokens
+                : dimension == "input" ? template.Limits.MaximumUncachedInputTokens : 500_000,
+            maximumOutputTokens: dimension == "output" ? 2L * template.Limits.MaximumOutputTokens : 100_000,
+            maximumCostMicrounits: dimension == "cost" ? 2 * template.Limits.MaximumCostMicrounits : 5_000_000,
             maximumElapsedMilliseconds: dimension.StartsWith("elapsed", StringComparison.Ordinal)
                 ? template.Limits.MaximumElapsedMilliseconds : 300_000);
         var work = scenario.Plan.WorkItems[0];
@@ -98,6 +99,19 @@ public sealed partial class CampaignStateContractTests
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(failure.Request, attempt, failure.Result);
         var settlement = CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed);
         Assert.Equal(expected == CampaignTerminalKind.Exhausted ? CampaignBudgetDecisionKind.Exhausted : CampaignBudgetDecisionKind.Admitted, settlement.Kind);
+        if (dimension is "input" or "uncached" or "output" or "cost")
+        {
+            var charge = dimension switch
+            {
+                "input" => settlement.Charges!.InputTokens,
+                "uncached" => settlement.Charges!.UncachedInputTokens,
+                "output" => settlement.Charges!.OutputTokens,
+                _ => settlement.Charges!.CostMicrounits,
+            };
+            // Exact equality includes both the observed aggregate and independent unknown exposure.
+            Assert.Equal(charge.Observed, charge.ConservativeUnobserved);
+            Assert.Equal(2 * charge.Observed, charge.TotalCharged);
+        }
         var completed = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact,
             OrdinaryCompletion(invocation, outcome, elapsed), scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
@@ -107,7 +121,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(settlement.Charges, restored.LineageCharges);
         Assert.Null(restored.ActiveReservation);
         Assert.Equal(expected, restored.TerminalOutcome!.Kind);
-        Assert.Equal(expected == CampaignTerminalKind.Exhausted ? CampaignTerminalReason.Budget : CampaignTerminalReason.Unresolved, restored.TerminalOutcome.Reason);
+        Assert.Equal(expected == CampaignTerminalKind.Exhausted ? CampaignTerminalReason.LifetimeCap : CampaignTerminalReason.Unresolved, restored.TerminalOutcome.Reason);
         Assert.Equal(CampaignAttemptDisposition.SuppressedAtAttemptLimit, restored.WorkItems[0].AttemptDisposition);
         Assert.Equal(CampaignTargetProgressKind.Suppressed, restored.TargetProgress[0].Kind);
         Assert.Empty(CampaignStateFactory.CreateInvocationTargetAllowance(restored, new(4096)).WorkItemKeys);
@@ -153,7 +167,8 @@ public sealed partial class CampaignStateContractTests
             CampaignTerminalKind.Failed => CampaignTerminalReason.Host,
             CampaignTerminalKind.Cancelled => CampaignTerminalReason.Caller,
             CampaignTerminalKind.Timeout => CampaignTerminalReason.Deadline,
-            _ => CampaignTerminalReason.Budget
+            _ => kind == CampaignProviderCompletionKind.ProposalInvalid
+                ? CampaignTerminalReason.LifetimeCap : CampaignTerminalReason.Budget
         };
         Assert.Equal(new CampaignTerminalOutcome(expected, reason), restored.TerminalOutcome);
         if (kind == CampaignProviderCompletionKind.ProposalInvalid)

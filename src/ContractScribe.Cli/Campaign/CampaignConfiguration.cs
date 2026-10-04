@@ -87,7 +87,12 @@ internal sealed record CampaignConfigurationDocument(
             campaign.MaximumCandidatesPerBlock,
             CostPolicy is not null,
             CostPolicy?.CurrencyId,
-            costAuthority);
+            costAuthority,
+            CostPolicy is null ? null : new CampaignCostRates(
+                CostPolicy.CachedInputMicrounitsPerMillion,
+                CostPolicy.UncachedInputMicrounitsPerMillion,
+                CostPolicy.OutputMicrounitsPerMillion,
+                CostPolicy.ReasoningMicrounitsPerMillion));
 
         return new CampaignPlanningExecutionPolicy(
             Budgets.Scribe,
@@ -140,13 +145,13 @@ internal sealed record CampaignAggregateBudgetConfiguration(
     int MaximumBlocks,
     int MaximumChangedFiles,
     long MaximumPatchBytes,
-    int MaximumProviderRequests,
+    int? MaximumProviderRequests,
     int MaximumAttemptsPerTarget,
-    long MaximumInputTokens,
-    long MaximumUncachedInputTokens,
-    long MaximumOutputTokens,
-    long MaximumCostMicrounits,
-    long MaximumElapsedMilliseconds,
+    long? MaximumInputTokens,
+    long? MaximumUncachedInputTokens,
+    long? MaximumOutputTokens,
+    long? MaximumCostMicrounits,
+    long? MaximumElapsedMilliseconds,
     int MaximumCandidatesPerBlock);
 
 internal sealed record CampaignRetryConfiguration(string RetryPolicyId);
@@ -253,10 +258,6 @@ internal static class CampaignConfiguration
 
             var planning = ParsePlanning(root.GetProperty("planning"));
             var budgets = ParseBudgets(root.GetProperty("budgets"));
-            if (planning.MaximumPatchElapsedMilliseconds > budgets.Campaign.MaximumElapsedMilliseconds)
-            {
-                throw Invalid();
-            }
 
             return new CampaignConfigurationDocument(
                 planning,
@@ -330,19 +331,23 @@ internal static class CampaignConfiguration
             "maximumElapsedMilliseconds",
             "maximumCandidatesPerBlock",
         ]);
-        var campaignInput = Long(campaign, "maximumInputTokens", 1, 1_000_000_000_000);
-        var campaignUncached = Long(campaign, "maximumUncachedInputTokens", 0, campaignInput);
+        var campaignInput = NullableLong(campaign, "maximumInputTokens", 1_000_000_000_000);
+        var campaignUncached = NullableLong(campaign, "maximumUncachedInputTokens", 1_000_000_000_000);
+        if (campaignInput is { } total && campaignUncached is { } uncached && uncached > total)
+        {
+            throw Invalid();
+        }
         var aggregate = new CampaignAggregateBudgetConfiguration(
             Int(campaign, "maximumBlocks", 1, 16_384),
             Int(campaign, "maximumChangedFiles", 1, 16_384),
             Long(campaign, "maximumPatchBytes", 1, CampaignStateContract.MaximumPatchBytes),
-            Int(campaign, "maximumProviderRequests", 1, 1_000_000),
+            NullableInt(campaign, "maximumProviderRequests", 1_000_000),
             Int(campaign, "maximumAttemptsPerTarget", 1, 1_000),
             campaignInput,
             campaignUncached,
-            Long(campaign, "maximumOutputTokens", 1, 1_000_000_000_000),
-            Long(campaign, "maximumCostMicrounits", 0, 1_000_000_000_000_000),
-            Long(campaign, "maximumElapsedMilliseconds", 1, CampaignStateContract.MaximumCampaignElapsedMilliseconds),
+            NullableLong(campaign, "maximumOutputTokens", 1_000_000_000_000),
+            NullableLong(campaign, "maximumCostMicrounits", 1_000_000_000_000_000),
+            NullableLong(campaign, "maximumElapsedMilliseconds", CampaignStateContract.MaximumCampaignElapsedMilliseconds),
             Int(campaign, "maximumCandidatesPerBlock", 1, 1_000));
 
         var scribe = value.GetProperty("scribe");
@@ -649,6 +654,12 @@ internal static class CampaignConfiguration
             throw Invalid();
         }
     }
+
+    private static int? NullableInt(JsonElement parent, string name, int maximum) =>
+        parent.GetProperty(name).ValueKind == JsonValueKind.Null ? null : Int(parent, name, 0, maximum);
+
+    private static long? NullableLong(JsonElement parent, string name, long maximum) =>
+        parent.GetProperty(name).ValueKind == JsonValueKind.Null ? null : Long(parent, name, 0, maximum);
 
     private static int Int(JsonElement parent, string name, int minimum, int maximum)
     {

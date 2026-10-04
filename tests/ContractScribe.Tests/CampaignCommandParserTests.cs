@@ -147,7 +147,7 @@ public sealed class CampaignCommandParserTests
         Assert.Throws<CampaignConfigurationException>(() => Parse(reordered));
 
         var crossed = JsonNode.Parse(valid)!.AsObject();
-        crossed["planning"]!["maximumPatchElapsedMilliseconds"] = 120001;
+        crossed["budgets"]!["campaign"]!["maximumUncachedInputTokens"] = 1000001;
         Assert.Throws<CampaignConfigurationException>(() => Parse(crossed));
 
         var duplicate = Encoding.UTF8.GetString(valid).Replace(

@@ -58,7 +58,7 @@ public static class CampaignBudgetAccounting
                 limits.MaximumInputTokens,
                 limits.MaximumUncachedInputTokens,
                 limits.MaximumOutputTokens,
-                budget.CostEnforced ? limits.MaximumCostMicrounits : 0,
+                ProviderCostExposure(budget, limits),
                 limits.MaximumElapsedMilliseconds);
             var charges = state.LineageCharges with
             {
@@ -105,6 +105,7 @@ public static class CampaignBudgetAccounting
         try
         {
             var usage = envelope.Usage;
+            var completeUsage = envelope.ProviderRequestCount <= 1;
             var charges = state.LineageCharges with
             {
                 ProviderRequests = AddExact(
@@ -113,29 +114,32 @@ public static class CampaignBudgetAccounting
                 InputTokens = AddObservation(
                     state.LineageCharges.InputTokens,
                     usage?.InputTokens,
-                    reservation.Exposure.InputTokens),
+                    ParentExposure(reservation.Exposure.InputTokens, usage?.InputTokens,
+                        checked((usage?.CachedInputTokens ?? 0L) + (usage?.UncachedInputTokens ?? 0L)), completeUsage),
+                    completeUsage),
                 CachedInputTokens = AddObservation(
                     state.LineageCharges.CachedInputTokens,
                     usage?.CachedInputTokens,
-                    reservation.Exposure.InputTokens),
+                    reservation.Exposure.InputTokens,
+                    completeUsage),
                 UncachedInputTokens = AddObservation(
                     state.LineageCharges.UncachedInputTokens,
                     usage?.UncachedInputTokens,
-                    reservation.Exposure.UncachedInputTokens),
+                    reservation.Exposure.UncachedInputTokens,
+                    completeUsage),
                 OutputTokens = AddObservation(
                     state.LineageCharges.OutputTokens,
                     usage?.OutputTokens,
-                    reservation.Exposure.OutputTokens),
+                    ParentExposure(reservation.Exposure.OutputTokens, usage?.OutputTokens, usage?.ReasoningTokens ?? 0, completeUsage),
+                    completeUsage),
                 ReasoningTokens = AddObservation(
                     state.LineageCharges.ReasoningTokens,
                     usage?.ReasoningTokens,
-                    reservation.Exposure.OutputTokens),
-                CostMicrounits = budget.CostEnforced
-                    ? AddObservation(
-                        state.LineageCharges.CostMicrounits,
-                        envelope.Cost?.AmountMicrounits,
-                        reservation.Exposure.CostMicrounits)
-                    : state.LineageCharges.CostMicrounits,
+                    reservation.Exposure.OutputTokens,
+                    completeUsage),
+                CostMicrounits = SettleCost(state, reservation, envelope),
+                HasUnpricedCostHistory = state.LineageCharges.HasUnpricedCostHistory
+                    || !budget.CostEnforced && envelope.ProviderRequestCount > 0,
                 ActiveElapsedMilliseconds = AddObservation(
                     state.LineageCharges.ActiveElapsedMilliseconds,
                     activeElapsedMilliseconds,
@@ -181,7 +185,8 @@ public static class CampaignBudgetAccounting
             {
                 PatchValidationInvocations = checked(settledCharges.PatchValidationInvocations + 1),
             };
-            return charges.ActiveElapsedMilliseconds.TotalCharged + elapsedMilliseconds <= budget.MaximumElapsedMilliseconds
+            var totalElapsed = checked(charges.ActiveElapsedMilliseconds.TotalCharged + elapsedMilliseconds);
+            return FitsSettledBudget(charges, budget) && Within(totalElapsed, budget.MaximumElapsedMilliseconds)
                 ? new CampaignSettlementDecision(CampaignBudgetDecisionKind.Admitted, charges)
                 : new CampaignSettlementDecision(CampaignBudgetDecisionKind.Exhausted, null);
         }
@@ -235,6 +240,8 @@ public static class CampaignBudgetAccounting
                 UncachedInputTokens = AddUnknown(state.LineageCharges.UncachedInputTokens, provider.Exposure.UncachedInputTokens),
                 OutputTokens = AddUnknown(state.LineageCharges.OutputTokens, provider.Exposure.OutputTokens),
                 ReasoningTokens = AddUnknown(state.LineageCharges.ReasoningTokens, provider.Exposure.OutputTokens),
+                HasUnpricedCostHistory = state.LineageCharges.HasUnpricedCostHistory
+                    || !state.ConfiguredCeilings.CampaignBudget.CostEnforced,
                 CostMicrounits = state.ConfiguredCeilings.CampaignBudget.CostEnforced
                     ? AddUnknown(state.LineageCharges.CostMicrounits, provider.Exposure.CostMicrounits)
                     : state.LineageCharges.CostMicrounits,
@@ -252,27 +259,78 @@ public static class CampaignBudgetAccounting
         };
     }
 
+    internal static long ProviderCostExposure(
+        CampaignStateCampaignBudget budget,
+        CampaignStateScribeLimits limits) => budget.CostEnforced
+            ? Math.Max(limits.MaximumCostMicrounits, budget.CostRates!.ConservativeCost(
+                limits.MaximumInputTokens, limits.MaximumUncachedInputTokens,
+                limits.MaximumOutputTokens, limits.MaximumProviderRequests))
+            : 0;
+
+    private static CampaignChargeObservation SettleCost(
+        CampaignCheckpointState state,
+        CampaignProviderReservation reservation,
+        DocumentationScribeRunEnvelope envelope)
+    {
+        var budget = state.ConfiguredCeilings.CampaignBudget;
+        var previous = state.LineageCharges.CostMicrounits;
+        if (!budget.CostEnforced) return previous;
+        if (envelope.Cost is { } exact && envelope.ProviderRequestCount == 1)
+        {
+            return AddExact(previous, exact.AmountMicrounits);
+        }
+        var limits = state.ConfiguredCeilings.ScribeRunLimits;
+        var usage = envelope.Usage;
+        var bound = Math.Max(reservation.Exposure.CostMicrounits, budget.CostRates!.ConservativeCost(
+            CostTokenExposure(limits.MaximumInputTokens,
+                Math.Max(usage?.InputTokens ?? 0, checked((usage?.CachedInputTokens ?? 0L) + (usage?.UncachedInputTokens ?? 0L))),
+                envelope.ProviderRequestCount),
+            CostTokenExposure(limits.MaximumUncachedInputTokens, usage?.UncachedInputTokens ?? 0, envelope.ProviderRequestCount),
+            CostTokenExposure(limits.MaximumOutputTokens,
+                Math.Max(usage?.OutputTokens ?? 0, usage?.ReasoningTokens ?? 0), envelope.ProviderRequestCount),
+            Math.Max(limits.MaximumProviderRequests, envelope.ProviderRequestCount)));
+        if (envelope.Cost is not { } reported) return AddUnknown(previous, bound);
+        // Aggregated present fields do not prove complete monetary observation for every exchange.
+        var known = AddExact(previous, reported.AmountMicrounits);
+        return AddUnknown(known, bound);
+    }
+
     internal static bool FitsSettledBudget(
         CampaignLineageCharges charges,
         CampaignStateCampaignBudget budget) =>
-        charges.ProviderRequests.TotalCharged <= budget.MaximumProviderRequests
-        && charges.InputTokens.TotalCharged <= budget.MaximumInputTokens
-        && charges.UncachedInputTokens.TotalCharged <= budget.MaximumUncachedInputTokens
-        && charges.OutputTokens.TotalCharged <= budget.MaximumOutputTokens
-        && (!budget.CostEnforced || charges.CostMicrounits.TotalCharged <= budget.MaximumCostMicrounits)
-        && charges.ActiveElapsedMilliseconds.TotalCharged <= budget.MaximumElapsedMilliseconds;
+        Within(charges.ProviderRequests.TotalCharged, budget.MaximumProviderRequests)
+        && Within(charges.InputTokens.TotalCharged, budget.MaximumInputTokens)
+        && Within(charges.UncachedInputTokens.TotalCharged, budget.MaximumUncachedInputTokens)
+        && Within(charges.OutputTokens.TotalCharged, budget.MaximumOutputTokens)
+        && FitsCost(charges, charges.CostMicrounits.TotalCharged, budget)
+        && Within(charges.ActiveElapsedMilliseconds.TotalCharged, budget.MaximumElapsedMilliseconds);
 
     private static bool FitsProviderBudget(
         CampaignLineageCharges charges,
         CampaignProviderReservationExposure exposure,
-        CampaignStateCampaignBudget budget) =>
-        charges.ProviderRequests.TotalCharged + exposure.ProviderRequests <= budget.MaximumProviderRequests
-        && charges.InputTokens.TotalCharged + exposure.InputTokens <= budget.MaximumInputTokens
-        && charges.UncachedInputTokens.TotalCharged + exposure.UncachedInputTokens <= budget.MaximumUncachedInputTokens
-        && charges.OutputTokens.TotalCharged + exposure.OutputTokens <= budget.MaximumOutputTokens
-        && (!budget.CostEnforced
-            || charges.CostMicrounits.TotalCharged + exposure.CostMicrounits <= budget.MaximumCostMicrounits)
-        && charges.ActiveElapsedMilliseconds.TotalCharged + exposure.ElapsedMilliseconds <= budget.MaximumElapsedMilliseconds;
+        CampaignStateCampaignBudget budget)
+    {
+        // Evaluate every checked sum even if its cap is unlimited or an earlier dimension fails.
+        var requests = checked(charges.ProviderRequests.TotalCharged + exposure.ProviderRequests);
+        var input = checked(charges.InputTokens.TotalCharged + exposure.InputTokens);
+        var uncached = checked(charges.UncachedInputTokens.TotalCharged + exposure.UncachedInputTokens);
+        var output = checked(charges.OutputTokens.TotalCharged + exposure.OutputTokens);
+        var cost = checked(charges.CostMicrounits.TotalCharged + exposure.CostMicrounits);
+        var elapsed = checked(charges.ActiveElapsedMilliseconds.TotalCharged + exposure.ElapsedMilliseconds);
+        return Within(requests, budget.MaximumProviderRequests)
+            && Within(input, budget.MaximumInputTokens)
+            && Within(uncached, budget.MaximumUncachedInputTokens)
+            && Within(output, budget.MaximumOutputTokens)
+            && FitsCost(charges, cost, budget)
+            && Within(elapsed, budget.MaximumElapsedMilliseconds);
+    }
+
+    private static bool FitsCost(CampaignLineageCharges charges, long cost, CampaignStateCampaignBudget budget) =>
+        budget.MaximumCostMicrounits is null
+        || budget.CostEnforced && budget.CostRates is not null && !charges.HasUnpricedCostHistory
+            && cost <= budget.MaximumCostMicrounits;
+
+    private static bool Within(long amount, long? cap) => cap is null || amount <= cap;
 
     private static CampaignChargeObservation AddExact(CampaignChargeObservation charge, long value)
     {
@@ -286,9 +344,22 @@ public static class CampaignBudgetAccounting
     private static CampaignChargeObservation AddObservation(
         CampaignChargeObservation charge,
         long? observed,
-        long conservativeMaximum) => observed is { } exact
-            ? AddExact(charge, exact)
-            : AddUnknown(charge, conservativeMaximum);
+        long conservativeMaximum,
+        bool complete = true)
+    {
+        if (observed is not { } exact) return AddUnknown(charge, conservativeMaximum);
+        var known = AddExact(charge, exact);
+        // A sum of present fields does not prove that every dispatched exchange reported this dimension.
+        return complete ? known : AddUnknown(known, conservativeMaximum);
+    }
+
+    private static long ParentExposure(long reserved, long? observed, long knownSubset, bool complete) => complete
+        ? Math.Max(reserved, knownSubset)
+        : checked(reserved + Math.Max(0, knownSubset - (observed ?? 0)));
+
+    private static long CostTokenExposure(long reserved, long known, int requests) => requests <= 1
+        ? Math.Max(reserved, known)
+        : checked(reserved + known);
 
     private static CampaignChargeObservation AddUnknown(CampaignChargeObservation charge, long value)
     {

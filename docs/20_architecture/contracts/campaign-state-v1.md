@@ -59,7 +59,7 @@ Initial admission additionally checks the exact first provider-reservation encod
 
 Provider admission and retry also reserve an encoded upper bound for a durable bounded completion: maximum-width settled observations, a closed outcome and result commitment, finite-attempt suppression, terminal fields and retained accepted-candidate origin. This private encoding probe is not a semantic checkpoint and creates no acceptance or dispatch authority. If a validated trusted proposal exceeds the complete checkpoint byte ceiling, completion persists the existing `CompletedOverBound` work outcome and budget terminal with its validated proposal commitment and exact settled usage, clears the active reservation, and consumes the completion lease once. It cannot enter M2 or publish a candidate. Authority and correlation failures remain distinct; no generic invalid proposal is converted to capacity. Missing provider observations retain the existing conservative accounting semantics, and neither budgets nor byte/count ceilings change.
 
-Settlement exhaustion takes precedence over a derived fixed-batch `complete/unresolved`, including suppression of the last retryable outer attempt and X1 proposal-invalid completion. Explicit caller cancellation, shutdown/host failure, timeout and budget completion terminals retain their documented precedence. Exact equality with request, token, cost or elapsed ceilings retains the existing accepted-settlement semantics; this correction changes no budget defaults or accounting policy.
+Settlement exhaustion takes precedence over a derived fixed-batch `complete/unresolved`, including suppression of the last retryable outer attempt and X1 proposal-invalid completion. Explicit caller cancellation, shutdown/host failure, timeout and budget completion terminals retain their documented precedence. Exact equality with request, token, cost or elapsed ceilings retains the existing accepted-settlement semantics; finite and unlimited lifetime caps retain the same checked accounting.
 
 Every C1 work item appears exactly once and in exact C1 order. Its closed status is:
 
@@ -127,6 +127,14 @@ other artifact is a conflict.
 
 ## Budget and transition semantics
 
+The six campaign lifetime caps are explicit nullable non-negative integers in the current v1 checkpoint; `null` is unlimited and zero is finite. They do not participate in the campaign configuration correctness commitment. All finite Scribe, Patch, structural, attempt and candidate bounds remain active, and all arithmetic remains checked regardless of cap presence. `costRates` is a required nullable four-rate object bound to the existing currency/rate content authority; `hasUnpricedCostHistory` is a required lineage charge fact. There is one current draft shape and no cross-revision reader.
+
+`RefreshLifetimeCaps` validates the exact accepted predecessor and all current correctness inputs before one conditional revision transition. The CLI revalidates every admitted configuration source immediately before this transition and any old lease retirement. A changed source stops before mutation. A changed cap conservatively settles any old active reservation once, retires its lease, preserves charges, attempts, proposal/candidate authority and accepted origin, and changes only spending policy. A cap below retained history yields `exhausted/lifetime-cap`; raising or clearing it permits retained progress to resume. Structural over-bound, explicit cancellation, timeout and host/per-run terminals retain their original authority and are not reopened. Identical caps are an exact no-op. Changed-base supersession carries the same history while accepting current caps.
+
+A successful valid proposal or fitting accepted candidate that crosses a lifetime cap remains trusted or accepted; only subsequent work stops. Structural projection/candidate overflow remains `exhausted/budget` and cannot be repaired by clearing lifetime caps. Exact cap equality is admissible.
+
+Cost measurement is independent of the lifetime cap. With configured rates, reserve at least the finite Scribe monetary ceiling and the conservative rate estimate: the greater of total-input-limit times the greater input rate and the sum of independent cached/uncached partition bounds, plus one output allowance times the greater output/reasoning rate. Divide by one million with upward rounding and allow up to request-count minus one additional rounding units. Reasoning is an output subset. Missing or incomplete monetary observations retain this conservative exposure instead of inventing exact billing; observed monetary amounts remain observed. Without multi-request completeness authority, rate estimates bound the sum of reserved and known token exposure, and a reported monetary aggregate retains the full conservative exposure alongside its observed amount. Single-request missing-cost estimates use the greater of reserved and known token exposure. Without rate/currency authority, numeric cost telemetry cannot establish priced zero: dispatched or uncertain work sets the durable unpriced-history fact, and every finite cost cap fails closed before new provider dispatch.
+
 `CampaignBudgetAccounting` is the only arithmetic authority for admission and
 settlement. Provider admission increments one durable outer invocation and one
 per-work outer ordinal, then reserves the complete persisted Scribe-run maxima
@@ -141,9 +149,7 @@ checkpoint capability produced after exact persisted readback. The complete
 artifact, attempt, request, and revision bindings prevent pre-persistence
 dispatch and prevent an earlier result from being attached to a later retry.
 
-Settlement adds exact observations when present. A missing observation moves
-the entire reserved dimension to `conservativeUnobserved`; it never becomes
-zero. A typed retry first settles the old reservation once, then performs one
+Single-request settlement adds exact token observations when present. A missing observation moves the entire reserved dimension to `conservativeUnobserved`; it never becomes zero. A multi-request envelope does not prove per-field completeness: retain each observed aggregate plus the entire reserved dimension as conservative unobserved history, even when the aggregate exceeds the reservation. An observed overrun cannot cancel an independent missing-field fact. Cached and reasoning history use their corresponding input/output exposure. Known cached/uncached partitions and reasoning provide conservative parent input/output lower bounds without inventing exact parent observations; for incomplete multi-request parents, retain the full reservation in addition to any subset excess over the observed parent. Reasoning remains an output subset and is never added to output twice. A typed retry first settles the old reservation once, then performs one
 new admission in the same revision transition. A retryable closed provider
 outcome is also a durable retry source. Both retry families validate a freshly
 reconstructed current request; its process-local request SHA may stay equal or
@@ -160,7 +166,7 @@ Valid authoritative budget, timeout, or cancellation terminals may report
 bounded observations above the reserved run maxima. Those exact observations
 are charged and the reservation is cleared; they are not reclassified as an
 ambiguous invocation. Provider cost telemetry is ignored by the currency-less
-campaign ledger when cost enforcement is disabled. A valid successful proposal
+campaign ledger when rate/currency authority is absent; unpriced activity is retained explicitly. A valid successful proposal
 that cannot join the bounded aggregate M2 request is closed with a context-independent
 Scribe result commitment; a valid candidate that cannot fit is recorded as a
 cumulative `over-bound` projection/result pair. Both become durable budget
@@ -213,7 +219,7 @@ result. Completing a distinct retained projection cannot reopen a Scribe
 `completed-over-bound` work row.
 
 Supersession revalidates a fresh revision-zero C2 template against current C1
-authority. Product revision, lineage, complete ceilings, policy, target profile,
+authority. Product revision, lineage, correctness-bearing ceilings, policy, target profile,
 and input identity remain equal, while opaque snapshot and execution commitments
 must both change. Active exposure is conservatively settled, lineage charges and
 revision continue, snapshot work/candidate facts reset from the template, and
@@ -236,7 +242,7 @@ The authority-only reducer uses this closed final mapping; X1-only rows retain a
 | Final fact | Durable work result | Root terminal / stage outcome |
 | --- | --- | --- |
 | admitted proposal | `proposal-complete` with trusted projection | none / proposal ready |
-| proposal over a settled or aggregate bound | `closed / scribe / completed-over-bound` with the existing proposal commitment | `exhausted / budget` / budget exhausted |
+| proposal over a structural aggregate bound | `closed / scribe / completed-over-bound` with the existing proposal commitment | `exhausted / budget` / budget exhausted |
 | structured skip | existing insufficient-evidence or unsupported-domain code | complete when resolved / terminal stop |
 | retryable provider failure | `provider-failure / retryable` | none unless settlement exhausts / retryable stop |
 | terminal provider, tool-protocol, validation, or internal M3 failure | existing matching Scribe code | complete when resolved, subject to settlement exhaustion / terminal stop |
@@ -264,7 +270,7 @@ exactly `m2ProjectionVersion: 1` and a positive
 `configuration.m2-projection` authority must match C1 by ID and SHA. The same
 maximum is used unchanged as both the conservative write-ahead Patch elapsed
 reservation and the one-shot M2 deadline; it cannot exceed the accepted
-campaign elapsed ceiling or the Campaign State observation bound.
+Campaign State observation bound. The optional campaign lifetime elapsed cap may be zero, lower than the Patch deadline, or unlimited; admission compares accumulated charge plus the full finite reservation against a configured cap.
 
 Before reconstruction, the executor independently re-establishes every active
 proposal evidence row from the current M1/C1 catalog or current repository,

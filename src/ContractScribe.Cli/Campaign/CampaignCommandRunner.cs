@@ -217,14 +217,30 @@ internal static class CampaignCommandRunner
             {
                 try
                 {
-                    CampaignStateFactory.ValidateCurrentContext(
-                        current.Artifact.State,
-                        execution,
+                    var refreshed = await ChangedBaseCampaignReconciler.RefreshLifetimeCapsAsync(
+                        current, store, execution,
                         configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                         configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
-                        bundle.Session.InputIdentity,
-                        planning,
-                        plan);
+                        bundle.Session.InputIdentity, planning, plan,
+                        preflight.Configuration.Revalidate, cancellationToken).ConfigureAwait(false);
+                    if (refreshed.Kind != ChangedBaseCampaignReconciliationKind.Accepted
+                        || refreshed.AcceptedCheckpoint is not { } acceptedRefresh)
+                    {
+                        return refreshed.Kind switch
+                        {
+                            ChangedBaseCampaignReconciliationKind.InvalidConfiguration =>
+                                Terminal(preflight.Operation, "preflight", "campaign.invalid-configuration", current),
+                            ChangedBaseCampaignReconciliationKind.CheckpointCapacity =>
+                                Terminal(preflight.Operation, "state", "campaign.checkpoint-too-large", current),
+                            ChangedBaseCampaignReconciliationKind.Cancelled =>
+                                Terminal(preflight.Operation, "execution", "campaign.cancelled", refreshed.AcceptedCheckpoint),
+                            ChangedBaseCampaignReconciliationKind.CheckpointFailure =>
+                                Terminal(preflight.Operation, "state", AcceptanceOutcome(refreshed.CheckpointFailure
+                                    ?? CampaignCheckpointAcceptanceKind.InvalidRead), refreshed.AcceptedCheckpoint),
+                            _ => Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", current),
+                        };
+                    }
+                    current = acceptedRefresh;
                 }
                 catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
                 {

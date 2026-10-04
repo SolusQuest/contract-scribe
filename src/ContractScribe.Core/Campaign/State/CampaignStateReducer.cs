@@ -377,7 +377,7 @@ public static class CampaignStateReducer
             if (budget.Kind != CampaignBudgetDecisionKind.Admitted)
             {
                 return budget.Kind == CampaignBudgetDecisionKind.Exhausted
-                    ? Exhausted(predecessor)
+                    ? Exhausted(predecessor, CampaignTerminalReason.LifetimeCap)
                     : Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             }
 
@@ -529,46 +529,22 @@ public static class CampaignStateReducer
             if (terminal is DocumentationScribeProposalTerminal)
             {
                 var proposal = trustedProposal!;
-                if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
+                if (proposalAdmission == CampaignTrustedProposalAdmissionKind.OverBound)
                 {
-                    workItems = ReplaceWork(
-                        workItems,
-                        reservation.WorkItemKey,
-                        CampaignWorkStatus.Closed,
-                        null,
-                        CreateClosedScribeOverboundOutcome(
-                            ordinaryOutcome,
-                            reservation.WorkItemKey,
-                            proposal.ProposalCommitmentSha256));
+                    workItems = ReplaceWork(workItems, reservation.WorkItemKey,
+                        CampaignWorkStatus.Closed, null, CreateClosedScribeOverboundOutcome(
+                            ordinaryOutcome, reservation.WorkItemKey, proposal.ProposalCommitmentSha256));
                     campaignTerminal = new CampaignTerminalOutcome(
-                        CampaignTerminalKind.Exhausted,
-                        CampaignTerminalReason.Budget);
+                        CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
                 }
                 else
                 {
-                    if (proposalAdmission == CampaignTrustedProposalAdmissionKind.OverBound)
+                    workItems = ReplaceWork(workItems, reservation.WorkItemKey,
+                        CampaignWorkStatus.ProposalComplete, proposal, null);
+                    if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
                     {
-                        workItems = ReplaceWork(
-                            workItems,
-                            reservation.WorkItemKey,
-                            CampaignWorkStatus.Closed,
-                            null,
-                            CreateClosedScribeOverboundOutcome(
-                                ordinaryOutcome,
-                                reservation.WorkItemKey,
-                                proposal.ProposalCommitmentSha256));
                         campaignTerminal = new CampaignTerminalOutcome(
-                            CampaignTerminalKind.Exhausted,
-                            CampaignTerminalReason.Budget);
-                    }
-                    else
-                    {
-                        workItems = ReplaceWork(
-                            workItems,
-                            reservation.WorkItemKey,
-                            CampaignWorkStatus.ProposalComplete,
-                            proposal,
-                            null);
+                            CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap);
                     }
                 }
             }
@@ -609,7 +585,7 @@ public static class CampaignStateReducer
                 {
                     campaignTerminal = new CampaignTerminalOutcome(
                         CampaignTerminalKind.Exhausted,
-                        CampaignTerminalReason.Budget);
+                        CampaignTerminalReason.LifetimeCap);
                 }
             }
 
@@ -743,7 +719,7 @@ public static class CampaignStateReducer
         };
         if ((terminal is null or { Kind: CampaignTerminalKind.Complete }) && settlementExhausted)
         {
-            terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
+            terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap);
         }
         var transition = Applied(predecessor, CreateState(
             state,
@@ -930,7 +906,7 @@ public static class CampaignStateReducer
                     null,
                     state.CandidateObservation,
                     state.CumulativeOutcome,
-                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
+                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap),
                     state.Predecessor);
                 return Finish(Applied(predecessor, exhausted));
             }
@@ -994,7 +970,7 @@ public static class CampaignStateReducer
                 }
 
                 return budget.Kind == CampaignBudgetDecisionKind.Exhausted
-                    ? Exhausted(predecessor)
+                    ? Exhausted(predecessor, CampaignTerminalReason.LifetimeCap)
                     : Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             }
 
@@ -1112,8 +1088,7 @@ public static class CampaignStateReducer
             CampaignTerminalOutcome? terminal = state.TerminalOutcome;
             if (completion.CandidateObservation is { } proposed)
             {
-                if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted
-                    || !FitsCandidate(proposed, state.ConfiguredCeilings.CampaignBudget))
+                if (!FitsCandidate(proposed, state.ConfiguredCeilings.CampaignBudget))
                 {
                     terminal = new CampaignTerminalOutcome(
                         CampaignTerminalKind.Exhausted,
@@ -1135,7 +1110,9 @@ public static class CampaignStateReducer
                             ? item with { Status = CampaignWorkStatus.Accepted }
                             : item).ToImmutableArray();
                     candidate = proposed;
-                    terminal = CompleteWhenResolved(state.Batch, workItems);
+                    terminal = settlement.Kind == CampaignBudgetDecisionKind.Exhausted
+                        ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap)
+                        : CompleteWhenResolved(state.Batch, workItems);
                 }
             }
             else
@@ -1230,7 +1207,7 @@ public static class CampaignStateReducer
                     null,
                     state.CandidateObservation,
                     state.CumulativeOutcome,
-                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
+                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap),
                     state.Predecessor)));
             }
 
@@ -1528,6 +1505,64 @@ public static class CampaignStateReducer
             StopCore(predecessor, kind));
     }
 
+    public static CampaignTransitionResult RefreshLifetimeCaps(
+        CampaignCheckpointArtifact predecessor,
+        CampaignAcceptedCheckpoint acceptedCheckpoint,
+        CampaignScribeExecutionCapability executionCapability,
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan)
+    {
+        ArgumentNullException.ThrowIfNull(predecessor);
+        ArgumentNullException.ThrowIfNull(acceptedCheckpoint);
+        if (!IsExactArtifact(predecessor) || !ArtifactsEqual(predecessor, acceptedCheckpoint.Artifact))
+        {
+            return Reject(predecessor, CampaignTransitionFailure.InvalidPredecessor);
+        }
+        try
+        {
+            var state = predecessor.State;
+            var ceilings = CampaignStateFactory.ValidateLifetimeCapChangeContext(state,
+                executionCapability, styleConfigurationId, validatedStyleConfigurationProjection,
+                inputIdentity, planningInput, acceptedPlan);
+            if (ceilings == state.ConfiguredCeilings)
+            {
+                return new(CampaignTransitionKind.Unchanged, predecessor, predecessor, CampaignTransitionFailure.None);
+            }
+            var charges = CampaignBudgetAccounting.SettleActiveConservatively(state);
+            var terminal = state.TerminalOutcome;
+            if (terminal is null or { Kind: CampaignTerminalKind.Complete } or { Kind: CampaignTerminalKind.Exhausted, Reason: CampaignTerminalReason.LifetimeCap })
+            {
+                terminal = CampaignBudgetAccounting.FitsSettledBudget(charges, ceilings.CampaignBudget)
+                    ? CompleteWhenResolved(state.Batch, state.WorkItems)
+                    : new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap);
+            }
+            var successor = CampaignStateFactory.CreateValidated(state.ProductRevision, state.CampaignLineage,
+                state.Snapshot, NextRevision(state.CheckpointRevision), ceilings, charges, state.WorkItems,
+                state.Batch, activeReservation: null, state.CandidateObservation, state.CumulativeOutcome,
+                state.KnownCompletedOperations, terminal, state.Predecessor);
+            var transition = Applied(predecessor, successor);
+            ValidateInitialProviderReservationCapacity(transition.Artifact.State);
+            return state.ActiveReservation is null ? transition
+                : RetireReservationBeforeApply(predecessor, acceptedCheckpoint, transition);
+        }
+        catch (OverflowException)
+        {
+            return Reject(predecessor, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(predecessor, CampaignTransitionFailure.CheckpointCapacity);
+        }
+        catch (Exception exception) when (IsBoundedContractFailure(exception))
+        {
+            return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
+        }
+    }
+
     public static CampaignTransitionResult Supersede(
         CampaignCheckpointArtifact current,
         CampaignAcceptedCheckpoint? acceptedCheckpoint,
@@ -1577,7 +1612,7 @@ public static class CampaignStateReducer
             }
             if (state.ProductRevision != template.ProductRevision
                 || !string.Equals(state.CampaignLineage, template.CampaignLineage, StringComparison.Ordinal)
-                || state.ConfiguredCeilings != template.ConfiguredCeilings
+                || !CampaignStateFactory.SameCorrectnessCeilings(state.ConfiguredCeilings, template.ConfiguredCeilings)
                 || !string.Equals(
                     state.Snapshot.InputIdentityCommitmentSha256,
                     template.Snapshot.InputIdentityCommitmentSha256,
@@ -1662,7 +1697,7 @@ public static class CampaignStateReducer
         var terminal = state.TerminalOutcome ?? CompleteWhenResolved(state.Batch, workItems);
         if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
         {
-            terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
+            terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap);
         }
         if (HasDurableKnownCompletion(workItems, state.KnownCompletedOperations))
         {
@@ -1883,7 +1918,8 @@ public static class CampaignStateReducer
             .ToImmutableArray();
     }
 
-    private static CampaignTransitionResult Exhausted(CampaignCheckpointArtifact predecessor)
+    private static CampaignTransitionResult Exhausted(
+        CampaignCheckpointArtifact predecessor, CampaignTerminalReason reason = CampaignTerminalReason.Budget)
     {
         try
         {
@@ -1896,7 +1932,7 @@ public static class CampaignStateReducer
                 null,
                 predecessor.State.CandidateObservation,
                 predecessor.State.CumulativeOutcome,
-                new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
+                new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, reason),
                 predecessor.State.Predecessor));
         }
         catch (OverflowException)
@@ -1909,8 +1945,10 @@ public static class CampaignStateReducer
     {
         if (state.TerminalOutcome is not null || state.ActiveReservation is not null) return;
         var byKey = state.Batch.CompleteTargets.ToDictionary(target => target.TargetKey, StringComparer.Ordinal);
+        var plannedKeys = state.WorkItems.Where(item => item.Status == CampaignWorkStatus.Planned)
+            .Select(item => item.WorkItemKey).ToHashSet(StringComparer.Ordinal);
         var first = state.Batch.SelectedTargetKeys.Select(key => byKey[key])
-            .FirstOrDefault(target => target.Dispatchable);
+            .FirstOrDefault(target => target.Dispatchable && plannedKeys.Contains(target.WorkItemKey));
         if (first is null) return;
         var work = state.WorkItems.Single(item => item.WorkItemKey == first.WorkItemKey);
         var budget = state.ConfiguredCeilings.CampaignBudget;

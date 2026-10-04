@@ -1390,7 +1390,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     1_000_000,
                     500_000,
                     100_000,
-                    5_000_000,
+                    null,
                     maximumCampaignElapsedMilliseconds,
                     8,
                     costEnforced: false,

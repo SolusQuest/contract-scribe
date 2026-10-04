@@ -8,7 +8,7 @@ using ContractScribe.Core;
 
 namespace ContractScribe.Tests;
 
-public sealed class LayeredConfigurationTests : IDisposable
+public sealed partial class LayeredConfigurationTests : IDisposable
 {
     private const string Revision = "0123456789abcdef0123456789abcdef01234567";
     private readonly string _root = Path.Join(
@@ -37,7 +37,7 @@ public sealed class LayeredConfigurationTests : IDisposable
         Assert.Equal("product.contract-scribe.campaign-v1", document.Planning.ProductContractRevisionId);
         Assert.Equal("https://api.deepseek.com/chat/completions", document.Provider.Endpoint.AbsoluteUri);
         Assert.Equal("deepseek-v4-flash", document.Provider.Model);
-        Assert.Equal(128, document.Budgets.Campaign.MaximumProviderRequests);
+        Assert.Null(document.Budgets.Campaign.MaximumProviderRequests);
         Assert.Single(snapshot.Sources);
         Assert.True(snapshot.Revalidate());
     }
@@ -91,7 +91,7 @@ public sealed class LayeredConfigurationTests : IDisposable
 
         Assert.Equal(0, document.Budgets.Scribe.MaximumToolRounds);
         Assert.Equal(0, document.Budgets.Scribe.MaximumToolCalls);
-        Assert.Equal(128, document.Budgets.Campaign.MaximumProviderRequests);
+        Assert.Null(document.Budgets.Campaign.MaximumProviderRequests);
         Assert.Equal(
             DocumentationScribeInheritDocDisposition.Allowed,
             document.ScribeRequest.StyleProfileTemplate.InheritDocDisposition);
@@ -531,7 +531,14 @@ public sealed class LayeredConfigurationTests : IDisposable
     public void Resolve_MergedCrossFieldViolation_FailsClosed()
     {
         var layer = Layer(
-            "planning", new JsonObject { ["maximumPatchElapsedMilliseconds"] = 120_001 });
+            "budgets", new JsonObject
+            {
+                ["campaign"] = new JsonObject
+                {
+                    ["maximumInputTokens"] = 100,
+                    ["maximumUncachedInputTokens"] = 101,
+                },
+            });
         AssertInvalid(Defaults(), layer);
     }
 
