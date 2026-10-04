@@ -8,6 +8,7 @@ public static class CampaignStateContract
     public const int MaximumArtifactUtf8Bytes = 4_194_304;
     public const int MaximumJsonDepth = 96;
     public const int MaximumWorkItems = 4_096;
+    public const int MaximumCompleteTargets = 16_384;
     public const int MaximumActivePatchBlocks = 512;
     public const int MaximumChangedFiles = 512;
     public const int MaximumKnownCompletedOperations = 513;

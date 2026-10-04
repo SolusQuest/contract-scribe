@@ -51,6 +51,10 @@ Same-snapshot context validation replans using the saved creation quota. A lower
 
 Target statuses distinguish `pending`, `deferred`, `active`, `retryable`, `proposal-complete`, `accepted-proposal`, `skipped`, `failed`, `suppressed`, `infrastructure-blocked`, `unsupported-current-executor` and `excluded`. Finite exhausted retryable attempts persist suppression per work item without silently renewing invocation quotas or suppressing the rest of the batch. Skipped/failed/unsupported targets remain unresolved. Infrastructure, credentials, cancellation and ambiguous operations retain their existing typed failure and recovery semantics.
 
+The 16,384 complete-target and 4,096 work-row count ceilings are necessary bounds, not a guarantee that every combination of individually valid fields fits. Initial and changed-base checkpoint admission also validates the full canonical encoding against the existing 4 MiB byte ceiling, including excluded/deferred progress, work rows, binding fields and JSON escaping. A valid complete plan that exceeds it receives the typed `DocumentTooLarge` capacity rejection; the production consumer reports `campaign.checkpoint-too-large` before initial publication or predecessor replacement. No target is truncated, quota does not shrink the complete manifest, and neither planner ceilings nor the artifact ceiling is expanded.
+
+Settlement exhaustion takes precedence over a derived fixed-batch `complete/unresolved`, including suppression of the last retryable outer attempt and X1 proposal-invalid completion. Explicit caller cancellation, shutdown/host failure, timeout and budget completion terminals retain their documented precedence. Exact equality with request, token, cost or elapsed ceilings retains the existing accepted-settlement semantics; this correction changes no budget defaults or accounting policy.
+
 Every C1 work item appears exactly once and in exact C1 order. Its closed status is:
 
 - `planned`: no proposal or terminal outcome;

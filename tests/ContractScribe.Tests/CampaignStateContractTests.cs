@@ -2821,11 +2821,13 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData("cancelled", CampaignTerminalKind.Cancelled)]
     [InlineData("timeout", CampaignTerminalKind.Timeout)]
+    [InlineData("shutdown", CampaignTerminalKind.Failed)]
+    [InlineData("budget", CampaignTerminalKind.Exhausted)]
     public void Authoritative_provider_stop_wins_over_simultaneous_budget_exhaustion(
         string outcomeKind,
         CampaignTerminalKind expectedTerminal)
     {
-        var scenario = CreateProposalScenario();
+        var scenario = CreateProposalScenario(targetLimit: 1, maximumAttemptsPerTarget: 1);
         var work = scenario.Plan.WorkItems[0];
         var requestExchange = CreateScribeExchange(work);
         var authority = scenario.ExecutionAuthority;
@@ -2845,14 +2847,15 @@ public sealed partial class CampaignStateContractTests
         var completionExchange = CreateScribeExchange(
             work,
             attemptId: attempt.Value,
-            resultFixture: outcomeKind == "cancelled" ? "cancelled-result.json" : "failure-result.json",
+            resultFixture: outcomeKind is "cancelled" or "shutdown" ? "cancelled-result.json" : "failure-result.json",
             resultMutation: root =>
             {
-                if (outcomeKind == "timeout")
+                if (outcomeKind is "timeout" or "budget")
                 {
-                    root["terminal"]!["code"] = "scribe.failure.timeout";
+                    root["terminal"]!["code"] = "scribe.failure." + outcomeKind;
                     root["terminal"]!.AsObject().Remove("providerFinalDisposition");
                 }
+                if (outcomeKind == "shutdown") root["terminal"]!["code"] = "scribe.cancelled.shutdown";
 
                 root["runEnvelope"]!["usage"] = new JsonObject
                 {
@@ -2872,10 +2875,10 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             completionExchange.Request);
         Assert.True(invocation.TryBeginDispatch(out _));
-        var completion = OrdinaryCompletion(
-            invocation,
-            outcome,
-            completionExchange.Result.RunEnvelope.ElapsedMilliseconds);
+        var elapsed = scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds + 1;
+        Assert.Equal(CampaignBudgetDecisionKind.Exhausted,
+            CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed).Kind);
+        var completion = OrdinaryCompletion(invocation, outcome, elapsed);
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
             admitted.Artifact,
@@ -4596,7 +4599,12 @@ public sealed partial class CampaignStateContractTests
         int targetLimit = 100,
         Func<int, string>? containingType = null,
         Func<int, string>? memberFamily = null,
-        bool compactPolicyContributions = false)
+        bool compactPolicyContributions = false,
+        int maximumAttemptsPerTarget = 3,
+        long maximumInputTokens = 1_000_000,
+        long maximumUncachedInputTokens = 500_000,
+        long maximumOutputTokens = 100_000,
+        long maximumCostMicrounits = 5_000_000)
     {
         const string Context = "synthetic.v1";
         var requestTemplate = scribeRequestTemplate ?? ReadScribeRequest();
@@ -4842,11 +4850,11 @@ public sealed partial class CampaignStateContractTests
                 maximumChangedFiles,
                 maximumPatchBytes,
                 maximumProviderRequests,
-                3,
-                1_000_000,
-                500_000,
-                100_000,
-                5_000_000,
+                maximumAttemptsPerTarget,
+                maximumInputTokens,
+                maximumUncachedInputTokens,
+                maximumOutputTokens,
+                maximumCostMicrounits,
                 maximumElapsedMilliseconds,
                 8,
                 costEnforced,

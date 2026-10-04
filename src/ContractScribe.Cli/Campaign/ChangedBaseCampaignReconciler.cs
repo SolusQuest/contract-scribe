@@ -10,6 +10,7 @@ internal enum ChangedBaseCampaignReconciliationKind
     InvalidConfiguration,
     Cancelled,
     CheckpointFailure,
+    CheckpointCapacity,
 }
 
 internal sealed record ChangedBaseCampaignReconciliation(
@@ -71,6 +72,11 @@ internal static class ChangedBaseCampaignReconciler
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             return new(ChangedBaseCampaignReconciliationKind.Cancelled, predecessor);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return new(ChangedBaseCampaignReconciliationKind.CheckpointCapacity, predecessor);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {

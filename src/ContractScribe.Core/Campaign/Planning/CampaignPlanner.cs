@@ -8,7 +8,7 @@ namespace ContractScribe.Core;
 public static partial class CampaignPlanner
 {
     private const int MaximumOwners = 4_096;
-    private const int MaximumTargets = 16_384;
+    private const int MaximumTargets = CampaignStateContract.MaximumCompleteTargets;
     private const int MaximumComponents = 65_536;
     private const int MaximumUnresolved = 65_536;
     private const int MaximumRelations = 65_536;

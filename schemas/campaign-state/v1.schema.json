@@ -15,7 +15,7 @@
     "lineageCharges": { "$ref": "#/$defs/charges" },
     "workItems": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/work" } },
     "batch": { "$ref": "#/$defs/batch" },
-    "targetProgress": { "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/targetProgress" } },
+    "targetProgress": { "$comment": "The count ceiling does not waive the independent 4 MiB complete canonical checkpoint admission bound.", "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/targetProgress" } },
     "activeReservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/providerReservation" }, { "$ref": "#/$defs/patchReservation" }] },
     "candidateObservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidate" }] },
     "acceptedCandidateOrigin": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/acceptedCandidateOrigin" }] },

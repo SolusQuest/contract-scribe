@@ -148,7 +148,8 @@ public static partial class CampaignStateFactory
         Require(batch is not null && !batch.CompleteTargets.IsDefault && !batch.SelectedTargetKeys.IsDefault,
             CampaignStateValidationCode.InvalidShape);
         Require(batch!.CreationQuota is >= 0 and <= CampaignStateContract.MaximumWorkItems
-            && batch.CompleteTargets.Length <= 16_384 && batch.SelectedTargetKeys.Length <= batch.CreationQuota,
+            && batch.CompleteTargets.Length <= CampaignStateContract.MaximumCompleteTargets
+            && batch.SelectedTargetKeys.Length <= batch.CreationQuota,
             CampaignStateValidationCode.InvalidBound);
         Require(batch.PlanCommitment == state.Snapshot.ExecutionCommitmentSha256
             && batch.Identity == CampaignPlanner.ComputeBatchIdentity(batch), CampaignStateValidationCode.InvalidCorrelation);

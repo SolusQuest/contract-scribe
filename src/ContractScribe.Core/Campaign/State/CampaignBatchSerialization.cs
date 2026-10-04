@@ -37,7 +37,7 @@ public static partial class CampaignStateJson
     {
         var batch = root.GetProperty("batch");
         ExpectObject(batch, "identity", "planCommitment", "creationQuota", "selectedTargetKeys");
-        var targets = ParseArray(root.GetProperty("targetProgress"), ParseBatchTarget, 16_384);
+        var targets = ParseArray(root.GetProperty("targetProgress"), ParseBatchTarget, CampaignStateContract.MaximumCompleteTargets);
         return new CampaignFixedBatch(ReadString(batch, "planCommitment"), ReadInt32(batch, "creationQuota"),
             targets, ParseStrings(batch.GetProperty("selectedTargetKeys"), CampaignStateContract.MaximumWorkItems),
             ReadString(batch, "identity"));

@@ -163,6 +163,7 @@ public sealed class CampaignCommandParserTests
     [InlineData("campaign.batch-complete", 0)]
     [InlineData("campaign.target-limit", 3)]
     [InlineData("campaign.unresolved", 5)]
+    [InlineData("campaign.checkpoint-too-large", 4)]
     [InlineData("campaign.provider-retryable", 3)]
     [InlineData("campaign.state-conflict", 4)]
     [InlineData("campaign.patch-rejected", 5)]

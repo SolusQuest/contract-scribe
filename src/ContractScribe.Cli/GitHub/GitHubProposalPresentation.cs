@@ -16,7 +16,7 @@ internal static class GitHubProposalPresentation
             "campaign.complete" or "campaign.batch-complete" or "campaign.no-work" => "no-op",
             "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous"
                 or "campaign.target-limit" => "conflict",
-            "campaign.invalid-configuration" or "campaign.state-missing" or "campaign.state-present"
+            "campaign.checkpoint-too-large" or "campaign.invalid-configuration" or "campaign.state-missing" or "campaign.state-present"
                 or "campaign.state-corrupt" or "campaign.state-unsafe" or "campaign.state-conflict"
                 or "campaign.lease-conflict" or "campaign.lease-unverifiable" or "campaign.unsupported-revision" => "local-invalid",
             "campaign.incompatible-snapshot" or "campaign.patch-stale" => "stale",

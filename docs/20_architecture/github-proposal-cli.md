@@ -147,7 +147,7 @@ Campaign terminal normalization is exhaustive:
 | --- | --- | --- |
 | complete, batch-complete, no-work | no-op | 0 |
 | provider-retryable, budget-exhausted, attempt-ambiguous, target-limit | conflict | 3 |
-| invalid-configuration, state-missing, state-present, state-corrupt, state-unsafe, state-conflict, lease-conflict, lease-unverifiable, unsupported-revision | local-invalid | 4 |
+| checkpoint-too-large, invalid-configuration, state-missing, state-present, state-corrupt, state-unsafe, state-conflict, lease-conflict, lease-unverifiable, unsupported-revision | local-invalid | 4 |
 | incompatible-snapshot, patch-stale | stale | 4 |
 | load-failure, target-terminal, provider-terminal, proposal-invalid, patch-rejected, patch-host-failure, state-publication-failure, host-contract-error, unresolved | host-failure | 5 |
 | cancelled | cancelled | 6 |

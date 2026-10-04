@@ -167,14 +167,23 @@ internal static class CampaignCommandRunner
         CampaignAcceptedCheckpoint current;
         if (existing is null)
         {
-            var state = CampaignStateFactory.CreateInitial(
-                configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
-                configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
-                execution,
-                bundle.Session.InputIdentity,
-                planning,
-                plan);
-            var artifact = CampaignStateJson.CreateArtifact(state);
+            CampaignCheckpointArtifact artifact;
+            try
+            {
+                var state = CampaignStateFactory.CreateInitial(
+                    configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
+                    configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
+                    execution,
+                    bundle.Session.InputIdentity,
+                    planning,
+                    plan);
+                artifact = CampaignStateJson.CreateArtifact(state);
+            }
+            catch (CampaignStateValidationException exception)
+                when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+            {
+                return Terminal(preflight.Operation, "state", "campaign.checkpoint-too-large", null);
+            }
             CampaignCheckpointAcceptanceResult accepted;
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.InitialBeforeCreate);
             using (CampaignProcessBoundaryHooks.EnterReplacementScope(
@@ -246,6 +255,8 @@ internal static class CampaignCommandRunner
                             Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", checkpoint),
                         ChangedBaseCampaignReconciliationKind.InvalidConfiguration =>
                             Terminal(preflight.Operation, "preflight", "campaign.invalid-configuration", checkpoint),
+                        ChangedBaseCampaignReconciliationKind.CheckpointCapacity =>
+                            Terminal(preflight.Operation, "state", "campaign.checkpoint-too-large", checkpoint),
                         ChangedBaseCampaignReconciliationKind.Cancelled =>
                             Terminal(preflight.Operation, "execution", "campaign.cancelled", checkpoint),
                         _ => Terminal(

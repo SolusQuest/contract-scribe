@@ -619,7 +619,7 @@ public static class CampaignStateReducer
                     } => CompleteWhenResolved(state.Batch, workItems),
                     _ => CompleteWhenResolved(state.Batch, workItems),
                 };
-                if (campaignTerminal is null
+                if ((campaignTerminal is null or { Kind: CampaignTerminalKind.Complete })
                     && settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
                 {
                     campaignTerminal = new CampaignTerminalOutcome(
@@ -737,7 +737,7 @@ public static class CampaignStateReducer
                 new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
             _ => CompleteWhenResolved(state.Batch, workItems),
         };
-        if (terminal is null && settlementExhausted)
+        if ((terminal is null or { Kind: CampaignTerminalKind.Complete }) && settlementExhausted)
         {
             terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
         }

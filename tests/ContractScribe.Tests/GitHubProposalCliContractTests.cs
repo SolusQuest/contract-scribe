@@ -101,6 +101,7 @@ public sealed class GitHubProposalCliContractTests
     {
         { "complete", "no-op", 0 }, { "batch-complete", "no-op", 0 }, { "no-work", "no-op", 0 },
         { "target-limit", "conflict", 3 }, { "unresolved", "host-failure", 5 },
+        { "checkpoint-too-large", "local-invalid", 4 },
         { "provider-retryable", "conflict", 3 }, { "budget-exhausted", "conflict", 3 }, { "attempt-ambiguous", "conflict", 3 },
         { "invalid-configuration", "local-invalid", 4 }, { "state-missing", "local-invalid", 4 }, { "state-present", "local-invalid", 4 },
         { "state-corrupt", "local-invalid", 4 }, { "state-unsafe", "local-invalid", 4 }, { "state-conflict", "local-invalid", 4 },
