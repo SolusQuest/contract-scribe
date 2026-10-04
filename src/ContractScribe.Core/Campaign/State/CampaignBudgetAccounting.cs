@@ -105,6 +105,7 @@ public static class CampaignBudgetAccounting
         try
         {
             var usage = envelope.Usage;
+            var completeUsage = envelope.ProviderRequestCount <= 1;
             var charges = state.LineageCharges with
             {
                 ProviderRequests = AddExact(
@@ -113,23 +114,28 @@ public static class CampaignBudgetAccounting
                 InputTokens = AddObservation(
                     state.LineageCharges.InputTokens,
                     usage?.InputTokens,
-                    reservation.Exposure.InputTokens),
+                    reservation.Exposure.InputTokens,
+                    completeUsage),
                 CachedInputTokens = AddObservation(
                     state.LineageCharges.CachedInputTokens,
                     usage?.CachedInputTokens,
-                    reservation.Exposure.InputTokens),
+                    reservation.Exposure.InputTokens,
+                    completeUsage),
                 UncachedInputTokens = AddObservation(
                     state.LineageCharges.UncachedInputTokens,
                     usage?.UncachedInputTokens,
-                    reservation.Exposure.UncachedInputTokens),
+                    reservation.Exposure.UncachedInputTokens,
+                    completeUsage),
                 OutputTokens = AddObservation(
                     state.LineageCharges.OutputTokens,
                     usage?.OutputTokens,
-                    reservation.Exposure.OutputTokens),
+                    Math.Max(reservation.Exposure.OutputTokens, usage?.ReasoningTokens ?? 0),
+                    completeUsage),
                 ReasoningTokens = AddObservation(
                     state.LineageCharges.ReasoningTokens,
                     usage?.ReasoningTokens,
-                    reservation.Exposure.OutputTokens),
+                    reservation.Exposure.OutputTokens,
+                    completeUsage),
                 CostMicrounits = SettleCost(state, reservation, envelope),
                 HasUnpricedCostHistory = state.LineageCharges.HasUnpricedCostHistory
                     || !budget.CostEnforced && envelope.ProviderRequestCount > 0,
@@ -334,9 +340,14 @@ public static class CampaignBudgetAccounting
     private static CampaignChargeObservation AddObservation(
         CampaignChargeObservation charge,
         long? observed,
-        long conservativeMaximum) => observed is { } exact
-            ? AddExact(charge, exact)
-            : AddUnknown(charge, conservativeMaximum);
+        long conservativeMaximum,
+        bool complete = true)
+    {
+        if (observed is not { } exact) return AddUnknown(charge, conservativeMaximum);
+        var known = AddExact(charge, exact);
+        // A sum of present fields does not prove that every dispatched exchange reported this dimension.
+        return complete ? known : AddUnknown(known, Math.Max(0, checked(conservativeMaximum - exact)));
+    }
 
     private static CampaignChargeObservation AddUnknown(CampaignChargeObservation charge, long value)
     {

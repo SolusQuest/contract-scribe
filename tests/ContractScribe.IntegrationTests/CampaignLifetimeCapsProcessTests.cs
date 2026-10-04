@@ -51,7 +51,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Null(exhausted.State.ActiveReservation);
             Assert.Equal(0, exhausted.State.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits);
 
-            layer["budgets"]!["campaign"]![field] = null;
+            layer["budgets"]!["campaign"]![field] = monetary ? JsonValue.Create(1_000_000) : null;
             await WriteLayerAsync();
             var resumed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c3"),
                 TimeSpan.FromMinutes(5));
@@ -72,7 +72,13 @@ public sealed partial class CampaignCliProcessTests
             AssertCampaign(lowered, 3, "campaign.budget-exhausted", retained.CheckpointRevision);
             Assert.Equal(CampaignTerminalReason.LifetimeCap, retained.State.TerminalOutcome!.Reason);
             Assert.Equal(accepted.State.LineageCharges, retained.State.LineageCharges);
-            Assert.Equal(accepted.State.CandidateObservation, retained.State.CandidateObservation);
+            var originalCandidate = accepted.State.CandidateObservation!;
+            var retainedCandidate = retained.State.CandidateObservation!;
+            Assert.Equal(originalCandidate.AcceptedProjectionCommitmentSha256, retainedCandidate.AcceptedProjectionCommitmentSha256);
+            Assert.Equal(originalCandidate.PatchRequestSha256, retainedCandidate.PatchRequestSha256);
+            Assert.Equal(originalCandidate.PatchResultCommitmentSha256, retainedCandidate.PatchResultCommitmentSha256);
+            Assert.Equal(originalCandidate.AcceptedWorkItemKeys.ToArray(), retainedCandidate.AcceptedWorkItemKeys.ToArray());
+            Assert.Equal(originalCandidate.ChangedFiles.ToArray(), retainedCandidate.ChangedFiles.ToArray());
             Assert.Equal(accepted.State.AcceptedCandidateOrigin!.CheckpointSha256 ?? accepted.Sha256,
                 retained.State.AcceptedCandidateOrigin!.CheckpointSha256);
             Assert.Equal(1, server.RequestCount);

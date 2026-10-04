@@ -312,6 +312,9 @@ public sealed partial class CampaignCliProcessTests
         var acknowledgement = Path.Join(outside, "hook.ack");
         var release = Path.Join(outside, "hook.release");
         await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
+        var finiteLayer = JsonNode.Parse(await File.ReadAllTextAsync(configurationPath))!;
+        finiteLayer["budgets"] = new JsonObject { ["campaign"] = new JsonObject { ["maximumElapsedMilliseconds"] = 120_000 } };
+        await File.WriteAllTextAsync(configurationPath, finiteLayer.ToJsonString());
         var configurationBytes = await File.ReadAllBytesAsync(configurationPath);
 
         using var running = Start(
@@ -346,6 +349,8 @@ public sealed partial class CampaignCliProcessTests
             var completed = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath));
             Assert.True(completed.IsValid);
             Assert.Equal(CampaignTerminalKind.Exhausted, completed.Artifact!.State.TerminalOutcome!.Kind);
+            Assert.Equal(CampaignTerminalReason.LifetimeCap, completed.Artifact.State.TerminalOutcome.Reason);
+            Assert.Equal(60_000, completed.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
             Assert.Null(completed.Artifact.State.CandidateObservation);
             AssertCampaign(recovered, 3, "campaign.budget-exhausted", completed.Artifact.CheckpointRevision);
             Assert.Equal(1, server.RequestCount);

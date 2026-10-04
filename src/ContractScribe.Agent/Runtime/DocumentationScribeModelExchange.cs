@@ -391,6 +391,11 @@ public sealed class DocumentationScribeModelUsage
         Validate(cachedInputTokens, DocumentationScribeContract.MaximumObservedInputTokens, nameof(cachedInputTokens));
         Validate(uncachedInputTokens, DocumentationScribeContract.MaximumObservedInputTokens, nameof(uncachedInputTokens));
         Validate(reasoningTokens, DocumentationScribeContract.MaximumObservedOutputTokens, nameof(reasoningTokens));
+        if (outputTokens is { } output && reasoningTokens > output)
+        {
+            throw new ArgumentException("Reasoning tokens cannot exceed observed output tokens.", nameof(reasoningTokens));
+        }
+
         InputTokens = inputTokens;
         OutputTokens = outputTokens;
         CachedInputTokens = cachedInputTokens;

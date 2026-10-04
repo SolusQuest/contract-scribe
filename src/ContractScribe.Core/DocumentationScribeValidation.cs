@@ -645,6 +645,12 @@ public static class DocumentationScribeValidation
                 DocumentationScribeContract.MaximumObservedOutputTokens,
                 allowBudgetOverrun,
                 nameof(input));
+            if (input.ProviderRequestCount <= 1
+                && input.Usage.OutputTokens is { } output && input.Usage.ReasoningTokens > output)
+            {
+                throw new ArgumentException("Reasoning tokens cannot exceed a single request output observation.", nameof(input));
+            }
+
             usage = new DocumentationScribeUsageObservation(
                 input.Usage.InputTokens,
                 input.Usage.OutputTokens,
@@ -1968,6 +1974,10 @@ public static class DocumentationScribeValidation
         var usage = element.TryGetProperty("usage", out var usageElement)
             ? ParseUsage(usageElement, pointer + "/usage", request.Limits, allowBudgetOverrun)
             : null;
+        if (providerRequestCount <= 1 && usage?.OutputTokens is { } output && usage.ReasoningTokens > output)
+        {
+            throw Fail("invalid-shape", pointer + "/usage/reasoningTokens");
+        }
         DocumentationScribeCacheObservation? cache = null;
         if (element.TryGetProperty("cacheObservation", out var cacheElement))
         {

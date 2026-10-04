@@ -149,9 +149,7 @@ checkpoint capability produced after exact persisted readback. The complete
 artifact, attempt, request, and revision bindings prevent pre-persistence
 dispatch and prevent an earlier result from being attached to a later retry.
 
-Settlement adds exact observations when present. A missing observation moves
-the entire reserved dimension to `conservativeUnobserved`; it never becomes
-zero. A typed retry first settles the old reservation once, then performs one
+Single-request settlement adds exact token observations when present. A missing observation moves the entire reserved dimension to `conservativeUnobserved`; it never becomes zero. A multi-request envelope does not prove per-field completeness: retain each observed aggregate and the non-negative difference between its reserved dimension and that aggregate as conservative unobserved history. Cached and reasoning history use their corresponding input/output exposure. Missing or partially observed output is bounded by at least known reasoning, including observed overruns. Reasoning remains an output subset and is never added to output twice. A typed retry first settles the old reservation once, then performs one
 new admission in the same revision transition. A retryable closed provider
 outcome is also a durable retry source. Both retry families validate a freshly
 reconstructed current request; its process-local request SHA may stay equal or

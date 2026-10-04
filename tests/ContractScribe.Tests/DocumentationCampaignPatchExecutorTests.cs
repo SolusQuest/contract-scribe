@@ -770,13 +770,16 @@ public sealed partial class DocumentationScribeCompositionTests
             patchEngine: overrunEngine,
             timeProvider: new FixedElapsedTimeProvider(1_200_001, 10_000)));
 
-        Assert.Equal(DocumentationCampaignOutcomeKind.BudgetExhausted, overrun.Kind);
-        Assert.Equal(CampaignCumulativeOutcomeKind.OverBound, overrun.Artifact!.State.CumulativeOutcome!.Kind);
+        Assert.Equal(DocumentationCampaignOutcomeKind.Accepted, overrun.Kind);
+        Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, overrun.Artifact!.State.CumulativeOutcome!.Kind);
+        Assert.Equal(CampaignTerminalReason.LifetimeCap, overrun.Artifact.State.TerminalOutcome!.Reason);
+        Assert.NotNull(overrun.Artifact.State.CandidateObservation);
+        Assert.Empty(overrun.Artifact.State.KnownCompletedOperations);
         var afterOverrun = overrun.Artifact.State.LineageCharges.ActiveElapsedMilliseconds;
         Assert.Equal(checked((beforeOverrun.Observed ?? 0) + 120_001), afterOverrun.Observed);
         Assert.Equal(beforeOverrun.ConservativeUnobserved, afterOverrun.ConservativeUnobserved);
         Assert.Equal(checked(beforeOverrun.TotalCharged + 120_001), afterOverrun.TotalCharged);
-        Assert.Null(overrun.AcceptedCandidate);
+        Assert.NotNull(overrun.AcceptedCandidate);
         var firstDispatches = dispatches;
 
         var replay = await DocumentationCampaignPatchExecutor.ExecuteAsync(PatchInput(

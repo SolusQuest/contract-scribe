@@ -55,7 +55,10 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(settlement.Charges, parsed.Artifact.State.LineageCharges);
         Assert.Equal(knownUsage ? 31L : predecessor.State.LineageCharges.InputTokens.Observed,
             parsed.Artifact.State.LineageCharges.InputTokens.Observed);
-        Assert.Equal(knownUsage ? 0 : admitted.Artifact.State.ConfiguredCeilings.ScribeRunLimits.MaximumInputTokens,
+        var inputBound = admitted.Artifact.State.ConfiguredCeilings.ScribeRunLimits.MaximumInputTokens;
+        var expectedUnknown = !knownUsage ? inputBound
+            : exchange.Result.RunEnvelope.ProviderRequestCount > 1 ? inputBound - 31 : 0;
+        Assert.Equal(expectedUnknown,
             parsed.Artifact.State.LineageCharges.InputTokens.ConservativeUnobserved);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority,
             CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact, completion,

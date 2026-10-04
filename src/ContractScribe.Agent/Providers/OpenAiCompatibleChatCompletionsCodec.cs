@@ -712,7 +712,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             && cachedTokens + uncachedTokens > inputTotal;
         if ((directHit is not null && cachedDetail is not null && directHit != cachedDetail)
             || (input is not null && (cached > input || directMiss > input))
-            || cacheComponentsExceedInput)
+            || cacheComponentsExceedInput
+            || (output is not null && reasoning > output))
         {
             throw Malformed(OpenAiCompatibleResponseCodecDisposition.UsageInvalid);
         }
