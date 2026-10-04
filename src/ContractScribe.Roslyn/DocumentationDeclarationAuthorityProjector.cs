@@ -94,7 +94,10 @@ public sealed class DocumentationDeclarationAuthorityProjector
                 declaration.IsMultiDeclarator,
                 declaration.IsPrimaryConstructor,
                 declaration.HasPrimaryConstructorAlias,
-                executableStyleProfile),
+                executableStyleProfile)
+            {
+                GroupingAuthority = declaration.GroupingAuthority,
+            },
             null);
     }
 

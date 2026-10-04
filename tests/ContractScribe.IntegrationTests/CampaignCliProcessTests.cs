@@ -13,7 +13,7 @@ using ContractScribe.Core;
 namespace ContractScribe.Roslyn.IntegrationTests;
 
 [Collection("Integration process lane 1")]
-public sealed class CampaignCliProcessTests
+public sealed partial class CampaignCliProcessTests
 {
     internal static readonly string RepositoryRoot = FindRepositoryRoot();
     private static readonly string Configuration = AppContext.BaseDirectory.Contains(
@@ -119,7 +119,7 @@ public sealed class CampaignCliProcessTests
         else if (required)
         {
             Assert.Equal(CampaignTerminalKind.Complete, state.TerminalOutcome!.Kind);
-            Assert.Equal(CampaignTerminalReason.AllWorkClosed, state.TerminalOutcome.Reason);
+            Assert.Equal(CampaignTerminalReason.Unresolved, state.TerminalOutcome.Reason);
             Assert.NotEmpty(state.WorkItems);
         }
         else
@@ -808,9 +808,13 @@ public sealed class CampaignCliProcessTests
         private int requestCount;
 
         private readonly string scenario;
-        internal ProposalLoopbackServer(string scenario = "accepted")
+        private readonly string? summaryText;
+        private readonly bool includeUsage;
+        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = false)
         {
             this.scenario = scenario;
+            this.summaryText = summaryText;
+            this.includeUsage = includeUsage;
             listener.Start();
             var endpoint = (IPEndPoint)listener.LocalEndpoint;
             Endpoint = new Uri($"http://127.0.0.1:{endpoint.Port}/v1/chat/completions");
@@ -851,7 +855,7 @@ public sealed class CampaignCliProcessTests
                     Interlocked.Increment(ref requestCount);
                     var response = scenario == "closed-proposal"
                         ? CreateSkipResponse()
-                        : CreateProposalResponse(body);
+                        : CreateProposalResponse(body, summaryText, includeUsage);
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(headers, disposal.Token);
@@ -870,7 +874,7 @@ public sealed class CampaignCliProcessTests
             return TerminalResponse(terminal);
         }
 
-        private static byte[] CreateProposalResponse(byte[] body)
+        private static byte[] CreateProposalResponse(byte[] body, string? summaryText, bool includeUsage)
         {
             using var wire = JsonDocument.Parse(body);
             JsonElement? targetEvidence = null;
@@ -901,7 +905,7 @@ public sealed class CampaignCliProcessTests
             }
             var units = new JsonArray
             {
-                ContentUnit("content.summary", null, null, summaryEvidenceReferenceId),
+                ContentUnit("content.summary", null, null, summaryEvidenceReferenceId, summaryText),
             };
             var terminal = new JsonObject
             {
@@ -909,10 +913,10 @@ public sealed class CampaignCliProcessTests
                 ["target"] = JsonNode.Parse(evidence.GetProperty("terminalTarget").GetRawText()),
                 ["contentUnits"] = units,
             };
-            return TerminalResponse(terminal.ToJsonString());
+            return TerminalResponse(terminal.ToJsonString(), includeUsage);
         }
 
-        private static byte[] TerminalResponse(string terminal)
+        private static byte[] TerminalResponse(string terminal, bool includeUsage = false)
         {
             var response = new
             {
@@ -942,19 +946,23 @@ public sealed class CampaignCliProcessTests
                     },
                 },
             };
-            return JsonSerializer.SerializeToUtf8Bytes(response);
+            if (!includeUsage) return JsonSerializer.SerializeToUtf8Bytes(response);
+            var node = JsonSerializer.SerializeToNode(response)!;
+            node["usage"] = new JsonObject { ["prompt_tokens"] = 31, ["completion_tokens"] = 7, ["total_tokens"] = 38 };
+            return JsonSerializer.SerializeToUtf8Bytes(node);
         }
 
         private static JsonObject ContentUnit(
             string kind,
             string? componentIdentity,
             string? name,
-            string evidenceReferenceId)
+            string evidenceReferenceId,
+            string? summaryText = null)
         {
             var unit = new JsonObject
             {
                 ["kind"] = kind,
-                ["lines"] = new JsonArray("Documents the selected contract."),
+                ["lines"] = new JsonArray(summaryText ?? "Documents the selected contract."),
                 ["claimCategoryId"] = "claim.behavior",
                 ["evidenceReferenceIds"] = new JsonArray(evidenceReferenceId),
             };

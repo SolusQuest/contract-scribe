@@ -5,7 +5,7 @@ namespace ContractScribe.Cli;
 internal enum DocumentationCampaignProposalOutcomeKind
 {
     NoWork, UnsupportedOnly, ProposalReady, RetryableStop, TerminalStop,
-    Cancelled, TimedOut, BudgetExhausted, AmbiguousDispatch, StateConflict, HostContractError,
+    Cancelled, TimedOut, BudgetExhausted, TargetLimit, AmbiguousDispatch, StateConflict, HostContractError, CheckpointCapacity,
 }
 
 internal sealed class DocumentationCampaignProposalOutcome
@@ -52,6 +52,7 @@ internal sealed class DocumentationCampaignProposalOutcome
             or (DocumentationCampaignProposalOutcomeKind.Cancelled, "campaign.cancelled")
             or (DocumentationCampaignProposalOutcomeKind.TimedOut, "campaign.timed-out")
             or (DocumentationCampaignProposalOutcomeKind.BudgetExhausted, "campaign.exhausted")
+            or (DocumentationCampaignProposalOutcomeKind.TargetLimit, "campaign.target-limit")
             or (DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.unconfirmed")
             or (DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.reservation.observer")
             or (DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.settlement.unconfirmed")
@@ -67,5 +68,6 @@ internal sealed class DocumentationCampaignProposalOutcome
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.credential.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid")
-            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.settlement.invalid");
+            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.settlement.invalid")
+            or (DocumentationCampaignProposalOutcomeKind.CheckpointCapacity, "campaign.checkpoint-too-large");
 }

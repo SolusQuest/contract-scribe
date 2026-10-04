@@ -208,7 +208,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
             observations,
             [],
             audit,
-            new CampaignPlanningOwnerAuthoritySet([]));
+            new CampaignPlanningOwnerAuthoritySet([]), new CampaignInvocationTargetLimit(100));
         var plan = CampaignPlanner.Plan(input);
         Assert.Empty(plan.WorkItems);
         var artifact = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateInitial(
@@ -247,6 +247,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
                 CampaignWorkStatus.Planned,
                 TrustedProposal: null,
                 ClosedOutcome: null)],
+            CampaignTestBatchFixtures.Singleton(state.Snapshot.ExecutionCommitmentSha256, WorkItemKey),
             new CampaignProviderReservation(
                 WorkItemKey,
                 Hash('8'),

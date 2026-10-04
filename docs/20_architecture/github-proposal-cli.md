@@ -75,9 +75,9 @@ Successor transitions require `terminalPredecessor`, exactly `logicalPredecessor
 
 ## Admission and replay
 
-One optional accepted-candidate continuation uses the existing M4 executor. It receives only a real `Accepted`/`Reconstructed` candidate while the repository session is alive, plus an exact fresh checkpoint-store acceptance. Complete/AllWorkClosed with that candidate is eligible; no-work, exhausted/stopped, failed, stale, candidate-less, and mismatched states cannot publish. Ordinary `campaign` behavior is unchanged when the continuation is absent.
+One optional accepted-candidate continuation uses the existing M4 executor. It receives only a real `Accepted`/`Reconstructed` candidate while the repository session is alive, plus an exact fresh checkpoint-store acceptance. A validated accepted candidate can be eligible under selected-batch Complete/AllWorkClosed or Complete/Unresolved; its proposal does not resolve remaining documentation. No-work, exhausted/stopped, failed, stale, candidate-less, and mismatched states cannot publish. Ordinary `campaign` behavior is unchanged when the continuation is absent.
 
-For initial/successor resume, accepted work is reconstructed before advancing remaining work. For append, an explicit preceding candidate equal to the current accepted origin selects further campaign progress. Once genuinely new work is accepted, its new origin selects reconstruction on an exact append retry. Progress is checked again against exact checkpoint readback before publication; reconstructing only the predecessor does not constitute new append work. An eligible accepted state with no remaining work produces a no-op, not another append of the same candidate. A persisted failed, rejected, or stale reconstruction retains its authoritative failure and current revision even when an older accepted candidate remains. Accepted-only retry reuses the existing retry reservation/settlement owner and validates the accepted projection under the fresh process context.
+For initial/successor resume, accepted work is reconstructed before advancing remaining work. For append, an explicit preceding candidate equal to the current accepted origin selects further selected-batch campaign progress. Once genuinely new work is accepted, its new origin selects reconstruction on an exact append retry. Progress is checked again against exact checkpoint readback before publication; reconstructing only the predecessor does not constitute new append work. When that predecessor already matches and the selected batch has no remaining actionable work, the continuation stops without reconstruction, credentials or publication. Deferred future work stays outside this batch and produces batch-complete/no-op; unresolved selected work remains unresolved/host-failure. A persisted failed, rejected, or stale reconstruction retains its authoritative failure and current revision even when an older accepted candidate remains. Accepted-only retry reuses the existing retry reservation/settlement owner and validates the accepted projection under the fresh process context.
 
 The [campaign origin](contracts/campaign-state-v1.md) retains the first accepted checkpoint and historical M2 identity. Every fresh reconstruction still executes, validates current evidence and candidate bytes, settles its budget, and conditionally accepts/readbacks a new checkpoint. H1 proves full correspondence with the retained origin before using that original checkpoint/request/result identity in unchanged R1 commitment framing. This makes a real fresh-process resume the same publication operation without reusing stale current-candidate authority. The displayed revision is always the current checkpoint, not the origin revision.
 
@@ -145,11 +145,11 @@ Campaign terminal normalization is exhaustive:
 
 | Campaign source suffix (`campaign.` prefix) | GitHub outcome suffix | Exit |
 | --- | --- | --- |
-| complete, no-work | no-op | 0 |
-| provider-retryable, budget-exhausted, attempt-ambiguous | conflict | 3 |
-| invalid-configuration, state-missing, state-present, state-corrupt, state-unsafe, state-conflict, lease-conflict, lease-unverifiable, unsupported-revision | local-invalid | 4 |
+| complete, batch-complete, no-work | no-op | 0 |
+| provider-retryable, budget-exhausted, attempt-ambiguous, target-limit | conflict | 3 |
+| checkpoint-too-large, invalid-configuration, state-missing, state-present, state-corrupt, state-unsafe, state-conflict, lease-conflict, lease-unverifiable, unsupported-revision | local-invalid | 4 |
 | incompatible-snapshot, patch-stale | stale | 4 |
-| load-failure, target-terminal, provider-terminal, proposal-invalid, patch-rejected, patch-host-failure, state-publication-failure, host-contract-error | host-failure | 5 |
+| load-failure, target-terminal, provider-terminal, proposal-invalid, patch-rejected, patch-host-failure, state-publication-failure, host-contract-error, unresolved | host-failure | 5 |
 | cancelled | cancelled | 6 |
 | timeout | timeout | 7 |
 

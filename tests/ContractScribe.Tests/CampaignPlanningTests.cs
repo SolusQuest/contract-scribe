@@ -1960,7 +1960,11 @@ public sealed class CampaignPlanningTests
             multiDeclarator: false,
             primaryConstructor: false,
             primaryConstructorAlias: false,
-            request.StyleProfile);
+            request.StyleProfile)
+        {
+            GroupingAuthority = new("project.synthetic", "T:Synthetic.Widget", Sha256("member.Run"),
+                CampaignPlanner.CreateInstructionStackCommitment(request.ContextReferences), Sha256("style.synthetic")),
+        };
         var snapshot = new CampaignPlanningSnapshot(
             "campaign.synthetic",
             "snapshot.first",
@@ -2005,7 +2009,7 @@ public sealed class CampaignPlanningTests
             audit,
             new CampaignPlanningOwnerAuthoritySet([
                 new CampaignPlanningOwnerAuthority([targetAuthority]),
-            ]));
+            ]), new CampaignInvocationTargetLimit(100));
         return new Scenario(input);
     }
 
@@ -2309,7 +2313,11 @@ public sealed class CampaignPlanningTests
                     || groupTogether && (!includeUnrelatedThird
                         || target.SymbolRef.CompilationContextRef != "synthetic.c")
                     ? null
-                    : zeroComponentStyle);
+                    : zeroComponentStyle)
+            {
+                GroupingAuthority = new("project." + specification.Context, "T:Synthetic.Widget", Sha256("member.Run"),
+                    CampaignPlanner.CreateInstructionStackCommitment([]), Sha256("style.synthetic")),
+            };
         }).ToImmutableArray();
         var ownerAuthority = groupTogether
             ? new CampaignPlanningOwnerAuthoritySet(includeUnrelatedThird
@@ -2331,7 +2339,7 @@ public sealed class CampaignPlanningTests
             observations,
             evidenceAuthority.ToImmutable(),
             audit,
-            ownerAuthority));
+            ownerAuthority, new CampaignInvocationTargetLimit(100)));
     }
 
     private static DocumentationScribeStyleProfile ReadZeroComponentStyleProfile()

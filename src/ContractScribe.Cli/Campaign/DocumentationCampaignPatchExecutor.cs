@@ -518,7 +518,7 @@ internal static class DocumentationCampaignPatchExecutor
         if (state.TerminalOutcome is { } terminal)
         {
             if (terminal.Kind == CampaignTerminalKind.Complete
-                && terminal.Reason == CampaignTerminalReason.AllWorkClosed
+                && terminal.Reason is CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved
                 && proposalCount == 0
                 && acceptedCount > 0)
             {

@@ -19,7 +19,8 @@ internal static class CampaignCommandRunner
         CampaignPreflightResult preflight,
         CancellationToken cancellationToken,
         Func<string, string?>? credentialAccessor = null,
-        CampaignAcceptedCandidateContinuation? continuation = null)
+        CampaignAcceptedCandidateContinuation? continuation = null,
+        CampaignInvocationTargetLimit? targetLimit = null)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(preflight);
@@ -97,6 +98,7 @@ internal static class CampaignCommandRunner
                     bundle,
                     credentialAccessor ?? Environment.GetEnvironmentVariable,
                     continuation,
+                    targetLimit ?? new CampaignInvocationTargetLimit(CampaignStateContract.MaximumWorkItems),
                     token).ConfigureAwait(false);
                 if (continuation is not null) GitHubProposalProcessHooks.Reach("after-terminal");
             }),
@@ -130,6 +132,7 @@ internal static class CampaignCommandRunner
         ProductionRepositorySessionBundle bundle,
         Func<string, string?> credentialAccessor,
         CampaignAcceptedCandidateContinuation? continuation,
+        CampaignInvocationTargetLimit targetLimit,
         CancellationToken cancellationToken)
     {
         if (!preflight.Configuration.Revalidate())
@@ -145,7 +148,11 @@ internal static class CampaignCommandRunner
         {
             policy = configuration.CreateExecutionPolicy();
             execution = configuration.CreateExecutionCapability(policy);
-            planning = CreatePlanningInput(preflight, configuration, policy, bundle, cancellationToken);
+            planning = CreatePlanningInput(preflight, configuration, policy, bundle, cancellationToken, targetLimit);
+            if (existing is not null && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding == preflight.SnapshotBinding)
+            {
+                planning = planning with { TargetLimit = new CampaignInvocationTargetLimit(existing.Artifact.State.Batch.CreationQuota) };
+            }
             plan = CampaignPlanner.Plan(planning);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -160,14 +167,23 @@ internal static class CampaignCommandRunner
         CampaignAcceptedCheckpoint current;
         if (existing is null)
         {
-            var state = CampaignStateFactory.CreateInitial(
-                configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
-                configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
-                execution,
-                bundle.Session.InputIdentity,
-                planning,
-                plan);
-            var artifact = CampaignStateJson.CreateArtifact(state);
+            CampaignCheckpointArtifact artifact;
+            try
+            {
+                var state = CampaignStateFactory.CreateInitial(
+                    configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
+                    configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
+                    execution,
+                    bundle.Session.InputIdentity,
+                    planning,
+                    plan);
+                artifact = CampaignStateJson.CreateArtifact(state);
+            }
+            catch (CampaignStateValidationException exception)
+                when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+            {
+                return Terminal(preflight.Operation, "state", "campaign.checkpoint-too-large", null);
+            }
             CampaignCheckpointAcceptanceResult accepted;
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.InitialBeforeCreate);
             using (CampaignProcessBoundaryHooks.EnterReplacementScope(
@@ -239,6 +255,8 @@ internal static class CampaignCommandRunner
                             Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", checkpoint),
                         ChangedBaseCampaignReconciliationKind.InvalidConfiguration =>
                             Terminal(preflight.Operation, "preflight", "campaign.invalid-configuration", checkpoint),
+                        ChangedBaseCampaignReconciliationKind.CheckpointCapacity =>
+                            Terminal(preflight.Operation, "state", "campaign.checkpoint-too-large", checkpoint),
                         ChangedBaseCampaignReconciliationKind.Cancelled =>
                             Terminal(preflight.Operation, "execution", "campaign.cancelled", checkpoint),
                         _ => Terminal(
@@ -253,6 +271,8 @@ internal static class CampaignCommandRunner
             }
         }
 
+        var targetAllowance = CampaignStateFactory.CreateInvocationTargetAllowance(current.Artifact.State, targetLimit);
+        var reconstructPriorAccepted = continuation is null && current.Artifact.State.CandidateObservation is not null;
         var m2Projection = JsonSerializer.SerializeToElement(new
         {
             m2ProjectionVersion = 1,
@@ -291,10 +311,11 @@ internal static class CampaignCommandRunner
             if (continuation?.PersistedStop(stateNow) is { } persistedStop) return persistedStop;
 
             if (continuation?.HasNoAppendWork(stateNow) == true)
-                return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
-            var reconstructAccepted = continuation?.ReconstructAccepted(stateNow) == true;
-            var reconstructAcceptedTerminal = stateNow.TerminalOutcome is
-            { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed }
+                return Terminal(preflight.Operation, "campaign", CompletionOutcome(stateNow), current);
+            var reconstructAccepted = continuation?.ReconstructAccepted(stateNow) == true
+                || reconstructPriorAccepted && stateNow.ActiveReservation is null;
+            var reconstructAcceptedTerminal = continuation is null && stateNow.TerminalOutcome is
+            { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved }
                 && stateNow.WorkItems.Any(item => item.Status == CampaignWorkStatus.Accepted);
             if (stateNow.ActiveReservation is CampaignPatchReservation
                 || stateNow.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete)
@@ -340,7 +361,7 @@ internal static class CampaignCommandRunner
                     if (!continuation.ReconstructAccepted(current.Artifact.State))
                     {
                         if (continuation.HasNoAppendWork(current.Artifact.State))
-                            return Terminal(preflight.Operation, "campaign", "campaign.no-work", current);
+                            return Terminal(preflight.Operation, "campaign", CompletionOutcome(current.Artifact.State), current);
                         continue;
                     }
                     return await continuation.ContinueAsync(new GitHubPublicationContext(
@@ -352,20 +373,21 @@ internal static class CampaignCommandRunner
                 if (patched.Kind == DocumentationCampaignOutcomeKind.Reconstructed
                     && reconstructAcceptedTerminal)
                 {
-                    return Terminal(preflight.Operation, "campaign", "campaign.complete",
+                    return Terminal(preflight.Operation, "campaign", CompletionOutcome(patched.Artifact?.State ?? stateNow),
                         patched.Artifact is null ? current : AcceptedObservation(patched.Artifact));
                 }
                 if (patched.Kind == DocumentationCampaignOutcomeKind.Accepted
                     && patched.Artifact?.State.TerminalOutcome is
-                    { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed })
+                    { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved })
                 {
-                    return Terminal(preflight.Operation, "campaign", "campaign.complete",
+                    return Terminal(preflight.Operation, "campaign", CompletionOutcome(patched.Artifact.State),
                         AcceptedObservation(patched.Artifact));
                 }
                 if (patched.Kind is DocumentationCampaignOutcomeKind.Accepted
                     or DocumentationCampaignOutcomeKind.Reconstructed
                     or DocumentationCampaignOutcomeKind.Reduced)
                 {
+                    reconstructPriorAccepted = false;
                     continue;
                 }
                 return Terminal(preflight.Operation, "execution",
@@ -377,13 +399,13 @@ internal static class CampaignCommandRunner
 
             if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Complete })
             {
-                return Terminal(preflight.Operation, "campaign", "campaign.complete", current);
+                return Terminal(preflight.Operation, "campaign", CompletionOutcome(stateNow), current);
             }
 
-            var next = SelectNextWork(stateNow, plan);
+            var next = SelectNextWork(stateNow, plan, targetAllowance);
             if (next is null)
             {
-                return Terminal(preflight.Operation, "execution", "campaign.target-terminal", current);
+                return Terminal(preflight.Operation, "execution", "campaign.target-limit", current);
             }
 
             ReadOnlyMemory<byte> request;
@@ -420,17 +442,21 @@ internal static class CampaignCommandRunner
                 ExecutionToken: cancellationToken,
                 SettlementToken: cancellationToken,
                 DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor),
-                DispatchGuard: preflight.Configuration.Revalidate)).ConfigureAwait(false);
+                DispatchGuard: preflight.Configuration.Revalidate,
+                TargetAllowance: targetAllowance)).ConfigureAwait(false);
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady)
             {
                 continue;
             }
-            var proposalOutcome = proposal.CheckpointFailure is { } proposalFailure
+            var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Reason == CampaignTerminalReason.Unresolved
+                ? "campaign.unresolved"
+                : proposal.CheckpointFailure is { } proposalFailure
                 ? AcceptanceOutcome(proposalFailure)
                 : proposal.Code == "campaign.credential.invalid"
                 ? "campaign.invalid-configuration"
                 : ProposalOutcome(proposal.Kind);
-            return Terminal(preflight.Operation, "execution", proposalOutcome,
+            return Terminal(preflight.Operation,
+                proposal.Kind == DocumentationCampaignProposalOutcomeKind.CheckpointCapacity ? "state" : "execution", proposalOutcome,
                 proposal.Artifact is null ? current : AcceptedObservation(proposal.Artifact));
         }
 
@@ -439,8 +465,13 @@ internal static class CampaignCommandRunner
 
     private static CampaignPlanningWorkItem? SelectNextWork(
         CampaignCheckpointState state,
-        CampaignWorkPlan plan) =>
-        state.WorkItems.Zip(plan.WorkItems)
+        CampaignWorkPlan plan,
+        CampaignInvocationTargetAllowance allowance) =>
+        (allowance.RecoveryWorkItemKey is { } recovery ? new[] { recovery } : [])
+            .Concat(allowance.WorkItemKeys).Distinct(StringComparer.Ordinal)
+            .Where(key => CampaignStateFactory.AllowsTarget(state, key, allowance))
+            .Select(key => (First: state.WorkItems.Single(work => work.WorkItemKey == key),
+                Second: plan.WorkItems.Single(work => work.WorkItemKey == key)))
             .Where(pair => pair.First.Status == CampaignWorkStatus.Planned
                 || pair.First.Status == CampaignWorkStatus.Closed
                 && pair.First.ClosedOutcome is
@@ -450,6 +481,12 @@ internal static class CampaignCommandRunner
                 })
             .Select(pair => pair.Second)
             .FirstOrDefault();
+
+    private static string CompletionOutcome(CampaignCheckpointState state) =>
+        (state.TerminalOutcome ?? CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems))?.Reason
+            == CampaignTerminalReason.Unresolved ? "campaign.unresolved"
+            : state.TargetProgress.Any(progress => progress.Kind == CampaignTargetProgressKind.Deferred)
+                ? "campaign.batch-complete" : "campaign.complete";
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,
@@ -515,8 +552,10 @@ internal static class CampaignCommandRunner
         DocumentationCampaignProposalOutcomeKind.Cancelled => "campaign.cancelled",
         DocumentationCampaignProposalOutcomeKind.TimedOut => "campaign.timeout",
         DocumentationCampaignProposalOutcomeKind.BudgetExhausted => "campaign.budget-exhausted",
+        DocumentationCampaignProposalOutcomeKind.TargetLimit => "campaign.target-limit",
         DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch => "campaign.attempt-ambiguous",
         DocumentationCampaignProposalOutcomeKind.StateConflict => "campaign.state-conflict",
+        DocumentationCampaignProposalOutcomeKind.CheckpointCapacity => "campaign.checkpoint-too-large",
         DocumentationCampaignProposalOutcomeKind.TerminalStop => "campaign.provider-terminal",
         _ => "campaign.host-contract-error",
     };
@@ -541,7 +580,8 @@ internal static class CampaignCommandRunner
         CampaignConfigurationDocument configuration,
         CampaignPlanningExecutionPolicy policy,
         ProductionRepositorySessionBundle bundle,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CampaignInvocationTargetLimit? targetLimit = null)
     {
         var authorities = ImmutableArray.CreateBuilder<CampaignPlanningTargetAuthority>();
         var projector = new DocumentationDeclarationAuthorityProjector();
@@ -574,15 +614,21 @@ internal static class CampaignCommandRunner
         var executableStyleParents = CampaignPlanner.ReadExecutableStyleParentSymbols(
             bundle.Audit,
             owners);
+        var batchCandidates = CampaignPlanner.ReadBatchCandidateParentSymbols(bundle.Audit, owners);
+        var styleCommitment = configuration.CreateStyleAuthority().ContentSha256;
         owners = owners.Select(owner => owner with
         {
             Targets = owner.Targets.Select(authority =>
-                executableStyleParents.Contains(authority.Target.SymbolRef)
-                    ? authority with
-                    {
-                        ExecutableStyleProfile = ExpandStyleProfile(configuration, authority),
-                    }
-                    : authority).ToImmutableArray(),
+            {
+                if (!batchCandidates.Contains(authority.Target.SymbolRef)) return authority;
+                var grouping = BindGroupingContext(bundle, authority, styleCommitment, cancellationToken);
+                return authority with
+                {
+                    GroupingAuthority = grouping,
+                    ExecutableStyleProfile = executableStyleParents.Contains(authority.Target.SymbolRef)
+                        ? ExpandStyleProfile(configuration, authority) : null,
+                };
+            }).ToImmutableArray(),
         }).ToImmutableArray();
         var evidence = bundle.Evidence.Bindings.Select(binding =>
             new CampaignPlanningEvidenceAuthority(
@@ -603,8 +649,42 @@ internal static class CampaignCommandRunner
             bundle.Observed.ObservationSet!,
             evidence,
             bundle.Audit,
-            new CampaignPlanningOwnerAuthoritySet(owners));
+            new CampaignPlanningOwnerAuthoritySet(owners),
+            targetLimit ?? new CampaignInvocationTargetLimit(CampaignStateContract.MaximumWorkItems));
     }
+
+    private static CampaignPlanningGroupingAuthority BindGroupingContext(
+        ProductionRepositorySessionBundle bundle,
+        CampaignPlanningTargetAuthority authority,
+        string styleCommitment,
+        CancellationToken cancellationToken)
+    {
+        if (authority.Source is not CampaignPlanningRepositorySourceAuthority source
+            || authority.GroupingAuthority is not { } semantic)
+            throw new InvalidOperationException("campaign.grouping.semantic-authority-unavailable");
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            bundle.Session.RepositoryContextRef, bundle.Session.InputIdentity, bundle.Classifications.TargetProfile,
+            authority.Target.SymbolRef, source.Path, source.RequestedDeclarationSpan.Start,
+            source.RequestedDeclarationSpan.End, source.ContentSha256);
+        var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(bundle.Classified, selection, cancellationToken);
+        if (bootstrap.Status is not (DocumentationScribeContextBootstrapStatus.Succeeded
+                or DocumentationScribeContextBootstrapStatus.Incomplete)
+            || bootstrap.Context is not { } context)
+            throw new InvalidOperationException("campaign.grouping.context-unavailable");
+        return semantic with
+        {
+            InstructionsSha256 = InstructionCommitment(context.Facts),
+            StyleConfigurationSha256 = styleCommitment,
+        };
+    }
+
+    internal static string InstructionCommitment(DocumentationScribeContextFacts facts) =>
+        CampaignPlanner.CreateInstructionStackCommitment(facts.Instructions.Select(instruction =>
+            new DocumentationScribeContextReference(instruction.InstructionId,
+                DocumentationScribeContextReferenceKind.ProjectInstruction, facts.RepositoryContextRef,
+                instruction.Commitment.RepositoryPath!, instruction.Commitment.ContentSha256,
+                instruction.Commitment.OriginalUtf8ByteCount, instruction.Commitment.IncludedUtf8ByteCount,
+                instruction.Commitment.IsTruncated)));
 
     private static DocumentationScribeStyleProfile ExpandStyleProfile(
         CampaignConfigurationDocument configuration,

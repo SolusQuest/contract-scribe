@@ -28,10 +28,11 @@ public static partial class CampaignStateJson
         return stream.ToArray();
     }
 
-    internal static void ValidateEncodedSize(CampaignCheckpointState state)
+    internal static long ValidateEncodedSize(CampaignCheckpointState state)
     {
         using var stream = new BoundedMemoryStream(CampaignStateContract.MaximumArtifactUtf8Bytes);
         WriteValidatedState(stream, state);
+        return stream.Length;
     }
 
     private static void WriteValidatedState(Stream stream, CampaignCheckpointState state)
@@ -172,6 +173,7 @@ public static partial class CampaignStateJson
         }
 
         writer.WriteEndArray();
+        WriteBatch(writer, state);
         writer.WritePropertyName("activeReservation");
         WriteReservation(writer, state.ActiveReservation);
         writer.WritePropertyName("candidateObservation");
@@ -333,6 +335,7 @@ public static partial class CampaignStateJson
         writer.WriteNumber("outerAttemptCount", work.OuterAttemptCount);
         writer.WriteNumber("candidateAttemptCount", work.CandidateAttemptCount);
         writer.WriteString("status", WorkStatusId(work.Status));
+        writer.WriteString("attemptDisposition", AttemptDispositionId(work.AttemptDisposition));
         writer.WritePropertyName("trustedProposal");
         WriteProposal(writer, work.TrustedProposal);
         writer.WritePropertyName("closedOutcome");
@@ -871,6 +874,8 @@ public static partial class CampaignStateJson
             "configuredCeilings",
             "lineageCharges",
             "workItems",
+            "batch",
+            "targetProgress",
             "activeReservation",
             "candidateObservation",
             "acceptedCandidateOrigin",
@@ -893,6 +898,7 @@ public static partial class CampaignStateJson
             ParseCeilings(root.GetProperty("configuredCeilings")),
             ParseCharges(root.GetProperty("lineageCharges")),
             ParseArray(root.GetProperty("workItems"), ParseWork, CampaignStateContract.MaximumWorkItems),
+            ParseBatch(root),
             ParseReservation(root.GetProperty("activeReservation")),
             ParseCandidate(root.GetProperty("candidateObservation")),
             ParseCumulativeOutcome(root.GetProperty("cumulativeOutcome")),
@@ -1082,6 +1088,7 @@ public static partial class CampaignStateJson
             "outerAttemptCount",
             "candidateAttemptCount",
             "status",
+            "attemptDisposition",
             "trustedProposal",
             "closedOutcome");
         var workItemKey = ReadString(element, "workItemKey");
@@ -1091,7 +1098,10 @@ public static partial class CampaignStateJson
             ReadInt32(element, "candidateAttemptCount"),
             ParseWorkStatus(ReadString(element, "status")),
             ParseProposal(element.GetProperty("trustedProposal")),
-            ParseClosedOutcome(element.GetProperty("closedOutcome"), workItemKey));
+            ParseClosedOutcome(element.GetProperty("closedOutcome"), workItemKey))
+        {
+            AttemptDisposition = ParseAttemptDisposition(ReadString(element, "attemptDisposition")),
+        };
     }
 
     private static CampaignTrustedProposal? ParseProposal(JsonElement element)
@@ -2089,6 +2099,7 @@ public static partial class CampaignStateJson
     {
         CampaignTerminalReason.NoWork => "no-work",
         CampaignTerminalReason.AllWorkClosed => "all-work-closed",
+        CampaignTerminalReason.Unresolved => "unresolved",
         CampaignTerminalReason.Budget => "budget",
         CampaignTerminalReason.Caller => "caller",
         CampaignTerminalReason.Deadline => "deadline",
@@ -2101,6 +2112,7 @@ public static partial class CampaignStateJson
     {
         "no-work" => CampaignTerminalReason.NoWork,
         "all-work-closed" => CampaignTerminalReason.AllWorkClosed,
+        "unresolved" => CampaignTerminalReason.Unresolved,
         "budget" => CampaignTerminalReason.Budget,
         "caller" => CampaignTerminalReason.Caller,
         "deadline" => CampaignTerminalReason.Deadline,

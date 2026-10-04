@@ -26,7 +26,8 @@ internal sealed record DocumentationCampaignProposalInput(
     CancellationToken SettlementToken,
     TimeProvider? TimeProvider = null,
     Func<IDocumentationScribeModelExchange?>? DeferredExchange = null,
-    Func<bool>? DispatchGuard = null);
+    Func<bool>? DispatchGuard = null,
+    CampaignInvocationTargetAllowance? TargetAllowance = null);
 
 internal static class DocumentationCampaignProposalExecutor
 {
@@ -67,13 +68,16 @@ internal static class DocumentationCampaignProposalExecutor
         }
 
         var state = current.Artifact.State;
+        var targetAllowance = input.TargetAllowance
+            ?? CampaignStateFactory.CreateInvocationTargetAllowance(state, input.PlanningInput.TargetLimit);
         if (state.ActiveReservation is CampaignPatchReservation)
         {
             return Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.patch-active");
         }
         CampaignWorkItemState? selectedState = null;
         CampaignPlanningWorkItem? selectedPlan = null;
-        foreach (var pair in state.WorkItems.Zip(input.AcceptedPlan.WorkItems))
+        foreach (var pair in state.WorkItems.Zip(input.AcceptedPlan.WorkItems).Where(pair =>
+                     pair.First.Status == CampaignWorkStatus.ProposalComplete))
         {
             var work = pair.First;
             if (work.Status == CampaignWorkStatus.ProposalComplete)
@@ -88,6 +92,16 @@ internal static class DocumentationCampaignProposalExecutor
                 return new(DocumentationCampaignProposalOutcomeKind.ProposalReady,
                     "campaign.proposal.replay", work.WorkItemKey, current.Artifact);
             }
+        }
+        var orderedKeys = (targetAllowance.RecoveryWorkItemKey is { } recoveryKey
+                ? new[] { recoveryKey } : [])
+            .Concat(targetAllowance.WorkItemKeys).Distinct(StringComparer.Ordinal);
+        foreach (var key in orderedKeys)
+        {
+            var work = state.WorkItems.SingleOrDefault(item => item.WorkItemKey == key);
+            var planWork = input.AcceptedPlan.WorkItems.SingleOrDefault(item => item.WorkItemKey == key);
+            if (work is null || planWork is null || work.AttemptDisposition != CampaignAttemptDisposition.Open
+                || !CampaignStateFactory.AllowsTarget(state, key, targetAllowance)) continue;
             if (work.Status is CampaignWorkStatus.Accepted
                 || work.Status == CampaignWorkStatus.Closed
                     && work.ClosedOutcome is not
@@ -101,14 +115,16 @@ internal static class DocumentationCampaignProposalExecutor
             if (state.TerminalOutcome is null)
             {
                 selectedState = work;
-                selectedPlan = pair.Second;
+                selectedPlan = planWork;
                 break;
             }
         }
 
         if (selectedState is null || selectedPlan is null)
         {
-            return FromTerminal(current.Artifact);
+            return state.TerminalOutcome is null
+                ? new(DocumentationCampaignProposalOutcomeKind.TargetLimit, "campaign.target-limit", artifact: current.Artifact)
+                : FromTerminal(current.Artifact);
         }
         if (state.ActiveReservation is CampaignProviderReservation active
             && active.WorkItemKey != selectedState.WorkItemKey)
@@ -145,17 +161,30 @@ internal static class DocumentationCampaignProposalExecutor
         var transition = selectedState.Status == CampaignWorkStatus.Planned && state.ActiveReservation is null
             ? CampaignStateReducer.AdmitProviderInvocation(current.Artifact, input.ExecutionCapability,
                 input.StyleConfigurationId, input.StyleConfigurationProjection, input.PlanningInput,
-                input.AcceptedPlan, selectedState.WorkItemKey, request)
+                input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance)
             : CampaignStateReducer.RetryProviderInvocation(current.Artifact,
                 state.ActiveReservation is null ? null : current, input.ExecutionCapability,
                 input.StyleConfigurationId, input.StyleConfigurationProjection, input.PlanningInput,
-                input.AcceptedPlan, selectedState.WorkItemKey, request);
+                input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance);
         if (transition.Kind == CampaignTransitionKind.Rejected)
         {
+            if (transition.Failure == CampaignTransitionFailure.CheckpointCapacity)
+            {
+                return new(DocumentationCampaignProposalOutcomeKind.CheckpointCapacity,
+                    "campaign.checkpoint-too-large", selectedState.WorkItemKey, current.Artifact);
+            }
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError,
                 "campaign.reservation.invalid");
         }
 
+        if (transition.Artifact.State.ActiveReservation is not CampaignProviderReservation)
+        {
+            var stopped = await CampaignCheckpointAcceptance.AcceptAsync(input.Store, transition, input.SettlementToken)
+                .ConfigureAwait(false);
+            return stopped.Artifact is { } artifact && stopped.Kind == CampaignCheckpointAcceptanceKind.Accepted
+                ? FromArtifact(artifact, selectedState.WorkItemKey)
+                : Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.conflict");
+        }
         var exchange = input.Exchange ?? input.DeferredExchange?.Invoke();
         if (exchange is null)
         {
@@ -327,7 +356,7 @@ internal static class DocumentationCampaignProposalExecutor
             {
                 Code: CampaignWorkOutcomeCode.ProviderFailure,
                 ProviderDisposition: CampaignProviderFinalDisposition.Retryable
-            } && artifact.State.TerminalOutcome is null)
+            } && work.AttemptDisposition == CampaignAttemptDisposition.Open && artifact.State.TerminalOutcome is null)
             return new(DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.provider.retryable", workKey, artifact);
         return FromTerminal(artifact);
     }
@@ -339,7 +368,7 @@ internal static class DocumentationCampaignProposalExecutor
             { Kind: CampaignTerminalKind.Timeout } => new(DocumentationCampaignProposalOutcomeKind.TimedOut, "campaign.timed-out", artifact: artifact),
             { Kind: CampaignTerminalKind.Exhausted } => new(DocumentationCampaignProposalOutcomeKind.BudgetExhausted, "campaign.exhausted", artifact: artifact),
             { Reason: CampaignTerminalReason.NoWork } => new(DocumentationCampaignProposalOutcomeKind.NoWork, "campaign.no-work", artifact: artifact),
-            { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed }
+            { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved }
                 when artifact.State.WorkItems.All(item => item.ClosedOutcome?.Stage == CampaignWorkOutcomeStage.Planning) =>
                 new(DocumentationCampaignProposalOutcomeKind.UnsupportedOnly, "campaign.unsupported-only", artifact: artifact),
             _ => new(DocumentationCampaignProposalOutcomeKind.TerminalStop, "campaign.terminal", artifact: artifact),

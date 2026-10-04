@@ -4,7 +4,7 @@
   "title": "ContractScribe Campaign State v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "batch", "targetProgress", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
   "properties": {
     "campaignStateVersion": { "const": 1 },
     "productRevision": { "$ref": "#/$defs/revision" },
@@ -14,6 +14,8 @@
     "configuredCeilings": { "$ref": "#/$defs/ceilings" },
     "lineageCharges": { "$ref": "#/$defs/charges" },
     "workItems": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/work" } },
+    "batch": { "$ref": "#/$defs/batch" },
+    "targetProgress": { "$comment": "The count ceiling does not waive the independent 4 MiB complete canonical checkpoint admission bound.", "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/targetProgress" } },
     "activeReservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/providerReservation" }, { "$ref": "#/$defs/patchReservation" }] },
     "candidateObservation": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/candidate" }] },
     "acceptedCandidateOrigin": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/acceptedCandidateOrigin" }] },
@@ -23,9 +25,12 @@
     "predecessor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessor" }] }
   },
   "$defs": {
+    "targetKey": {"type":"string","pattern":"^campaign-target\\.[0-9a-f]{64}$"},
+    "batch": {"type":"object","additionalProperties":false,"required":["identity","planCommitment","creationQuota","selectedTargetKeys"],"properties":{"identity":{"$ref":"#/$defs/sha256"},"planCommitment":{"$ref":"#/$defs/sha256"},"creationQuota":{"type":"integer","minimum":0,"maximum":4096},"selectedTargetKeys":{"type":"array","maxItems":4096,"uniqueItems":true,"items":{"$ref":"#/$defs/targetKey"}}}},
+    "targetProgress": {"type":"object","additionalProperties":false,"required":["targetKey","workItemKey","symbolRef","batchEligible","dispatchable","groupIdentity","memberFamilyIdentity","status"],"properties":{"targetKey":{"$ref":"#/$defs/targetKey"},"workItemKey":{"type":"string","pattern":"^campaign-work\\.[0-9a-f]{64}$"},"symbolRef":{"$ref":"#/$defs/symbol"},"batchEligible":{"type":"boolean"},"dispatchable":{"type":"boolean"},"groupIdentity":{"$ref":"#/$defs/nullableSha"},"memberFamilyIdentity":{"$ref":"#/$defs/nullableSha"},"status":{"enum":["pending","deferred","active","retryable","proposal-complete","accepted-proposal","skipped","failed","suppressed","infrastructure-blocked","unsupported-current-executor","excluded"]}}},
     "acceptedCandidateOrigin": {
       "type": "object", "additionalProperties": false,
-      "required": ["checkpointRevision", "checkpointSha256", "productRevision", "campaignLineage", "snapshot", "campaignConfigurationCommitmentSha256", "candidateObservation"],
+      "required": ["checkpointRevision", "checkpointSha256", "productRevision", "campaignLineage", "snapshot", "campaignConfigurationCommitmentSha256", "batchIdentity", "candidateObservation"],
       "properties": {
         "checkpointRevision": { "$ref": "#/$defs/nonNegativeInt64" },
         "checkpointSha256": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/sha256" }] },
@@ -33,6 +38,7 @@
         "campaignLineage": { "$ref": "#/$defs/opaqueId" },
         "snapshot": { "$ref": "#/$defs/snapshot" },
         "campaignConfigurationCommitmentSha256": { "$ref": "#/$defs/sha256" },
+        "batchIdentity": { "$ref": "#/$defs/sha256" },
         "candidateObservation": { "$ref": "#/$defs/candidate" }
       }
     },
@@ -127,8 +133,8 @@
       "properties": { "outerInvocations": { "$ref": "#/$defs/nonNegativeInt64" }, "providerRequests": { "$ref": "#/$defs/charge" }, "inputTokens": { "$ref": "#/$defs/charge" }, "cachedInputTokens": { "$ref": "#/$defs/charge" }, "uncachedInputTokens": { "$ref": "#/$defs/charge" }, "outputTokens": { "$ref": "#/$defs/charge" }, "reasoningTokens": { "$ref": "#/$defs/charge" }, "costMicrounits": { "$ref": "#/$defs/charge" }, "activeElapsedMilliseconds": { "$ref": "#/$defs/charge" }, "patchValidationInvocations": { "$ref": "#/$defs/nonNegativeInt64" } }
     },
     "work": {
-      "type": "object", "additionalProperties": false, "required": ["workItemKey", "outerAttemptCount", "candidateAttemptCount", "status", "trustedProposal", "closedOutcome"],
-      "properties": { "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "outerAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "candidateAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "status": { "enum": ["planned", "proposal-complete", "accepted", "closed"] }, "trustedProposal": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/proposal" }] }, "closedOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closed" }] } }
+      "type": "object", "additionalProperties": false, "required": ["workItemKey", "outerAttemptCount", "candidateAttemptCount", "status", "attemptDisposition", "trustedProposal", "closedOutcome"],
+      "properties": { "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "outerAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "candidateAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "status": { "enum": ["planned", "proposal-complete", "accepted", "closed"] }, "attemptDisposition": { "enum": ["open", "suppressed-at-attempt-limit"] }, "trustedProposal": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/proposal" }] }, "closedOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closed" }] } }
     },
     "proposal": {
       "type": "object", "additionalProperties": false, "required": ["historicalScribeRequestSha256", "historicalAttemptId", "providerConfigurationId", "modelConfigurationId", "scribeProtocolId", "patchBlock", "evidence", "styleProfileCommitmentSha256", "toolPolicyId", "proposalCommitmentSha256"],
@@ -261,7 +267,7 @@
     },
     "terminal": {
       "type": "object", "additionalProperties": false, "required": ["kind", "reason"],
-      "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "budget", "caller", "deadline", "host", "new-snapshot"] } }
+      "properties": { "kind": { "enum": ["complete", "exhausted", "cancelled", "timeout", "failed", "superseded"] }, "reason": { "enum": ["no-work", "all-work-closed", "unresolved", "budget", "caller", "deadline", "host", "new-snapshot"] } }
     },
     "predecessor": {
       "type": "object", "additionalProperties": false, "required": ["productRevision", "snapshot", "campaignConfigurationCommitmentSha256", "finalCheckpointRevision", "finalCheckpointSha256", "terminalKind", "reservation", "candidate", "completedOperations"],

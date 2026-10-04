@@ -65,7 +65,7 @@ internal static class GitHubPublicationRequestFactory
                 && state.CandidateObservation is not null
                 && state.WorkItems.Any(work => work.Status == CampaignWorkStatus.Accepted)
                 && (state.TerminalOutcome is null
-                    or { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed }));
+                    or { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved }));
 
             field = GitHubPublicationFieldId.Checkpoint;
             Require(ExactArtifact(artifact, CampaignStateJson.CreateArtifact(state)));

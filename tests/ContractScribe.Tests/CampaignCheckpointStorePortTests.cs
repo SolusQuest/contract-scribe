@@ -186,6 +186,7 @@ public sealed class CampaignCheckpointStorePortTests
             state.ConfiguredCeilings,
             state.LineageCharges,
             state.WorkItems,
+            state.Batch,
             terminalOutcome: null));
     }
 

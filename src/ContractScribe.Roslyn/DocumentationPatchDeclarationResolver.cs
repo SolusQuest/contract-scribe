@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
 using Microsoft.CodeAnalysis;
@@ -58,7 +59,8 @@ public sealed record DocumentationPatchResolvedDeclaration
         ImmutableArray<SymbolRef> ownerSymbolRefs,
         bool isMultiDeclarator,
         bool isPrimaryConstructor,
-        bool hasPrimaryConstructorAlias)
+        bool hasPrimaryConstructorAlias,
+        CampaignPlanningGroupingAuthority? groupingAuthority)
     {
         BlockId = blockId;
         SymbolRef = symbolRef;
@@ -77,6 +79,7 @@ public sealed record DocumentationPatchResolvedDeclaration
         IsMultiDeclarator = isMultiDeclarator;
         IsPrimaryConstructor = isPrimaryConstructor;
         HasPrimaryConstructorAlias = hasPrimaryConstructorAlias;
+        GroupingAuthority = groupingAuthority;
     }
 
     public string BlockId { get; }
@@ -112,6 +115,7 @@ public sealed record DocumentationPatchResolvedDeclaration
     public bool IsPrimaryConstructor { get; }
 
     public bool HasPrimaryConstructorAlias { get; }
+    public CampaignPlanningGroupingAuthority? GroupingAuthority { get; }
 }
 
 public sealed record DocumentationPatchDeclarationBlock
@@ -534,7 +538,19 @@ public sealed class DocumentationPatchDeclarationResolver
             ownerResolution.SymbolRefs,
             multiDeclarator,
             primaryConstructor,
-            ownerResolution.HasPrimaryConstructor);
+            ownerResolution.HasPrimaryConstructor,
+            CreateGroupingAuthority(definition, project.ProjectIdentity));
+    }
+
+    private static CampaignPlanningGroupingAuthority? CreateGroupingAuthority(ISymbol definition, string projectIdentity)
+    {
+        var containingType = definition is INamedTypeSymbol type ? type : definition.ContainingType;
+        var typeId = containingType?.OriginalDefinition.GetDocumentationCommentId();
+        if (typeId is null) return null;
+        // Roslyn supplies both containment and the direct member's family; no documentation-ID parsing.
+        var family = "contract-scribe/campaign-member-family/v1\0" + definition.Kind + "\0" + definition.MetadataName;
+        return new CampaignPlanningGroupingAuthority(projectIdentity, typeId,
+            Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(family))).ToLowerInvariant(), null, null);
     }
 
     private static ImmutableArray<DocumentationPatchResolvedComponent> ResolveComponents(

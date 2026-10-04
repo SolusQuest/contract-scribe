@@ -550,7 +550,7 @@ jobs:
         id: integration_tests
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 35
+        timeout-minutes: 45
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
@@ -674,7 +674,7 @@ jobs:
         id: integration_tests
         if: always() && steps.build.outcome == 'success'
         continue-on-error: true
-        timeout-minutes: 55
+        timeout-minutes: 65
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore

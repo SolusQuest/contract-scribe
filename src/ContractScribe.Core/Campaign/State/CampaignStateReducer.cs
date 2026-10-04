@@ -22,6 +22,7 @@ public enum CampaignTransitionFailure
     ProjectionCapacityUnavailable,
     RevisionOverflow,
     ConflictingReplay,
+    CheckpointCapacity,
 }
 
 public sealed class CampaignTransitionResult
@@ -304,7 +305,8 @@ public static class CampaignStateReducer
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan,
         string workItemKey,
-        DocumentationScribeRequest request)
+        DocumentationScribeRequest request,
+        CampaignInvocationTargetAllowance targetAllowance)
     {
         ArgumentNullException.ThrowIfNull(predecessor);
         ArgumentNullException.ThrowIfNull(executionCapability);
@@ -333,6 +335,8 @@ public static class CampaignStateReducer
             if (state.TerminalOutcome is not null
                 || state.ActiveReservation is not null
                 || work is not { Status: CampaignWorkStatus.Planned }
+                || work.AttemptDisposition != CampaignAttemptDisposition.Open
+                || !CampaignStateFactory.AllowsTarget(state, workItemKey, targetAllowance)
                 || !ValidExecutionCapability(executionCapability))
             {
                 return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
@@ -356,7 +360,7 @@ public static class CampaignStateReducer
 
             if (work.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget)
             {
-                return Exhausted(predecessor);
+                return SuppressAtAttemptLimit(predecessor, workItemKey, state.LineageCharges);
             }
 
             if (work.CandidateAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumCandidatesPerBlock)
@@ -377,36 +381,20 @@ public static class CampaignStateReducer
                     : Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             }
 
-            var nextRevision = NextRevision(state.CheckpointRevision);
-            var nextOrdinal = checked(work.OuterAttemptCount + 1);
-            var attemptId = CampaignStateFactory.CreateScribeAttemptId(
-                state.Snapshot.ExecutionCommitmentSha256,
-                executionCapability.Projection,
-                workItemKey,
-                nextOrdinal);
-            var workItems = state.WorkItems.Select(item =>
-                string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
-                    ? item with { OuterAttemptCount = nextOrdinal }
-                    : item).ToImmutableArray();
-            var reservation = new CampaignProviderReservation(
-                workItemKey,
-                request.ArtifactSha256,
-                attemptId,
-                budget.Exposure!);
-            return Applied(predecessor, CreateState(
-                state,
-                nextRevision,
-                budget.Charges!,
-                workItems,
-                reservation,
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                state.TerminalOutcome,
-                state.Predecessor), attemptId);
+            var reserved = CreateProviderReservationState(state, executionCapability.Projection,
+                work, request.ArtifactSha256, budget);
+            var transition = Applied(predecessor, reserved.State, reserved.AttemptId);
+            ValidateProviderSettlementCapacity(transition.Artifact.State);
+            return transition;
         }
         catch (OverflowException)
         {
             return Reject(predecessor, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(predecessor, CampaignTransitionFailure.CheckpointCapacity);
         }
         catch (Exception exception) when (IsBoundedContractFailure(exception))
         {
@@ -593,6 +581,12 @@ public static class CampaignStateReducer
                     CampaignWorkStatus.Closed,
                     null,
                     closed);
+                if (closed is { Code: CampaignWorkOutcomeCode.ProviderFailure, ProviderDisposition: CampaignProviderFinalDisposition.Retryable }
+                    && state.WorkItems.Single(work => work.WorkItemKey == reservation.WorkItemKey).OuterAttemptCount
+                        >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget)
+                {
+                    workItems = MarkAttemptSuppressed(workItems, reservation.WorkItemKey);
+                }
                 campaignTerminal = terminal switch
                 {
                     DocumentationScribeCancelledTerminal { Code: DocumentationScribeCancellationCode.Caller } =>
@@ -607,10 +601,10 @@ public static class CampaignStateReducer
                     {
                         Code: DocumentationScribeFailureCode.Provider,
                         ProviderFinalDisposition: DocumentationScribeProviderFinalDisposition.Retryable,
-                    } => null,
-                    _ => CompleteWhenResolved(workItems),
+                    } => CompleteWhenResolved(state.Batch, workItems),
+                    _ => CompleteWhenResolved(state.Batch, workItems),
                 };
-                if (campaignTerminal is null
+                if ((campaignTerminal is null or { Kind: CampaignTerminalKind.Complete })
                     && settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
                 {
                     campaignTerminal = new CampaignTerminalOutcome(
@@ -619,16 +613,35 @@ public static class CampaignStateReducer
                 }
             }
 
-            var transition = Applied(predecessor, CreateState(
-                state,
-                NextRevision(state.CheckpointRevision),
-                settlement.Charges!,
-                workItems,
-                null,
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                campaignTerminal,
-                state.Predecessor));
+            CampaignTransitionResult transition;
+            try
+            {
+                transition = Applied(predecessor, CreateState(
+                    state,
+                    NextRevision(state.CheckpointRevision),
+                    settlement.Charges!,
+                    workItems,
+                    null,
+                    state.CandidateObservation,
+                    state.CumulativeOutcome,
+                    campaignTerminal,
+                    state.Predecessor));
+            }
+            catch (CampaignStateValidationException exception)
+                when (exception.Code == CampaignStateValidationCode.DocumentTooLarge
+                    && trustedProposal is not null
+                    && workItems.Single(item => item.WorkItemKey == reservation.WorkItemKey).Status == CampaignWorkStatus.ProposalComplete)
+            {
+                // A validated proposal can fit M2's projection bounds yet exceed the
+                // complete checkpoint. Retain its commitment and exact settlement in
+                // the existing bounded completion outcome, before consuming the lease.
+                workItems = ReplaceWork(workItems, reservation.WorkItemKey, CampaignWorkStatus.Closed, null,
+                    CreateClosedScribeOverboundOutcome(ordinaryOutcome, reservation.WorkItemKey,
+                        trustedProposal.ProposalCommitmentSha256));
+                transition = Applied(predecessor, CreateState(state, NextRevision(state.CheckpointRevision),
+                    settlement.Charges!, workItems, null, state.CandidateObservation, state.CumulativeOutcome,
+                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget), state.Predecessor));
+            }
             if (!completionAuthority.TryConsume()
                 || !invocationAuthority.TryCompleteLifecycle(invocationAuthority.DispatchStarted))
             {
@@ -726,9 +739,9 @@ public static class CampaignStateReducer
                 new CampaignTerminalOutcome(CampaignTerminalKind.Timeout, CampaignTerminalReason.Deadline),
             CampaignProviderCompletionKind.BudgetExhausted =>
                 new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
-            _ => CompleteWhenResolved(workItems),
+            _ => CompleteWhenResolved(state.Batch, workItems),
         };
-        if (terminal is null && settlementExhausted)
+        if ((terminal is null or { Kind: CampaignTerminalKind.Complete }) && settlementExhausted)
         {
             terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
         }
@@ -760,7 +773,8 @@ public static class CampaignStateReducer
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan,
         string workItemKey,
-        DocumentationScribeRequest request)
+        DocumentationScribeRequest request,
+        CampaignInvocationTargetAllowance targetAllowance)
     {
         ArgumentNullException.ThrowIfNull(predecessor);
         ArgumentNullException.ThrowIfNull(executionCapability);
@@ -790,6 +804,8 @@ public static class CampaignStateReducer
                 : RetireReservationBeforeApply(predecessor, acceptedCheckpoint!, transition);
         if (state.TerminalOutcome is not null
             || work is null
+            || work.AttemptDisposition != CampaignAttemptDisposition.Open
+            || !CampaignStateFactory.AllowsTarget(state, workItemKey, targetAllowance)
             || activeRetry is not null && !string.Equals(activeRetry.WorkItemKey, workItemKey, StringComparison.Ordinal)
             || activeRetry is null && !closedRetry
             || !ValidExecutionCapability(executionCapability)
@@ -829,6 +845,10 @@ public static class CampaignStateReducer
             var settledCharges = activeRetry is null
                 ? state.LineageCharges
                 : CampaignBudgetAccounting.SettleActiveConservatively(state);
+            if (work.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget)
+            {
+                return Finish(SuppressAtAttemptLimit(predecessor, workItemKey, settledCharges));
+            }
             var patchContext = new DocumentationPatchContext(
                 request.Context.RepositoryContextRef,
                 request.Context.InputIdentity,
@@ -915,55 +935,20 @@ public static class CampaignStateReducer
                 return Finish(Applied(predecessor, exhausted));
             }
 
-            if (work.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget)
-            {
-                return Finish(Applied(predecessor, CreateState(
-                    state,
-                    NextRevision(state.CheckpointRevision),
-                    settledCharges,
-                    state.WorkItems,
-                    null,
-                    state.CandidateObservation,
-                    state.CumulativeOutcome,
-                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
-                    state.Predecessor)));
-            }
-
-            var ordinal = checked(work.OuterAttemptCount + 1);
-            var nextRevision = NextRevision(state.CheckpointRevision);
-            var attemptId = CampaignStateFactory.CreateScribeAttemptId(
-                state.Snapshot.ExecutionCommitmentSha256,
-                executionCapability.Projection,
-                workItemKey,
-                ordinal);
-            var workItems = retryableWorkItems.Select(item =>
-                string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
-                    ? item with
-                    {
-                        OuterAttemptCount = ordinal,
-                        Status = CampaignWorkStatus.Planned,
-                        TrustedProposal = null,
-                        ClosedOutcome = null,
-                    }
-                    : item).ToImmutableArray();
-            return Finish(Applied(predecessor, CreateState(
-                state,
-                nextRevision,
-                budget.Charges!,
-                workItems,
-                new CampaignProviderReservation(
-                    workItemKey,
-                    request.ArtifactSha256,
-                    attemptId,
-                    budget.Exposure!),
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                state.TerminalOutcome,
-                state.Predecessor), attemptId));
+            var reserved = CreateProviderReservationState(settled, executionCapability.Projection,
+                work, request.ArtifactSha256, budget);
+            var transition = Applied(predecessor, reserved.State, reserved.AttemptId);
+            ValidateProviderSettlementCapacity(transition.Artifact.State);
+            return Finish(transition);
         }
         catch (OverflowException)
         {
             return Reject(predecessor, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(predecessor, CampaignTransitionFailure.CheckpointCapacity);
         }
         catch (Exception exception) when (IsBoundedContractFailure(exception))
         {
@@ -1150,7 +1135,7 @@ public static class CampaignStateReducer
                             ? item with { Status = CampaignWorkStatus.Accepted }
                             : item).ToImmutableArray();
                     candidate = proposed;
-                    terminal = CompleteWhenResolved(workItems);
+                    terminal = CompleteWhenResolved(state.Batch, workItems);
                 }
             }
             else
@@ -1624,8 +1609,12 @@ public static class CampaignStateReducer
                 template.ConfiguredCeilings,
                 charges,
                 template.WorkItems,
+                template.Batch,
                 terminalOutcome: template.TerminalOutcome,
                 predecessor: summary));
+            // Carried charges and the predecessor summary belong to the final admission
+            // shape; an empty-charge template cannot decide whether provider work fits.
+            ValidateInitialProviderReservationCapacity(transition.Artifact.State);
             return state.ActiveReservation is null
                 ? transition
                 : RetireReservationBeforeApply(current, acceptedCheckpoint!, transition);
@@ -1633,6 +1622,11 @@ public static class CampaignStateReducer
         catch (OverflowException)
         {
             return Reject(current, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(current, CampaignTransitionFailure.CheckpointCapacity);
         }
         catch (Exception exception) when (IsBoundedContractFailure(exception))
         {
@@ -1665,7 +1659,7 @@ public static class CampaignStateReducer
         }
 
         var charges = settlement.Charges!;
-        var terminal = state.TerminalOutcome ?? CompleteWhenResolved(workItems);
+        var terminal = state.TerminalOutcome ?? CompleteWhenResolved(state.Batch, workItems);
         if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted)
         {
             terminal = new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget);
@@ -1827,10 +1821,23 @@ public static class CampaignStateReducer
             workItemKey);
 
     private static CampaignTerminalOutcome? CompleteWhenResolved(
-        ImmutableArray<CampaignWorkItemState> workItems) =>
-        workItems.All(item => item.Status is CampaignWorkStatus.Closed or CampaignWorkStatus.Accepted)
-            ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.AllWorkClosed)
-            : null;
+        CampaignFixedBatch batch, ImmutableArray<CampaignWorkItemState> workItems) =>
+        CampaignStateFactory.SelectBatchTerminal(batch, workItems);
+
+    private static ImmutableArray<CampaignWorkItemState> MarkAttemptSuppressed(
+        ImmutableArray<CampaignWorkItemState> workItems, string workItemKey) => workItems.Select(work =>
+            work.WorkItemKey == workItemKey ? work with { AttemptDisposition = CampaignAttemptDisposition.SuppressedAtAttemptLimit } : work)
+            .ToImmutableArray();
+
+    private static CampaignTransitionResult SuppressAtAttemptLimit(
+        CampaignCheckpointArtifact predecessor, string workItemKey, CampaignLineageCharges charges)
+    {
+        var state = predecessor.State;
+        var workItems = MarkAttemptSuppressed(state.WorkItems, workItemKey);
+        return Applied(predecessor, CreateState(state, NextRevision(state.CheckpointRevision), charges, workItems,
+            null, state.CandidateObservation, state.CumulativeOutcome,
+            CompleteWhenResolved(state.Batch, workItems), state.Predecessor));
+    }
 
     private static bool HasDurableKnownCompletion(
         ImmutableArray<CampaignWorkItemState> workItems,
@@ -1898,6 +1905,73 @@ public static class CampaignStateReducer
         }
     }
 
+    internal static void ValidateInitialProviderReservationCapacity(CampaignCheckpointState state)
+    {
+        if (state.TerminalOutcome is not null || state.ActiveReservation is not null) return;
+        var byKey = state.Batch.CompleteTargets.ToDictionary(target => target.TargetKey, StringComparer.Ordinal);
+        var first = state.Batch.SelectedTargetKeys.Select(key => byKey[key])
+            .FirstOrDefault(target => target.Dispatchable);
+        if (first is null) return;
+        var work = state.WorkItems.Single(item => item.WorkItemKey == first.WorkItemKey);
+        var budget = state.ConfiguredCeilings.CampaignBudget;
+        if (budget.MaximumBlocks == 0
+            || work.OuterAttemptCount >= budget.MaximumAttemptsPerTarget
+            || work.CandidateAttemptCount >= budget.MaximumCandidatesPerBlock
+            || !HasProviderCompletionRevisionHeadroom(state)) return;
+        var reservationBudget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
+        if (reservationBudget.Kind != CampaignBudgetDecisionKind.Admitted) return;
+
+        // Request digests have a fixed canonical width. This probe uses the exact
+        // reservation producer but creates no artifact, acceptance or dispatch grant.
+        var reserved = CreateProviderReservationState(state, state.ConfiguredCeilings.ScribeExecutionAuthority,
+            work, new string('0', 64), reservationBudget);
+        ValidateProviderSettlementCapacity(reserved.State);
+    }
+
+    internal static long ValidateProviderSettlementCapacity(CampaignCheckpointState state)
+    {
+        var reservation = (CampaignProviderReservation)state.ActiveReservation!;
+        var closed = new CampaignWorkClosedOutcome(CampaignWorkOutcomeStage.Scribe, CampaignWorkOutcomeCode.CompletedOverBound,
+            null, reservation.ScribeRequestSha256, reservation.AttemptId, null, null, new string('0', 64), reservation.WorkItemKey);
+        var items = ReplaceWork(state.WorkItems, reservation.WorkItemKey, CampaignWorkStatus.Closed, null, closed)
+            .Select(item => item.WorkItemKey == reservation.WorkItemKey
+                ? item with { AttemptDisposition = CampaignAttemptDisposition.SuppressedAtAttemptLimit } : item).ToImmutableArray();
+        const long Maximum = CampaignStateContract.MaximumObservation;
+        var observation = new CampaignChargeObservation(Maximum / 2, Maximum - Maximum / 2, Maximum);
+        var charges = new CampaignLineageCharges(state.LineageCharges.OuterInvocations,
+            observation, observation, observation, observation, observation, observation, observation, observation,
+            state.LineageCharges.PatchValidationInvocations);
+        // This encoded upper bound is deliberately not a semantic state or artifact.
+        // It includes maximum-width charge observations, the longest terminal fields,
+        // suppression, and the result commitment that dominates other closed outcomes.
+        // Only a real reservation/settlement may create acceptance or dispatch authority.
+        var upper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
+            NextRevision(state.CheckpointRevision), state.ConfiguredCeilings, charges, items, state.Batch,
+            activeReservation: null, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
+            new CampaignTerminalOutcome(CampaignTerminalKind.Superseded, CampaignTerminalReason.AllWorkClosed), state.Predecessor)
+        {
+            AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
+        };
+        return CampaignStateJson.ValidateEncodedSize(upper);
+    }
+
+    private static (CampaignCheckpointState State, DocumentationScribeAttemptId AttemptId) CreateProviderReservationState(
+        CampaignCheckpointState state,
+        CampaignScribeExecutionAuthority executionAuthority,
+        CampaignWorkItemState work,
+        string requestSha256,
+        CampaignProviderBudgetDecision budget)
+    {
+        var ordinal = checked(work.OuterAttemptCount + 1);
+        var attemptId = CampaignStateFactory.CreateScribeAttemptId(
+            state.Snapshot.ExecutionCommitmentSha256, executionAuthority, work.WorkItemKey, ordinal);
+        var workItems = state.WorkItems.Select(item => item.WorkItemKey == work.WorkItemKey
+            ? item with { OuterAttemptCount = ordinal } : item).ToImmutableArray();
+        return (CreateState(state, NextRevision(state.CheckpointRevision), budget.Charges!, workItems,
+            new CampaignProviderReservation(work.WorkItemKey, requestSha256, attemptId, budget.Exposure!),
+            state.CandidateObservation, state.CumulativeOutcome, state.TerminalOutcome, state.Predecessor), attemptId);
+    }
+
     private static CampaignCheckpointState CreateState(
         CampaignCheckpointState basis,
         long revision,
@@ -1917,6 +1991,7 @@ public static class CampaignStateReducer
             basis.ConfiguredCeilings,
             charges,
             workItems,
+            basis.Batch,
             reservation,
             candidate,
             cumulative,
@@ -1969,7 +2044,7 @@ public static class CampaignStateReducer
         return !active.IsEmpty
             && state.TerminalOutcome switch
             {
-                { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed } =>
+                { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved } =>
                     active.All(item => item.Status == CampaignWorkStatus.Accepted),
                 { Kind: CampaignTerminalKind.Exhausted, Reason: CampaignTerminalReason.Budget } => true,
                 _ => false,

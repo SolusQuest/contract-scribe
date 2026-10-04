@@ -50,6 +50,10 @@ internal static class CampaignScribeRequestBuilder
             item.KindId == "source.target-declaration"
             && item.Commitment.RepositoryPath == source.Path
             && item.Range == source.RequestedDeclarationSpan);
+        if (target.GroupingAuthority?.InstructionsSha256 != CampaignCommandRunner.InstructionCommitment(context.Facts))
+        {
+            throw new InvalidOperationException("campaign.request.instruction-authority-changed");
+        }
         var sourceClaim = style.ClaimPolicies.FirstOrDefault(policyRow =>
             policyRow.AllowedAuthorities.Contains(
                 DocumentationScribeEvidenceAuthority.SourceDeclaration));

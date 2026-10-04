@@ -10,6 +10,7 @@ internal enum ChangedBaseCampaignReconciliationKind
     InvalidConfiguration,
     Cancelled,
     CheckpointFailure,
+    CheckpointCapacity,
 }
 
 internal sealed record ChangedBaseCampaignReconciliation(
@@ -44,7 +45,7 @@ internal static class ChangedBaseCampaignReconciler
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var successorTemplate = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateInitial(
+            var successorTemplate = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateSupersessionTemplate(
                 styleConfigurationId,
                 validatedStyleConfigurationProjection,
                 successorExecution,
@@ -72,6 +73,11 @@ internal static class ChangedBaseCampaignReconciler
         {
             return new(ChangedBaseCampaignReconciliationKind.Cancelled, predecessor);
         }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return new(ChangedBaseCampaignReconciliationKind.CheckpointCapacity, predecessor);
+        }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
             return new(ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
@@ -79,7 +85,9 @@ internal static class ChangedBaseCampaignReconciler
 
         if (transition.Kind == CampaignTransitionKind.Rejected)
         {
-            return new(ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
+            return new(transition.Failure == CampaignTransitionFailure.CheckpointCapacity
+                ? ChangedBaseCampaignReconciliationKind.CheckpointCapacity
+                : ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
         }
 
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(

@@ -21,11 +21,13 @@ internal static class CampaignCliPresentation
     private static readonly HashSet<string> Outcomes = new(StringComparer.Ordinal)
     {
         "campaign.complete", "campaign.no-work", "campaign.invalid-command",
+        "campaign.batch-complete", "campaign.unresolved", "campaign.target-limit",
         "campaign.provider-retryable", "campaign.budget-exhausted", "campaign.attempt-ambiguous",
         "campaign.invalid-configuration", "campaign.state-missing", "campaign.state-present",
         "campaign.state-corrupt", "campaign.state-unsafe", "campaign.state-conflict",
         "campaign.lease-conflict", "campaign.lease-unverifiable", "campaign.unsupported-revision",
         "campaign.incompatible-snapshot", "campaign.load-failure", "campaign.target-terminal",
+        "campaign.checkpoint-too-large",
         "campaign.provider-terminal", "campaign.proposal-invalid", "campaign.patch-stale",
         "campaign.patch-rejected", "campaign.patch-host-failure",
         "campaign.state-publication-failure", "campaign.host-contract-error",
@@ -121,14 +123,15 @@ internal static class CampaignCliPresentation
 
     private static int ExitCode(string outcome) => outcome switch
     {
-        "campaign.complete" or "campaign.no-work" => 0,
+        "campaign.complete" or "campaign.batch-complete" or "campaign.no-work" => 0,
         "campaign.invalid-command" => 2,
-        "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous" => 3,
-        "campaign.invalid-configuration" or "campaign.state-missing" or "campaign.state-present"
+        "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous" or "campaign.target-limit" => 3,
+        "campaign.checkpoint-too-large" or "campaign.invalid-configuration" or "campaign.state-missing" or "campaign.state-present"
             or "campaign.state-corrupt" or "campaign.state-unsafe" or "campaign.state-conflict"
             or "campaign.lease-conflict" or "campaign.lease-unverifiable"
             or "campaign.unsupported-revision" or "campaign.incompatible-snapshot" => 4,
         "campaign.load-failure" or "campaign.target-terminal" or "campaign.provider-terminal"
+            or "campaign.unresolved"
             or "campaign.proposal-invalid" or "campaign.patch-stale" or "campaign.patch-rejected"
             or "campaign.patch-host-failure" or "campaign.state-publication-failure"
             or "campaign.host-contract-error" => 5,
