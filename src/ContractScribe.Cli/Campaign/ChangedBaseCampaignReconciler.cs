@@ -85,7 +85,9 @@ internal static class ChangedBaseCampaignReconciler
 
         if (transition.Kind == CampaignTransitionKind.Rejected)
         {
-            return new(ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
+            return new(transition.Failure == CampaignTransitionFailure.CheckpointCapacity
+                ? ChangedBaseCampaignReconciliationKind.CheckpointCapacity
+                : ChangedBaseCampaignReconciliationKind.Incompatible, predecessor);
         }
 
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(

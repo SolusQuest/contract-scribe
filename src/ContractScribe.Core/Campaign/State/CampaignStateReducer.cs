@@ -22,6 +22,7 @@ public enum CampaignTransitionFailure
     ProjectionCapacityUnavailable,
     RevisionOverflow,
     ConflictingReplay,
+    CheckpointCapacity,
 }
 
 public sealed class CampaignTransitionResult
@@ -1636,6 +1637,11 @@ public static class CampaignStateReducer
         catch (OverflowException)
         {
             return Reject(current, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(current, CampaignTransitionFailure.CheckpointCapacity);
         }
         catch (Exception exception) when (IsBoundedContractFailure(exception))
         {
