@@ -383,7 +383,9 @@ public static class CampaignStateReducer
 
             var reserved = CreateProviderReservationState(state, executionCapability.Projection,
                 work, request.ArtifactSha256, budget);
-            return Applied(predecessor, reserved.State, reserved.AttemptId);
+            var transition = Applied(predecessor, reserved.State, reserved.AttemptId);
+            ValidateProviderSettlementCapacity(transition.Artifact.State);
+            return transition;
         }
         catch (OverflowException)
         {
@@ -611,16 +613,35 @@ public static class CampaignStateReducer
                 }
             }
 
-            var transition = Applied(predecessor, CreateState(
-                state,
-                NextRevision(state.CheckpointRevision),
-                settlement.Charges!,
-                workItems,
-                null,
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                campaignTerminal,
-                state.Predecessor));
+            CampaignTransitionResult transition;
+            try
+            {
+                transition = Applied(predecessor, CreateState(
+                    state,
+                    NextRevision(state.CheckpointRevision),
+                    settlement.Charges!,
+                    workItems,
+                    null,
+                    state.CandidateObservation,
+                    state.CumulativeOutcome,
+                    campaignTerminal,
+                    state.Predecessor));
+            }
+            catch (CampaignStateValidationException exception)
+                when (exception.Code == CampaignStateValidationCode.DocumentTooLarge
+                    && trustedProposal is not null
+                    && workItems.Single(item => item.WorkItemKey == reservation.WorkItemKey).Status == CampaignWorkStatus.ProposalComplete)
+            {
+                // A validated proposal can fit M2's projection bounds yet exceed the
+                // complete checkpoint. Retain its commitment and exact settlement in
+                // the existing bounded completion outcome, before consuming the lease.
+                workItems = ReplaceWork(workItems, reservation.WorkItemKey, CampaignWorkStatus.Closed, null,
+                    CreateClosedScribeOverboundOutcome(ordinaryOutcome, reservation.WorkItemKey,
+                        trustedProposal.ProposalCommitmentSha256));
+                transition = Applied(predecessor, CreateState(state, NextRevision(state.CheckpointRevision),
+                    settlement.Charges!, workItems, null, state.CandidateObservation, state.CumulativeOutcome,
+                    new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget), state.Predecessor));
+            }
             if (!completionAuthority.TryConsume()
                 || !invocationAuthority.TryCompleteLifecycle(invocationAuthority.DispatchStarted))
             {
@@ -916,7 +937,9 @@ public static class CampaignStateReducer
 
             var reserved = CreateProviderReservationState(settled, executionCapability.Projection,
                 work, request.ArtifactSha256, budget);
-            return Finish(Applied(predecessor, reserved.State, reserved.AttemptId));
+            var transition = Applied(predecessor, reserved.State, reserved.AttemptId);
+            ValidateProviderSettlementCapacity(transition.Artifact.State);
+            return Finish(transition);
         }
         catch (OverflowException)
         {
@@ -1900,8 +1923,36 @@ public static class CampaignStateReducer
 
         // Request digests have a fixed canonical width. This probe uses the exact
         // reservation producer but creates no artifact, acceptance or dispatch grant.
-        _ = CreateProviderReservationState(state, state.ConfiguredCeilings.ScribeExecutionAuthority,
+        var reserved = CreateProviderReservationState(state, state.ConfiguredCeilings.ScribeExecutionAuthority,
             work, new string('0', 64), reservationBudget);
+        ValidateProviderSettlementCapacity(reserved.State);
+    }
+
+    internal static long ValidateProviderSettlementCapacity(CampaignCheckpointState state)
+    {
+        var reservation = (CampaignProviderReservation)state.ActiveReservation!;
+        var closed = new CampaignWorkClosedOutcome(CampaignWorkOutcomeStage.Scribe, CampaignWorkOutcomeCode.CompletedOverBound,
+            null, reservation.ScribeRequestSha256, reservation.AttemptId, null, null, new string('0', 64), reservation.WorkItemKey);
+        var items = ReplaceWork(state.WorkItems, reservation.WorkItemKey, CampaignWorkStatus.Closed, null, closed)
+            .Select(item => item.WorkItemKey == reservation.WorkItemKey
+                ? item with { AttemptDisposition = CampaignAttemptDisposition.SuppressedAtAttemptLimit } : item).ToImmutableArray();
+        const long Maximum = CampaignStateContract.MaximumObservation;
+        var observation = new CampaignChargeObservation(Maximum / 2, Maximum - Maximum / 2, Maximum);
+        var charges = new CampaignLineageCharges(state.LineageCharges.OuterInvocations,
+            observation, observation, observation, observation, observation, observation, observation, observation,
+            state.LineageCharges.PatchValidationInvocations);
+        // This encoded upper bound is deliberately not a semantic state or artifact.
+        // It includes maximum-width charge observations, the longest terminal fields,
+        // suppression, and the result commitment that dominates other closed outcomes.
+        // Only a real reservation/settlement may create acceptance or dispatch authority.
+        var upper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
+            NextRevision(state.CheckpointRevision), state.ConfiguredCeilings, charges, items, state.Batch,
+            activeReservation: null, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
+            new CampaignTerminalOutcome(CampaignTerminalKind.Superseded, CampaignTerminalReason.AllWorkClosed), state.Predecessor)
+        {
+            AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
+        };
+        return CampaignStateJson.ValidateEncodedSize(upper);
     }
 
     private static (CampaignCheckpointState State, DocumentationScribeAttemptId AttemptId) CreateProviderReservationState(

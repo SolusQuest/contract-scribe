@@ -28,10 +28,11 @@ public static partial class CampaignStateJson
         return stream.ToArray();
     }
 
-    internal static void ValidateEncodedSize(CampaignCheckpointState state)
+    internal static long ValidateEncodedSize(CampaignCheckpointState state)
     {
         using var stream = new BoundedMemoryStream(CampaignStateContract.MaximumArtifactUtf8Bytes);
         WriteValidatedState(stream, state);
+        return stream.Length;
     }
 
     private static void WriteValidatedState(Stream stream, CampaignCheckpointState state)

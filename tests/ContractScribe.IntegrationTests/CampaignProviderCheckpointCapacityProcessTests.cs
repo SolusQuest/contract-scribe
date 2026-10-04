@@ -132,16 +132,21 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(CampaignTransitionKind.Applied, closedRetry.Kind);
             Assert.Equal(2, closedRetry.Artifact.State.LineageCharges.OuterInvocations);
             var reservationGrowth = valid.Artifact.ExactUtf8Json.Length - baseline.Artifact.ExactUtf8Json.Length;
+            var boundedCompletionGrowth = CampaignStateReducer.ValidateProviderSettlementCapacity(valid.Artifact.State)
+                - baseline.Artifact.ExactUtf8Json.Length;
             growth = CampaignStateContract.MaximumArtifactUtf8Bytes - reservationGrowth - baseline.Artifact.ExactUtf8Json.Length;
             var retrySource = ProviderCapacitySource(900 + growth / BytesPerNamespaceScalar, growth % BytesPerNamespaceScalar);
             await File.WriteAllTextAsync(sourcePath, retrySource, new UTF8Encoding(false, true));
             var retryTemplate = await Template("snapshot.provider-capacity", baseline.Artifact.State);
-            _ = CampaignStateFactory.CreateInitial(configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
+            var retryCapacity = Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.CreateInitial(configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                 configuration.ScribeRequest.StyleProfileTemplate.ExactProjection, retryTemplate.Execution,
-                "App/App.csproj", retryTemplate.Input, retryTemplate.Plan);
-            var active = Admit(retryTemplate.Artifact, retryTemplate.Input, retryTemplate.Plan, retryTemplate.Request);
-            Assert.Equal(CampaignTransitionKind.Applied, active.Kind);
-            var retryArtifact = active.Artifact;
+                "App/App.csproj", retryTemplate.Input, retryTemplate.Plan));
+            Assert.Equal(CampaignStateValidationCode.DocumentTooLarge, retryCapacity.Code);
+            Assert.Equal(CampaignTransitionFailure.CheckpointCapacity,
+                Admit(retryTemplate.Artifact, retryTemplate.Input, retryTemplate.Plan, retryTemplate.Request).Failure);
+            // Legacy current-shape checkpoints remain readable, even when a new
+            // producer rejects their missing completion headroom before dispatch.
+            var retryArtifact = ProviderCapacityLoadedReservation(retryTemplate.Artifact, retryTemplate.Request);
             Assert.Equal(CampaignStateContract.MaximumArtifactUtf8Bytes, retryArtifact.ExactUtf8Json.Length);
             Assert.True(CampaignStateJson.Parse(retryArtifact.ExactUtf8Json.AsMemory()).IsValid);
             var acceptedRetry = CampaignCheckpointAcceptance.AcceptCurrent(CampaignCheckpointReadResult.Found(
@@ -173,13 +178,13 @@ public sealed partial class CampaignCliProcessTests
                 configuration.ScribeRequest.StyleProfileTemplate.ExactProjection, "App/App.csproj", fittingInput, fittingPlan);
             Assert.Equal(CampaignTransitionKind.Applied, fittingSupersession.Kind);
             var summaryGrowth = fittingSupersession.Artifact.ExactUtf8Json.Length - fittingTemplate.ExactUtf8Json.Length;
-            growth = CampaignStateContract.MaximumArtifactUtf8Bytes - Math.Max(reservationGrowth, summaryGrowth)
-                - RemainingBytes - baseline.Artifact.ExactUtf8Json.Length;
+            growth = checked((int)(CampaignStateContract.MaximumArtifactUtf8Bytes - Math.Max(boundedCompletionGrowth, summaryGrowth)
+                - RemainingBytes - baseline.Artifact.ExactUtf8Json.Length));
             var successorSource = ProviderCapacitySource(900 + growth / BytesPerNamespaceScalar, growth % BytesPerNamespaceScalar);
             await File.WriteAllTextAsync(sourcePath, successorSource, new UTF8Encoding(false, true));
             var successor = await Template("snapshot.provider-successor", baseline.Artifact.State);
-            // The template and its first reservation both fit. Only the final shape,
-            // including the predecessor summary, exhausts reservation capacity.
+            // The template admits both reservation and bounded completion. The
+            // final carried predecessor summary exhausts that future capacity.
             _ = CampaignStateFactory.CreateInitial(configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                 configuration.ScribeRequest.StyleProfileTemplate.ExactProjection, successor.Execution,
                 "App/App.csproj", successor.Input, successor.Plan);
@@ -278,4 +283,22 @@ public sealed partial class CampaignCliProcessTests
             state.CheckpointRevision, state.ConfiguredCeilings, charges, workItems, state.Batch,
             state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             state.TerminalOutcome, state.Predecessor);
+
+    private static CampaignCheckpointArtifact ProviderCapacityLoadedReservation(CampaignCheckpointArtifact initial,
+        DocumentationScribeRequest request)
+    {
+        var state = initial.State;
+        var work = state.WorkItems.Single(item => item.Status == CampaignWorkStatus.Planned);
+        var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
+        Assert.Equal(CampaignBudgetDecisionKind.Admitted, budget.Kind);
+        var attempt = CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
+            state.ConfiguredCeilings.ScribeExecutionAuthority, work.WorkItemKey, 1);
+        return CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(state.ProductRevision,
+            state.CampaignLineage, state.Snapshot, state.CheckpointRevision + 1, state.ConfiguredCeilings,
+            budget.Charges!, state.WorkItems.Select(item => item.WorkItemKey == work.WorkItemKey
+                ? item with { OuterAttemptCount = 1 } : item), state.Batch,
+            new CampaignProviderReservation(work.WorkItemKey, request.ArtifactSha256, attempt, budget.Exposure!),
+            state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
+            state.TerminalOutcome, state.Predecessor));
+    }
 }

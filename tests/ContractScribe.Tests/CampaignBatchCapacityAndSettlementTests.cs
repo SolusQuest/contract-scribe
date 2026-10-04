@@ -71,6 +71,7 @@ public sealed partial class CampaignStateContractTests
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
             CreateScribeExchange(work).Request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)));
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
+        var boundedCompletionBytes = CampaignStateReducer.ValidateProviderSettlementCapacity(admitted.Artifact.State);
         var attempt = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation).AttemptId;
         var failure = CreateScribeExchange(work, attemptId: attempt.Value, resultFixture: "retryable-failure-result.json",
             resultMutation: root =>
@@ -101,6 +102,7 @@ public sealed partial class CampaignStateContractTests
             OrdinaryCompletion(invocation, outcome, elapsed), scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+        Assert.True(completed.Artifact.ExactUtf8Json.Length <= boundedCompletionBytes);
         var restored = CampaignStateJson.Parse(completed.Artifact.ExactUtf8Json.AsMemory()).Artifact!.State;
         Assert.Equal(settlement.Charges, restored.LineageCharges);
         Assert.Null(restored.ActiveReservation);
@@ -129,6 +131,7 @@ public sealed partial class CampaignStateContractTests
         var admitted = CampaignStateReducer.AdmitProviderInvocation(predecessor, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
             exchange.Request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)));
+        var boundedCompletionBytes = CampaignStateReducer.ValidateProviderSettlementCapacity(admitted.Artifact.State);
         var attempt = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation).AttemptId;
         exchange = CreateScribeExchange(work, attemptId: attempt.Value);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(exchange.Request, attempt, exchange.Result);
@@ -143,6 +146,7 @@ public sealed partial class CampaignStateContractTests
         var completed = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact, completion!, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+        Assert.True(completed.Artifact.ExactUtf8Json.Length <= boundedCompletionBytes);
         var restored = CampaignStateJson.Parse(completed.Artifact.ExactUtf8Json.AsMemory()).Artifact!.State;
         var reason = expected switch
         {
