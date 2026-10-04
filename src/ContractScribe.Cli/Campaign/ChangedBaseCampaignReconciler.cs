@@ -45,7 +45,7 @@ internal static class ChangedBaseCampaignReconciler
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var successorTemplate = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateInitial(
+            var successorTemplate = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateSupersessionTemplate(
                 styleConfigurationId,
                 validatedStyleConfigurationProjection,
                 successorExecution,

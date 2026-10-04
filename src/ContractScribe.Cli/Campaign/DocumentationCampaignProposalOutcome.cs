@@ -5,7 +5,7 @@ namespace ContractScribe.Cli;
 internal enum DocumentationCampaignProposalOutcomeKind
 {
     NoWork, UnsupportedOnly, ProposalReady, RetryableStop, TerminalStop,
-    Cancelled, TimedOut, BudgetExhausted, TargetLimit, AmbiguousDispatch, StateConflict, HostContractError,
+    Cancelled, TimedOut, BudgetExhausted, TargetLimit, AmbiguousDispatch, StateConflict, HostContractError, CheckpointCapacity,
 }
 
 internal sealed class DocumentationCampaignProposalOutcome
@@ -68,5 +68,6 @@ internal sealed class DocumentationCampaignProposalOutcome
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.credential.invalid")
             or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid")
-            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.settlement.invalid");
+            or (DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.settlement.invalid")
+            or (DocumentationCampaignProposalOutcomeKind.CheckpointCapacity, "campaign.checkpoint-too-large");
 }

@@ -455,7 +455,8 @@ internal static class CampaignCommandRunner
                 : proposal.Code == "campaign.credential.invalid"
                 ? "campaign.invalid-configuration"
                 : ProposalOutcome(proposal.Kind);
-            return Terminal(preflight.Operation, "execution", proposalOutcome,
+            return Terminal(preflight.Operation,
+                proposal.Kind == DocumentationCampaignProposalOutcomeKind.CheckpointCapacity ? "state" : "execution", proposalOutcome,
                 proposal.Artifact is null ? current : AcceptedObservation(proposal.Artifact));
         }
 
@@ -554,6 +555,7 @@ internal static class CampaignCommandRunner
         DocumentationCampaignProposalOutcomeKind.TargetLimit => "campaign.target-limit",
         DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch => "campaign.attempt-ambiguous",
         DocumentationCampaignProposalOutcomeKind.StateConflict => "campaign.state-conflict",
+        DocumentationCampaignProposalOutcomeKind.CheckpointCapacity => "campaign.checkpoint-too-large",
         DocumentationCampaignProposalOutcomeKind.TerminalStop => "campaign.provider-terminal",
         _ => "campaign.host-contract-error",
     };

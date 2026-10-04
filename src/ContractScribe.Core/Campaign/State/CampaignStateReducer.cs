@@ -381,36 +381,18 @@ public static class CampaignStateReducer
                     : Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             }
 
-            var nextRevision = NextRevision(state.CheckpointRevision);
-            var nextOrdinal = checked(work.OuterAttemptCount + 1);
-            var attemptId = CampaignStateFactory.CreateScribeAttemptId(
-                state.Snapshot.ExecutionCommitmentSha256,
-                executionCapability.Projection,
-                workItemKey,
-                nextOrdinal);
-            var workItems = state.WorkItems.Select(item =>
-                string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
-                    ? item with { OuterAttemptCount = nextOrdinal }
-                    : item).ToImmutableArray();
-            var reservation = new CampaignProviderReservation(
-                workItemKey,
-                request.ArtifactSha256,
-                attemptId,
-                budget.Exposure!);
-            return Applied(predecessor, CreateState(
-                state,
-                nextRevision,
-                budget.Charges!,
-                workItems,
-                reservation,
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                state.TerminalOutcome,
-                state.Predecessor), attemptId);
+            var reserved = CreateProviderReservationState(state, executionCapability.Projection,
+                work, request.ArtifactSha256, budget);
+            return Applied(predecessor, reserved.State, reserved.AttemptId);
         }
         catch (OverflowException)
         {
             return Reject(predecessor, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(predecessor, CampaignTransitionFailure.CheckpointCapacity);
         }
         catch (Exception exception) when (IsBoundedContractFailure(exception))
         {
@@ -932,41 +914,18 @@ public static class CampaignStateReducer
                 return Finish(Applied(predecessor, exhausted));
             }
 
-            var ordinal = checked(work.OuterAttemptCount + 1);
-            var nextRevision = NextRevision(state.CheckpointRevision);
-            var attemptId = CampaignStateFactory.CreateScribeAttemptId(
-                state.Snapshot.ExecutionCommitmentSha256,
-                executionCapability.Projection,
-                workItemKey,
-                ordinal);
-            var workItems = retryableWorkItems.Select(item =>
-                string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal)
-                    ? item with
-                    {
-                        OuterAttemptCount = ordinal,
-                        Status = CampaignWorkStatus.Planned,
-                        TrustedProposal = null,
-                        ClosedOutcome = null,
-                    }
-                    : item).ToImmutableArray();
-            return Finish(Applied(predecessor, CreateState(
-                state,
-                nextRevision,
-                budget.Charges!,
-                workItems,
-                new CampaignProviderReservation(
-                    workItemKey,
-                    request.ArtifactSha256,
-                    attemptId,
-                    budget.Exposure!),
-                state.CandidateObservation,
-                state.CumulativeOutcome,
-                state.TerminalOutcome,
-                state.Predecessor), attemptId));
+            var reserved = CreateProviderReservationState(settled, executionCapability.Projection,
+                work, request.ArtifactSha256, budget);
+            return Finish(Applied(predecessor, reserved.State, reserved.AttemptId));
         }
         catch (OverflowException)
         {
             return Reject(predecessor, CampaignTransitionFailure.RevisionOverflow);
+        }
+        catch (CampaignStateValidationException exception)
+            when (exception.Code == CampaignStateValidationCode.DocumentTooLarge)
+        {
+            return Reject(predecessor, CampaignTransitionFailure.CheckpointCapacity);
         }
         catch (Exception exception) when (IsBoundedContractFailure(exception))
         {
@@ -1630,6 +1589,9 @@ public static class CampaignStateReducer
                 template.Batch,
                 terminalOutcome: template.TerminalOutcome,
                 predecessor: summary));
+            // Carried charges and the predecessor summary belong to the final admission
+            // shape; an empty-charge template cannot decide whether provider work fits.
+            ValidateInitialProviderReservationCapacity(transition.Artifact.State);
             return state.ActiveReservation is null
                 ? transition
                 : RetireReservationBeforeApply(current, acceptedCheckpoint!, transition);
@@ -1918,6 +1880,45 @@ public static class CampaignStateReducer
         {
             return Reject(predecessor, CampaignTransitionFailure.RevisionOverflow);
         }
+    }
+
+    internal static void ValidateInitialProviderReservationCapacity(CampaignCheckpointState state)
+    {
+        if (state.TerminalOutcome is not null || state.ActiveReservation is not null) return;
+        var byKey = state.Batch.CompleteTargets.ToDictionary(target => target.TargetKey, StringComparer.Ordinal);
+        var first = state.Batch.SelectedTargetKeys.Select(key => byKey[key])
+            .FirstOrDefault(target => target.Dispatchable);
+        if (first is null) return;
+        var work = state.WorkItems.Single(item => item.WorkItemKey == first.WorkItemKey);
+        var budget = state.ConfiguredCeilings.CampaignBudget;
+        if (budget.MaximumBlocks == 0
+            || work.OuterAttemptCount >= budget.MaximumAttemptsPerTarget
+            || work.CandidateAttemptCount >= budget.MaximumCandidatesPerBlock
+            || !HasProviderCompletionRevisionHeadroom(state)) return;
+        var reservationBudget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
+        if (reservationBudget.Kind != CampaignBudgetDecisionKind.Admitted) return;
+
+        // Request digests have a fixed canonical width. This probe uses the exact
+        // reservation producer but creates no artifact, acceptance or dispatch grant.
+        _ = CreateProviderReservationState(state, state.ConfiguredCeilings.ScribeExecutionAuthority,
+            work, new string('0', 64), reservationBudget);
+    }
+
+    private static (CampaignCheckpointState State, DocumentationScribeAttemptId AttemptId) CreateProviderReservationState(
+        CampaignCheckpointState state,
+        CampaignScribeExecutionAuthority executionAuthority,
+        CampaignWorkItemState work,
+        string requestSha256,
+        CampaignProviderBudgetDecision budget)
+    {
+        var ordinal = checked(work.OuterAttemptCount + 1);
+        var attemptId = CampaignStateFactory.CreateScribeAttemptId(
+            state.Snapshot.ExecutionCommitmentSha256, executionAuthority, work.WorkItemKey, ordinal);
+        var workItems = state.WorkItems.Select(item => item.WorkItemKey == work.WorkItemKey
+            ? item with { OuterAttemptCount = ordinal } : item).ToImmutableArray();
+        return (CreateState(state, NextRevision(state.CheckpointRevision), budget.Charges!, workItems,
+            new CampaignProviderReservation(work.WorkItemKey, requestSha256, attemptId, budget.Exposure!),
+            state.CandidateObservation, state.CumulativeOutcome, state.TerminalOutcome, state.Predecessor), attemptId);
     }
 
     private static CampaignCheckpointState CreateState(

@@ -168,6 +168,11 @@ internal static class DocumentationCampaignProposalExecutor
                 input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance);
         if (transition.Kind == CampaignTransitionKind.Rejected)
         {
+            if (transition.Failure == CampaignTransitionFailure.CheckpointCapacity)
+            {
+                return new(DocumentationCampaignProposalOutcomeKind.CheckpointCapacity,
+                    "campaign.checkpoint-too-large", selectedState.WorkItemKey, current.Artifact);
+            }
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError,
                 "campaign.reservation.invalid");
         }

@@ -114,7 +114,28 @@ public static partial class CampaignStateFactory
         CampaignScribeExecutionCapability scribeExecutionCapability,
         string inputIdentity,
         CampaignPlanningInput planningInput,
-        CampaignWorkPlan acceptedPlan)
+        CampaignWorkPlan acceptedPlan) => CreateInitialCore(styleConfigurationId,
+            validatedStyleConfigurationProjection, scribeExecutionCapability, inputIdentity,
+            planningInput, acceptedPlan, validateProviderCapacity: true);
+
+    internal static CampaignCheckpointState CreateSupersessionTemplate(
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        CampaignScribeExecutionCapability scribeExecutionCapability,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan) => CreateInitialCore(styleConfigurationId,
+            validatedStyleConfigurationProjection, scribeExecutionCapability, inputIdentity,
+            planningInput, acceptedPlan, validateProviderCapacity: false);
+
+    private static CampaignCheckpointState CreateInitialCore(
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        CampaignScribeExecutionCapability scribeExecutionCapability,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan,
+        bool validateProviderCapacity)
     {
         ArgumentNullException.ThrowIfNull(planningInput);
         ArgumentNullException.ThrowIfNull(acceptedPlan);
@@ -173,6 +194,7 @@ public static partial class CampaignStateFactory
             terminalOutcome: terminal,
             predecessor: null);
         Validate(state);
+        if (validateProviderCapacity) CampaignStateReducer.ValidateInitialProviderReservationCapacity(state);
         return state;
     }
 
