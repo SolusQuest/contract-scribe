@@ -174,7 +174,7 @@ internal sealed class CampaignPlanningSourceSessionIndex
         }
     }
 
-    private string ProjectIdentity(string context)
+    internal string ProjectIdentity(string context)
     {
         Require(projectByContext.TryGetValue(context, out var project),
             "Every accepted compilation context must map to exactly one observed project identity.");

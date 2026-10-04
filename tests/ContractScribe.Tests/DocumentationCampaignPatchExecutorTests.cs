@@ -65,7 +65,7 @@ public sealed class DocumentationCampaignPatchExecutorTests
         });
         var execution = ExecutionPolicy(acceptedProjection, maximumCampaignElapsedMilliseconds: 20_000);
         var planning = new CampaignPlanningInput(
-            null!, execution, null!, null!, [], null!, null!);
+            null!, execution, null!, null!, [], null!, null!, new CampaignInvocationTargetLimit(100));
         var store = new FailingIfCalledStore();
         var substituted = JsonSerializer.SerializeToElement(new
         {
@@ -638,7 +638,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     ? completeEvidenceWork
                     : work)
                 .ToImmutableArray(),
-            campaign.Plan.Summary);
+            campaign.Plan.Summary, campaign.Plan.Batch);
 
         Assert.Throws<ArgumentException>(() =>
             CumulativeDocumentationPatchComposer.ValidateClaimAuthority(
@@ -825,7 +825,7 @@ public sealed partial class DocumentationScribeCompositionTests
             basis.AuditReason,
             basis.AuditRowSha256,
             basis.M3Eligible,
-            styleProfile ?? basis.StyleProfile);
+            styleProfile ?? basis.StyleProfile, basis.GroupingAuthority);
 
     private static DocumentationScribeStyleProfile Style(
         DocumentationScribeStyleProfile basis,

@@ -44,6 +44,7 @@ public sealed class CampaignStateTransitionTests
             state.ConfiguredCeilings,
             budget.Charges!,
             [work],
+            state.Batch,
             new CampaignProviderReservation(
                 work.WorkItemKey,
                 new string('a', 64),
@@ -111,7 +112,8 @@ public sealed class CampaignStateTransitionTests
             CampaignStateContract.MaximumObservation,
             state.ConfiguredCeilings,
             state.LineageCharges,
-            state.WorkItems);
+            state.WorkItems,
+            state.Batch);
         var predecessor = CampaignStateJson.CreateArtifact(max);
 
         var result = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Timeout);
@@ -143,7 +145,8 @@ public sealed class CampaignStateTransitionTests
             basis.CheckpointRevision,
             basis.ConfiguredCeilings,
             basis.LineageCharges,
-            [work]);
+            [work],
+            CampaignTestBatchFixtures.Singleton(basis.Snapshot.ExecutionCommitmentSha256, work.WorkItemKey));
     }
 
     private static CampaignAcceptedCheckpoint AcceptForTest(CampaignCheckpointArtifact artifact)

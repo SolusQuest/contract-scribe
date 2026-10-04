@@ -114,7 +114,28 @@ public static partial class CampaignStateFactory
         CampaignScribeExecutionCapability scribeExecutionCapability,
         string inputIdentity,
         CampaignPlanningInput planningInput,
-        CampaignWorkPlan acceptedPlan)
+        CampaignWorkPlan acceptedPlan) => CreateInitialCore(styleConfigurationId,
+            validatedStyleConfigurationProjection, scribeExecutionCapability, inputIdentity,
+            planningInput, acceptedPlan, validateProviderCapacity: true);
+
+    internal static CampaignCheckpointState CreateSupersessionTemplate(
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        CampaignScribeExecutionCapability scribeExecutionCapability,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan) => CreateInitialCore(styleConfigurationId,
+            validatedStyleConfigurationProjection, scribeExecutionCapability, inputIdentity,
+            planningInput, acceptedPlan, validateProviderCapacity: false);
+
+    private static CampaignCheckpointState CreateInitialCore(
+        string styleConfigurationId,
+        JsonElement validatedStyleConfigurationProjection,
+        CampaignScribeExecutionCapability scribeExecutionCapability,
+        string inputIdentity,
+        CampaignPlanningInput planningInput,
+        CampaignWorkPlan acceptedPlan,
+        bool validateProviderCapacity)
     {
         ArgumentNullException.ThrowIfNull(planningInput);
         ArgumentNullException.ThrowIfNull(acceptedPlan);
@@ -125,6 +146,7 @@ public static partial class CampaignStateFactory
         var styleAuthority = CreateStyleConfigurationAuthority(
             styleConfigurationId,
             validatedStyleConfigurationProjection);
+        ValidateBatchStyle(acceptedPlan, styleAuthority.ContentSha256);
         var policy = planningInput.ExecutionPolicy;
         var workItems = acceptedPlan.WorkItems.Select(work => new CampaignWorkItemState(
             work.WorkItemKey,
@@ -146,11 +168,7 @@ public static partial class CampaignStateFactory
                     null,
                     work.WorkItemKey)
                 : null)).ToImmutableArray();
-        CampaignTerminalOutcome? terminal = workItems.IsEmpty
-            ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.NoWork)
-            : workItems.All(item => item.Status == CampaignWorkStatus.Closed)
-                ? new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.AllWorkClosed)
-                : null;
+        var terminal = SelectBatchTerminal(acceptedPlan.Batch, workItems);
         var state = new CampaignCheckpointState(
             new CampaignStateProductRevision(
                 policy.ProductContractRevision.Id,
@@ -168,6 +186,7 @@ public static partial class CampaignStateFactory
             CreateCeilings(policy, styleAuthority, scribeExecutionCapability.Projection),
             EmptyCharges(),
             workItems,
+            acceptedPlan.Batch,
             activeReservation: null,
             candidateObservation: null,
             cumulativeOutcome: null,
@@ -175,6 +194,7 @@ public static partial class CampaignStateFactory
             terminalOutcome: terminal,
             predecessor: null);
         Validate(state);
+        if (validateProviderCapacity) CampaignStateReducer.ValidateInitialProviderReservationCapacity(state);
         return state;
     }
 
@@ -186,6 +206,7 @@ public static partial class CampaignStateFactory
         CampaignStateConfiguredCeilings configuredCeilings,
         CampaignLineageCharges lineageCharges,
         IEnumerable<CampaignWorkItemState> workItems,
+        CampaignFixedBatch batch,
         CampaignActiveReservation? activeReservation = null,
         CampaignCandidateObservation? candidateObservation = null,
         CampaignCumulativeOutcome? cumulativeOutcome = null,
@@ -215,6 +236,7 @@ public static partial class CampaignStateFactory
             configuredCeilings,
             lineageCharges,
             boundedWorkItems,
+            batch,
             activeReservation,
             candidateObservation,
             cumulativeOutcome,
@@ -240,11 +262,15 @@ public static partial class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(planningInput);
         ArgumentNullException.ThrowIfNull(acceptedPlan);
         Validate(state);
-        var replanned = CampaignPlanner.Plan(planningInput);
+        var replanned = CampaignPlanner.Plan(planningInput with
+        {
+            TargetLimit = new CampaignInvocationTargetLimit(state.Batch.CreationQuota),
+        });
         RequireSamePlan(replanned, acceptedPlan);
         var style = CreateStyleConfigurationAuthority(
             styleConfigurationId,
             validatedStyleConfigurationProjection);
+        ValidateBatchStyle(acceptedPlan, style.ContentSha256);
         var expectedCeilings = CreateCeilings(
             planningInput.ExecutionPolicy,
             style,
@@ -278,6 +304,9 @@ public static partial class CampaignStateFactory
                 snapshot.PolicyAuthorityCommitmentSha256,
                 StringComparison.Ordinal)
             || state.Snapshot.TargetProfile != snapshot.TargetProfile
+            || state.Batch.Identity != acceptedPlan.Batch.Identity
+            || !state.Batch.CompleteTargets.SequenceEqual(acceptedPlan.Batch.CompleteTargets)
+            || !state.Batch.SelectedTargetKeys.SequenceEqual(acceptedPlan.Batch.SelectedTargetKeys, StringComparer.Ordinal)
             || state.ConfiguredCeilings != expectedCeilings
             || !string.Equals(
                 state.Snapshot.ExecutionCommitmentSha256,
@@ -715,6 +744,11 @@ public static partial class CampaignStateFactory
             && target is not null
             && target.M3Eligible
             && target.StyleProfile is not null
+            && state.Batch.CompleteTargets.Any(candidate => candidate.WorkItemKey == workItemKey
+                && candidate.SymbolRef == target.SymbolRef && candidate.Dispatchable
+                && state.Batch.SelectedTargetKeys.Contains(candidate.TargetKey, StringComparer.Ordinal))
+            && target.GroupingAuthority?.InstructionsSha256
+                == CampaignPlanner.CreateInstructionStackCommitment(request.ContextReferences)
             && request.Context.TargetProfile == state.Snapshot.TargetProfile
             && request.Context.AuditOutcome == target.AuditOutcome
             && request.Target.SymbolRef == target.SymbolRef
@@ -1205,6 +1239,7 @@ public static partial class CampaignStateFactory
                 state.ConfiguredCeilings,
                 state.LineageCharges,
                 remainingWork,
+                state.Batch,
                 activeReservation: null,
                 state.CandidateObservation,
                 state.CumulativeOutcome,
@@ -1326,6 +1361,12 @@ public static partial class CampaignStateFactory
                 && work.CandidateAttemptCount <= state.ConfiguredCeilings.CampaignBudget.MaximumCandidatesPerBlock,
                 CampaignStateValidationCode.InvalidBound);
             Require(Enum.IsDefined(work.Status), CampaignStateValidationCode.InvalidVocabulary);
+            Require(Enum.IsDefined(work.AttemptDisposition), CampaignStateValidationCode.InvalidVocabulary);
+            Require(work.AttemptDisposition == CampaignAttemptDisposition.Open
+                || work.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget
+                    && work.Status is CampaignWorkStatus.Planned or CampaignWorkStatus.Closed
+                    && (state.ActiveReservation is not CampaignProviderReservation active || active.WorkItemKey != work.WorkItemKey),
+                CampaignStateValidationCode.InvalidCorrelation);
             var hasProposal = work.TrustedProposal is not null;
             var hasClosed = work.ClosedOutcome is not null;
             Require(work.Status switch
@@ -1398,6 +1439,7 @@ public static partial class CampaignStateFactory
                 acceptedProposals);
         }
 
+        ValidateBatch(state);
         ValidateReservation(state);
         ValidateCandidate(state);
         ValidateOrigin(state);
@@ -1704,6 +1746,9 @@ public static partial class CampaignStateFactory
             || !string.Equals(actual.AuditDocumentSha256, accepted.AuditDocumentSha256, StringComparison.Ordinal)
             || !string.Equals(actual.ExecutionCommitment, accepted.ExecutionCommitment, StringComparison.Ordinal)
             || actual.TargetProfile != accepted.TargetProfile
+            || actual.Batch.Identity != accepted.Batch.Identity
+            || !actual.Batch.CompleteTargets.SequenceEqual(accepted.Batch.CompleteTargets)
+            || !actual.Batch.SelectedTargetKeys.SequenceEqual(accepted.Batch.SelectedTargetKeys, StringComparer.Ordinal)
             || !SameSummary(actual.Summary, accepted.Summary)
             || !actual.WorkItems.Select(item => item.WorkItemKey).SequenceEqual(
                 accepted.WorkItems.Select(item => item.WorkItemKey),
@@ -2297,8 +2342,9 @@ public static partial class CampaignStateFactory
                 CampaignTerminalKind.Complete when terminal.Reason == CampaignTerminalReason.NoWork =>
                     state.WorkItems.IsEmpty,
                 CampaignTerminalKind.Complete when terminal.Reason == CampaignTerminalReason.AllWorkClosed =>
-                    !state.WorkItems.IsEmpty
-                    && state.WorkItems.All(item => item.Status is CampaignWorkStatus.Closed or CampaignWorkStatus.Accepted),
+                    SelectBatchTerminal(state.Batch, state.WorkItems) == terminal,
+                CampaignTerminalKind.Complete when terminal.Reason == CampaignTerminalReason.Unresolved =>
+                    SelectBatchTerminal(state.Batch, state.WorkItems) == terminal,
                 CampaignTerminalKind.Exhausted => terminal.Reason == CampaignTerminalReason.Budget,
                 CampaignTerminalKind.Cancelled => terminal.Reason == CampaignTerminalReason.Caller,
                 CampaignTerminalKind.Timeout => terminal.Reason == CampaignTerminalReason.Deadline,
