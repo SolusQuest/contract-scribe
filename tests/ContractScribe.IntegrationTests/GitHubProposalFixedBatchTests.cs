@@ -6,6 +6,32 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
+    [Fact]
+    public async Task Empty_fixed_batch_with_deferred_targets_is_no_op_without_publication_or_credentials()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await Fixture.CreateAsync(unsupportedProperty: true);
+        await CreateFixedBatchCheckpoint(fixture, 0);
+        var initial = fixture.Checkpoint();
+        Assert.Empty(initial.State.Batch.SelectedTargetKeys);
+        Assert.Equal(2, initial.State.Batch.CompleteTargets.Length);
+        Assert.All(initial.State.TargetProgress, item => Assert.Equal(CampaignTargetProgressKind.Deferred, item.Kind));
+        Assert.Equal(CampaignTerminalReason.AllWorkClosed, initial.State.TerminalOutcome!.Reason);
+        for (var repeat = 0; repeat < 2; repeat++)
+        {
+            var stopped = await fixture.Run("resume");
+            AssertResult(stopped, 0, "no-op");
+            Assert.Equal("", stopped.Stderr);
+            Assert.Equal(initial.Sha256, fixture.Checkpoint().Sha256);
+            Assert.Equal(0, fixture.Checkpoint().State.LineageCharges.OuterInvocations);
+            Assert.Equal(0, fixture.Checkpoint().State.LineageCharges.PatchValidationInvocations);
+            Assert.Equal(0, fixture.TokenReads());
+            Assert.Equal(0, fixture.Provider.RequestCount);
+            Assert.Equal(0, fixture.GitHub.Mutations);
+        }
+        await fixture.AssertSourceUnchanged();
+    }
+
     [Theory]
     [InlineData(false, 0, "no-op")]
     [InlineData(true, 5, "host-failure")]

@@ -7,6 +7,54 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Theory]
+    [InlineData(2)]
+    [InlineData(12)]
+    public void Zero_creation_quota_keeps_deferred_targets_without_unresolved_work(int targetCount)
+    {
+        var scenario = CreateProposalScenario(workItemCount: targetCount, targetLimit: 0);
+        var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        Assert.Equal(0, initial.State.Batch.CreationQuota);
+        Assert.Empty(initial.State.Batch.SelectedTargetKeys);
+        Assert.Equal(targetCount, initial.State.Batch.CompleteTargets.Length);
+        Assert.All(initial.State.TargetProgress, item => Assert.Equal(CampaignTargetProgressKind.Deferred, item.Kind));
+        Assert.Equal(new CampaignTerminalOutcome(CampaignTerminalKind.Complete, CampaignTerminalReason.AllWorkClosed),
+            initial.State.TerminalOutcome);
+        using var document = System.Text.Json.JsonDocument.Parse(initial.ExactUtf8Json.AsMemory());
+        Assert.True(EvaluateCampaignSchema(document.RootElement).IsValid);
+        var restored = CampaignStateJson.Parse(initial.ExactUtf8Json.AsMemory()).Artifact!;
+        Assert.Equal(initial.ExactUtf8Json.ToArray(), restored.ExactUtf8Json.ToArray());
+        AssertMutationFailure(initial.State, root => root["terminalOutcome"]!["reason"] = "unresolved",
+            CampaignStateValidationCode.InvalidShape);
+        foreach (var limit in new[] { 0, 1, 4096 })
+        {
+            var input = scenario.Input with { TargetLimit = new(limit) };
+            CampaignStateFactory.ValidateCurrentContext(restored.State, scenario.ExecutionAuthority, "style.synthetic",
+                scenario.StyleProjection, "samples/Synthetic.csproj", input, scenario.Plan);
+            var allowance = CampaignStateFactory.CreateInvocationTargetAllowance(restored.State, new(limit));
+            Assert.Empty(allowance.WorkItemKeys);
+            var work = scenario.Plan.WorkItems[0];
+            var rejected = CampaignStateReducer.AdmitProviderInvocation(restored, scenario.ExecutionAuthority,
+                "style.synthetic", scenario.StyleProjection, input, scenario.Plan, work.WorkItemKey,
+                CreateScribeExchange(work).Request, allowance);
+            Assert.Equal(CampaignTransitionKind.Rejected, rejected.Kind);
+            Assert.Equal(initial.ExactUtf8Json.ToArray(), rejected.Artifact.ExactUtf8Json.ToArray());
+            Assert.Equal(0, rejected.Artifact.State.LineageCharges.OuterInvocations);
+            Assert.Null(rejected.Artifact.State.ActiveReservation);
+        }
+    }
+
+    [Fact]
+    public void Empty_selected_batch_still_preserves_excluded_unresolved_work()
+    {
+        var state = CreateCapacityState(excludedOwners: 1, deferredOwners: 0);
+        Assert.Empty(state.Batch.SelectedTargetKeys);
+        Assert.All(state.TargetProgress, item => Assert.Equal(CampaignTargetProgressKind.Excluded, item.Kind));
+        Assert.Equal(CampaignTerminalReason.Unresolved, state.TerminalOutcome!.Reason);
+        Assert.Equal(CampaignTerminalReason.Unresolved,
+            CampaignStateJson.Parse(CampaignStateJson.Write(state)).Artifact!.State.TerminalOutcome!.Reason);
+    }
+
     [Fact]
     public void Batch_grouping_is_independent_of_owner_input_permutation_and_current_culture()
     {

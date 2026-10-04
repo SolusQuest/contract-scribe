@@ -10,6 +10,62 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class CampaignCliProcessTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Production_zero_creation_quota_preserves_deferred_manifest_and_batch_complete_across_fresh_invocations(
+        bool unsupportedProperty)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await LoaderFixture.CreateAsync();
+        var source = "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App {\n"
+            + "public static void First() { }\npublic static void Second() { }\n"
+            + (unsupportedProperty ? "public static int Value { get; set; }\n" : "") + "}\n";
+        var sourcePath = Path.Join(fixture.Root, "App", "App.cs");
+        await File.WriteAllTextAsync(sourcePath, source);
+        var sourceBytes = await File.ReadAllBytesAsync(sourcePath);
+        await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
+        await using var server = new ProposalLoopbackServer();
+        var outside = CreatePrivateDirectory("contract-scribe-zero-batch");
+        try
+        {
+            var configurationPath = Path.Join(outside, "campaign.json");
+            var stateDirectory = Path.Join(outside, "state");
+            Directory.CreateDirectory(stateDirectory);
+            File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var statePath = Path.Join(stateDirectory, "checkpoint.json");
+            await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
+            var preflight = CampaignPreflight.Run(new(CampaignOperation.Start, fixture.Root, "App/App.csproj", "policy.json",
+                "snapshot.batch", statePath, configurationPath, null, "campaign.integration"), RepositoryRoot);
+            var result = await CampaignCommandRunner.RunAsync(CliBuildIdentity.Current, preflight, CancellationToken.None,
+                _ => throw new InvalidOperationException("An empty fixed batch cannot request credentials."), targetLimit: new(0));
+            using var envelope = JsonDocument.Parse(result.StandardOutput);
+            Assert.Equal("campaign.batch-complete", envelope.RootElement.GetProperty("outcome").GetString());
+            Assert.Equal(0, result.ExitCode);
+            var bytes = await File.ReadAllBytesAsync(statePath);
+            var parsed = CampaignStateJson.Parse(bytes);
+            Assert.True(parsed.IsValid, parsed.FailureCode?.ToString());
+            var initial = parsed.Artifact!.State;
+            Assert.Equal(0, initial.Batch.CreationQuota);
+            Assert.Empty(initial.Batch.SelectedTargetKeys);
+            Assert.Equal(unsupportedProperty ? 3 : 2, initial.Batch.CompleteTargets.Length);
+            Assert.All(initial.TargetProgress, item => Assert.Equal(CampaignTargetProgressKind.Deferred, item.Kind));
+            Assert.Equal(CampaignTerminalReason.AllWorkClosed, initial.TerminalOutcome!.Reason);
+            Assert.Equal(0, initial.LineageCharges.OuterInvocations);
+            Assert.Equal(0, initial.LineageCharges.PatchValidationInvocations);
+            Assert.Null(initial.ActiveReservation);
+            Assert.Equal(bytes, CampaignStateJson.Write(initial));
+            foreach (var limit in new[] { 0, 4096 })
+            {
+                await RunBatchWorkerAsync(fixture.Root, configurationPath, statePath, outside, limit, "campaign.batch-complete");
+                Assert.Equal(bytes, await File.ReadAllBytesAsync(statePath));
+            }
+            Assert.Equal(0, server.RequestCount);
+            Assert.Equal(sourceBytes, await File.ReadAllBytesAsync(sourcePath));
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
     [Fact]
     public async Task Production_saved100_batch_restores_at10_in_a_fresh_runner_process_and_reconstructs_at0()
     {
@@ -104,16 +160,18 @@ public sealed partial class CampaignCliProcessTests
         var configuration = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_BATCH_WORKER_CONFIG")!;
         var state = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_BATCH_WORKER_STATE")!;
         var limit = int.Parse(Environment.GetEnvironmentVariable("CONTRACTSCRIBE_BATCH_WORKER_LIMIT")!, System.Globalization.CultureInfo.InvariantCulture);
+        var expectedOutcome = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_BATCH_WORKER_OUTCOME") ?? "campaign.target-limit";
         var preflight = CampaignPreflight.Run(new(CampaignOperation.Resume, root, "App/App.csproj", "policy.json",
             "snapshot.batch", state, configuration, null, "campaign.integration"), RepositoryRoot);
         var result = await CampaignCommandRunner.RunAsync(CliBuildIdentity.Current, preflight, CancellationToken.None,
             _ => throw new InvalidOperationException("Loopback batch execution cannot request credentials."), targetLimit: new(limit));
         using var envelope = JsonDocument.Parse(result.StandardOutput);
-        Assert.Equal("campaign.target-limit", envelope.RootElement.GetProperty("outcome").GetString());
-        Assert.Equal(3, result.ExitCode);
+        Assert.Equal(expectedOutcome, envelope.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(expectedOutcome == "campaign.batch-complete" ? 0 : 3, result.ExitCode);
     }
 
-    private static async Task RunBatchWorkerAsync(string root, string configuration, string state, string output, int limit)
+    private static async Task RunBatchWorkerAsync(string root, string configuration, string state, string output, int limit,
+        string expectedOutcome = "campaign.target-limit")
     {
         var start = new ProcessStartInfo("dotnet") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true, WorkingDirectory = RepositoryRoot };
         foreach (var argument in new[] { "test", Path.Join(RepositoryRoot, "tests", "ContractScribe.IntegrationTests", "ContractScribe.IntegrationTests.csproj"),
@@ -124,6 +182,7 @@ public sealed partial class CampaignCliProcessTests
         start.Environment["CONTRACTSCRIBE_BATCH_WORKER_CONFIG"] = configuration;
         start.Environment["CONTRACTSCRIBE_BATCH_WORKER_STATE"] = state;
         start.Environment["CONTRACTSCRIBE_BATCH_WORKER_LIMIT"] = limit.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        start.Environment["CONTRACTSCRIBE_BATCH_WORKER_OUTCOME"] = expectedOutcome;
         using var process = Process.Start(start)!;
         var stdout = process.StandardOutput.ReadToEndAsync();
         var stderr = process.StandardError.ReadToEndAsync();

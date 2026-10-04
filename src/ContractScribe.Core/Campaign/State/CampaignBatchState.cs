@@ -138,7 +138,7 @@ public static partial class CampaignStateFactory
         var unresolved = targets.Any(target => !target.Dispatchable
             || byKey[target.WorkItemKey].Status != CampaignWorkStatus.Accepted)
             || batch.CompleteTargets.Any(target => !target.BatchEligible);
-        return new(CampaignTerminalKind.Complete, unresolved || targets.IsEmpty
+        return new(CampaignTerminalKind.Complete, unresolved
             ? CampaignTerminalReason.Unresolved : CampaignTerminalReason.AllWorkClosed);
     }
 
