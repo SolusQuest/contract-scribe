@@ -90,7 +90,7 @@ public sealed partial class CampaignCliProcessTests
                     Credential, targetLimit: new(0));
             }
 
-            await File.WriteAllTextAsync(sourcePath, CapacitySource(512), new UTF8Encoding(false, true));
+            await File.WriteAllTextAsync(sourcePath, CapacitySource(128, documentedClass: true), new UTF8Encoding(false, true));
             var started = await Run(CampaignOperation.Start, "snapshot.capacity-small", statePath);
             Assert.Equal(5, started.ExitCode);
             Assert.Contains("\"outcome\":\"campaign.unresolved\"", started.StandardOutput, StringComparison.Ordinal);
@@ -99,9 +99,9 @@ public sealed partial class CampaignCliProcessTests
             Assert.True(parsed.IsValid, parsed.FailureCode?.ToString());
             var state = parsed.Artifact!.State;
             Assert.True(before.Length < CampaignStateContract.MaximumArtifactUtf8Bytes);
-            Assert.Equal(2065, state.Batch.CompleteTargets.Length);
-            Assert.Equal(2048, state.TargetProgress.Count(row => row.Kind == CampaignTargetProgressKind.Excluded));
-            Assert.Equal(17, state.TargetProgress.Count(row => row.Kind == CampaignTargetProgressKind.Deferred));
+            Assert.Equal(528, state.Batch.CompleteTargets.Length);
+            Assert.Equal(512, state.TargetProgress.Count(row => row.Kind == CampaignTargetProgressKind.Excluded));
+            Assert.Equal(16, state.TargetProgress.Count(row => row.Kind == CampaignTargetProgressKind.Deferred));
             Assert.Empty(state.Batch.SelectedTargetKeys);
             Assert.Equal(before, CampaignStateJson.Write(state));
 
