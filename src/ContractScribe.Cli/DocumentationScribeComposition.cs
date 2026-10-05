@@ -88,6 +88,7 @@ internal enum DocumentationCampaignPreparationKind
     StopCancelled,
     StopTimedOut,
     StopBudgetExhausted,
+    StopLifetimeExhausted,
     Invalid,
 }
 
@@ -351,8 +352,10 @@ internal static class DocumentationScribeComposition
             DocumentationScribeCompositionStatus status,
             string code,
             DocumentationScribeValidatedRunOutcome? m3Outcome,
-            PatchAuthorization? patchAuthorization)
+            PatchAuthorization? patchAuthorization,
+            DocumentationScribeDeadlineOwner? resourceStopOwner = null)
         {
+            ResourceStopOwner = resourceStopOwner;
             Status = status;
             Code = code;
             M3Outcome = m3Outcome;
@@ -365,6 +368,8 @@ internal static class DocumentationScribeComposition
                 throw new ArgumentException("Patch authorization requires a bound proposal-ready M3 outcome.", nameof(patchAuthorization));
             }
         }
+
+        internal DocumentationScribeDeadlineOwner? ResourceStopOwner { get; }
 
         public DocumentationScribeCompositionStatus Status { get; }
 
@@ -398,8 +403,19 @@ internal static class DocumentationScribeComposition
     private static PreparedOutcome CreatePrepared(
         DocumentationScribeCompositionStatus status,
         string code,
-        DocumentationScribeValidatedRunOutcome? m3Outcome = null) =>
-        new(status, code, m3Outcome, patchAuthorization: null);
+        DocumentationScribeValidatedRunOutcome? m3Outcome = null,
+        DocumentationScribeDeadlineOwner? resourceStopOwner = null) =>
+        new(status, code, m3Outcome, patchAuthorization: null, resourceStopOwner);
+
+    private static PreparedOutcome CreateDeadlineStopped(DocumentationScribeExecutionScope scope,
+        DocumentationScribeDeadlineOwner owner, DocumentationScribeValidatedRunOutcome? outcome = null)
+    {
+        scope.ObserveDeadline(owner);
+        var resourceStop = scope.Allowance.HasCheckedStop || scope.LifetimeDeadlineReached;
+        return CreatePrepared(resourceStop ? DocumentationScribeCompositionStatus.BudgetExhausted : DocumentationScribeCompositionStatus.Timeout,
+            resourceStop ? "scribe.failure.budget" : "scribe.failure.timeout", outcome,
+            resourceStopOwner: scope.LifetimeDeadlineReached ? DocumentationScribeDeadlineOwner.Lifetime : null);
+    }
 
     private static PreparedOutcome CreateProposalReady(
         DocumentationScribeSelectedAudit selection,
@@ -481,6 +497,9 @@ internal static class DocumentationScribeComposition
                 preflightCancellation?.Token ?? cancellationToken, executionScope).ConfigureAwait(false);
             if (preflight.Failure is { } failure)
             {
+                if (failure.Kind == PreflightFailureKind.Cancelled && !cancellationToken.IsCancellationRequested
+                    && preflightDeadline?.IsCancellationRequested == true)
+                    return CreateDeadlineStopped(executionScope!, preflightOwner);
                 var mapped = MapPreflightFailure(failure, afterProposal: false);
                 return CreatePrepared(mapped.Status, mapped.Code);
             }
@@ -623,6 +642,9 @@ internal static class DocumentationScribeComposition
             return DocumentationCampaignPreparation.Invalid();
         }
 
+        if (owned.ResourceStopOwner == DocumentationScribeDeadlineOwner.Lifetime)
+            return DocumentationCampaignPreparation.Stop(DocumentationCampaignPreparationKind.StopLifetimeExhausted);
+
         var m3 = owned.M3Outcome;
         if (m3 is null && invocation.AcceptedCheckpoint.Artifact.State.ActiveReservation is CampaignProviderReservation
             { CurrentExecutionSettledProviderRequests: 0, OperationKind: CampaignProviderOperationKind.Host })
@@ -724,7 +746,8 @@ internal static class DocumentationScribeComposition
 
             if (coordinator is not null && await coordinator.BeginHostAsync(DocumentationScribeHostOperation.Postflight,
                 Math.Min(executionScope!.Allowance.RemainingMilliseconds, executionScope.Allowance.Limits.MaximumRequestElapsedMilliseconds), cancellationToken).ConfigureAwait(false) is null)
-                return CreatePrepared(DocumentationScribeCompositionStatus.BudgetExhausted, "scribe.failure.budget", bound);
+                return CreatePrepared(DocumentationScribeCompositionStatus.BudgetExhausted, "scribe.failure.budget", bound,
+                    resourceStopOwner: coordinator.LifetimeElapsedExhausted ? DocumentationScribeDeadlineOwner.Lifetime : null);
             postflightOwner = coordinator?.CurrentDeadlineOwner ?? DocumentationScribeDeadlineOwner.HostOperation;
             using var postflightDeadline = executionScope is null ? null : new CancellationTokenSource(
                 TimeSpan.FromMilliseconds(Math.Max(1, Math.Min(executionScope.Allowance.RemainingMilliseconds,
@@ -738,6 +761,9 @@ internal static class DocumentationScribeComposition
                 postflightCancellation?.Token ?? cancellationToken, executionScope).ConfigureAwait(false);
             if (postflight.Failure is { } postflightFailure)
             {
+                if (postflightFailure.Kind == PreflightFailureKind.Cancelled && !cancellationToken.IsCancellationRequested
+                    && postflightDeadline?.IsCancellationRequested == true)
+                    return CreateDeadlineStopped(executionScope!, postflightOwner, bound);
                 var outcome = MapPreflightFailure(postflightFailure, afterProposal: true);
                 return CreatePrepared(outcome.Status, outcome.Code, bound);
             }
@@ -748,6 +774,11 @@ internal static class DocumentationScribeComposition
                     DocumentationScribeCompositionStatus.PatchStale,
                     "scribe.patch.stale-context",
                     bound);
+            }
+
+            if (coordinator is not null && coordinator.CurrentRemaining <= 0)
+            {
+                return CreateDeadlineStopped(executionScope!, postflightOwner, bound);
             }
 
             return CreateProposalReady(

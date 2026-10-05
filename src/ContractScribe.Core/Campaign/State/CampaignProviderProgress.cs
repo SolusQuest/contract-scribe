@@ -148,11 +148,16 @@ public static partial class CampaignStateReducer
         {
             var claim = CurrentClaim(invocation);
             if (claim.OperationKind != CampaignProviderOperationKind.Host || claim.CurrentExecutionSettledProviderRequests != 0
-                || kind is not (CampaignTerminalKind.Cancelled or CampaignTerminalKind.Timeout))
+                || kind is not (CampaignTerminalKind.Cancelled or CampaignTerminalKind.Timeout or CampaignTerminalKind.Exhausted))
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             var state = predecessor.State;
             var charges = CampaignBudgetAccounting.SettleHostInterval(state.LineageCharges, elapsed, claim.Exposure.ElapsedMilliseconds);
-            var reason = kind == CampaignTerminalKind.Cancelled ? CampaignTerminalReason.Caller : CampaignTerminalReason.Deadline;
+            var reason = kind switch
+            {
+                CampaignTerminalKind.Cancelled => CampaignTerminalReason.Caller,
+                CampaignTerminalKind.Timeout => CampaignTerminalReason.Deadline,
+                _ => CampaignTerminalReason.Budget,
+            };
             var transition = Applied(predecessor, CreateState(state, NextRevision(state.CheckpointRevision), charges,
                 state.WorkItems, null, state.CandidateObservation, state.CumulativeOutcome,
                 new CampaignTerminalOutcome(kind, reason), state.Predecessor));

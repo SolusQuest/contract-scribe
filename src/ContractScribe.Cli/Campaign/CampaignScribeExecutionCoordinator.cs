@@ -21,6 +21,9 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     internal DocumentationScribeExecutionScope Scope { get; }
     internal bool LifetimeStop { get; private set; }
     internal bool Conflict { get; private set; }
+    internal bool LifetimeElapsedExhausted => CampaignBudgetAccounting.RemainingLifetimeElapsed(
+        invocation.AcceptedCheckpoint.Artifact.State.LineageCharges,
+        invocation.AcceptedCheckpoint.Artifact.State.ConfiguredCeilings.CampaignBudget) <= CurrentElapsed;
     internal int CurrentElapsed => ElapsedAt(clock.GetTimestamp());
     private int ElapsedAt(long boundary) => checked((int)Math.Ceiling(clock.GetElapsedTime(operationStartedAt, boundary).TotalMilliseconds));
     internal int CurrentRemaining => invocation.AcceptedCheckpoint.Artifact.State.ActiveReservation is CampaignProviderReservation claim

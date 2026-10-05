@@ -300,11 +300,21 @@ internal static class DocumentationCampaignProposalExecutor
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);
-        if (coordinator.Scope.Allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
-            || coordinator.LifetimeStop && !proposalResult)
+        var callerCancelled = prepared.Kind == DocumentationCampaignPreparationKind.StopCancelled
+            || prepared.CompletionAuthority?.Kind == CampaignProviderCompletionKind.CallerCancelled
+            || prepared.CompletionAuthority is
+            {
+                Kind: CampaignProviderCompletionKind.Ordinary,
+                Outcome.RunResult.Terminal: DocumentationScribeCancelledTerminal { Code: DocumentationScribeCancellationCode.Caller }
+            };
+        if (!callerCancelled && (coordinator.Scope.Allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
+            || coordinator.LifetimeElapsedExhausted
+            || prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted
+            || coordinator.LifetimeStop && !proposalResult))
         {
             completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
-                coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached);
+                coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeElapsedExhausted
+                    || prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted);
         }
         else if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
         {
