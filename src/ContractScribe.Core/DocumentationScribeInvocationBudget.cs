@@ -292,6 +292,11 @@ public sealed class DocumentationScribeInvocationAllowance
         }
     }
 
+    internal void ObserveElapsedDeadline()
+    {
+        lock (gate) Stop(DocumentationScribeInvocationStopReason.Elapsed);
+    }
+
     internal int ElapsedSince(long timestamp)
     {
         var elapsed = Clock.GetElapsedTime(timestamp).TotalMilliseconds;

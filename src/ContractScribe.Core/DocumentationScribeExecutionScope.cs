@@ -92,7 +92,9 @@ public sealed class DocumentationScribeExecutionScope
     internal void ObserveDeadline(DocumentationScribeDeadlineOwner owner)
     {
         if (owner == DocumentationScribeDeadlineOwner.Lifetime) LifetimeDeadlineReached = true;
-        if (owner == DocumentationScribeDeadlineOwner.Invocation) Allowance.CanBeginProviderWork();
+        // The admitted boundary owns the stop. Integer timer durations can expire
+        // before a second global-clock read rounds to the same millisecond.
+        if (owner == DocumentationScribeDeadlineOwner.Invocation) Allowance.ObserveElapsedDeadline();
     }
     public bool Failed => Volatile.Read(ref failed) != 0;
     public static DocumentationScribeExecutionScope ForStandalone(DocumentationScribeRequest request,

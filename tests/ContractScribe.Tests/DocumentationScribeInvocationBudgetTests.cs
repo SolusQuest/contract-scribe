@@ -176,6 +176,49 @@ public sealed class DocumentationScribeInvocationBudgetTests
         Assert.Null(await scope.BeginHostAsync(DocumentationScribeHostOperation.RepositoryTool, default));
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Expired_permit_preserves_its_selected_deadline_owner_across_millisecond_rounding(bool provider, bool actionDeadline)
+    {
+        var clock = new FractionalInvocationClock();
+        var allowance = new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
+            maximumElapsedMilliseconds: 500, maximumRequestElapsedMilliseconds: actionDeadline ? 1000 : 200), clock);
+        var scope = new DocumentationScribeExecutionScope(allowance, null, 0, 0);
+        clock.AdvanceTicks(1);
+        var physical = provider ? await scope.ReserveProviderAsync(new(new string('a', 64), 1, 1, 1), default) : null;
+        var host = provider ? null : await scope.BeginHostAsync(DocumentationScribeHostOperation.RegisteredTool, default);
+        if (provider) Assert.True(scope.BeginPhysicalDispatch(Assert.IsType<DocumentationScribeInvocationProviderPermit>(physical)));
+        else Assert.True(Assert.IsType<DocumentationScribeHostPermit>(host).TryBeginOperation());
+        clock.AdvanceTicks(1);
+        var remaining = provider ? physical!.RemainingMilliseconds : host!.RemainingMilliseconds;
+        clock.AdvanceTicks(remaining * 10);
+        Assert.Equal(0, provider ? physical!.RemainingMilliseconds : host!.RemainingMilliseconds);
+        Assert.True(allowance.RemainingMilliseconds > 0);
+        if (provider) scope.ObserveDeadline(physical!);
+        else scope.ObserveDeadline(host!);
+        Assert.Equal(actionDeadline ? DocumentationScribeInvocationStopReason.Elapsed : DocumentationScribeInvocationStopReason.None,
+            allowance.StopReason);
+        Assert.False(scope.LifetimeDeadlineReached);
+        if (provider) Assert.True(await scope.SettleProviderAsync(physical!, new(DocumentationScribeDispatchDisposition.Interrupted, new(0, 0, 0, 0)), default));
+        else Assert.True(await scope.CompleteHostAsync(host!, default));
+        if (actionDeadline)
+        {
+            Assert.False(allowance.TryChargeTool());
+            Assert.False(allowance.TryReserveProvider(out _));
+        }
+    }
+
+    private sealed class FractionalInvocationClock : TimeProvider
+    {
+        private long timestamp;
+        public override long TimestampFrequency => 10_000;
+        public override long GetTimestamp() => timestamp;
+        internal void AdvanceTicks(long ticks) => timestamp = checked(timestamp + ticks);
+    }
+
     private sealed class InvocationClock : TimeProvider
     {
         private long timestamp;
