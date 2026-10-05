@@ -63,9 +63,8 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "scribe-protocol.openai-compatible.v1"));
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        await server.Completion;
-
         Assert.Equal(expectedKind, result.Terminal.Kind);
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal("one", Assert.Single(port.References));
@@ -155,11 +154,10 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "scribe-protocol.openai-compatible.v1"));
 
         var first = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        var second = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        await server.Completion;
-
         Assert.Equal(DocumentationScribeTerminalKind.Skip, first.Terminal.Kind);
+        var second = await runtime.RunAsync(request, Attempt(), Prompt(request));
         Assert.Equal(DocumentationScribeTerminalKind.Skip, second.Terminal.Kind);
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(4, server.Requests.Length);
         foreach (var index in new[] { 0, 2 })
         {
@@ -197,9 +195,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             "empty" => "\"content\":\"\",",
             _ => throw new ArgumentOutOfRangeException(nameof(contentShape)),
         };
-        var toolResponse = Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
+        var toolResponse = WithKnownSyntheticUsage(Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
             + contentProperty
-            + "\"reasoning_content\":\"" + marker + "\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\\\"referenceId\\\":\\\"one\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}");
+            + "\"reasoning_content\":\"" + marker + "\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\\\"referenceId\\\":\\\"one\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}"));
         var terminalResponse = ThinkingCompletion("cs_terminal", "call.terminal", terminal, "terminal-marker");
         await using var server = new LoopbackServer(toolResponse, terminalResponse);
         var profile = new OpenAiCompatibleChatCompletionsRequestProfile(
@@ -223,9 +221,8 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "scribe-protocol.openai-compatible.v1"));
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        await server.Completion;
-
         Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(2, server.Requests.Length);
         using var replay = JsonDocument.Parse(server.Requests[1].Body);
         var assistant = replay.RootElement.GetProperty("messages")[5];
@@ -252,7 +249,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
 
         var response = await exchange.SendAsync(await ModelRequestAsync(), CancellationToken.None);
-        await server.Completion;
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, response.Failure!.Code);
         Assert.Single(server.Requests);
@@ -387,13 +384,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     }
 
     [Fact]
-    public async Task Runtime_owns_retry_after_pre_response_eof_without_transport_body_replay()
+    public async Task Runtime_stops_after_unknown_pre_response_eof_without_transport_body_replay()
     {
-        var terminal = Completion(
-            "cs_terminal",
-            "call.terminal",
-            Encoding.UTF8.GetString(ReadTerminal("skip-result.json")));
-        await using var server = new ReplayFaultServer(terminal);
+        await using var server = new ReplayFaultServer();
         var request = Request();
         using var exchange = new OpenAiCompatibleHttpModelExchange(
             new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
@@ -403,12 +396,40 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        Assert.Equal(DocumentationScribeFailureCode.Budget,
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
-        Assert.Equal(2, server.CompleteRequestBodies);
-        Assert.InRange(server.AcceptedConnections, 2, 3);
+        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(0, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(1, server.CompleteRequestBodies);
+        Assert.InRange(server.AcceptedConnections, 1, 2);
+    }
+
+    [Fact]
+    public async Task Missing_success_usage_stops_follow_up_without_an_unsent_fixture_request()
+    {
+        var response = JsonNode.Parse(Completion("cs_tool_000", "call.one", "{\"referenceId\":\"one\"}"))!.AsObject();
+        Assert.True(response.Remove("usage"));
+        await using var server = new LoopbackServer(Encoding.UTF8.GetBytes(response.ToJsonString()));
+        var request = Request();
+        var port = new SyntheticPort();
+        using var exchange = new OpenAiCompatibleHttpModelExchange(
+            new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
+        var runtime = new DocumentationScribeRuntime(
+            exchange,
+            Registry(request.ToolPolicyId, port),
+            new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
+
+        var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        Assert.Equal(DocumentationScribeFailureCode.Budget,
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+        Assert.Equal("one", Assert.Single(port.References));
+        Assert.Single(server.Requests);
     }
 
     [Fact]
@@ -434,7 +455,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     }
 
     private static byte[] Completion(string alias, string callId, string arguments) =>
-        JsonSerializer.SerializeToUtf8Bytes(new
+        WithKnownSyntheticUsage(JsonSerializer.SerializeToUtf8Bytes(new
         {
             choices = new[]
             {
@@ -457,14 +478,14 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                     finish_reason = "tool_calls",
                 },
             },
-        });
+        }));
 
     private static byte[] ThinkingCompletion(
         string alias,
         string callId,
         string arguments,
         string reasoningContent) =>
-        JsonSerializer.SerializeToUtf8Bytes(new
+        WithKnownSyntheticUsage(JsonSerializer.SerializeToUtf8Bytes(new
         {
             choices = new[]
             {
@@ -489,7 +510,21 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                     finish_reason = "tool_calls",
                 },
             },
-        });
+        }));
+
+    private static byte[] WithKnownSyntheticUsage(byte[] response)
+    {
+        var node = JsonNode.Parse(response)!.AsObject();
+        node["usage"] = new JsonObject
+        {
+            ["prompt_tokens"] = 100,
+            ["completion_tokens"] = 20,
+            ["prompt_cache_hit_tokens"] = 0,
+            ["prompt_cache_miss_tokens"] = 100,
+            ["completion_tokens_details"] = new JsonObject { ["reasoning_tokens"] = 0 },
+        };
+        return Encoding.UTF8.GetBytes(node.ToJsonString());
+    }
 
     private static int SelectedRawResponseUtf8Bytes => checked(
         6 * DocumentationScribeContract.MaximumArtifactUtf8Bytes
