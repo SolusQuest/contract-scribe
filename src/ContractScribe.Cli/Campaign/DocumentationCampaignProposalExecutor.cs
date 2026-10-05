@@ -300,7 +300,8 @@ internal static class DocumentationCampaignProposalExecutor
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);
-        if (coordinator.Scope.Allowance.HasCheckedStop || coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached)
+        if (coordinator.Scope.Allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
+            || coordinator.LifetimeStop && !proposalResult)
         {
             completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
                 coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached);

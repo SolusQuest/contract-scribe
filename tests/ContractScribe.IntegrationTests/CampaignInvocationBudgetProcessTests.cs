@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json.Nodes;
 using ContractScribe.Core;
+using ContractScribe.Cli;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -95,6 +96,25 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(1000, attempt.RetryProgress.PendingRetryAfterMilliseconds);
             Assert.Equal(1, server.RequestCount);
             Assert.Equal(1, paused.State.LineageCharges.OuterInvocations);
+            var stoppedLayer = JsonNode.Parse(await File.ReadAllTextAsync(configurationPath))!;
+            stoppedLayer["budgets"] = new JsonObject { ["invocation"] = new JsonObject { ["maximumProviderRequests"] = 0 } };
+            await File.WriteAllTextAsync(configurationPath, stoppedLayer.ToJsonString());
+            var credentialReads = 0;
+            var preflight = CampaignPreflight.Run(new(CampaignOperation.Resume, fixture.Root, "App/App.csproj", "policy.json",
+                "snapshot.c4.retry", statePath, configurationPath, null, "campaign.integration"), RepositoryRoot);
+            var stopped = await CampaignCommandRunner.RunAsync(CliBuildIdentity.Current, preflight, CancellationToken.None,
+                _ => { credentialReads++; throw new InvalidOperationException("A paused Action without provider quota cannot request credentials."); });
+            Assert.Contains("campaign.invocation-budget-exhausted", stopped.StandardOutput, StringComparison.Ordinal);
+            Assert.Equal(3, stopped.ExitCode);
+            Assert.Equal(0, credentialReads);
+            Assert.Equal(paused.ExactUtf8Json.ToArray(), await File.ReadAllBytesAsync(statePath));
+            Assert.Equal(1, server.RequestCount);
+            var stoppedProcess = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c4.retry"),
+                timeout: TimeSpan.FromMinutes(3));
+            AssertCampaign(stoppedProcess, 3, "campaign.invocation-budget-exhausted", paused.CheckpointRevision);
+            Assert.Equal(paused.ExactUtf8Json.ToArray(), await File.ReadAllBytesAsync(statePath));
+            Assert.Equal(1, server.RequestCount);
+            await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
             var completed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c4.retry"),
                 timeout: TimeSpan.FromMinutes(3));
             AssertControlledCampaign(completed, "fresh-process-retry-wait");

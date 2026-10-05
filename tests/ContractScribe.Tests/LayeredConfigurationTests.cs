@@ -23,6 +23,32 @@ public sealed partial class LayeredConfigurationTests : IDisposable
         }
     }
 
+    [Theory]
+    [InlineData(1)]
+    [InlineData(2)]
+    [InlineData(4)]
+    [InlineData(5)]
+    [InlineData(1_000_000)]
+    public void Resolve_ScribeAttempts_UsesCurrentDocumentationScribeDomain(int attempts)
+    {
+        var layer = Layer("budgets", new JsonObject
+        {
+            ["scribe"] = new JsonObject { ["maximumAttempts"] = attempts },
+        });
+        var snapshot = Resolve(Defaults(), layer);
+        Assert.Equal(attempts, snapshot.Document.Budgets.Scribe.MaximumAttempts);
+        Assert.Equal(DocumentationScribeContract.MaximumAttempts, 1_000_000);
+    }
+
+    [Fact]
+    public void Resolve_ScribeAttempts_RejectsAboveCurrentBound()
+    {
+        var layer = Layer("budgets", new JsonObject
+        {
+            ["scribe"] = new JsonObject { ["maximumAttempts"] = DocumentationScribeContract.MaximumAttempts + 1 },
+        });
+        AssertInvalid(Defaults(), layer);
+    }
     [Fact]
     public void Resolve_DefaultsOnly_InjectsLineageAndProductIdentity()
     {

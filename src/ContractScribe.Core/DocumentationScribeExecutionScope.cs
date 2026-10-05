@@ -53,7 +53,8 @@ public sealed class DocumentationScribeHostPermit
     public DocumentationScribeDeadlineOwner DeadlineOwner { get; }
     public int ElapsedMilliseconds => scope.Allowance.ElapsedSince(startedAt);
     public int RemainingMilliseconds => Math.Max(0, MaximumMilliseconds - ElapsedMilliseconds);
-    public bool TryBeginOperation() => !scope.Failed && RemainingMilliseconds > 0 && !scope.Allowance.HasCheckedStop
+    public bool TryBeginOperation() => !scope.Failed && scope.CanBeginHost(Operation)
+        && RemainingMilliseconds > 0 && !scope.Allowance.HasCheckedStop
         && Interlocked.CompareExchange(ref started, 1, 0) == 0
         && (!chargesTool || scope.Allowance.TryChargeTool());
     internal bool TryComplete() => Interlocked.CompareExchange(ref completed, 1, 0) == 0;
@@ -81,8 +82,13 @@ public sealed class DocumentationScribeExecutionScope
     public bool LifetimeDeadlineReached { get; private set; }
     public bool StandaloneDeadlineReached => !Allowance.IsCampaignScope
         && Allowance.StopReason == DocumentationScribeInvocationStopReason.Elapsed;
-    public bool ResourceBudgetReached => LifetimeDeadlineReached || Allowance.IsCampaignScope
-        && Allowance.HasCheckedStop;
+    public bool SettledLifetimeBudgetExceeded { get; private set; }
+    public bool ResourceBudgetReached => LifetimeDeadlineReached || SettledLifetimeBudgetExceeded
+        || Allowance.IsCampaignScope && Allowance.HasCheckedStop;
+    internal void ObserveSettledLifetimeBudgetExhaustion() => SettledLifetimeBudgetExceeded = true;
+    internal bool CanBeginHost(DocumentationScribeHostOperation operation) => !LifetimeDeadlineReached
+        && (!SettledLifetimeBudgetExceeded || operation is DocumentationScribeHostOperation.TerminalSubmission
+            or DocumentationScribeHostOperation.Postflight);
     public void ObserveDeadline(DocumentationScribeInvocationProviderPermit permit)
     {
         if (!ReferenceEquals(provider, permit)) throw new InvalidOperationException("scribe.deadline.invalid-owner");
@@ -115,7 +121,7 @@ public sealed class DocumentationScribeExecutionScope
     public async ValueTask<DocumentationScribeInvocationProviderPermit?> ReserveProviderAsync(
         DocumentationScribeDispatchDescriptor descriptor, CancellationToken cancellationToken)
     {
-        if (Failed || host is not null || provider is not null || !ValidDescriptor(descriptor)
+        if (Failed || ResourceBudgetReached || host is not null || provider is not null || !ValidDescriptor(descriptor)
             || Interlocked.CompareExchange(ref operationGrant, 1, 0) != 0) return null;
         if (!Allowance.TryReserveProvider(out var permit) || permit is null)
         { Volatile.Write(ref operationGrant, 0); return null; }
@@ -149,7 +155,7 @@ public sealed class DocumentationScribeExecutionScope
         CancellationToken cancellationToken)
     {
         if (Failed || host is not null || provider is not null || !Enum.IsDefined(operation)
-            || Allowance.HasCheckedStop) return null;
+            || Allowance.HasCheckedStop || !CanBeginHost(operation)) return null;
         if (Allowance.RemainingMilliseconds <= 0) { Allowance.CanBeginProviderWork(); return null; }
         if (Interlocked.CompareExchange(ref operationGrant, 1, 0) != 0) return null;
         var startedAt = Allowance.Clock.GetTimestamp();

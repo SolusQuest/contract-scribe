@@ -826,8 +826,10 @@ public sealed partial class CampaignCliProcessTests
         private readonly string scenario;
         private readonly string? summaryText;
         private readonly bool includeUsage;
-        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = false)
+        private readonly int usageOutputTokens;
+        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = false, int usageOutputTokens = 7)
         {
+            this.usageOutputTokens = usageOutputTokens;
             this.scenario = scenario;
             this.summaryText = summaryText;
             this.includeUsage = includeUsage;
@@ -877,7 +879,7 @@ public sealed partial class CampaignCliProcessTests
                     }
                     var response = scenario == "closed-proposal"
                         ? CreateSkipResponse()
-                        : CreateProposalResponse(body, summaryText, includeUsage);
+                        : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens);
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(headers, disposal.Token);
@@ -896,7 +898,7 @@ public sealed partial class CampaignCliProcessTests
             return TerminalResponse(terminal);
         }
 
-        private static byte[] CreateProposalResponse(byte[] body, string? summaryText, bool includeUsage)
+        private static byte[] CreateProposalResponse(byte[] body, string? summaryText, bool includeUsage, int usageOutputTokens)
         {
             using var wire = JsonDocument.Parse(body);
             JsonElement? targetEvidence = null;
@@ -935,10 +937,10 @@ public sealed partial class CampaignCliProcessTests
                 ["target"] = JsonNode.Parse(evidence.GetProperty("terminalTarget").GetRawText()),
                 ["contentUnits"] = units,
             };
-            return TerminalResponse(terminal.ToJsonString(), includeUsage);
+            return TerminalResponse(terminal.ToJsonString(), includeUsage, usageOutputTokens);
         }
 
-        private static byte[] TerminalResponse(string terminal, bool includeUsage = false)
+        private static byte[] TerminalResponse(string terminal, bool includeUsage = false, int usageOutputTokens = 7)
         {
             var response = new
             {
@@ -975,8 +977,8 @@ public sealed partial class CampaignCliProcessTests
                 ["prompt_tokens"] = 31,
                 ["prompt_cache_hit_tokens"] = 29,
                 ["prompt_cache_miss_tokens"] = 2,
-                ["completion_tokens"] = 7,
-                ["total_tokens"] = 38
+                ["completion_tokens"] = usageOutputTokens,
+                ["total_tokens"] = 31 + usageOutputTokens
             };
             return JsonSerializer.SerializeToUtf8Bytes(node);
         }

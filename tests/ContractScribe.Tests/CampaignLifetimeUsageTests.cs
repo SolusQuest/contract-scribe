@@ -344,7 +344,8 @@ public sealed partial class CampaignStateContractTests
     }
 
     private static async Task<(CampaignCheckpointArtifact Artifact, DocumentationScribeRunResult Result)>
-        CompleteC3RuntimeAsync(ProposalScenario scenario, IDocumentationScribeModelExchange exchange)
+        CompleteC3RuntimeAsync(ProposalScenario scenario, IDocumentationScribeModelExchange exchange,
+            DocumentationScribeInvocationLimits? invocationLimits = null, DocumentationScribeToolRegistry? registry = null)
     {
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var request = CreateScribeExchange(scenario.Plan.WorkItems[0], requestMutation: root =>
@@ -355,7 +356,8 @@ public sealed partial class CampaignStateContractTests
         var work = scenario.Plan.WorkItems[0];
         for (var action = 0; action < 2; action++)
         {
-            var allowance = CampaignInvocationTestPolicy.Create(request.Limits);
+            var allowance = invocationLimits is null ? CampaignInvocationTestPolicy.Create(request.Limits)
+                : new DocumentationScribeInvocationAllowance(invocationLimits);
             var targets = CampaignStateFactory.CreateInvocationTargetAllowance(current.State, new(100));
             var admitted = current.State.WorkItems[0].PausedProviderAttempt is null
                 ? CampaignStateReducer.AdmitProviderInvocation(current, scenario.ExecutionAuthority, "style.synthetic",
@@ -371,7 +373,7 @@ public sealed partial class CampaignStateContractTests
             var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
             Assert.True(authority.TryBeginDispatch(out _));
             var runtime = new DocumentationScribeRuntime(exchange,
-                new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
+                registry ?? new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
                 new DocumentationScribeRuntimeOptions("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
             var prompt = new DocumentationScribePromptInput(
                 request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
@@ -382,7 +384,8 @@ public sealed partial class CampaignStateContractTests
                     new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
             var result = await runtime.RunAsync(request, reservation.AttemptId, prompt, executionScope: coordinator.Scope);
             CampaignTransitionResult complete;
-            if (allowance.HasCheckedStop || coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached)
+            if (allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
+                || coordinator.LifetimeStop && result.Terminal is not DocumentationScribeProposalTerminal)
             {
                 complete = CampaignStateReducer.PauseProviderInvocation(authority, coordinator.CurrentElapsed,
                     coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached);
@@ -400,7 +403,7 @@ public sealed partial class CampaignStateContractTests
             Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, final.Kind);
             current = final.Artifact!;
             var paused = current.State.WorkItems[0].PausedProviderAttempt;
-            if (action == 0 && paused?.RetryProgress.LastDisposition == CampaignProviderDispatchDisposition.RetryableFailure
+            if (action == 0 && current.State.TerminalOutcome is null && paused?.RetryProgress.LastDisposition == CampaignProviderDispatchDisposition.RetryableFailure
                 && paused.RetryProgress.RetryableFailureCount < request.Limits.MaximumAttempts)
             {
                 Assert.Null(current.State.TerminalOutcome);

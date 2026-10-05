@@ -113,6 +113,11 @@ public static partial class CampaignStateReducer
             var next = Continuation(claim, invocation.InvocationAllowance!, charges, predecessor.State.ConfiguredCeilings.CampaignBudget);
             if (!completing)
             {
+                // Only validation of an already returned terminal proposal may finish
+                // after a non-elapsed lifetime overrun. Settlement still owns all charges.
+                if (!CampaignBudgetAccounting.FitsSettledBudget(charges, predecessor.State.ConfiguredCeilings.CampaignBudget)
+                    && phase is not (DocumentationScribeHostOperation.TerminalSubmission or DocumentationScribeHostOperation.Postflight))
+                    return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
                 var lifetime = CampaignBudgetAccounting.RemainingLifetimeElapsed(charges, predecessor.State.ConfiguredCeilings.CampaignBudget);
                 var exposure = Math.Min(maximumMilliseconds, Math.Min(lifetime, invocation.InvocationAllowance!.RemainingMilliseconds));
                 if (exposure <= 0 || !HasProviderCompletionRevisionHeadroom(predecessor.State))
@@ -250,8 +255,10 @@ public static partial class CampaignStateReducer
             if (state.ActiveReservation is not null || state.TerminalOutcome is not null
                 || paused.RetryProgress.RetryableFailureCount >= request.Limits.MaximumAttempts
                 || paused.RetryProgress.LastDisposition == CampaignProviderDispatchDisposition.TerminalFailure
-                || !CampaignStateFactory.AllowsTarget(state, key, targets) || !allowance.CanBeginProviderWork())
+                || !CampaignStateFactory.AllowsTarget(state, key, targets))
                 return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
+            if (!allowance.CanBeginProviderWork())
+                return Reject(predecessor, CampaignTransitionFailure.InvocationBudgetExhausted);
             var budget = CampaignBudgetAccounting.ReserveProviderResume(state, allowance);
             if (budget.Kind != CampaignBudgetDecisionKind.Admitted || budget.Exposure is null)
                 return Exhausted(predecessor, CampaignTerminalReason.LifetimeCap);

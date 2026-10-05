@@ -174,7 +174,9 @@ public sealed class DocumentationScribeRuntime
 
             var response = completion.Value;
             var observationProtocolFailure = !state.TryApplyObservations(response);
-            checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
+            var returnedTerminal = !observationProtocolFailure && response.TerminalSubmissions.Length == 1
+                && response.ToolCalls.Length == 0 && response.Failure is null;
+            checkpoint = CommitCheckpoint(state, reducer, cancellationToken, allowReturnedTerminal: returnedTerminal);
             if (checkpoint is not null)
             {
                 return checkpoint;
@@ -254,7 +256,7 @@ public sealed class DocumentationScribeRuntime
                 continue;
             }
 
-            checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
+            checkpoint = CommitCheckpoint(state, reducer, cancellationToken, allowReturnedTerminal: true);
             if (checkpoint is not null)
             {
                 return checkpoint;
@@ -666,8 +668,8 @@ public sealed class DocumentationScribeRuntime
     private static DocumentationScribeRunResult? CommitCheckpoint(
         RunState state,
         DocumentationScribeTerminalReducer reducer,
-        CancellationToken cancellationToken) =>
-        reducer.TryCommitPriority(state, cancellationToken);
+        CancellationToken cancellationToken, bool allowReturnedTerminal = false) =>
+        reducer.TryCommitPriority(state, cancellationToken, allowReturnedTerminal);
 
     private static bool EvidenceReferenceEquivalent(
         DocumentationScribeEvidenceReference left,
@@ -708,7 +710,7 @@ internal sealed class DocumentationScribeTerminalReducer
 
     internal DocumentationScribeRunResult? TryCommitPriority(
         RunState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool allowReturnedTerminal = false)
     {
         lock (gate)
         {
@@ -718,7 +720,7 @@ internal sealed class DocumentationScribeTerminalReducer
             }
 
             var elapsed = state.ElapsedMilliseconds;
-            committed = CreatePriorityResult(state, cancellationToken, elapsed);
+            committed = CreatePriorityResult(state, cancellationToken, elapsed, allowReturnedTerminal);
             return committed;
         }
     }
@@ -813,7 +815,8 @@ internal sealed class DocumentationScribeTerminalReducer
             }
 
             var elapsed = state.ElapsedMilliseconds;
-            committed = CreatePriorityResult(state, cancellationToken, elapsed);
+            committed = CreatePriorityResult(state, cancellationToken, elapsed,
+                allowReturnedTerminal: validationCode is null && candidate?.Result?.Terminal is DocumentationScribeProposalTerminal);
             if (committed is not null)
             {
                 return committed;
@@ -880,14 +883,16 @@ internal sealed class DocumentationScribeTerminalReducer
     private static DocumentationScribeRunResult? CreatePriorityResult(
         RunState state,
         CancellationToken cancellationToken,
-        int elapsedMilliseconds)
+        int elapsedMilliseconds, bool allowReturnedTerminal = false)
     {
         if (cancellationToken.IsCancellationRequested)
         {
             return state.CreateCancelled(elapsedMilliseconds);
         }
 
-        if (state.Scope.ResourceBudgetReached)
+        if (state.Scope.ResourceBudgetReached
+            && !(allowReturnedTerminal && state.Scope.SettledLifetimeBudgetExceeded
+                && !state.Scope.LifetimeDeadlineReached && !state.Scope.Allowance.HasCheckedStop))
         {
             return state.CreateFailure(DocumentationScribeFailureCode.Budget, elapsedMilliseconds);
         }

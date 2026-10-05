@@ -149,6 +149,29 @@ public sealed partial class CampaignStateContractTests
             CampaignInvocationTestPolicy.Create(foreignRequest.Limits));
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, foreign.Failure);
         Assert.Equal(retired.Artifact.ExactUtf8Json, foreign.Artifact.ExactUtf8Json);
+        foreach (var resource in new[] { "requests", "calls", "cached", "uncached", "output", "elapsed", "request-output", "request-elapsed", "connect", "response-width" })
+        {
+            var stopped = DocumentationScribeInvocationLimits.Create(
+                maximumProviderRequests: resource == "requests" ? 0 : 8,
+                maximumToolCalls: resource == "calls" ? 0 : 16,
+                maximumCachedInputTokens: resource == "cached" ? 0 : 32768,
+                maximumUncachedInputTokens: resource == "uncached" ? 0 : 32768,
+                maximumOutputTokens: resource == "output" ? 0 : 8192,
+                maximumElapsedMilliseconds: resource == "elapsed" ? 0 : 120000,
+                maximumRequestOutputTokens: resource == "request-output" ? 0 : 8192,
+                maximumRequestElapsedMilliseconds: resource == "request-elapsed" ? 0 : 120000,
+                maximumConnectMilliseconds: resource == "connect" ? 0 : 1000,
+                maximumToolCallsPerResponse: resource == "response-width" ? 0 : 16);
+            var noQuota = CampaignStateReducer.RetryProviderInvocation(retired.Artifact, retired.AcceptedCheckpoint,
+                scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan,
+                scenario.Plan.WorkItems[0].WorkItemKey, freshRequest,
+                CampaignStateFactory.CreateInvocationTargetAllowance(retired.Artifact.State, new(0)),
+                new DocumentationScribeInvocationAllowance(stopped));
+            Assert.Equal(CampaignTransitionFailure.InvocationBudgetExhausted, noQuota.Failure);
+            Assert.Equal(retired.Artifact.ExactUtf8Json, noQuota.Artifact.ExactUtf8Json);
+            Assert.Equal(paused, noQuota.Artifact.State.WorkItems[0].PausedProviderAttempt);
+            Assert.Null(noQuota.Artifact.State.TerminalOutcome);
+        }
         var freshAllowance = CampaignInvocationTestPolicy.Create(freshRequest.Limits, new C4CampaignClock());
         var resume = CampaignStateReducer.RetryProviderInvocation(retired.Artifact, retired.AcceptedCheckpoint,
             scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan,

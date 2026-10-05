@@ -95,8 +95,11 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
             || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
         { Conflict = true; return false; }
         operationStartedAt = boundary;
-        LifetimeStop |= CampaignBudgetAccounting.RemainingLifetimeElapsed(accepted.Artifact!.State.LineageCharges,
-            accepted.Artifact.State.ConfiguredCeilings.CampaignBudget) <= 0;
+        var state = accepted.Artifact!.State;
+        var exceeded = !CampaignBudgetAccounting.FitsSettledBudget(state.LineageCharges, state.ConfiguredCeilings.CampaignBudget);
+        if (exceeded) Scope.ObserveSettledLifetimeBudgetExhaustion();
+        LifetimeStop |= exceeded || CampaignBudgetAccounting.RemainingLifetimeElapsed(state.LineageCharges,
+            state.ConfiguredCeilings.CampaignBudget) <= 0;
         return true;
     }
 }
