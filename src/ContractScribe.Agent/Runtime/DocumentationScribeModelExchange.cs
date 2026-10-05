@@ -231,6 +231,11 @@ public interface IDocumentationScribeModelExchange
     ValueTask<DocumentationScribeModelResponse> SendAsync(
         DocumentationScribeModelRequest request,
         CancellationToken cancellationToken);
+
+    ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeModelRequest request,
+        DocumentationScribeExecutionScope scope, CancellationToken cancellationToken) =>
+        DocumentationScribePhysicalExchange.SendAsync(request, scope,
+            new DocumentationScribeExchangePhysicalSend(this, request, scope), cancellationToken);
 }
 
 public sealed class DocumentationScribeModelToolCall
@@ -395,6 +400,12 @@ public sealed class DocumentationScribeModelUsage
         {
             throw new ArgumentException("Reasoning tokens cannot exceed observed output tokens.", nameof(reasoningTokens));
         }
+
+        if (inputTokens is { } observedTotal && (cachedInputTokens > observedTotal || uncachedInputTokens > observedTotal))
+            throw new ArgumentException("An input partition cannot exceed observed total input.", nameof(inputTokens));
+        if (inputTokens is { } total && cachedInputTokens is { } hit && uncachedInputTokens is { } miss
+            && checked((long)hit + miss) != total)
+            throw new ArgumentException("Complete input partitions must equal total input.", nameof(inputTokens));
 
         InputTokens = inputTokens;
         OutputTokens = outputTokens;

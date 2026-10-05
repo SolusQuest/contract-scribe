@@ -709,7 +709,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
         var cacheComponentsExceedInput = input is int inputTotal
             && cached is int cachedTokens
             && directMiss is int uncachedTokens
-            && cachedTokens + uncachedTokens > inputTotal;
+            && cachedTokens + uncachedTokens != inputTotal;
         if ((directHit is not null && cachedDetail is not null && directHit != cachedDetail)
             || (input is not null && (cached > input || directMiss > input))
             || cacheComponentsExceedInput

@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Security.Authentication;
 using ContractScribe.Agent.Runtime;
+using ContractScribe.Core;
 
 namespace ContractScribe.Agent.Providers;
 
@@ -15,7 +16,7 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
     private int disposed;
 
     public OpenAiCompatibleHttpModelExchange(OpenAiCompatibleHttpTransportOptions options)
-        : this(options, CreateProductionHandler(), disposeHandler: true, diagnostics: null)
+        : this(options, CreateProductionHandler(options.MaximumConnectMilliseconds), disposeHandler: true, diagnostics: null)
     {
     }
 
@@ -41,8 +42,14 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             disposeHandler: true);
     }
 
-    public async ValueTask<DocumentationScribeModelResponse> SendAsync(
-        DocumentationScribeModelRequest request,
+    public ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeModelRequest request,
+        CancellationToken cancellationToken) => SendCoreAsync(request, null, cancellationToken);
+
+    public ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeModelRequest request,
+        DocumentationScribeExecutionScope scope, CancellationToken cancellationToken) => SendCoreAsync(request, scope, cancellationToken);
+
+    private async ValueTask<DocumentationScribeModelResponse> SendCoreAsync(
+        DocumentationScribeModelRequest request, DocumentationScribeExecutionScope? scope,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
@@ -71,6 +78,16 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
                 origin: DocumentationScribeModelFailureOrigin.RequestPreparation);
         }
 
+        return scope is null
+            ? await SendPreparedAsync(prepared, request, null, null, cancellationToken).ConfigureAwait(false)
+            : await DocumentationScribePhysicalExchange.SendAsync(request, scope,
+                new PreparedPhysicalSend(this, prepared, request, scope), cancellationToken).ConfigureAwait(false);
+    }
+
+    private async ValueTask<DocumentationScribeModelResponse> SendPreparedAsync(OpenAiCompatiblePreparedRequest prepared,
+        DocumentationScribeModelRequest request, DocumentationScribeExecutionScope? scope,
+        DocumentationScribeInvocationProviderPermit? permit, CancellationToken cancellationToken)
+    {
         var replayObservation = prepared.HistoryReplayed
             ? DocumentationScribeContinuationObservation.HistoryReplayed
             : DocumentationScribeContinuationObservation.None;
@@ -78,6 +95,9 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         try
         {
             using var message = CreateMessage(prepared);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (scope is not null && (permit is null || !scope.BeginPhysicalDispatch(permit)))
+                throw new OperationCanceledException(cancellationToken);
             dispatchedReplayObservation = replayObservation;
             using var response = await invoker.SendAsync(message, cancellationToken).ConfigureAwait(false);
             if (response.StatusCode != HttpStatusCode.OK)
@@ -201,6 +221,14 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
     }
 
+    private sealed class PreparedPhysicalSend(OpenAiCompatibleHttpModelExchange owner,
+        OpenAiCompatiblePreparedRequest prepared, DocumentationScribeModelRequest request,
+        DocumentationScribeExecutionScope scope) : IDocumentationScribePreparedPhysicalSend
+    {
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeInvocationProviderPermit permit, CancellationToken token) =>
+            owner.SendPreparedAsync(prepared, request, scope, permit, token);
+    }
+
     public void Dispose()
     {
         if (Interlocked.Exchange(ref disposed, 1) == 0)
@@ -211,9 +239,10 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
 
     public override string ToString() => nameof(OpenAiCompatibleHttpModelExchange);
 
-    internal static SocketsHttpHandler CreateProductionHandler() => new()
+    internal static SocketsHttpHandler CreateProductionHandler(int maximumConnectMilliseconds = 15_000) => new()
     {
         ActivityHeadersPropagator = null,
+        ConnectTimeout = TimeSpan.FromMilliseconds(maximumConnectMilliseconds),
         AllowAutoRedirect = false,
         AutomaticDecompression = DecompressionMethods.None,
         MaxResponseDrainSize = 0,

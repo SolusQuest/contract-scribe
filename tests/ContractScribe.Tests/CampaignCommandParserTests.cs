@@ -147,7 +147,7 @@ public sealed class CampaignCommandParserTests
         Assert.Throws<CampaignConfigurationException>(() => Parse(reordered));
 
         var crossed = JsonNode.Parse(valid)!.AsObject();
-        crossed["budgets"]!["campaign"]!["maximumUncachedInputTokens"] = 1000001;
+        crossed["budgets"]!["invocation"]!["maximumCachedInputTokens"] = ContractScribe.Core.DocumentationScribeContract.MaximumConfiguredInputTokens;
         Assert.Throws<CampaignConfigurationException>(() => Parse(crossed));
 
         var duplicate = Encoding.UTF8.GetString(valid).Replace(
@@ -202,7 +202,9 @@ public sealed class CampaignCommandParserTests
     [Fact]
     public void ProcessBoundaryHook_RejectsUnknownNamesAndPublishesClosedAllowlist()
     {
-        Assert.Equal(41, CampaignProcessBoundaryHooks.Allowlist.Count);
+        var matrix = JsonNode.Parse(File.ReadAllBytes(Fixture("process-boundary-matrix.json")))!.AsArray();
+        Assert.Equal(CampaignProcessBoundaryHooks.Allowlist.Order(StringComparer.Ordinal),
+            matrix.Select(row => row!["hook"]!.GetValue<string>()).Order(StringComparer.Ordinal));
         Assert.Contains("checkpoint.initial.before-create", CampaignProcessBoundaryHooks.Allowlist);
         Assert.Contains("proposal.result.proposal.in-replacement", CampaignProcessBoundaryHooks.Allowlist);
         Assert.Contains("proposal.result.closed.after-replacement-before-readback", CampaignProcessBoundaryHooks.Allowlist);

@@ -581,8 +581,19 @@ public sealed partial class CampaignCliProcessTests
             server.Endpoint,
             vector.Scenario == "closed-patch" ? 1 : null);
 
+        var startOperation = "start";
+        if (vector.Scenario == "retry-wait")
+        {
+            var seeded = await RunAsync(Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary"),
+                timeout: TimeSpan.FromMinutes(3));
+            AssertControlledCampaign(seeded, "accepted-failure-before-fresh-action-wait");
+            var seed = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
+            Assert.NotNull(seed.State.WorkItems.Single(item => item.OuterAttemptCount > 0).PausedProviderAttempt);
+            Assert.Equal(1, server.RequestCount);
+            startOperation = "resume";
+        }
         using var running = Start(
-            Args("start", fixture.Root, statePath, configurationPath, "snapshot.boundary"),
+            Args(startOperation, fixture.Root, statePath, configurationPath, "snapshot.boundary"),
             new Dictionary<string, string?>
             {
                 ["DOTNET_STARTUP_HOOKS"] = StartupHookPath,
@@ -857,7 +868,13 @@ public sealed partial class CampaignCliProcessTests
                     await using var stream = client.GetStream();
                     var body = await ReadHttpBodyAsync(stream, disposal.Token);
                     requestBodies.Enqueue(body);
-                    Interlocked.Increment(ref requestCount);
+                    var count = Interlocked.Increment(ref requestCount);
+                    if (scenario is "retry" or "retry-wait" && count == 1)
+                    {
+                        var transient = Encoding.ASCII.GetBytes("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        await stream.WriteAsync(transient, disposal.Token);
+                        continue;
+                    }
                     var response = scenario == "closed-proposal"
                         ? CreateSkipResponse()
                         : CreateProposalResponse(body, summaryText, includeUsage);
@@ -953,7 +970,14 @@ public sealed partial class CampaignCliProcessTests
             };
             if (!includeUsage) return JsonSerializer.SerializeToUtf8Bytes(response);
             var node = JsonSerializer.SerializeToNode(response)!;
-            node["usage"] = new JsonObject { ["prompt_tokens"] = 31, ["completion_tokens"] = 7, ["total_tokens"] = 38 };
+            node["usage"] = new JsonObject
+            {
+                ["prompt_tokens"] = 31,
+                ["prompt_cache_hit_tokens"] = 29,
+                ["prompt_cache_miss_tokens"] = 2,
+                ["completion_tokens"] = 7,
+                ["total_tokens"] = 38
+            };
             return JsonSerializer.SerializeToUtf8Bytes(node);
         }
 

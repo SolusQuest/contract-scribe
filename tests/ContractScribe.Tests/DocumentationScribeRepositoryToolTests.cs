@@ -1369,7 +1369,7 @@ public sealed class DocumentationScribeRepositoryToolTests
                             new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 1 }),
                         Call(2, "call.read", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
                             new { scopeId = AnchorId, repositoryPath = "docs/guide.md" }),
-                    ], []));
+                    ], [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
             if (request.ProviderRequestNumber == 2)
@@ -1379,7 +1379,7 @@ public sealed class DocumentationScribeRepositoryToolTests
                     DocumentationScribeRepositoryToolOperationIds.SearchText));
                 return ValueTask.FromResult(new DocumentationScribeModelResponse(
                     [], [], new DocumentationScribeModelFailure(
-                        DocumentationScribeModelFailureCode.TransientUnavailable)));
+                        DocumentationScribeModelFailureCode.TransientUnavailable), usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
             if (request.ProviderRequestNumber == 3)
@@ -1392,7 +1392,7 @@ public sealed class DocumentationScribeRepositoryToolTests
                             new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 1 }),
                         Call(1, "call.search.fresh-b", DocumentationScribeRepositoryToolOperationIds.SearchText,
                             new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 1 }),
-                    ], []));
+                    ], [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
             if (request.ProviderRequestNumber == 4)
@@ -1413,7 +1413,7 @@ public sealed class DocumentationScribeRepositoryToolTests
                             new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 1, cursor = cursors[1] }),
                         Call(3, "call.search.fresh-complete", DocumentationScribeRepositoryToolOperationIds.SearchText,
                             new { scopeId = AnchorId, literal = "hit", subdirectory = "docs", pageSize = 8 }),
-                    ], []));
+                    ], [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
             Completed = request.CompletedToolExchanges;
@@ -1423,7 +1423,7 @@ public sealed class DocumentationScribeRepositoryToolTests
             using var terminal = JsonDocument.Parse(File.ReadAllBytes(terminalPath));
             var bytes = Encoding.UTF8.GetBytes(terminal.RootElement.GetProperty("terminal").GetRawText());
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
-                [], [new DocumentationScribeModelTerminalSubmission(bytes)]));
+                [], [new DocumentationScribeModelTerminalSubmission(bytes)], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
         }
 
         private static DocumentationScribeModelToolCall Call(int index, string id, string operation, object arguments) =>

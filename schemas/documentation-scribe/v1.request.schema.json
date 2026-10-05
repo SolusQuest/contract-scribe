@@ -874,12 +874,12 @@
         "maximumInputTokens": {
           "type": "integer",
           "minimum": 1,
-          "maximum": 16777215
+          "maximum": 134217727
         },
         "maximumUncachedInputTokens": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 16777215
+          "maximum": 134217727
         },
         "maximumOutputTokens": {
           "type": "integer",

@@ -89,6 +89,38 @@ public enum CampaignWorkOutcomeCode
     PatchRejected,
 }
 
+public enum CampaignScribeCompletionSource
+{
+    ScribeResult, RecoveredDispatchFailure,
+}
+
+public enum CampaignProviderOperationKind
+{
+    Host, Dispatch,
+}
+
+public enum CampaignProviderHostPhase
+{
+    Preflight, RepositoryTool, SemanticTool, RegisteredTool, TerminalSubmission, RetryWait, Continuation, Postflight, Retirement,
+}
+
+public enum CampaignProviderDispatchDisposition
+{
+    None, Success, RetryableFailure, TerminalFailure, Interrupted,
+}
+
+public sealed record CampaignProviderRetryProgress(
+    int RetryableFailureCount, CampaignProviderDispatchDisposition LastDisposition,
+    long LastSettledDispatchOrdinal, string? LastRequestCommitmentSha256,
+    string? LastSettlementCommitmentSha256, int PendingRetryAfterMilliseconds)
+{
+    internal static CampaignProviderRetryProgress Empty { get; } = new(0, CampaignProviderDispatchDisposition.None, 0, null, null, 0);
+}
+
+public sealed record CampaignPausedProviderAttempt(
+    string ScribeRequestSha256, DocumentationScribeAttemptId AttemptId,
+    long LastDispatchOrdinal, CampaignProviderRetryProgress RetryProgress);
+
 public enum CampaignProviderFinalDisposition
 {
     Retryable,
@@ -251,6 +283,8 @@ public sealed record CampaignWorkClosedOutcome
         PatchResultCommitmentSha256 = patchResultCommitmentSha256;
         ScribeResultCommitmentSha256 = scribeResultCommitmentSha256;
         BoundWorkItemKey = boundWorkItemKey;
+        ScribeCompletionSource = stage == CampaignWorkOutcomeStage.Scribe
+            ? CampaignScribeCompletionSource.ScribeResult : null;
     }
 
     public CampaignWorkOutcomeStage Stage { get; }
@@ -261,6 +295,8 @@ public sealed record CampaignWorkClosedOutcome
     public string? PatchRequestSha256 { get; }
     public string? PatchResultCommitmentSha256 { get; }
     public string? ScribeResultCommitmentSha256 { get; }
+    public CampaignScribeCompletionSource? ScribeCompletionSource { get; internal init; }
+    public string? AcceptedDispatchFailureCommitmentSha256 { get; internal init; }
     internal string BoundWorkItemKey { get; }
 }
 
@@ -321,6 +357,7 @@ public sealed record CampaignWorkItemState(
     CampaignWorkClosedOutcome? ClosedOutcome)
 {
     public CampaignAttemptDisposition AttemptDisposition { get; init; }
+    public CampaignPausedProviderAttempt? PausedProviderAttempt { get; init; }
 }
 
 public sealed record CampaignProviderReservationExposure(
@@ -329,7 +366,10 @@ public sealed record CampaignProviderReservationExposure(
     int UncachedInputTokens,
     int OutputTokens,
     long CostMicrounits,
-    int ElapsedMilliseconds);
+    int ElapsedMilliseconds)
+{
+    public int CachedInputTokens { get; init; }
+}
 
 public abstract record CampaignActiveReservation
 {
@@ -343,7 +383,18 @@ public sealed record CampaignProviderReservation(
     string ScribeRequestSha256,
     DocumentationScribeAttemptId AttemptId,
     CampaignProviderReservationExposure Exposure)
-    : CampaignActiveReservation;
+    : CampaignActiveReservation
+{
+    public long ExecutionStartRevision { get; init; }
+    public long CurrentOperationOrdinal { get; init; }
+    public long LastDispatchOrdinal { get; init; }
+    public int CurrentExecutionSettledProviderRequests { get; init; }
+    public int RestoredRetryableProviderFailures { get; init; }
+    public CampaignProviderOperationKind OperationKind { get; init; }
+    public CampaignProviderHostPhase? HostPhase { get; init; } = CampaignProviderHostPhase.Preflight;
+    public string? RequestCommitmentSha256 { get; init; }
+    public CampaignProviderRetryProgress RetryProgress { get; init; } = CampaignProviderRetryProgress.Empty;
+}
 
 public sealed record CampaignPatchReservation : CampaignActiveReservation
 {

@@ -74,9 +74,9 @@ public sealed partial class LayeredConfigurationTests : IDisposable
         var layer = Layer(
             "budgets", new JsonObject
             {
-                ["scribe"] = new JsonObject
+                ["invocation"] = new JsonObject
                 {
-                    ["maximumToolRounds"] = 0,
+                    ["maximumProviderRequests"] = 0,
                     ["maximumToolCalls"] = 0,
                 },
             },
@@ -89,8 +89,8 @@ public sealed partial class LayeredConfigurationTests : IDisposable
             });
         var document = Resolve(Defaults(), layer).Document;
 
-        Assert.Equal(0, document.Budgets.Scribe.MaximumToolRounds);
-        Assert.Equal(0, document.Budgets.Scribe.MaximumToolCalls);
+        Assert.Equal(0, document.Budgets.Invocation.MaximumProviderRequests);
+        Assert.Equal(0, document.Budgets.Invocation.MaximumToolCalls);
         Assert.Null(document.Budgets.Campaign.MaximumProviderRequests);
         Assert.Equal(
             DocumentationScribeInheritDocDisposition.Allowed,

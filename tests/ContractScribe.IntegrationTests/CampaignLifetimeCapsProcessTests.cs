@@ -49,9 +49,9 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(0, server.RequestCount);
             Assert.Equal(0, exhausted.State.LineageCharges.OuterInvocations);
             Assert.Null(exhausted.State.ActiveReservation);
-            Assert.Equal(0, exhausted.State.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits);
+            Assert.Equal(DocumentationScribeContract.MaximumConfiguredCostMicrounits, exhausted.State.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits);
 
-            layer["budgets"]!["campaign"]![field] = monetary ? JsonValue.Create(1_000_000) : null;
+            layer["budgets"]!["campaign"]![field] = monetary ? JsonValue.Create(1_000_000_000) : null;
             await WriteLayerAsync();
             var resumed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c3"),
                 TimeSpan.FromMinutes(5));

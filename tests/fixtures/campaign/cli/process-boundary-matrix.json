@@ -39,5 +39,14 @@
   {"hook":"patch.after-execution-before-closed-transition","scenario":"closed-patch"},
   {"hook":"patch.result.closed.in-replacement","scenario":"closed-patch"},
   {"hook":"patch.result.closed.after-replacement-before-readback","scenario":"closed-patch"},
-  {"hook":"patch.after-closed-readback","scenario":"closed-patch"}
+  {"hook":"patch.after-closed-readback","scenario":"closed-patch"},
+  {"hook":"proposal.physical-reservation.in-replacement","scenario":"accepted"},
+  {"hook":"proposal.physical-reservation.after-replacement-before-readback","scenario":"accepted"},
+  {"hook":"proposal.physical-reservation.after-readback","scenario":"accepted"},
+  {"hook":"proposal.physical-settlement.in-replacement","scenario":"retry"},
+  {"hook":"proposal.physical-settlement.after-replacement-before-readback","scenario":"retry"},
+  {"hook":"proposal.physical-settlement.after-readback","scenario":"retry"},
+  {"hook":"proposal.retry-wait.in-replacement","scenario":"retry-wait"},
+  {"hook":"proposal.retry-wait.after-replacement-before-readback","scenario":"retry-wait"},
+  {"hook":"proposal.retry-wait.after-readback","scenario":"retry-wait"}
 ]

@@ -1,6 +1,6 @@
 # Documentation Scribe
 
-> **Status:** Current single-target runtime reference with adopted M7 direction. [M7 plan](../90_roadmap/m7-plan.md) owns shared-session/fixed-batch behavior; C1 changes planning only. Current request/result contracts, provider wire behavior and runtime remain unchanged until their code/schema owners update them. Historical M3 evaluation claims remain revision-bound.
+> **Status:** Current single-target Runtime with M7 fixed selection and C4 shared invocation budgets/per-dispatch settlement. [M7 plan](../90_roadmap/m7-plan.md) owns the remaining shared-conversation direction; S1–S3 are not implemented by C4. Campaign targets share one checked allowance and monotonic Action clock while their model conversations remain independent. Historical M3–M6 evidence stays bound to its original revision.
 
 ## Goal
 

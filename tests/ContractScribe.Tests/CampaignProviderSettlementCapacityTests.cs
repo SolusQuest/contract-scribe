@@ -20,10 +20,10 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario(targetLimit: 1, maximumAttemptsPerTarget: 1);
         var work = scenario.Plan.WorkItems[0];
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
-        var request = CreateScribeExchange(work).Request;
+        var request = CreateScribeExchange(work, scenario: scenario).Request;
         var admitted = CampaignStateReducer.AdmitProviderInvocation(predecessor, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
-            request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)));
+            request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)), CampaignInvocationTestPolicy.Create(request.Limits));
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         var upperBytes = CampaignStateReducer.ValidateProviderSettlementCapacity(admitted.Artifact.State);
         var attempt = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation).AttemptId;
@@ -37,15 +37,16 @@ public sealed partial class CampaignStateContractTests
                     ["outputTokens"] = 7,
                 };
                 else root["runEnvelope"]!.AsObject().Remove("usage");
-            });
+            }, scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(exchange.Request, attempt, exchange.Result);
         var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(predecessor, admitted),
             scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, exchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
         var elapsed = exchange.Result.RunEnvelope.ElapsedMilliseconds;
-        var settlement = CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed);
         var completion = OrdinaryCompletion(invocation, outcome, elapsed);
-        var completed = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact, completion,
+        var settlement = CampaignBudgetAccounting.SettleProviderInvocation(invocation.AcceptedCheckpoint.Artifact.State, outcome, elapsed);
+        var completed = CampaignStateReducer.CompleteProviderInvocation(completion.Invocation.AcceptedCheckpoint.Artifact, completion,
             scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
         Assert.True(completed.Artifact.ExactUtf8Json.Length <= upperBytes);
@@ -53,15 +54,14 @@ public sealed partial class CampaignStateContractTests
         Assert.True(parsed.IsValid, parsed.FailureCode?.ToString());
         Assert.Null(parsed.Artifact!.State.ActiveReservation);
         Assert.Equal(settlement.Charges, parsed.Artifact.State.LineageCharges);
-        Assert.Equal(knownUsage ? 31L : predecessor.State.LineageCharges.InputTokens.Observed,
+        Assert.Equal(knownUsage && exchange.Result.RunEnvelope.ProviderRequestCount > 0 ? 31L : predecessor.State.LineageCharges.InputTokens.Observed,
             parsed.Artifact.State.LineageCharges.InputTokens.Observed);
         var inputBound = admitted.Artifact.State.ConfiguredCeilings.ScribeRunLimits.MaximumInputTokens;
-        var expectedUnknown = !knownUsage ? inputBound
-            : exchange.Result.RunEnvelope.ProviderRequestCount > 1 ? inputBound : 0;
+        var expectedUnknown = !knownUsage && exchange.Result.RunEnvelope.ProviderRequestCount > 0 ? inputBound : 0;
         Assert.Equal(expectedUnknown,
             parsed.Artifact.State.LineageCharges.InputTokens.ConservativeUnobserved);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority,
-            CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact, completion,
+            CampaignStateReducer.CompleteProviderInvocation(completion.Invocation.AcceptedCheckpoint.Artifact, completion,
                 scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan).Failure);
     }
 }

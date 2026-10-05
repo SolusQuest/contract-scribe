@@ -332,7 +332,7 @@ public sealed partial class DocumentationScribeCompositionTests
         var conflictStore = new MemoryCampaignStore(
             CampaignStateJson.CreateArtifact(conflictCampaign.InitialState))
         {
-            ReportedReplaceAttempt = 3,
+            ReportedReplaceAttempt = 8,
             ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
         };
         proposal = await DocumentationCampaignProposalExecutor.ExecuteAsync(
@@ -353,7 +353,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignOutcomeKind.StateConflict, conflict.Kind);
         Assert.Equal(0, conflictDispatches);
-        Assert.Equal(2, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(7, conflictStore.SuccessfulReplaceCount);
         Assert.Null(conflict.AcceptedCandidate);
     }
 
@@ -376,7 +376,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignOutcomeKind.AmbiguousDispatch, outcome.Kind);
         Assert.Equal("campaign.patch.dispatch-unconfirmed", outcome.Code);
         Assert.IsType<CampaignPatchReservation>(store.Current!.State.ActiveReservation);
-        Assert.Equal(3, store.SuccessfulReplaceCount);
+        Assert.Equal(8, store.SuccessfulReplaceCount);
         Assert.Null(outcome.AcceptedCandidate);
     }
 

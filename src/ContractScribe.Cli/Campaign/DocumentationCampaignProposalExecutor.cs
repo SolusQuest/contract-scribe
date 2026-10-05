@@ -27,7 +27,8 @@ internal sealed record DocumentationCampaignProposalInput(
     TimeProvider? TimeProvider = null,
     Func<IDocumentationScribeModelExchange?>? DeferredExchange = null,
     Func<bool>? DispatchGuard = null,
-    CampaignInvocationTargetAllowance? TargetAllowance = null);
+    CampaignInvocationTargetAllowance? TargetAllowance = null,
+    DocumentationScribeInvocationAllowance? InvocationAllowance = null);
 
 internal static class DocumentationCampaignProposalExecutor
 {
@@ -35,6 +36,10 @@ internal static class DocumentationCampaignProposalExecutor
         DocumentationCampaignProposalInput input)
     {
         ArgumentNullException.ThrowIfNull(input);
+        if (input.InvocationAllowance is null) return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.runtime.mismatch");
+        try { _ = input.InvocationAllowance.RemainingMilliseconds; }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        { return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.preparation.invalid"); }
         var accepted = await CampaignCheckpointAcceptance.AcceptCurrentAsync(
             input.Store, input.SettlementToken).ConfigureAwait(false);
         if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null)
@@ -67,7 +72,28 @@ internal static class DocumentationCampaignProposalExecutor
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.context.invalid");
         }
 
+        if (current.Artifact.State.ActiveReservation is CampaignProviderReservation)
+        {
+            var recovery = CampaignStateReducer.RetireInterruptedProviderAttempt(current);
+            var retired = await CampaignCheckpointAcceptance.AcceptAsync(input.Store, recovery, input.SettlementToken).ConfigureAwait(false);
+            if (retired.Kind != CampaignCheckpointAcceptanceKind.Accepted || retired.AcceptedCheckpoint is null)
+                return Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.conflict");
+            current = retired.AcceptedCheckpoint;
+        }
         var state = current.Artifact.State;
+        foreach (var pausedWork in state.WorkItems.Where(work => work.PausedProviderAttempt is { } paused
+            && (paused.RetryProgress.RetryableFailureCount >= state.ConfiguredCeilings.ScribeRunLimits.MaximumAttempts
+                || paused.RetryProgress.LastDisposition == CampaignProviderDispatchDisposition.TerminalFailure)))
+        {
+            var fresh = await CampaignCheckpointAcceptance.AcceptCurrentAsync(input.Store, input.SettlementToken).ConfigureAwait(false);
+            if (fresh.AcceptedCheckpoint is null) return Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.reservation.conflict");
+            var closure = CampaignStateReducer.CompleteRecoveredProviderFailure(fresh.AcceptedCheckpoint, pausedWork.WorkItemKey);
+            var closed = await CampaignCheckpointAcceptance.AcceptAsync(input.Store, closure, input.SettlementToken).ConfigureAwait(false);
+            if (closed.Kind != CampaignCheckpointAcceptanceKind.Accepted || closed.AcceptedCheckpoint is null)
+                return Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.settlement.conflict");
+            current = closed.AcceptedCheckpoint;
+        }
+        state = current.Artifact.State;
         var targetAllowance = input.TargetAllowance
             ?? CampaignStateFactory.CreateInvocationTargetAllowance(state, input.PlanningInput.TargetLimit);
         if (state.ActiveReservation is CampaignPatchReservation)
@@ -158,16 +184,19 @@ internal static class DocumentationCampaignProposalExecutor
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.runtime.mismatch");
         }
 
-        var transition = selectedState.Status == CampaignWorkStatus.Planned && state.ActiveReservation is null
+        var transition = selectedState.Status == CampaignWorkStatus.Planned && state.ActiveReservation is null && selectedState.PausedProviderAttempt is null
             ? CampaignStateReducer.AdmitProviderInvocation(current.Artifact, input.ExecutionCapability,
                 input.StyleConfigurationId, input.StyleConfigurationProjection, input.PlanningInput,
-                input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance)
+                input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance, input.InvocationAllowance)
             : CampaignStateReducer.RetryProviderInvocation(current.Artifact,
                 state.ActiveReservation is null ? null : current, input.ExecutionCapability,
                 input.StyleConfigurationId, input.StyleConfigurationProjection, input.PlanningInput,
-                input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance);
+                input.AcceptedPlan, selectedState.WorkItemKey, request, targetAllowance, input.InvocationAllowance);
         if (transition.Kind == CampaignTransitionKind.Rejected)
         {
+            if (transition.Failure == CampaignTransitionFailure.InvocationBudgetExhausted)
+                return new(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted,
+                    "campaign.invocation-budget-exhausted", selectedState.WorkItemKey, current.Artifact);
             if (transition.Failure == CampaignTransitionFailure.CheckpointCapacity)
             {
                 return new(DocumentationCampaignProposalOutcomeKind.CheckpointCapacity,
@@ -194,6 +223,7 @@ internal static class DocumentationCampaignProposalExecutor
         using var deferredExchange = input.Exchange is null
             ? exchange as IDisposable
             : null;
+        var executionStartedAt = input.InvocationAllowance.Clock.GetTimestamp();
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
         CampaignCheckpointAcceptanceResult reserved;
         using (CampaignProcessBoundaryHooks.EnterReplacementScope(
@@ -249,11 +279,13 @@ internal static class DocumentationCampaignProposalExecutor
                 selectedState.WorkItemKey,
                 reserved.Artifact);
         }
+        var coordinator = new CampaignScribeExecutionCoordinator(invocation, input.InvocationAllowance,
+            input.Store, input.SettlementToken, GuardDispatch, executionStartedAt);
         var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
             selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
             input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken,
-            GuardDispatch).ConfigureAwait(false);
-        if (dispatchGuardRejected)
+            GuardDispatch, coordinator).ConfigureAwait(false);
+        if (dispatchGuardRejected || coordinator.Conflict)
         {
             return new DocumentationCampaignProposalOutcome(
                 DocumentationCampaignProposalOutcomeKind.StateConflict,
@@ -268,10 +300,15 @@ internal static class DocumentationCampaignProposalExecutor
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);
-        if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
+        if (coordinator.Scope.Allowance.HasCheckedStop || coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached)
+        {
+            completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
+                coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached);
+        }
+        else if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
         {
             completed = CampaignStateReducer.CompleteProviderInvocation(
-                reserved.AcceptedCheckpoint.Artifact, prepared.CompletionAuthority,
+                invocation.AcceptedCheckpoint.Artifact, prepared.CompletionAuthority,
                 input.ExecutionCapability, input.StyleConfigurationId, input.StyleConfigurationProjection,
                 input.PlanningInput, input.AcceptedPlan);
         }
@@ -285,8 +322,7 @@ internal static class DocumentationCampaignProposalExecutor
                 DocumentationCampaignPreparationKind.StopTimedOut => CampaignTerminalKind.Timeout,
                 _ => CampaignTerminalKind.Exhausted,
             };
-            completed = CampaignStateReducer.StopActiveInvocation(
-                reserved.AcceptedCheckpoint.Artifact, reserved.AcceptedCheckpoint, stop);
+            completed = CampaignStateReducer.StopProviderBeforePhysicalDispatch(invocation, stop, coordinator.CurrentElapsed);
         }
         else
         {
@@ -313,6 +349,9 @@ internal static class DocumentationCampaignProposalExecutor
             CampaignProcessBoundaryHooks.Reach(proposalResult
                 ? CampaignProcessBoundaryHooks.ProposalAfterProposalReadback
                 : CampaignProcessBoundaryHooks.ProposalAfterClosedReadback);
+            if (coordinator.Scope.Allowance.HasCheckedStop && settled.Artifact.State.TerminalOutcome is null)
+                return new(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted,
+                    "campaign.invocation-budget-exhausted", selectedState.WorkItemKey, settled.Artifact);
             return FromArtifact(settled.Artifact, selectedState.WorkItemKey);
         }
 

@@ -423,12 +423,13 @@ public sealed class DocumentationScribeRepositoryToolBundle
         DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext loadedContext,
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
-        DocumentationScribeRepositoryToolLimits? limits = null)
+        DocumentationScribeRepositoryToolLimits? limits = null,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(loadedContext);
         ArgumentNullException.ThrowIfNull(scopes);
-        return CreateCore(request, attemptId, loadedContext, scopes, limits, null);
+        return CreateCore(request, attemptId, loadedContext, scopes, limits, null, clock: clock);
     }
 
     internal static DocumentationScribeRepositoryToolBundle CreateForTesting(
@@ -448,7 +449,8 @@ public sealed class DocumentationScribeRepositoryToolBundle
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
         DocumentationScribeRepositoryToolLimits? limits,
         Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint,
-        Func<TimeSpan>? elapsed = null)
+        Func<TimeSpan>? elapsed = null,
+        TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(loadedContext);
@@ -460,6 +462,7 @@ public sealed class DocumentationScribeRepositoryToolBundle
             scopes,
             limits ?? DocumentationScribeRepositoryToolLimits.Create(),
             checkpoint,
-            elapsed));
+            elapsed,
+            clock));
     }
 }

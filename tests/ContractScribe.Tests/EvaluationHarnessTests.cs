@@ -252,7 +252,7 @@ public sealed class EvaluationHarnessTests
     public void CostPolicyClosesEveryInputPartition()
     {
         Assert.True(EvaluationCostPolicy.TryCreate("usd", 1_000_000, 2_000_000, 3_000_000, out var policy));
-        AssertCost(policy!, new DocumentationScribeModelUsage(10, 4, 2, 3), "Complete", 30);
+        AssertCost(policy!, new DocumentationScribeModelUsage(10, 4, 2, 8), "Complete", 30);
         AssertCost(policy!, new DocumentationScribeModelUsage(10, 4, 2), "Complete", 30);
         AssertCost(policy!, new DocumentationScribeModelUsage(10, 4, uncachedInputTokens: 3), "Complete", 32);
         AssertCost(policy!, new DocumentationScribeModelUsage(10, 4), "Complete", 32);

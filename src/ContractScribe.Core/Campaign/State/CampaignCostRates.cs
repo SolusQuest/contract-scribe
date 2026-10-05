@@ -29,6 +29,20 @@ public sealed record CampaignCostRates(
                 reasoningMicrounitsPerMillion = ReasoningMicrounitsPerMillion,
             }));
 
+    internal long ConservativeDispatchCost(long cached, long uncached, long output)
+    {
+        if (!IsValid || cached < 0 || uncached < 0 || output < 0) throw new OverflowException();
+        checked
+        {
+            var numerator = (Int128)cached * CachedInputMicrounitsPerMillion
+                + (Int128)uncached * UncachedInputMicrounitsPerMillion
+                + (Int128)output * Math.Max(OutputMicrounitsPerMillion, ReasoningMicrounitsPerMillion);
+            var rounded = numerator == 0 ? 0 : (numerator + 999_999) / 1_000_000;
+            if (rounded > CampaignStateContract.MaximumObservation) throw new OverflowException();
+            return (long)rounded;
+        }
+    }
+
     internal long ConservativeCost(long input, long uncached, long output, int requests)
     {
         if (!IsValid || input < 0 || uncached < 0 || output < 0 || requests < 1)

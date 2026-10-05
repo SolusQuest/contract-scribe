@@ -70,7 +70,7 @@ public sealed partial class CampaignStateContractTests
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(predecessor, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
-            CreateScribeExchange(work).Request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)));
+            CreateScribeExchange(work, scenario: scenario).Request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)), CampaignInvocationTestPolicy.Create(CreateScribeExchange(work, scenario: scenario).Request.Limits));
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         var boundedCompletionBytes = CampaignStateReducer.ValidateProviderSettlementCapacity(admitted.Artifact.State);
         var attempt = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation).AttemptId;
@@ -89,15 +89,17 @@ public sealed partial class CampaignStateContractTests
                     ["currencyId"] = "currency.usd",
                     ["amountMicrounits"] = template.Limits.MaximumCostMicrounits,
                 };
-            });
+            }, scenario: scenario);
         var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(predecessor, admitted),
             scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, failure.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
         var elapsed = dimension.StartsWith("elapsed", StringComparison.Ordinal)
             ? template.Limits.MaximumElapsedMilliseconds + (dimension == "elapsed-overrun" ? 1 : 0)
             : failure.Result.RunEnvelope.ElapsedMilliseconds;
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(failure.Request, attempt, failure.Result);
-        var settlement = CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed);
+        var completion = OrdinaryCompletion(invocation, outcome, elapsed);
+        var settlement = CampaignBudgetAccounting.SettleProviderInvocation(invocation.AcceptedCheckpoint.Artifact.State, outcome, elapsed);
         Assert.Equal(expected == CampaignTerminalKind.Exhausted ? CampaignBudgetDecisionKind.Exhausted : CampaignBudgetDecisionKind.Admitted, settlement.Kind);
         if (dimension is "input" or "uncached" or "output" or "cost")
         {
@@ -108,12 +110,12 @@ public sealed partial class CampaignStateContractTests
                 "output" => settlement.Charges!.OutputTokens,
                 _ => settlement.Charges!.CostMicrounits,
             };
-            // Exact equality includes both the observed aggregate and independent unknown exposure.
-            Assert.Equal(charge.Observed, charge.ConservativeUnobserved);
-            Assert.Equal(2 * charge.Observed, charge.TotalCharged);
+            // Earlier fixture dispatches explicitly reported known zero; retain the final known observation once.
+            Assert.Equal(0, charge.ConservativeUnobserved);
+            Assert.Equal(charge.Observed, charge.TotalCharged);
         }
-        var completed = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact,
-            OrdinaryCompletion(invocation, outcome, elapsed), scenario.ExecutionAuthority,
+        var completed = CampaignStateReducer.CompleteProviderInvocation(invocation.AcceptedCheckpoint.Artifact,
+            completion, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
         Assert.True(completed.Artifact.ExactUtf8Json.Length <= boundedCompletionBytes);
@@ -141,23 +143,25 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario(targetLimit: 1, maximumAttemptsPerTarget: 1, costCurrency: "currency.usd");
         var work = scenario.Plan.WorkItems[0];
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(predecessor, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
-            exchange.Request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)));
+            exchange.Request, CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(1)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
         var boundedCompletionBytes = CampaignStateReducer.ValidateProviderSettlementCapacity(admitted.Artifact.State);
         var attempt = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation).AttemptId;
-        exchange = CreateScribeExchange(work, attemptId: attempt.Value);
+        exchange = CreateScribeExchange(work, attemptId: attempt.Value, scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(exchange.Request, attempt, exchange.Result);
         var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(predecessor, admitted),
             scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, exchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
         var elapsed = scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds + 1;
+        SettleSyntheticDispatches(invocation, outcome);
         Assert.Equal(CampaignBudgetDecisionKind.Exhausted,
-            CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed).Kind);
+            CampaignBudgetAccounting.SettleProviderInvocation(invocation.AcceptedCheckpoint.Artifact.State, outcome, elapsed).Kind);
         var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(invocation.TryCreateCompletionRegistrar());
         Assert.True(registrar.TryRegister(kind, outcome, elapsed, out var completion));
-        var completed = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact, completion!, scenario.ExecutionAuthority,
+        var completed = CampaignStateReducer.CompleteProviderInvocation(invocation.AcceptedCheckpoint.Artifact, completion!, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
         Assert.True(completed.Artifact.ExactUtf8Json.Length <= boundedCompletionBytes);

@@ -1761,7 +1761,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
                 prompt_tokens = DocumentationScribeContract.MaximumObservedInputTokens,
                 completion_tokens = DocumentationScribeContract.MaximumObservedOutputTokens,
                 prompt_cache_hit_tokens = 1,
-                prompt_cache_miss_tokens = 1,
+                prompt_cache_miss_tokens = DocumentationScribeContract.MaximumObservedInputTokens - 1,
             },
         });
         var calls = OpenAiCompatibleChatCompletionsCodec.ParseResponse(callsBody, prepared);

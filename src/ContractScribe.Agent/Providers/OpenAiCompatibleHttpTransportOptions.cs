@@ -31,7 +31,7 @@ public sealed class OpenAiCompatibleHttpTransportOptions
         string model,
         OpenAiCompatibleChatCompletionsRequestProfile requestProfile,
         bool networkEnabled,
-        string? credential = null)
+        string? credential = null, int maximumConnectMilliseconds = 15_000)
     {
         ArgumentNullException.ThrowIfNull(endpoint);
         ArgumentNullException.ThrowIfNull(model);
@@ -39,12 +39,17 @@ public sealed class OpenAiCompatibleHttpTransportOptions
         ValidateEndpoint(endpoint, credential);
         ValidateModel(model);
         ValidateCredential(credential);
+        if (maximumConnectMilliseconds <= 0 || maximumConnectMilliseconds > 86_399_999)
+            throw new ArgumentOutOfRangeException(nameof(maximumConnectMilliseconds));
+        MaximumConnectMilliseconds = maximumConnectMilliseconds;
         Endpoint = endpoint;
         Model = model;
         RequestProfile = requestProfile;
         NetworkEnabled = networkEnabled;
         Credential = credential;
     }
+
+    public int MaximumConnectMilliseconds { get; }
 
     public Uri Endpoint { get; }
 

@@ -153,4 +153,6 @@ M7 excludes automatic rebase/semantic migration/model-assisted safe rebuilding; 
 
 ## Current protocol references
 
+C4 implements the shared invocation allowance and each physical dispatch's durable reserve/readback/settle/readback within the existing single-target Runtime. It retains accepted same-attempt retry progress across Action pauses; shared conversations (S1–S3), invocation telemetry and G4 publication-quota changes remain separate owners. C4 exit still requires its exact-head tests, CI and review evidence.
+
 Until their code/schema owners change them, [Campaign Planning v1](../20_architecture/contracts/campaign-planning-v1.md), [Campaign State v1](../20_architecture/contracts/campaign-state-v1.md), [GitHub Publication v1](../20_architecture/contracts/github-publication-v1.md), [github-proposal CLI](../20_architecture/github-proposal-cli.md), [Action interface](../20_architecture/action-interface.md) and [consumer configuration](../20_architecture/consumer-configuration.md) describe current implementation. Future-planning differences are deliberate and labeled; C1 neither changes their executable shapes nor authorizes applying M7 assumptions to old state. Historical M4–M6 evidence remains bound to its own revision.

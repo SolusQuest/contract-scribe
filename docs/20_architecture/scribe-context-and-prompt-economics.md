@@ -1,6 +1,6 @@
 # Scribe context and prompt economics
 
-> **Status:** The M3-X1 bootstrap decision and current single-target runtime/provider boundaries remain implementation references. [M7 plan](../90_roadmap/m7-plan.md) adopts one shared bounded conversation per fixed batch and per-invocation observations; C1 implements neither. Exact request/tool/state shapes are updated by their owning code/schema issues, preserving historical M3–M6 evidence at its original revision.
+> **Status:** Current single-target Runtime with M7 fixed selection and C4 shared invocation budgets/per-dispatch settlement. [M7 plan](../90_roadmap/m7-plan.md) owns the remaining shared-conversation direction; S1–S3 are not implemented by C4. Campaign targets share one checked allowance and monotonic Action clock while their model conversations remain independent. Historical M3–M6 evidence stays bound to its original revision.
 
 ## Decision
 

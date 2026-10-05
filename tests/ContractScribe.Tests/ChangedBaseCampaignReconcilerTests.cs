@@ -133,7 +133,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
         Assert.Equal(16, state.Predecessor.Reservation.ConservativeCharge);
         Assert.Equal(1, state.LineageCharges.ProviderRequests.ConservativeUnobserved);
         Assert.Equal(3, state.LineageCharges.InputTokens.ConservativeUnobserved);
-        Assert.Equal(3, state.LineageCharges.CachedInputTokens.ConservativeUnobserved);
+        Assert.Equal(1, state.LineageCharges.CachedInputTokens.ConservativeUnobserved);
         Assert.Equal(2, state.LineageCharges.UncachedInputTokens.ConservativeUnobserved);
         Assert.Equal(4, state.LineageCharges.OutputTokens.ConservativeUnobserved);
         Assert.Equal(0, state.LineageCharges.CostMicrounits.ConservativeUnobserved);
@@ -233,16 +233,18 @@ public sealed class ChangedBaseCampaignReconcilerTests
             "scribe-attempt.11111111111111111111111111111111",
             out var attemptId));
         var state = scenario.Artifact.State;
+        attemptId = CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
+            state.ConfiguredCeilings.ScribeExecutionAuthority, WorkItemKey, 1);
         var reserved = CampaignStateFactory.CreateValidated(
             state.ProductRevision,
             state.CampaignLineage,
             state.Snapshot,
-            state.CheckpointRevision,
+            1,
             state.ConfiguredCeilings,
-            state.LineageCharges,
+            state.LineageCharges with { OuterInvocations = state.LineageCharges.OuterInvocations + 1 },
             [new CampaignWorkItemState(
                 WorkItemKey,
-                OuterAttemptCount: 0,
+                OuterAttemptCount: 1,
                 CandidateAttemptCount: 0,
                 CampaignWorkStatus.Planned,
                 TrustedProposal: null,
@@ -258,7 +260,16 @@ public sealed class ChangedBaseCampaignReconcilerTests
                     UncachedInputTokens: 2,
                     OutputTokens: 4,
                     CostMicrounits: 0,
-                    ElapsedMilliseconds: 6)),
+                    ElapsedMilliseconds: 6)
+                { CachedInputTokens = 1 })
+            {
+                ExecutionStartRevision = 1,
+                CurrentOperationOrdinal = 1,
+                LastDispatchOrdinal = 1,
+                OperationKind = CampaignProviderOperationKind.Dispatch,
+                HostPhase = null,
+                RequestCommitmentSha256 = Hash('7')
+            },
             candidateObservation: null,
             cumulativeOutcome: null,
             state.KnownCompletedOperations,

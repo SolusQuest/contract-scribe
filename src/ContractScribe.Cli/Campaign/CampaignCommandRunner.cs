@@ -98,7 +98,7 @@ internal static class CampaignCommandRunner
                     bundle,
                     credentialAccessor ?? Environment.GetEnvironmentVariable,
                     continuation,
-                    targetLimit ?? new CampaignInvocationTargetLimit(CampaignStateContract.MaximumWorkItems),
+                    targetLimit ?? new CampaignInvocationTargetLimit(configuration.Budgets.Invocation.MaximumTargets),
                     token).ConfigureAwait(false);
                 if (continuation is not null) GitHubProposalProcessHooks.Reach("after-terminal");
             }),
@@ -287,8 +287,24 @@ internal static class CampaignCommandRunner
             }
         }
 
+        using var settlementCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(
+            checked(configuration.Budgets.Invocation.MaximumElapsedMilliseconds + 30_000)));
+        if (current.Artifact.State.ActiveReservation is CampaignProviderReservation)
+        {
+            var retirementAcceptance = await AcceptProviderRetirementAsync(current, store, settlementCancellation.Token).ConfigureAwait(false);
+            if (retirementAcceptance.Kind != CampaignCheckpointAcceptanceKind.Accepted || retirementAcceptance.AcceptedCheckpoint is null)
+                return Terminal(preflight.Operation, "state", AcceptanceOutcome(retirementAcceptance.Kind), current);
+            current = retirementAcceptance.AcceptedCheckpoint;
+            var retirement = CampaignStateReducer.RetireInterruptedProviderAttempt(current);
+            var recovered = await CampaignCheckpointAcceptance.AcceptAsync(store, retirement, settlementCancellation.Token).ConfigureAwait(false);
+            if (recovered.Kind != CampaignCheckpointAcceptanceKind.Accepted || recovered.AcceptedCheckpoint is null)
+                return Terminal(preflight.Operation, "state", AcceptanceOutcome(recovered.Kind), current);
+            current = recovered.AcceptedCheckpoint;
+        }
+        var invocationAllowance = new DocumentationScribeInvocationAllowance(configuration.Budgets.Invocation);
         var targetAllowance = CampaignStateFactory.CreateInvocationTargetAllowance(current.Artifact.State, targetLimit);
         var reconstructPriorAccepted = continuation is null && current.Artifact.State.CandidateObservation is not null;
+        var invocationStopped = false;
         var m2Projection = JsonSerializer.SerializeToElement(new
         {
             m2ProjectionVersion = 1,
@@ -404,6 +420,9 @@ internal static class CampaignCommandRunner
                     or DocumentationCampaignOutcomeKind.Reduced)
                 {
                     reconstructPriorAccepted = false;
+                    if (invocationStopped)
+                        return Terminal(preflight.Operation, "execution", "campaign.invocation-budget-exhausted",
+                            patched.Artifact is null ? current : AcceptedObservation(patched.Artifact));
                     continue;
                 }
                 return Terminal(preflight.Operation, "execution",
@@ -418,6 +437,8 @@ internal static class CampaignCommandRunner
                 return Terminal(preflight.Operation, "campaign", CompletionOutcome(stateNow), current);
             }
 
+            if (invocationStopped)
+                return Terminal(preflight.Operation, "execution", "campaign.invocation-budget-exhausted", current);
             var next = SelectNextWork(stateNow, plan, targetAllowance);
             if (next is null)
             {
@@ -456,13 +477,18 @@ internal static class CampaignCommandRunner
                 Exchange: null,
                 ConfiguredAgentEntrypoint: null,
                 ExecutionToken: cancellationToken,
-                SettlementToken: cancellationToken,
-                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor),
+                SettlementToken: settlementCancellation.Token,
+                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor, configuration.Budgets.Invocation.MaximumConnectMilliseconds),
                 DispatchGuard: preflight.Configuration.Revalidate,
-                TargetAllowance: targetAllowance)).ConfigureAwait(false);
+                TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance)).ConfigureAwait(false);
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady)
             {
                 continue;
+            }
+            if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted
+                && proposal.Artifact?.State.CandidateObservation is not null)
+            {
+                invocationStopped = true; reconstructPriorAccepted = true; continue;
             }
             var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Reason == CampaignTerminalReason.Unresolved
                 ? "campaign.unresolved"
@@ -506,7 +532,7 @@ internal static class CampaignCommandRunner
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,
-        Func<string, string?> credentialAccessor)
+        Func<string, string?> credentialAccessor, int maximumConnectMilliseconds = 15_000)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(credentialAccessor);
@@ -526,7 +552,7 @@ internal static class CampaignCommandRunner
                 provider.Model,
                 provider.RequestProfile,
                 networkEnabled: true,
-                credential);
+                credential, maximumConnectMilliseconds);
             return new CampaignHookedModelExchange(new OpenAiCompatibleHttpModelExchange(options));
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
@@ -551,6 +577,14 @@ internal static class CampaignCommandRunner
             return await pending.ConfigureAwait(false);
         }
 
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeModelRequest request,
+            DocumentationScribeExecutionScope scope, CancellationToken cancellationToken)
+        {
+            var pending = inner.SendAsync(request, scope, cancellationToken);
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalDuringProviderDispatch);
+            return await pending.ConfigureAwait(false);
+        }
+
         public void Dispose()
         {
             if (inner is IDisposable disposable)
@@ -569,6 +603,7 @@ internal static class CampaignCommandRunner
         DocumentationCampaignProposalOutcomeKind.TimedOut => "campaign.timeout",
         DocumentationCampaignProposalOutcomeKind.BudgetExhausted => "campaign.budget-exhausted",
         DocumentationCampaignProposalOutcomeKind.TargetLimit => "campaign.target-limit",
+        DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted => "campaign.invocation-budget-exhausted",
         DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch => "campaign.attempt-ambiguous",
         DocumentationCampaignProposalOutcomeKind.StateConflict => "campaign.state-conflict",
         DocumentationCampaignProposalOutcomeKind.CheckpointCapacity => "campaign.checkpoint-too-large",
@@ -666,7 +701,7 @@ internal static class CampaignCommandRunner
             evidence,
             bundle.Audit,
             new CampaignPlanningOwnerAuthoritySet(owners),
-            targetLimit ?? new CampaignInvocationTargetLimit(CampaignStateContract.MaximumWorkItems));
+            targetLimit ?? new CampaignInvocationTargetLimit(configuration.Budgets.Invocation.MaximumTargets));
     }
 
     private static CampaignPlanningGroupingAuthority BindGroupingContext(
@@ -719,6 +754,16 @@ internal static class CampaignCommandRunner
                 component.Identity,
                 component.Name)).ToImmutableArray();
         return configuration.ScribeRequest.StyleProfileTemplate.Expand(components);
+    }
+
+    internal static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptProviderRetirementAsync(
+        CampaignAcceptedCheckpoint expected, ICampaignCheckpointStore store, CancellationToken cancellationToken)
+    {
+        var accepted = await CampaignCheckpointAcceptance.AcceptCurrentAsync(store, cancellationToken).ConfigureAwait(false);
+        if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.Artifact is null) return accepted;
+        return accepted.Artifact.CheckpointRevision == expected.Artifact.CheckpointRevision
+            && accepted.Artifact.Sha256 == expected.Artifact.Sha256
+            ? accepted : new(CampaignCheckpointAcceptanceKind.Conflict, null);
     }
 
     private static string? ClassifyInitialRead(CampaignOperation operation, CampaignCheckpointReadResult read)

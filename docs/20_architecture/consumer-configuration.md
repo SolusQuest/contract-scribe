@@ -45,7 +45,8 @@ Some fields of the resolved document are never read from a consumer layer:
 | `planning.productContractRevisionId` | product-owned |
 | `planning.productContractRevisionSha256` | derived from the running payload |
 | `budgets.campaign.*` (11 limits) | public |
-| `budgets.scribe.*` (13 limits) | public |
+| `budgets.scribe.*` (5 context/evidence/attempt limits) | public |
+| `budgets.invocation.*` (11 execution limits) | public |
 | `retry.*` | product-owned |
 | `scribeRequest.scribeRequestVersion` | product-owned (`1`) |
 | `scribeRequest.agentProtocolId` | product-owned |
@@ -81,7 +82,9 @@ The consumer layer schema is published at `schemas/consumer-configuration/v1.sch
 `config/defaults.json` carries the complete resolved shape minus the two injected fields. Values:
 
 - Provider: the repository's frozen M3 `deepseek-primary` validation profile (`m3-provider-evaluation-protocol.md`): `https://api.deepseek.com/chat/completions`, `deepseek-v4-flash`, thinking enabled, `reasoningEffort: high`, `toolChoice: omitted`, `continuationPolicy: required-for-tool-calls`, `outputTokenField: max_tokens`. This selects the provider profile the repository's own validation exercised; it is not a provider-support claim and performs no network or credential access by itself.
-- Campaign lifetime provider-request, input/uncached/output-token, cost and elapsed caps default to `null` (unlimited). The five structural/attempt/candidate limits retain their finite defaults, as do all Scribe-run transport, parser, request, token and timeout limits (8 provider requests per run and attempt ceilings of 2) and the Patch deadline.
+- Campaign lifetime provider-request, input/uncached/output-token, cost and elapsed caps default to `null` (unlimited). The five structural/attempt/candidate limits and Patch deadline remain finite. `budgets.scribe` retains maximum attempts (2), context references/bytes and evidence references/bytes. These define request safety and evidence validity.
+- `budgets.invocation` defines one Action allowance shared by all selected targets, requests, tools, waits and retries: `maximumTargets: 100`, `maximumProviderRequests: 64`, `maximumToolCalls: 512`, `maximumCachedInputTokens: 38000000`, `maximumUncachedInputTokens: 2000000`, `maximumOutputTokens: 524288`, `maximumElapsedMilliseconds: 900000`, `maximumRequestOutputTokens: 65536`, `maximumRequestElapsedMilliseconds: 300000`, `maximumConnectMilliseconds: 15000`, and `maximumToolCallsPerResponse: 16`. Explicit zero is a finite stop. Cached and uncached allowances are independent and their sum must fit 134217727; request and tool counts are bounded by 128 and 1024. Each actual call uses the shorter request, remaining Action and applicable lifetime interval. There is no Action monetary cap.
+- Current M3 request envelopes use stable artifact-safety controls (128 provider requests/tool rounds, 1024 tool calls, input 134217727, output 1048575, cost 999999999999 microunits and elapsed 86399999 milliseconds). These do not reset the injected Action allowance for each target. Invocation limits are spending policy, excluded from campaign correctness identity; source revalidation still guards every dispatch.
 - `costPolicy`: `null` — no invented pricing; a finite lifetime cost cap requires configured rate/currency authority; unlimited runs without it retain unpriced history.
 - Authority identifiers: the frozen product-owned `*.v1` vocabulary (`proposal.documentation.v1`, `context.m1.v1`, `m2.projection.v1`, `retry.policy.v1`, `documentation-scribe.agent.v1`, `tools.registry.read-only.v1`, `tool-policy.read-only.v1`) plus the M3-accepted scribe protocol identity `scribe-protocol.v1`; `provider.configured.v1` / `model.configured.v1` source markers remain truthful under any effective endpoint/model because the complete provider object is committed as provider content authority.
 
