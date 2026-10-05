@@ -1512,6 +1512,38 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(1, result.RunEnvelope.ToolCallCount);
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void Selected_elapsed_deadline_keeps_scope_semantics_across_clock_offsets_and_caller_cancellation(bool campaign, bool offset, bool cancelled)
+    {
+        var clock = new ManualTimeProvider();
+        var request = campaign ? ActionSafetyRequest() : Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
+        var deadline = request.Limits.MaximumElapsedMilliseconds;
+        var scope = campaign
+            ? new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(maximumElapsedMilliseconds: deadline), clock), null, 0, 0)
+            : DocumentationScribeExecutionScope.ForStandalone(request, clock);
+        if (offset) clock.AdvanceMilliseconds(1);
+        var state = new RunState(request, Attempt(), new DocumentationScribeRuntimeOptions(
+            "provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), EmptyRegistry(), clock, scope);
+        clock.AdvanceMilliseconds(deadline - (offset ? 1 : 0));
+        Assert.Equal(deadline - (offset ? 1 : 0), state.ElapsedMilliseconds);
+        Assert.Equal(deadline, scope.Allowance.ElapsedMilliseconds);
+        Assert.False(scope.Allowance.CanBeginProviderWork());
+        using var cancellation = new CancellationTokenSource();
+        if (cancelled) cancellation.Cancel();
+        var result = new DocumentationScribeTerminalReducer().TryCommitPriority(state, cancellation.Token);
+        Assert.NotNull(result);
+        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        else Assert.Equal(campaign ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout, FailureCode(result));
+    }
+
     [Fact]
     public async Task Elapsed_deadline_cancels_in_flight_exchange_and_returns_timeout()
     {

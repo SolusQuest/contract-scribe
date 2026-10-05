@@ -887,7 +887,12 @@ internal sealed class DocumentationScribeTerminalReducer
             return state.CreateCancelled(elapsedMilliseconds);
         }
 
-        if (elapsedMilliseconds >= state.Request.Limits.MaximumElapsedMilliseconds)
+        if (state.Scope.ResourceBudgetReached)
+        {
+            return state.CreateFailure(DocumentationScribeFailureCode.Budget, elapsedMilliseconds);
+        }
+
+        if (elapsedMilliseconds >= state.Request.Limits.MaximumElapsedMilliseconds || state.Scope.StandaloneDeadlineReached)
         {
             return state.CreateFailure(DocumentationScribeFailureCode.Timeout, elapsedMilliseconds);
         }

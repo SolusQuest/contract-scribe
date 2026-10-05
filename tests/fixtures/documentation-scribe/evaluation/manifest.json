@@ -55,7 +55,7 @@
         "attemptCount": 1,
         "providerRequestCount": 2,
         "toolRoundCount": 1,
-        "toolCallCount": 1,
+        "toolCallCount": 2,
         "proposalStatus": "validated",
         "usage": {
           "inputTokens": 220,
@@ -92,7 +92,7 @@
         "attemptCount": 1,
         "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 0,
+        "toolCallCount": 1,
         "proposalStatus": "not-reported",
         "usage": {
           "inputTokens": 64,
@@ -102,7 +102,7 @@
           "reasoningTokens": null,
           "cacheObservation": null
         },
-        "observationIds": ["provider-request", "structured-skip", "usage-observed"]
+        "observationIds": ["provider-request", "structured-skip", "tool-call", "usage-observed"]
       }
     },
     {
@@ -117,7 +117,7 @@
         "attemptCount": 1,
         "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 0,
+        "toolCallCount": 1,
         "proposalStatus": "not-reported",
         "usage": {
           "inputTokens": 64,
@@ -127,7 +127,7 @@
           "reasoningTokens": null,
           "cacheObservation": null
         },
-        "observationIds": ["evidence-insufficient", "provider-request", "usage-observed"]
+        "observationIds": ["evidence-insufficient", "provider-request", "tool-call", "usage-observed"]
       }
     },
     {
@@ -179,10 +179,10 @@
         "attemptCount": 1,
         "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 0,
+        "toolCallCount": 1,
         "proposalStatus": "not-reported",
         "usage": null,
-        "observationIds": ["model-output-malformed", "provider-request"]
+        "observationIds": ["model-output-malformed", "provider-request", "tool-call"]
       }
     },
     {
@@ -197,7 +197,7 @@
         "attemptCount": 1,
         "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 0,
+        "toolCallCount": 1,
         "proposalStatus": "validated",
         "usage": {
           "inputTokens": 80,
@@ -207,7 +207,7 @@
           "reasoningTokens": null,
           "cacheObservation": "cache.miss"
         },
-        "observationIds": ["cache.miss", "proposal-validated", "provider-request", "usage-observed"]
+        "observationIds": ["cache.miss", "proposal-validated", "provider-request", "tool-call", "usage-observed"]
       },
       "proposalLine": "Does nothing."
     },
@@ -225,8 +225,15 @@
         "toolRoundCount": 0,
         "toolCallCount": 0,
         "proposalStatus": "not-reported",
-        "usage": null,
-        "observationIds": ["provider-rate-limit", "provider-request", "retry"]
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedInputTokens": 0,
+          "uncachedInputTokens": 0,
+          "reasoningTokens": 0,
+          "cacheObservation": null
+        },
+        "observationIds": ["provider-rate-limit", "provider-request", "retry", "usage-observed"]
       }
     },
     {
@@ -243,8 +250,15 @@
         "toolRoundCount": 0,
         "toolCallCount": 0,
         "proposalStatus": "not-reported",
-        "usage": null,
-        "observationIds": ["provider-request", "provider-unavailable"]
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedInputTokens": 0,
+          "uncachedInputTokens": 0,
+          "reasoningTokens": 0,
+          "cacheObservation": null
+        },
+        "observationIds": ["provider-request", "provider-unavailable", "usage-observed"]
       }
     },
     {

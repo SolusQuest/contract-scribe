@@ -79,6 +79,10 @@ public sealed class DocumentationScribeExecutionScope
     public int PendingRetryAfterMilliseconds { get; private set; }
     public int PhysicalProviderRequestCount { get; private set; }
     public bool LifetimeDeadlineReached { get; private set; }
+    public bool StandaloneDeadlineReached => !Allowance.IsCampaignScope
+        && Allowance.StopReason == DocumentationScribeInvocationStopReason.Elapsed;
+    public bool ResourceBudgetReached => LifetimeDeadlineReached || Allowance.IsCampaignScope
+        && Allowance.HasCheckedStop;
     public void ObserveDeadline(DocumentationScribeInvocationProviderPermit permit)
     {
         if (!ReferenceEquals(provider, permit)) throw new InvalidOperationException("scribe.deadline.invalid-owner");

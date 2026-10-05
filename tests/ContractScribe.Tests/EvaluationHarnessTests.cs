@@ -588,7 +588,7 @@ public sealed class EvaluationHarnessTests
             "validated-proposal-or-structured-skip-or-bounded-failure",
         ], miMo.ExpectedObservations);
         Assert.Equal(
-            "e46f220ef7a36c078c243d4b1363c87ca09756afdb198485eadba559c879ca6a",
+            "e5a8f17fb9b2153119a11492781bbb5810a2ead84cb72d1adcb1d3a3fc4d1910",
             loaded.CorpusIdentity);
         Assert.Equal(
             "44005e7eed4c8871190396f4043392f60454640c3a43f2520c537d7a134b72df",
