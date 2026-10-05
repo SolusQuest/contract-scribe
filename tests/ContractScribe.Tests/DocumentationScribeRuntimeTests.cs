@@ -1550,12 +1550,19 @@ public sealed class DocumentationScribeRuntimeTests
         var exchange = new ScriptedDocumentationScribeModelExchange(
             [ScriptedDocumentationScribeStep.WaitForCancellation()]);
         var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
+        var clock = new TrackingTimeProvider(manualDeadlines: true);
 
-        var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(
+        var pending = CreateRuntime(exchange, EmptyRegistry(), clock).RunAsync(
             request, Attempt(), Prompt(request));
+        Assert.Single(exchange.Requests);
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(1, clock.ActiveTimerCount);
+        clock.Expire(50);
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(result));
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
     }
 
     [Fact]
@@ -2418,10 +2425,12 @@ public sealed class DocumentationScribeRuntimeTests
         public override long GetTimestamp() => timestampForRead(Interlocked.Increment(ref reads));
     }
 
-    private sealed class TrackingTimeProvider : TimeProvider
+    private sealed class TrackingTimeProvider(bool manualDeadlines = false) : TimeProvider
     {
         private int activeTimerCount;
         private int createdTimerCount;
+        private long timestamp;
+        private readonly List<Action> deadlines = [];
 
         internal int ActiveTimerCount => Volatile.Read(ref activeTimerCount);
 
@@ -2429,7 +2438,14 @@ public sealed class DocumentationScribeRuntimeTests
 
         public override long TimestampFrequency => 1_000;
 
-        public override long GetTimestamp() => 0;
+        public override long GetTimestamp() => Volatile.Read(ref timestamp);
+
+        internal void Expire(int milliseconds)
+        {
+            Assert.True(manualDeadlines);
+            Interlocked.Add(ref timestamp, milliseconds);
+            foreach (var deadline in deadlines) deadline();
+        }
 
         public override ITimer CreateTimer(
             TimerCallback callback,
@@ -2437,7 +2453,8 @@ public sealed class DocumentationScribeRuntimeTests
             TimeSpan dueTime,
             TimeSpan period)
         {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
+            var timer = base.CreateTimer(callback, state, manualDeadlines ? Timeout.InfiniteTimeSpan : dueTime, period);
+            if (manualDeadlines) deadlines.Add(() => callback(state));
             Interlocked.Increment(ref createdTimerCount);
             Interlocked.Increment(ref activeTimerCount);
             return new TrackingTimer(timer, this);
