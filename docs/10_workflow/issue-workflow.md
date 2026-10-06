@@ -1,6 +1,6 @@
 # Issue workflow
 
-Apply Solus Book's [Issue workflow](../shared/solus-book/standards/issue-workflow.md), [Issue refinement](../shared/solus-book/skills/issue-refinement/SKILL.md), and [Issue publishing](../shared/solus-book/skills/issue-publishing/SKILL.md) for refinement, coherent decomposition, native-field publication, and readback. This document owns ContractScribe's required metadata and structural-migration rules.
+Apply Solus Book's [Issue workflow](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/issue-workflow.md), [Issue refinement](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/skills/issue-refinement/SKILL.md), and [Issue publishing](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/skills/issue-publishing/SKILL.md) for refinement, coherent decomposition, native-field publication, and readback. This document owns ContractScribe's required metadata and structural-migration rules.
 
 ## Native issue types
 

@@ -1,6 +1,6 @@
 # Contract lifecycle
 
-Apply Solus Book's [Contract lifecycle](../shared/solus-book/standards/contract-lifecycle.md) for draft replacement, supported obligations, and historical evidence. This document owns ContractScribe's integer-version scheme, transfer provenance, release freeze, and milestone interpretation. [Pre-release engineering](pre-release-engineering.md) owns the local process budget.
+Apply Solus Book's [Contract lifecycle](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/contract-lifecycle.md) for draft replacement, supported obligations, and historical evidence. This document owns ContractScribe's integer-version scheme, transfer provenance, release freeze, and milestone interpretation. [Pre-release engineering](pre-release-engineering.md) owns the local process budget.
 
 ## Integer artifact versions
 
@@ -16,7 +16,7 @@ A contract becomes released through a downstream-consumable release or an explic
 
 ## Coherent draft-contract change
 
-Use the shared [Draft changes](../shared/solus-book/standards/contract-lifecycle.md#draft-changes) rule. A ContractScribe change states the problem, affected artifacts, and whether product behavior changes; updates the actually affected normative specification, producer, consumer, schema/registry, fixture, validator, implementation, tests, and dependent references in one coherent PR; and runs affected conformance, cross-contract, and integration checks. It must not imply that an unreleased draft is externally supported.
+Use the shared [Draft changes](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/contract-lifecycle.md#draft-changes) rule. A ContractScribe change states the problem, affected artifacts, and whether product behavior changes; updates the actually affected normative specification, producer, consumer, schema/registry, fixture, validator, implementation, tests, and dependent references in one coherent PR; and runs affected conformance, cross-contract, and integration checks. It must not imply that an unreleased draft is externally supported.
 
 Living work uses the current main-reachable draft under [Source of truth](source-of-truth.md). A separate decision issue is required only for unresolved materially different semantics; a successor baseline is required only for an external consumer, coexisting persisted state, or irreversible authority that must distinguish revisions.
 

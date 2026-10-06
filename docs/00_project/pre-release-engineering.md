@@ -1,6 +1,6 @@
 # Pre-release engineering proportionality
 
-Apply Solus Book's [Pre-release engineering](../shared/solus-book/standards/pre-release-engineering.md) for coherent outcomes, precedent reuse, current drafts, proportional checks, and corrections. The requirements below specify ContractScribe's process before its first downstream-consumable release. They apply to architecture, issue refinement, implementation, contracts, validation infrastructure, review, publication, and closure.
+Apply Solus Book's [Pre-release engineering](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/pre-release-engineering.md) for coherent outcomes, precedent reuse, current drafts, proportional checks, and corrections. The requirements below specify ContractScribe's process before its first downstream-consumable release. They apply to architecture, issue refinement, implementation, contracts, validation infrastructure, review, publication, and closure.
 
 ## Default process budget
 
@@ -41,7 +41,7 @@ At a justified persistent-identity boundary, prefer a content digest, release-bu
 
 ## Validation proportionality
 
-Solus Book's [Validation](../shared/solus-book/standards/validation.md) governs evidence and behavioral document consumers. ContractScribe selects these initial checks:
+Solus Book's [Validation](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/validation.md) governs evidence and behavioral document consumers. ContractScribe selects these initial checks:
 
 | Change class | Local expectation |
 | --- | --- |
@@ -57,6 +57,6 @@ After production supersedes an experiment, remove it from ordinary CI and delete
 
 Before reopening closed work, report the current defect and failing path, original acceptance gap versus new requirement, impact on current and historical evidence, current-owner fix or new correction as the default alternative, and whether an adjacent satisfiability check would prevent serial corrections. Obtain the user's explicit decision before reopening or changing historical completion or milestone ownership.
 
-Use the shared [Corrections](../shared/solus-book/standards/pre-release-engineering.md#corrections) rule for coupled defects. Before materially expanding a correction, identify the coupled path and adjacent failures, current owner and coherent scope, any obsolete lifecycle/identity/validation layer to delete, and material product, commitment, security, privacy, destructive-operation, dependency, or scope decisions needing the user's choice. Unchanged decisions require no new ceremony. Recurrence handling must not delay immediate containment of a security, privacy, legal, destructive-operation, publication-authority, or evidence-integrity failure; stop normal dependent work without using emergency containment to justify another unchecked serial cycle.
+Use the shared [Corrections](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/pre-release-engineering.md#corrections) rule for coupled defects. Before materially expanding a correction, identify the coupled path and adjacent failures, current owner and coherent scope, any obsolete lifecycle/identity/validation layer to delete, and material product, commitment, security, privacy, destructive-operation, dependency, or scope decisions needing the user's choice. Unchanged decisions require no new ceremony. Recurrence handling must not delay immediate containment of a security, privacy, legal, destructive-operation, publication-authority, or evidence-integrity failure; stop normal dependent work without using emergency containment to justify another unchecked serial cycle.
 
 Closure records link authoritative commits, checks, identities, and remaining owners, with concise query results rather than copied ancestry or tracker state. A repeatedly delaying process with no distinct findings is itself a design problem; a separate workflow issue is needed only for independent planning or a material decision.

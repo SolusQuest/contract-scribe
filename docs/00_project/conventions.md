@@ -1,6 +1,6 @@
 # Conventions
 
-Apply Solus Book's [Conventions](../shared/solus-book/standards/conventions.md) with the local requirements below. ContractScribe excludes private downstream material from its repository surfaces even where the shared default permits necessary private context in a private destination.
+Apply Solus Book's [Conventions](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/conventions.md) with the local requirements below. ContractScribe excludes private downstream material from its repository surfaces even where the shared default permits necessary private context in a private destination.
 
 - Use English for public repository documentation, issue titles, and code.
 - Keep repository surfaces free of private repository content, machine-local paths, private or live-run prompts, raw provider responses, complete transcripts, raw logs, secrets, credentials, and private issue references.

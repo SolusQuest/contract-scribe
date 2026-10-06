@@ -1,10 +1,10 @@
 # Pull request workflow
 
-Apply Solus Book's [PR workflow](../shared/solus-book/standards/pr-workflow.md) and [PR publishing](../shared/solus-book/skills/pr-publishing/SKILL.md). Use the branch/title convention in [Conventions](../00_project/conventions.md), a draft PR by default, and the [repository PR template](../../.github/pull_request_template.md), unless the task selects another authorized status.
+Apply Solus Book's [PR workflow](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/pr-workflow.md) and [PR publishing](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/skills/pr-publishing/SKILL.md). Use the branch/title convention in [Conventions](../00_project/conventions.md), a draft PR by default, and the [repository PR template](../../.github/pull_request_template.md), unless the task selects another authorized status.
 
 ## No-issue exception
 
-The shared [no-issue path](../shared/solus-book/standards/pr-workflow.md#no-issue-path) additionally requires no required follow-up. A runtime change may qualify when its complete intended behavior is stated and tested without a separate product decision or coordination record. Diff size alone does not determine tracking value.
+The shared [no-issue path](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/pr-workflow.md#no-issue-path) additionally requires no required follow-up. A runtime change may qualify when its complete intended behavior is stated and tested without a separate product decision or coordination record. Diff size alone does not determine tracking value.
 
 Write `None` in the tracking field and briefly explain why separate tracking adds no value. If scope exceeds those conditions, create and link an issue before Ready or merge.
 

@@ -1,6 +1,6 @@
 # Test validation
 
-Apply Solus Book's [Validation](../../shared/solus-book/standards/validation.md) and [Test validation](../../shared/solus-book/skills/test-validation/SKILL.md). This local procedure owns ContractScribe's actual commands, environments, suite definitions, timing guidance, process boundaries, fixture rules, and CI qualification.
+Apply Solus Book's [Validation](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/validation.md) and [Test validation](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/skills/test-validation/SKILL.md). This local procedure owns ContractScribe's actual commands, environments, suite definitions, timing guidance, process boundaries, fixture rules, and CI qualification.
 
 ## Suite definitions
 
@@ -68,7 +68,7 @@ The cache allocates an ownership container before invoking reusable preparation.
 
 Use `--no-build --no-restore` only after the current working tree completed the applicable build with the same SDK and configuration. Rebuild when production or test source, a `.csproj` or `.slnx`, `Directory.*`, `global.json`, package-version inputs, a generator/helper project, or shared fixture/process infrastructure changed. Restore again when projects, package sources, package versions, SDK selection, lock inputs, or restore properties changed.
 
-The shared [Input validity](../../shared/solus-book/standards/validation.md#input-validity) rule applies to these outputs; uncertain build validity requires rebuilding.
+The shared [Input validity](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/validation.md#input-validity) rule applies to these outputs; uncertain build validity requires rebuilding.
 
 ## Result isolation and duration evidence
 
@@ -87,7 +87,7 @@ For a performance comparison, record exact commit, OS, resolved dotnet host, SDK
 
 Before a long run, assign the table's outer observation budget and preserve the terminal or process handle that launched it. The warm full-test-suite budget must be at least twice the measured expected duration; the current 25-minute budget covers the 9–12 minute range. Cold guidance separately includes restore, build, and first template qualification.
 
-At budget expiry, follow shared [Runs and failures](../../shared/solus-book/standards/validation.md#runs-and-failures). Preserve an active or uncertain original run; a second run requires completion or bounded owned-process evidence proving non-overlap.
+At budget expiry, follow shared [Runs and failures](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/standards/validation.md#runs-and-failures). Preserve an active or uncertain original run; a second run requires completion or bounded owned-process evidence proving non-overlap.
 
 ## Full validation
 
