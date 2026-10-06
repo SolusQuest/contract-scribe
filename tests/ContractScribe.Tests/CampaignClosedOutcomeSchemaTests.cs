@@ -95,6 +95,77 @@ public sealed partial class CampaignStateContractTests
         Assert.False(EvaluateCampaignSchema(document.RootElement).IsValid);
     }
 
+    [Theory]
+    [InlineData("lf")]
+    [InlineData("crlf")]
+    [InlineData("space")]
+    [InlineData("tab")]
+    [InlineData("short")]
+    [InlineData("long")]
+    [InlineData("uppercase")]
+    public async Task Published_paused_attempt_id_grammar_matches_canonical_reader(string mutation)
+    {
+        var scenario = UnlimitedScenario();
+        var work = scenario.Plan.WorkItems[0];
+        var request = CreateScribeExchange(work, scenario: scenario).Request;
+        var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var store = new TransitionCheckpointStore(initial);
+        var allowance = CampaignInvocationTestPolicy.Create(request.Limits, new TickingProgressClock());
+        var admission = CampaignStateReducer.AdmitProviderInvocation(initial, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey,
+            request, CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
+        Assert.Equal(CampaignTransitionKind.Applied, admission.Kind);
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
+        var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, request);
+        Assert.True(invocation.BindInvocationAllowance(allowance));
+        for (var index = 0; index < allowance.Limits.MaximumToolCalls; index++)
+        {
+            Assert.True(allowance.TryChargeTool());
+        }
+        Assert.False(allowance.TryChargeTool());
+        Assert.Equal(DocumentationScribeInvocationStopReason.ToolCalls, allowance.StopReason);
+        var pause = CampaignStateReducer.PauseProviderInvocation(invocation, 0, lifetimeStop: false);
+        Assert.Equal(CampaignTransitionKind.Applied, pause.Kind);
+        var artifact = pause.Artifact;
+        Assert.Null(artifact.State.ActiveReservation);
+        Assert.Null(artifact.State.TerminalOutcome);
+        Assert.Equal(1, artifact.State.LineageCharges.OuterInvocations);
+        Assert.Equal(0, artifact.State.LineageCharges.ProviderRequests.TotalCharged);
+        var paused = artifact.State.WorkItems.Single(item => item.WorkItemKey == work.WorkItemKey).PausedProviderAttempt;
+        Assert.NotNull(paused);
+        Assert.Equal(47, paused.AttemptId.Value.Length);
+        using var validDocument = JsonDocument.Parse(artifact.ExactUtf8Json.ToArray());
+        var validEvaluation = EvaluateCampaignSchema(validDocument.RootElement);
+        Assert.True(validEvaluation.IsValid, DescribeSchemaFailures(validEvaluation));
+        var roundTrip = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
+        Assert.True(roundTrip.IsValid, roundTrip.FailureCode?.ToString());
+        Assert.Equal(artifact.ExactUtf8Json.ToArray(), CampaignStateJson.CreateArtifact(roundTrip.Artifact!.State).ExactUtf8Json.ToArray());
+        Assert.Equal(paused.AttemptId, roundTrip.Artifact.State.WorkItems.Single(item => item.WorkItemKey == work.WorkItemKey).PausedProviderAttempt!.AttemptId);
+
+        var root = Assert.IsType<JsonObject>(JsonNode.Parse(artifact.ExactUtf8Json.ToArray()));
+        var identity = paused.AttemptId.Value;
+        var malformed = mutation switch
+        {
+            "lf" => identity + "\n",
+            "crlf" => identity + "\r\n",
+            "space" => identity + " ",
+            "tab" => identity + "\t",
+            "short" => identity[..^1],
+            "long" => identity + "d",
+            "uppercase" => "scribe-attempt.D" + identity[16..],
+            _ => throw new ArgumentOutOfRangeException(nameof(mutation)),
+        };
+        root["workItems"]!.AsArray().Single(item => item!["workItemKey"]!.GetValue<string>() == work.WorkItemKey)!["pausedProviderAttempt"]!["attemptId"] = malformed;
+        var bytes = Encoding.UTF8.GetBytes(root.ToJsonString() + "\n");
+        var parsed = CampaignStateJson.Parse(bytes);
+        Assert.False(parsed.IsValid);
+        Assert.Equal(CampaignStateValidationCode.InvalidVocabulary, parsed.FailureCode);
+        using var document = JsonDocument.Parse(bytes);
+        Assert.False(EvaluateCampaignSchema(document.RootElement).IsValid);
+    }
+
     private static CampaignCheckpointState CreateClosedOutcomeSourceState(
         string stage, string code, string? disposition)
     {
