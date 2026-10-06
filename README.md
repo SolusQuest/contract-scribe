@@ -1,5 +1,7 @@
 # ContractScribe
 
+Contributor and agent guidance uses a commit-pinned Solus Book submodule. Clone with `git clone --recurse-submodules`, or initialize an existing checkout with `git submodule update --init --recursive`. See [Book adoption](docs/50_ai/book-adoption.md) for the source revision, local rules, and skill discovery.
+
 ContractScribe is a public source repository for a policy-driven, evidence-grounded C# XML documentation audit and safe proposal system.
 
 The intended pipeline is:

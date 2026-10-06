@@ -2,6 +2,8 @@
 
 This directory is the durable source for product, workflow, architecture, contract, roadmap, and agent-collaboration decisions. GitHub milestones and issues should link to the merged documents rather than replace them.
 
+Shared engineering guidance comes from the fixed [Solus Book](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/README.md) submodule. Read [Book adoption](50_ai/book-adoption.md) for initialization, local exceptions, skill discovery, and update instructions. Product documents and local requirements remain owned here.
+
 ## Start here
 
 - [Project context](00_project/project-context.md) — current product purpose and implementation status.
@@ -81,7 +83,9 @@ Repository docs are updated and merged before the corresponding GitHub milestone
 ## Agent collaboration
 
 - [Agent context](50_ai/agent-context.md)
-- [Collaboration layers](50_ai/collaboration-layers.md)
-- [Task procedures](50_ai/skills/)
+- [Book adoption](50_ai/book-adoption.md)
+- [Shared context model](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/agents/context-model.md)
+- [Shared task routing and procedures](https://github.com/SolusQuest/solus-book/blob/c3718d7d194e2c42b2c95ead4e8aab7f3ec1ff67/agents/task-routing.md)
+- [Local test validation](50_ai/skills/test-validation.md)
 
-`AGENTS.md` is the shared entrypoint for repository-changing agents. It intentionally delegates durable rules to this documentation tree.
+`AGENTS.md` is the repository entrypoint for agents. It combines shared guidance with this project's context; the five thin adapters under `.agents/skills` route to Book without copying its procedures.
