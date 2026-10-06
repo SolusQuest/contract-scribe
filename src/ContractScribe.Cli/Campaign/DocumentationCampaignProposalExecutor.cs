@@ -300,28 +300,19 @@ internal static class DocumentationCampaignProposalExecutor
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);
-        var callerCancelled = prepared.Kind == DocumentationCampaignPreparationKind.StopCancelled
-            || prepared.CompletionAuthority?.Kind == CampaignProviderCompletionKind.CallerCancelled
-            || prepared.CompletionAuthority is
-            {
-                Kind: CampaignProviderCompletionKind.Ordinary,
-                Outcome.RunResult.Terminal: DocumentationScribeCancelledTerminal { Code: DocumentationScribeCancellationCode.Caller }
-            };
-        if (!callerCancelled && (coordinator.Scope.Allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
-            || coordinator.LifetimeElapsedExhausted
-            || prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted
-            || coordinator.LifetimeStop && !proposalResult))
-        {
-            completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
-                coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeElapsedExhausted
-                    || prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted);
-        }
-        else if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
+        if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
         {
             completed = CampaignStateReducer.CompleteProviderInvocation(
                 invocation.AcceptedCheckpoint.Artifact, prepared.CompletionAuthority,
                 input.ExecutionCapability, input.StyleConfigurationId, input.StyleConfigurationProjection,
                 input.PlanningInput, input.AcceptedPlan);
+        }
+        else if (prepared.Kind is DocumentationCampaignPreparationKind.StopInvocationExhausted
+            or DocumentationCampaignPreparationKind.StopLifetimeExhausted)
+        {
+            completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
+                prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted
+                    || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeStop || coordinator.LifetimeElapsedExhausted);
         }
         else if (prepared.Kind is DocumentationCampaignPreparationKind.StopCancelled
             or DocumentationCampaignPreparationKind.StopTimedOut

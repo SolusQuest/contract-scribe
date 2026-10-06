@@ -210,7 +210,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     }
 
     private static DocumentationScribeInvocationAllowance StopCauseAllowance(EndToEndFixture fixture, TimeProvider clock,
-        int elapsed = 900000, int? output = null) => new(DocumentationScribeInvocationLimits.Create(
+        int elapsed = 900000, int? output = null, int? hostElapsed = null) => new(DocumentationScribeInvocationLimits.Create(
             maximumProviderRequests: fixture.Request.Limits.MaximumProviderRequests,
             maximumToolCalls: fixture.Request.Limits.MaximumToolCalls,
             maximumCachedInputTokens: fixture.Request.Limits.MaximumInputTokens - fixture.Request.Limits.MaximumUncachedInputTokens,
@@ -218,7 +218,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             maximumOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
             maximumRequestOutputTokens: output ?? fixture.Request.Limits.MaximumOutputTokens,
             maximumElapsedMilliseconds: elapsed,
-            maximumRequestElapsedMilliseconds: fixture.Request.Limits.MaximumElapsedMilliseconds), clock);
+            maximumRequestElapsedMilliseconds: hostElapsed ?? fixture.Request.Limits.MaximumElapsedMilliseconds), clock);
 
     private static PatchCampaign StopCauseCampaign(EndToEndFixture fixture, long? elapsed, long? output = null)
     {
