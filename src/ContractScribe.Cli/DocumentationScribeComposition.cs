@@ -650,7 +650,7 @@ internal static class DocumentationScribeComposition
         if (resourceOwner is null && owned.Status == DocumentationScribeCompositionStatus.BudgetExhausted
             && (m3 is null || m3.RunResult.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }))
         {
-            if (coordinator.Scope.LifetimeDeadlineReached || coordinator.Scope.SettledLifetimeBudgetExceeded
+            if (coordinator.Scope.LifetimeDeadlineReached || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded
                 || m3 is null && coordinator.LifetimeElapsedExhausted)
                 resourceOwner = DocumentationScribeDeadlineOwner.Lifetime;
             else if (coordinator.Scope.Allowance.HasCheckedStop)

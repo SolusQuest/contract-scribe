@@ -47,6 +47,8 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         if (guard is not null && !guard()) { Conflict = true; return false; }
         var preceding = ElapsedAt(permit.StartedAt);
         var transition = CampaignStateReducer.ReserveProviderDispatch(invocation, descriptor, permit, preceding);
+        // This producer rejects BudgetExhausted only for lifetime exposure admission.
+        if (transition.Failure == CampaignTransitionFailure.BudgetExhausted) Scope.ObserveLifetimeAdmissionDenial();
         using var boundaryScope = CampaignProcessBoundaryHooks.EnterReplacementScope(CampaignProcessBoundaryHooks.PhysicalReservationReplacementScope);
         var accepted = await AcceptProgressAsync(transition, permit.StartedAt).ConfigureAwait(false);
         if (accepted) CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PhysicalReservationAfterReadback);
@@ -67,8 +69,24 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     {
         if (guard is not null && !guard()) { Conflict = true; return null; }
         var boundary = clock.GetTimestamp();
+        var elapsed = ElapsedAt(boundary);
         var transition = CampaignStateReducer.AdvanceHostOperation(invocation, operation,
-            ElapsedAt(boundary), maximumMilliseconds, completing: false);
+            elapsed, maximumMilliseconds, completing: false);
+        if (transition.Failure == CampaignTransitionFailure.BudgetExhausted)
+        {
+            var state = invocation.AcceptedCheckpoint.Artifact.State;
+            var claim = (CampaignProviderReservation)state.ActiveReservation!;
+            var charges = CampaignBudgetAccounting.SettleHostInterval(state.LineageCharges, elapsed, claim.Exposure.ElapsedMilliseconds);
+            var budget = state.ConfiguredCeilings.CampaignBudget;
+            // Host rejection also covers Action duration and completion headroom.
+            // Preserve only the lifetime cause of this specific denied operation.
+            if (CampaignBudgetAccounting.RemainingLifetimeElapsed(charges, budget) <= 0
+                || !CampaignBudgetAccounting.FitsSettledBudget(charges, budget)
+                    && operation is not (DocumentationScribeHostOperation.TerminalSubmission or DocumentationScribeHostOperation.Postflight))
+                Scope.ObserveLifetimeAdmissionDenial();
+            else if (Scope.Allowance.RemainingMilliseconds <= 0)
+                Scope.Allowance.CanBeginProviderWork();
+        }
         using var boundaryScope = operation == DocumentationScribeHostOperation.RetryWait
             ? CampaignProcessBoundaryHooks.EnterReplacementScope(CampaignProcessBoundaryHooks.RetryWaitReplacementScope) : null;
         if (!await AcceptProgressAsync(transition, boundary).ConfigureAwait(false)) return null;
@@ -87,8 +105,9 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     {
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
-            LifetimeStop |= transition.Failure == CampaignTransitionFailure.BudgetExhausted;
-            Conflict |= !LifetimeStop;
+            LifetimeStop |= Scope.LifetimeAdmissionDenied;
+            Conflict |= transition.Failure != CampaignTransitionFailure.BudgetExhausted
+                || !(Scope.LifetimeAdmissionDenied || Scope.Allowance.HasCheckedStop);
             return false;
         }
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);

@@ -384,8 +384,9 @@ public sealed partial class CampaignStateContractTests
                     new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
             var result = await runtime.RunAsync(request, reservation.AttemptId, prompt, executionScope: coordinator.Scope);
             CampaignTransitionResult complete;
-            if (allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
-                || coordinator.LifetimeStop && result.Terminal is not DocumentationScribeProposalTerminal)
+            if (result.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }
+                && (allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
+                    || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded))
             {
                 complete = CampaignStateReducer.PauseProviderInvocation(authority, coordinator.CurrentElapsed,
                     coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached);

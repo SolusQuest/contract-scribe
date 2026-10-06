@@ -163,7 +163,7 @@ public sealed class DocumentationScribeRuntime
             if (completion.Kind == OperationCompletionKind.TimedOut)
             {
                 return reducer.CommitFailure(state, cancellationToken,
-                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
                         ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             }
 
@@ -229,7 +229,7 @@ public sealed class DocumentationScribeRuntime
                     if (delay == OperationCompletionKind.TimedOut)
                     {
                         return reducer.CommitFailure(state, cancellationToken,
-                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
                         ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
                     }
                 }
@@ -373,7 +373,7 @@ public sealed class DocumentationScribeRuntime
             if (completion.Kind == OperationCompletionKind.TimedOut)
             {
                 return reducer.CommitFailure(state, cancellationToken,
-                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
                         ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             }
 
@@ -402,7 +402,7 @@ public sealed class DocumentationScribeRuntime
             if (invocation.Outcome == DocumentationScribeToolOutcome.TimedOut)
             {
                 return reducer.CommitFailure(state, cancellationToken,
-                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
                         ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             }
 
@@ -892,7 +892,7 @@ internal sealed class DocumentationScribeTerminalReducer
 
         if (state.Scope.ResourceBudgetReached
             && !(allowReturnedTerminal && state.Scope.SettledLifetimeBudgetExceeded
-                && !state.Scope.LifetimeDeadlineReached && !state.Scope.Allowance.HasCheckedStop))
+                && !state.Scope.LifetimeDeadlineReached && !state.Scope.LifetimeAdmissionDenied && !state.Scope.Allowance.HasCheckedStop))
         {
             return state.CreateFailure(DocumentationScribeFailureCode.Budget, elapsedMilliseconds);
         }

@@ -83,10 +83,12 @@ public sealed class DocumentationScribeExecutionScope
     public bool StandaloneDeadlineReached => !Allowance.IsCampaignScope
         && Allowance.StopReason == DocumentationScribeInvocationStopReason.Elapsed;
     public bool SettledLifetimeBudgetExceeded { get; private set; }
-    public bool ResourceBudgetReached => LifetimeDeadlineReached || SettledLifetimeBudgetExceeded
+    public bool LifetimeAdmissionDenied { get; private set; }
+    public bool ResourceBudgetReached => LifetimeDeadlineReached || LifetimeAdmissionDenied || SettledLifetimeBudgetExceeded
         || Allowance.IsCampaignScope && Allowance.HasCheckedStop;
     internal void ObserveSettledLifetimeBudgetExhaustion() => SettledLifetimeBudgetExceeded = true;
-    internal bool CanBeginHost(DocumentationScribeHostOperation operation) => !LifetimeDeadlineReached
+    internal void ObserveLifetimeAdmissionDenial() => LifetimeAdmissionDenied = true;
+    internal bool CanBeginHost(DocumentationScribeHostOperation operation) => !LifetimeDeadlineReached && !LifetimeAdmissionDenied
         && (!SettledLifetimeBudgetExceeded || operation is DocumentationScribeHostOperation.TerminalSubmission
             or DocumentationScribeHostOperation.Postflight);
     public void ObserveDeadline(DocumentationScribeInvocationProviderPermit permit)
