@@ -442,7 +442,8 @@ public static class DocumentationScribeValidation
                     diagnostic.Code,
                     diagnostic.Stage,
                     diagnostic.ReferenceId,
-                    diagnostic.ValidationCode)).ToImmutableArray()),
+                    diagnostic.ValidationCode)).ToImmutableArray())
+            { RestoredRetryableProviderFailures = envelope.RestoredRetryableProviderFailures },
             runResult.Terminal);
 
         return new DocumentationScribeValidatedRunOutcome(request, runResult);
@@ -590,6 +591,9 @@ public static class DocumentationScribeValidation
             || !IsIdentifier(input.ScribeProtocolId, allowSlash: false)
             || input.AttemptNumber < 1
             || input.AttemptNumber > request.Limits.MaximumAttempts
+            || input.RestoredRetryableProviderFailures < 0
+            || input.RestoredRetryableProviderFailures >= request.Limits.MaximumAttempts
+            || input.RestoredRetryableProviderFailures >= input.AttemptNumber
             || input.ProviderRequestCount < 0
             || input.ProviderRequestCount > request.Limits.MaximumProviderRequests
             || input.ToolRoundCount < 0
@@ -723,6 +727,7 @@ public static class DocumentationScribeValidation
             request.ToolPolicyId,
             request.StyleProfile.StyleProfileId,
             input.AttemptNumber,
+            input.RestoredRetryableProviderFailures,
             input.ProviderRequestCount,
             input.ToolRoundCount,
             input.ToolCallCount,
@@ -1583,7 +1588,7 @@ public static class DocumentationScribeValidation
         }
 
         if (envelope.ProviderRequestCount < 1
-            || envelope.ProviderRequestCount < envelope.AttemptNumber)
+            || envelope.ProviderRequestCount < envelope.AttemptNumber - envelope.RestoredRetryableProviderFailures)
         {
             throw Fail("invalid-correlation", "/runEnvelope/providerRequestCount");
         }
@@ -1618,7 +1623,7 @@ public static class DocumentationScribeValidation
         }
 
         if (envelope.ProviderRequestCount < 1
-            || envelope.ProviderRequestCount < envelope.AttemptNumber
+            || envelope.ProviderRequestCount < envelope.AttemptNumber - envelope.RestoredRetryableProviderFailures
             || failure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
                 && envelope.AttemptNumber != request.Limits.MaximumAttempts)
         {
@@ -1899,6 +1904,7 @@ public static class DocumentationScribeValidation
                 "toolPolicyId",
                 "styleProfileId",
                 "attemptNumber",
+                "restoredRetryableProviderFailures",
                 "providerRequestCount",
                 "toolRoundCount",
                 "toolCallCount",
@@ -1940,6 +1946,10 @@ public static class DocumentationScribeValidation
             pointer,
             1,
             request.Limits.MaximumAttempts);
+        var restoredFailures = ReadBoundedInt(element, "restoredRetryableProviderFailures", pointer,
+            0, request.Limits.MaximumAttempts - 1);
+        if (restoredFailures >= attemptNumber)
+            throw Fail("invalid-correlation", pointer + "/restoredRetryableProviderFailures");
         var providerRequestCount = ReadBoundedInt(
             element,
             "providerRequestCount",
@@ -2005,6 +2015,7 @@ public static class DocumentationScribeValidation
             toolPolicyId,
             styleProfileId,
             attemptNumber,
+            restoredFailures,
             providerRequestCount,
             toolRoundCount,
             toolCallCount,

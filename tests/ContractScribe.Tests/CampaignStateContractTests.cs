@@ -185,18 +185,18 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario();
         var first = scenario.Plan.WorkItems[0];
         var second = scenario.Plan.WorkItems[1];
-        var exchange = CreateScribeExchange(first);
-        var secondExchange = CreateScribeExchange(second);
+        var exchange = CreateScribeExchange(first, scenario: scenario);
+        var secondExchange = CreateScribeExchange(second, scenario: scenario);
 
         AssertInvalidCorrelation(() => AdmitProposal(scenario, scenario.InitialState, first, exchange));
 
         var wrongWorkReservation = WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems,
-            ProviderReservation(second.WorkItemKey, exchange));
+            ProviderReservation(second.WorkItemKey, secondExchange));
         AssertInvalidCorrelation(() => AdmitProposal(scenario, wrongWorkReservation, first, exchange));
 
-        var alternateRequest = CreateScribeExchange(first, inputIdentity: "samples/Alternate.csproj");
+        var alternateRequest = CreateScribeExchange(first, inputIdentity: "samples/Alternate.csproj", scenario: scenario);
         var wrongRequestReservation = WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems,
@@ -210,12 +210,11 @@ public sealed partial class CampaignStateContractTests
 
         var alternateAttempt = CreateScribeExchange(
             first,
-            attemptId: "scribe-attempt.ffffffffffffffffffffffffffffffff");
-        var wrongAttemptReservation = WithState(
+            attemptId: "scribe-attempt.ffffffffffffffffffffffffffffffff", scenario: scenario);
+        AssertInvalidCorrelation(() => WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems,
-            ProviderReservation(first.WorkItemKey, alternateAttempt));
-        AssertInvalidCorrelation(() => AdmitProposal(scenario, wrongAttemptReservation, first, exchange));
+            ProviderReservation(first.WorkItemKey, alternateAttempt)));
 
         AssertInvalidCorrelation(() => AdmitProposal(
             scenario,
@@ -259,7 +258,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var original = CreateScribeExchange(work);
+        var original = CreateScribeExchange(work, scenario: scenario);
         var reserved = WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems,
@@ -294,35 +293,35 @@ public sealed partial class CampaignStateContractTests
                 result => result["runEnvelope"]!["toolPolicyId"] = "tool-policy.alternate.v1"),
         };
         foreach (var changed in mutations.Select(mutation =>
-            CreateScribeExchange(work, requestMutation: mutation.Request, resultMutation: mutation.Result)))
+            CreateScribeExchange(work, requestMutation: mutation.Request, resultMutation: mutation.Result, scenario: scenario)))
         {
             AssertInvalidCorrelation(() => AdmitProposal(scenario, reserved, work, changed));
         }
 
         var productChanged = CampaignStateFactory.CreateValidated(
-            scenario.InitialState.ProductRevision with { ContentSha256 = Hash('f') },
-            scenario.InitialState.CampaignLineage,
-            scenario.InitialState.Snapshot,
-            scenario.InitialState.CheckpointRevision,
-            scenario.InitialState.ConfiguredCeilings,
-            scenario.InitialState.LineageCharges,
-            scenario.InitialState.WorkItems,
-            scenario.InitialState.Batch,
+            reserved.ProductRevision with { ContentSha256 = Hash('f') },
+            reserved.CampaignLineage,
+            reserved.Snapshot,
+            reserved.CheckpointRevision,
+            reserved.ConfiguredCeilings,
+            reserved.LineageCharges,
+            reserved.WorkItems,
+            reserved.Batch,
             ProviderReservation(work.WorkItemKey, original));
         AssertInvalidCorrelation(() => AdmitProposal(scenario, productChanged, work, original));
         var snapshotChanged = CampaignStateFactory.CreateValidated(
-            scenario.InitialState.ProductRevision,
-            scenario.InitialState.CampaignLineage,
-            scenario.InitialState.Snapshot with { OpaqueSnapshotBinding = "snapshot.alternate" },
-            scenario.InitialState.CheckpointRevision,
-            scenario.InitialState.ConfiguredCeilings,
-            scenario.InitialState.LineageCharges,
-            scenario.InitialState.WorkItems,
-            scenario.InitialState.Batch,
+            reserved.ProductRevision,
+            reserved.CampaignLineage,
+            reserved.Snapshot with { OpaqueSnapshotBinding = "snapshot.alternate" },
+            reserved.CheckpointRevision,
+            reserved.ConfiguredCeilings,
+            reserved.LineageCharges,
+            reserved.WorkItems,
+            reserved.Batch,
             ProviderReservation(work.WorkItemKey, original));
         AssertInvalidCorrelation(() => AdmitProposal(scenario, snapshotChanged, work, original));
 
-        var nonProposal = CreateNonProposalExchange(work);
+        var nonProposal = CreateNonProposalExchange(work, scenario: scenario);
         AssertInvalidCorrelation(() => AdmitProposal(scenario, reserved, work, nonProposal));
 
         var proposal = AdmitProposal(scenario, reserved, work, original);
@@ -341,7 +340,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var original = CreateScribeExchange(work);
+        var original = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var mutations = new (
             string Name,
@@ -389,7 +388,7 @@ public sealed partial class CampaignStateContractTests
             var changed = CreateScribeExchange(
                 work,
                 requestMutation: requestMutation,
-                resultMutation: resultMutation);
+                resultMutation: resultMutation, scenario: scenario);
             var rejected = CampaignStateReducer.AdmitProviderInvocation(
                 CampaignStateJson.CreateArtifact(scenario.InitialState),
                 authority,
@@ -399,7 +398,7 @@ public sealed partial class CampaignStateContractTests
                 scenario.Plan,
                 work.WorkItemKey,
                 changed.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(changed.Request.Limits));
             Assert.True(
                 rejected.Kind == CampaignTransitionKind.Rejected
                     && rejected.Failure == CampaignTransitionFailure.InvalidAuthority,
@@ -412,7 +411,7 @@ public sealed partial class CampaignStateContractTests
                         ? item with { OuterAttemptCount = 1 }
                         : item).ToImmutableArray(),
                 ProviderReservation(work.WorkItemKey, changed)));
-            Assert.Throws<CampaignStateValidationException>(() =>
+            Assert.Throws<ArgumentException>(() =>
                 CampaignStateReducer.CreateProviderInvocationAuthority(
                     AcceptCurrentForTest(fabricated),
                     authority,
@@ -438,7 +437,7 @@ public sealed partial class CampaignStateContractTests
                 root["runEnvelope"]!["modelConfigurationId"] = "model.substituted.v1";
                 root["runEnvelope"]!["scribeProtocolId"] = "scribe-protocol.substituted.v1";
                 root["runEnvelope"]!["toolPolicyId"] = "tool-policy.substituted.v1";
-            });
+            }, scenario: scenario);
         var substitutedAgent = JsonSerializer.SerializeToElement(new
         {
             scribeProtocolId = "scribe-protocol.substituted.v1",
@@ -481,7 +480,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             substitutedExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(substitutedExchange.Request.Limits));
         Assert.Equal(CampaignTransitionKind.Rejected, rejectedAdmission.Kind);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, rejectedAdmission.Failure);
 
@@ -520,8 +519,8 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             work.WorkItemKey,
-            CreateScribeExchange(work).Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(coherentlySubstitutedCheckpoint, new CampaignInvocationTargetLimit(100)));
+            CreateScribeExchange(work, scenario: scenario).Request,
+                CampaignStateFactory.CreateInvocationTargetAllowance(coherentlySubstitutedCheckpoint, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(CreateScribeExchange(work, scenario: scenario).Request.Limits));
         Assert.Equal(CampaignTransitionKind.Rejected, currentCapabilityRejected.Kind);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, currentCapabilityRejected.Failure);
         Assert.Null(currentCapabilityRejected.Artifact.State.ActiveReservation);
@@ -543,14 +542,14 @@ public sealed partial class CampaignStateContractTests
 
         var changedLimits = CreateScribeExchange(
             work,
-            requestMutation: root => root["limits"]!["maximumOutputTokens"] = 4_096);
+            requestMutation: root => root["limits"]!["maximumOutputTokens"] = 4_096, scenario: scenario);
         var changedLimitState = WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems,
             ProviderReservation(work.WorkItemKey, changedLimits));
         AssertInvalidCorrelation(() => AdmitProposal(scenario, changedLimitState, work, changedLimits));
 
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var exactReserved = WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems,
@@ -572,7 +571,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var historical = CreateScribeExchange(work);
+        var historical = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -611,7 +610,7 @@ public sealed partial class CampaignStateContractTests
             CurrentEvidence(fresh).Add(CurrentEvidence(fresh)[0])));
 
         var changedEvidence = CreateScribeExchange(work, requestMutation: root =>
-            root["evidenceReferences"]![0]!["contentSha256"] = Hash('f'));
+            root["evidenceReferences"]![0]!["contentSha256"] = Hash('f'), scenario: scenario);
         AssertInvalidCorrelation(() => CampaignStateFactory.ReconstructPatchRequest(
             complete,
             PatchContext(changedEvidence.Request),
@@ -623,7 +622,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var historical = CreateScribeExchange(work);
+        var historical = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -645,6 +644,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "scribe",
                 ["code"] = "insufficient-evidence",
                 ["providerDisposition"] = null,
+                ["scribeCompletionSource"] = "scribe-result",
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = Hash('c'),
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = "scribe-attempt.22222222222222222222222222222222",
@@ -744,8 +745,8 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario();
         var first = scenario.Plan.WorkItems[0];
         var second = scenario.Plan.WorkItems[1];
-        var firstExchange = CreateScribeExchange(first);
-        var secondExchange = CreateScribeExchange(second);
+        var firstExchange = CreateScribeExchange(first, scenario: scenario);
+        var secondExchange = CreateScribeExchange(second, scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
             WithState(
@@ -882,7 +883,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var retryable = MutateValidState(scenario.InitialState, root =>
         {
             var row = root["workItems"]![0]!;
@@ -893,6 +894,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "scribe",
                 ["code"] = "provider-failure",
                 ["providerDisposition"] = "retryable",
+                ["scribeCompletionSource"] = "scribe-result",
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = exchange.Request.ArtifactSha256,
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = exchange.Result.AttemptId.Value,
@@ -932,6 +935,7 @@ public sealed partial class CampaignStateContractTests
         var planningRollback = MutateValidState(retryable, root =>
         {
             root["workItems"]![0]!["closedOutcome"]!["stage"] = "planning";
+            root["workItems"]![0]!["closedOutcome"]!["scribeCompletionSource"] = null;
             root["workItems"]![0]!["closedOutcome"]!["code"] = "planning-terminal";
             root["workItems"]![0]!["closedOutcome"]!["providerDisposition"] = null;
             root["workItems"]![0]!["closedOutcome"]!["scribeRequestSha256"] = null;
@@ -952,6 +956,7 @@ public sealed partial class CampaignStateContractTests
         {
             var outcome = root["workItems"]![0]!["closedOutcome"]!;
             outcome["stage"] = "patch";
+            outcome["scribeCompletionSource"] = null;
             outcome["code"] = "patch-rejected";
             outcome["providerDisposition"] = null;
             outcome["scribeRequestSha256"] = null;
@@ -1062,6 +1067,7 @@ public sealed partial class CampaignStateContractTests
             selected.ClosedOutcome.PatchResultCommitmentSha256);
         Assert.Null(applied.Artifact.State.ActiveReservation);
         Assert.Equal(CampaignCumulativeOutcomeKind.Rejected, applied.Artifact.State.CumulativeOutcome!.Kind);
+        AssertPublishedCampaignRoundTrip(applied.Artifact.State);
         Assert.Equal(500, applied.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var repeatedFromPredecessor = CampaignStateReducer.ApplyPatchRejection(
@@ -1190,7 +1196,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costCurrency: "currency.usd");
         var work = scenario.Plan.WorkItems[0];
-        var requestExchange = CreateScribeExchange(work);
+        var requestExchange = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
 
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
@@ -1202,7 +1208,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             requestExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(requestExchange.Request.Limits));
 
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         var reserved = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation);
@@ -1210,7 +1216,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(1, admitted.Artifact.State.WorkItems[0].OuterAttemptCount);
         Assert.Equal(1, admitted.Artifact.State.LineageCharges.OuterInvocations);
 
-        var completionExchange = CreateScribeExchange(work, attemptId: attemptId.Value);
+        var completionExchange = CreateScribeExchange(work, attemptId: attemptId.Value, scenario: scenario);
         Assert.Equal(requestExchange.Request.ArtifactSha256, completionExchange.Request.ArtifactSha256);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             completionExchange.Request,
@@ -1227,6 +1233,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completionExchange.Request);
+        Assert.True(invocationAuthority.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocationAuthority.Request.Limits)));
         Assert.True(invocationAuthority.TryBeginDispatch(out var dispatchedAttempt));
         Assert.Equal(attemptId, dispatchedAttempt);
         Assert.False(invocationAuthority.TryBeginDispatch(out _));
@@ -1240,7 +1247,7 @@ public sealed partial class CampaignStateContractTests
             scenario.ToolPolicyProjection,
             scenario.ProviderModelProjection);
         var capabilitySubstitution = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             remintedCapability,
             "style.synthetic",
@@ -1250,7 +1257,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignTransitionKind.Rejected, capabilitySubstitution.Kind);
         Assert.Equal(CampaignTransitionFailure.InvalidCorrelation, capabilitySubstitution.Failure);
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             authority,
             "style.synthetic",
@@ -1280,7 +1287,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costCurrency: "currency.usd");
         var work = scenario.Plan.WorkItems[0];
-        var request = CreateScribeExchange(work);
+        var request = CreateScribeExchange(work, scenario: scenario);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             CampaignStateJson.CreateArtifact(scenario.InitialState),
             scenario.ExecutionAuthority,
@@ -1290,10 +1297,10 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             request.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(request.Request.Limits));
         var attempt = Assert.IsType<CampaignProviderReservation>(
             admitted.Artifact.State.ActiveReservation).AttemptId;
-        var completionExchange = CreateScribeExchange(work, attemptId: attempt.Value);
+        var completionExchange = CreateScribeExchange(work, attemptId: attempt.Value, scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             completionExchange.Request,
             attempt,
@@ -1306,6 +1313,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completionExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(
             invocation.TryCreateCompletionRegistrar());
         Assert.Null(invocation.TryCreateCompletionRegistrar());
@@ -1323,7 +1331,7 @@ public sealed partial class CampaignStateContractTests
         var skipExchange = CreateScribeExchange(
             work,
             attemptId: attempt.Value,
-            resultFixture: "skip-result.json");
+            resultFixture: "skip-result.json", scenario: scenario);
         var skipOutcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             skipExchange.Request,
             attempt,
@@ -1337,7 +1345,7 @@ public sealed partial class CampaignStateContractTests
         var cancelledExchange = CreateScribeExchange(
             work,
             attemptId: attempt.Value,
-            resultFixture: "cancelled-result.json");
+            resultFixture: "cancelled-result.json", scenario: scenario);
         var cancelledOutcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             cancelledExchange.Request,
             attempt,
@@ -1363,6 +1371,7 @@ public sealed partial class CampaignStateContractTests
             CampaignWorkOutcomeCode.CancelledByCaller,
             completed.Artifact.State.WorkItems[0].ClosedOutcome!.Code);
         Assert.Equal(CampaignTerminalKind.Cancelled, completed.Artifact.State.TerminalOutcome!.Kind);
+        AssertPublishedCampaignRoundTrip(completed.Artifact.State);
         Assert.Null(completed.Artifact.State.ActiveReservation);
         Assert.False(invocation.TryBeginDispatch(out _));
         Assert.False(registrar.TryRegister(
@@ -1377,7 +1386,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             initial,
@@ -1388,7 +1397,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
         var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(
             AcceptForTest(initial, admitted),
             scenario.ExecutionAuthority,
@@ -1397,6 +1406,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             exchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(
             invocation.TryCreateCompletionRegistrar());
         Assert.True(registrar.TryRegister(
@@ -1421,7 +1431,8 @@ public sealed partial class CampaignStateContractTests
         Assert.Null(closed.TrustedProposal);
         Assert.Null(closed.ClosedOutcome.ScribeResultCommitmentSha256);
         Assert.Null(completed.Artifact.State.ActiveReservation);
-        Assert.True(completed.Artifact.State.LineageCharges.ProviderRequests.ConservativeUnobserved > 0);
+        Assert.Equal(0, completed.Artifact.State.LineageCharges.ProviderRequests.TotalCharged);
+        Assert.True(completed.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved > 0);
         Assert.False(invocation.TryBeginDispatch(out _));
     }
 
@@ -1434,7 +1445,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costCurrency: "currency.usd", maximumCostMicrounits: 10_000_000);
         var work = scenario.Plan.WorkItems[0];
-        var request = CreateScribeExchange(work);
+        var request = CreateScribeExchange(work, scenario: scenario);
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             initial,
@@ -1445,10 +1456,10 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             request.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(request.Request.Limits));
         var attempt = Assert.IsType<CampaignProviderReservation>(
             admitted.Artifact.State.ActiveReservation).AttemptId;
-        var completionExchange = CreateScribeExchange(work, attemptId: attempt.Value);
+        var completionExchange = CreateScribeExchange(work, attemptId: attempt.Value, scenario: scenario);
         var retainedProposal = DocumentationScribeValidation.BindValidatedRunOutcome(
             completionExchange.Request,
             attempt,
@@ -1461,7 +1472,9 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completionExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
+        SettleSyntheticDispatches(invocation, retainedProposal);
         var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(
             invocation.TryCreateCompletionRegistrar());
         Assert.True(registrar.TryRegister(
@@ -1471,7 +1484,7 @@ public sealed partial class CampaignStateContractTests
             out var authority));
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            invocation.AcceptedCheckpoint.Artifact,
             Assert.IsType<CampaignProviderCompletionAuthority>(authority),
             scenario.ExecutionAuthority,
             "style.synthetic",
@@ -1493,7 +1506,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Null(completed.Artifact.State.TerminalOutcome);
 
         var replay = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            invocation.AcceptedCheckpoint.Artifact,
             Assert.IsType<CampaignProviderCompletionAuthority>(authority),
             scenario.ExecutionAuthority,
             "style.synthetic",
@@ -1509,7 +1522,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var nearMaximum = MutateValidState(
             scenario.InitialState,
             root => root["checkpointRevision"] = CampaignStateContract.MaximumObservation - 1);
@@ -1523,7 +1536,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(nearMaximum, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(nearMaximum, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
 
         Assert.Equal(CampaignTransitionKind.Applied, exhausted.Kind);
         Assert.Equal(CampaignStateContract.MaximumObservation, exhausted.Artifact.CheckpointRevision);
@@ -1542,7 +1555,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(atMaximum, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(atMaximum, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
         Assert.Equal(CampaignTransitionKind.Rejected, rejected.Kind);
         Assert.Equal(CampaignTransitionFailure.RevisionOverflow, rejected.Failure);
         Assert.True(
@@ -1555,7 +1568,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var request = CreateScribeExchange(work);
+        var request = CreateScribeExchange(work, scenario: scenario);
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             initial,
@@ -1566,10 +1579,14 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             request.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(request.Request.Limits));
         var activeAtMaximum = MutateValidState(
             admitted.Artifact.State,
-            root => root["checkpointRevision"] = CampaignStateContract.MaximumObservation);
+            root =>
+            {
+                root["checkpointRevision"] = CampaignStateContract.MaximumObservation;
+                root["activeReservation"]!["executionStartRevision"] = CampaignStateContract.MaximumObservation;
+            });
         var activeArtifact = CampaignStateJson.CreateArtifact(activeAtMaximum);
         var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(
             CreateWriterAcceptedCheckpoint(activeArtifact),
@@ -1579,6 +1596,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             request.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
         var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(
             invocation.TryCreateCompletionRegistrar());
@@ -1613,14 +1631,14 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public void Active_provider_retry_uses_the_last_revision_to_settle_without_redispatch()
+    public void Active_provider_retirement_uses_the_last_revision_without_redispatch()
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var reservable = MutateValidState(
             scenario.InitialState,
-            root => root["checkpointRevision"] = CampaignStateContract.MaximumObservation - 2);
+            root => root["checkpointRevision"] = CampaignStateContract.MaximumObservation - 5);
         var predecessor = CampaignStateJson.CreateArtifact(reservable);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             predecessor,
@@ -1631,26 +1649,19 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
-        var accepted = AcceptForTest(predecessor, admitted);
-
-        var retry = CampaignStateReducer.RetryProviderInvocation(
-            admitted.Artifact,
-            accepted,
-            scenario.ExecutionAuthority,
-            "style.synthetic",
-            scenario.StyleProjection,
-            scenario.Input,
-            scenario.Plan,
-            work.WorkItemKey,
-            exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(admitted.Artifact.State, new CampaignInvocationTargetLimit(100)));
-
-        Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
-        Assert.Equal(CampaignStateContract.MaximumObservation, retry.Artifact.CheckpointRevision);
-        Assert.Null(retry.Artifact.State.ActiveReservation);
-        Assert.Equal(CampaignTerminalKind.Exhausted, retry.Artifact.State.TerminalOutcome!.Kind);
-        Assert.True(retry.Artifact.State.LineageCharges.ProviderRequests.ConservativeUnobserved > 0);
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
+        var activeAtLastRevision = CampaignStateJson.CreateArtifact(MutateValidState(admitted.Artifact.State,
+            root => root["checkpointRevision"] = CampaignStateContract.MaximumObservation - 1));
+        var retired = CampaignStateReducer.RetireInterruptedProviderAttempt(AcceptCurrentForTest(activeAtLastRevision));
+        Assert.Equal(CampaignTransitionKind.Applied, retired.Kind);
+        Assert.Equal(CampaignStateContract.MaximumObservation, retired.Artifact.CheckpointRevision);
+        Assert.Null(retired.Artifact.State.ActiveReservation);
+        Assert.Equal(0, retired.Artifact.State.LineageCharges.ProviderRequests.TotalCharged);
+        Assert.True(retired.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved > 0);
+        Assert.NotNull(retired.Artifact.State.WorkItems[0].PausedProviderAttempt);
+        Assert.Equal(1, retired.Artifact.State.WorkItems[0].OuterAttemptCount);
+        Assert.Equal(CampaignTransitionFailure.InvalidAuthority,
+            CampaignStateReducer.RetireInterruptedProviderAttempt(AcceptCurrentForTest(retired.Artifact)).Failure);
     }
 
     [Fact]
@@ -1658,7 +1669,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
@@ -1670,7 +1681,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
 
         var successful = await CampaignCheckpointAcceptance.AcceptAsync(
             new TransitionCheckpointStore(predecessor),
@@ -1722,7 +1733,7 @@ public sealed partial class CampaignStateContractTests
             maximumElapsedMilliseconds: 300_000);
         var work = scenario.Plan.WorkItems[0];
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
-        var firstExchange = CreateScribeExchange(work);
+        var firstExchange = CreateScribeExchange(work, scenario: scenario);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             predecessor,
             scenario.ExecutionAuthority,
@@ -1732,7 +1743,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             firstExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(firstExchange.Request.Limits));
         var accepted = AcceptForTest(predecessor, admitted);
         var issued = CampaignStateReducer.CreateProviderInvocationAuthority(
             accepted,
@@ -1742,34 +1753,38 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             firstExchange.Request);
+        Assert.True(issued.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(issued.Request.Limits)));
 
         var fresh = CreateFreshContextExchange(work);
-        var retry = CampaignStateReducer.RetryProviderInvocation(
-            admitted.Artifact,
-            accepted,
-            scenario.ExecutionAuthority,
-            "style.synthetic",
-            scenario.StyleProjection,
-            scenario.Input,
-            scenario.Plan,
-            work.WorkItemKey,
-            fresh.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(admitted.Artifact.State, new CampaignInvocationTargetLimit(100)));
-
-        Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
+        var rejectedLiveRetry = CampaignStateReducer.RetryProviderInvocation(admitted.Artifact, accepted,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan,
+            work.WorkItemKey, fresh.Request, CampaignStateFactory.CreateInvocationTargetAllowance(admitted.Artifact.State, new(100)),
+            CampaignInvocationTestPolicy.Create(fresh.Request.Limits));
+        Assert.Equal(CampaignTransitionKind.Rejected, rejectedLiveRetry.Kind);
+        var retirement = CampaignStateReducer.RetireInterruptedProviderAttempt(accepted);
+        Assert.Equal(CampaignTransitionKind.Applied, retirement.Kind);
+        var retired = AcceptForTest(admitted.Artifact, retirement);
         Assert.False(issued.TryBeginDispatch(out _));
-        Assert.Equal(
-            fresh.Request.ArtifactSha256,
-            Assert.IsType<CampaignProviderReservation>(retry.Artifact.State.ActiveReservation).ScribeRequestSha256);
-        var successorAccepted = AcceptForTest(admitted.Artifact, retry);
-        var successor = CampaignStateReducer.CreateProviderInvocationAuthority(
-            successorAccepted,
-            scenario.ExecutionAuthority,
-            "style.synthetic",
-            scenario.StyleProjection,
-            scenario.Input,
-            scenario.Plan,
-            fresh.Request);
+        var foreign = CreateFreshContextExchange(work, inputIdentity: "samples/Alternate.csproj");
+        var mismatchedResume = CampaignStateReducer.RetryProviderInvocation(retirement.Artifact, retired,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan,
+            work.WorkItemKey, foreign.Request, CampaignStateFactory.CreateInvocationTargetAllowance(retirement.Artifact.State, new(100)),
+            CampaignInvocationTestPolicy.Create(fresh.Request.Limits));
+        Assert.Equal(CampaignTransitionKind.Rejected, mismatchedResume.Kind);
+        var retry = CampaignStateReducer.RetryProviderInvocation(retirement.Artifact, retired,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan,
+            work.WorkItemKey, fresh.Request, CampaignStateFactory.CreateInvocationTargetAllowance(retirement.Artifact.State, new(100)),
+            CampaignInvocationTestPolicy.Create(fresh.Request.Limits));
+        Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
+        var oldClaim = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation);
+        var resumedClaim = Assert.IsType<CampaignProviderReservation>(retry.Artifact.State.ActiveReservation);
+        Assert.Equal(oldClaim.AttemptId, resumedClaim.AttemptId);
+        Assert.Equal(fresh.Request.ArtifactSha256, resumedClaim.ScribeRequestSha256);
+        Assert.Equal(1, retry.Artifact.State.WorkItems[0].OuterAttemptCount);
+        var successorAccepted = AcceptForTest(retirement.Artifact, retry);
+        var successor = CampaignStateReducer.CreateProviderInvocationAuthority(successorAccepted,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, fresh.Request);
+        Assert.True(successor.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(successor.Request.Limits)));
         Assert.True(successor.TryBeginDispatch(out _));
 
         var stopAfterDispatch = CampaignStateReducer.StopActiveInvocation(
@@ -1787,7 +1802,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costEnforced: false);
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             predecessor,
@@ -1798,7 +1813,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
         var accepted = AcceptForTest(predecessor, admitted);
         var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(
             accepted,
@@ -1808,6 +1823,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             exchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         using var start = new ManualResetEventSlim();
         var dispatch = Task.Run(() =>
         {
@@ -1855,7 +1871,7 @@ public sealed partial class CampaignStateContractTests
             DocumentationScribeRequest Request) Admit(string attemptId)
         {
             var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
-            var request = CreateScribeExchange(work, attemptId: attemptId).Request;
+            var request = CreateScribeExchange(work, attemptId: attemptId, scenario: scenario).Request;
             var admitted = CampaignStateReducer.AdmitProviderInvocation(
                 predecessor,
                 scenario.ExecutionAuthority,
@@ -1865,7 +1881,7 @@ public sealed partial class CampaignStateContractTests
                 scenario.Plan,
                 work.WorkItemKey,
                 request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(request.Limits));
             return (predecessor, admitted, AcceptForTest(predecessor, admitted), request);
         }
 
@@ -1886,17 +1902,7 @@ public sealed partial class CampaignStateContractTests
         }
 
         var retryCase = Admit("scribe-attempt.11111111111111111111111111111111");
-        var retry = CampaignStateReducer.RetryProviderInvocation(
-            retryCase.Admitted.Artifact,
-            retryCase.Accepted,
-            scenario.ExecutionAuthority,
-            "style.synthetic",
-            scenario.StyleProjection,
-            scenario.Input,
-            scenario.Plan,
-            work.WorkItemKey,
-            CreateFreshContextExchange(work).Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(retryCase.Admitted.Artifact.State, new CampaignInvocationTargetLimit(100)));
+        var retry = CampaignStateReducer.RetireInterruptedProviderAttempt(retryCase.Accepted);
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
         AssertOldGrantRevoked(retryCase.Accepted, retryCase.Request);
 
@@ -1945,7 +1951,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costEnforced: false);
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             predecessor,
@@ -1956,7 +1962,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
         var accepted = AcceptForTest(predecessor, admitted);
         var issued = CampaignStateReducer.CreateProviderInvocationAuthority(
             accepted,
@@ -1966,6 +1972,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             exchange.Request);
+        Assert.True(issued.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(issued.Request.Limits)));
         var successorInput = scenario.Input with
         {
             Snapshot = scenario.Input.Snapshot with
@@ -2007,7 +2014,7 @@ public sealed partial class CampaignStateContractTests
             costEnforced: false,
             maximumElapsedMilliseconds: 300_000);
         var work = scenario.Plan.WorkItems[0];
-        var firstExchange = CreateScribeExchange(work);
+        var firstExchange = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             CampaignStateJson.CreateArtifact(scenario.InitialState),
@@ -2018,13 +2025,13 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             firstExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(firstExchange.Request.Limits));
         var firstAttempt = Assert.IsType<CampaignProviderReservation>(
             admitted.Artifact.State.ActiveReservation).AttemptId;
         var failureExchange = CreateScribeExchange(
             work,
             attemptId: firstAttempt.Value,
-            resultFixture: "retryable-failure-result.json");
+            resultFixture: "retryable-failure-result.json", scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             failureExchange.Request,
             firstAttempt,
@@ -2037,6 +2044,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             failureExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out var dispatchedAttempt));
         Assert.Equal(firstAttempt, dispatchedAttempt);
         var completion = OrdinaryCompletion(
@@ -2045,7 +2053,7 @@ public sealed partial class CampaignStateContractTests
             failureExchange.Result.RunEnvelope.ElapsedMilliseconds);
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             authority,
             "style.synthetic",
@@ -2073,7 +2081,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             foreignInput.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(completed.Artifact.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(completed.Artifact.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(foreignInput.Request.Limits));
         Assert.Equal(CampaignTransitionKind.Rejected, rejectedForeignInput.Kind);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, rejectedForeignInput.Failure);
         var retry = CampaignStateReducer.RetryProviderInvocation(
@@ -2086,7 +2094,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             fresh.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(completed.Artifact.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(completed.Artifact.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(fresh.Request.Limits));
 
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
         Assert.Equal(CampaignWorkStatus.Planned, retry.Artifact.State.WorkItems[0].Status);
@@ -2114,7 +2122,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costEnforced: false);
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             CampaignStateJson.CreateArtifact(scenario.InitialState),
@@ -2125,10 +2133,10 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
         var attempt = Assert.IsType<CampaignProviderReservation>(
             admitted.Artifact.State.ActiveReservation).AttemptId;
-        var completedExchange = CreateScribeExchange(work, attemptId: attempt.Value);
+        var completedExchange = CreateScribeExchange(work, attemptId: attempt.Value, scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             completedExchange.Request,
             attempt,
@@ -2141,6 +2149,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completedExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out var dispatchedAttempt));
         Assert.Equal(attempt, dispatchedAttempt);
         var completion = OrdinaryCompletion(
@@ -2149,7 +2158,7 @@ public sealed partial class CampaignStateContractTests
             completedExchange.Result.RunEnvelope.ElapsedMilliseconds);
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             authority,
             "style.synthetic",
@@ -2169,7 +2178,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var atCeiling = WithState(
             scenario.InitialState,
             scenario.InitialState.WorkItems.Select(item =>
@@ -2191,7 +2200,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             exchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(atCeiling, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(atCeiling, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
 
         Assert.Equal(CampaignTransitionKind.Applied, result.Kind);
         Assert.Null(result.Artifact.State.ActiveReservation);
@@ -2206,7 +2215,7 @@ public sealed partial class CampaignStateContractTests
             maximumBlocks: 1);
         var firstWork = scenario.Plan.WorkItems[0];
         var secondWork = scenario.Plan.WorkItems[1];
-        var firstExchange = CreateScribeExchange(firstWork);
+        var firstExchange = CreateScribeExchange(firstWork, scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
             WithState(
@@ -2232,7 +2241,7 @@ public sealed partial class CampaignStateContractTests
             scenario.InitialState,
             atCapacityWork,
             activeReservation: null);
-        var secondExchange = CreateScribeExchange(secondWork);
+        var secondExchange = CreateScribeExchange(secondWork, scenario: scenario);
         var secondAuthority = scenario.ExecutionAuthority;
 
         var blocked = CampaignStateReducer.AdmitProviderInvocation(
@@ -2244,7 +2253,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             secondWork.WorkItemKey,
             secondExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(atCapacity, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(atCapacity, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(secondExchange.Request.Limits));
 
         Assert.Equal(CampaignTransitionKind.Rejected, blocked.Kind);
         Assert.Equal(CampaignTransitionFailure.ProjectionCapacityUnavailable, blocked.Failure);
@@ -2261,7 +2270,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             secondWork.WorkItemKey,
             secondExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(secondExchange.Request.Limits));
         var retryAttempt = Assert.IsType<CampaignProviderReservation>(
             retrySeed.Artifact.State.ActiveReservation).AttemptId;
         var durableClosedRetry = MutateValidState(atCapacity, root =>
@@ -2276,6 +2285,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "scribe",
                 ["code"] = "provider-failure",
                 ["providerDisposition"] = "retryable",
+                ["scribeCompletionSource"] = "scribe-result",
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = secondExchange.Request.ArtifactSha256,
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = retryAttempt.Value,
@@ -2294,7 +2305,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             secondWork.WorkItemKey,
             CreateFreshContextExchange(secondWork).Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(durableClosedArtifact.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(durableClosedArtifact.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(CreateFreshContextExchange(secondWork).Request.Limits));
         Assert.Equal(CampaignTransitionKind.Rejected, blockedRetry.Kind);
         Assert.Equal(CampaignTransitionFailure.ProjectionCapacityUnavailable, blockedRetry.Failure);
         Assert.True(durableClosedArtifact.ExactUtf8Json.AsSpan()
@@ -2312,7 +2323,7 @@ public sealed partial class CampaignStateContractTests
                 firstProposal),
             admittedBeforeCapacity.Artifact.State.ActiveReservation);
         var correlatedArtifact = CampaignStateJson.CreateArtifact(correlatedAtCapacity);
-        var completionExchange = CreateScribeExchange(secondWork, attemptId: reservation.AttemptId.Value);
+        var completionExchange = CreateScribeExchange(secondWork, attemptId: reservation.AttemptId.Value, scenario: scenario);
         var exception = Assert.Throws<ArgumentException>(() =>
             CampaignStateReducer.CreateProviderInvocationAuthority(
             AcceptCurrentForTest(correlatedArtifact),
@@ -2331,7 +2342,7 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario(costCurrency: "currency.usd");
         var firstWork = scenario.Plan.WorkItems[0];
         var secondWork = scenario.Plan.WorkItems[1];
-        var firstExchange = CreateScribeExchange(firstWork);
+        var firstExchange = CreateScribeExchange(firstWork, scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
             WithState(
@@ -2374,7 +2385,7 @@ public sealed partial class CampaignStateContractTests
             }
         }
 
-        var requested = CreateScribeExchange(secondWork, requestMutation: MutateRequest, resultMutation: MutateResult);
+        var requested = CreateScribeExchange(secondWork, requestMutation: MutateRequest, resultMutation: MutateResult, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var predecessor = CampaignStateJson.CreateArtifact(firstComplete);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
@@ -2386,14 +2397,14 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             secondWork.WorkItemKey,
             requested.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(requested.Request.Limits));
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         var reservation = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation);
         var completionExchange = CreateScribeExchange(
             secondWork,
             attemptId: reservation.AttemptId.Value,
             requestMutation: MutateRequest,
-            resultMutation: MutateResult);
+            resultMutation: MutateResult, scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             completionExchange.Request,
             reservation.AttemptId,
@@ -2403,7 +2414,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(reservation.ScribeRequestSha256, outcome.Request.ArtifactSha256);
         Assert.Equal(reservation.AttemptId, outcome.RunResult.AttemptId);
         Assert.Equal(reservation.AttemptId, outcome.RunResult.RunEnvelope.AttemptId);
-        Assert.NotEqual(
+        Assert.Equal(
             CampaignBudgetDecisionKind.Invalid,
             CampaignBudgetAccounting.SettleProviderInvocation(
                 admitted.Artifact.State,
@@ -2417,6 +2428,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completionExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
         var completion = OrdinaryCompletion(
             invocation,
@@ -2424,7 +2436,7 @@ public sealed partial class CampaignStateContractTests
             completionExchange.Result.RunEnvelope.ElapsedMilliseconds);
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             authority,
             "style.synthetic",
@@ -2434,7 +2446,7 @@ public sealed partial class CampaignStateContractTests
 
         Assert.Equal(CampaignTransitionKind.Rejected, completed.Kind);
         Assert.Equal(CampaignTransitionFailure.InvalidAuthority, completed.Failure);
-        Assert.True(admitted.Artifact.ExactUtf8Json.AsSpan()
+        Assert.True(invocation.AcceptedCheckpoint.Artifact.ExactUtf8Json.AsSpan()
             .SequenceEqual(completed.Artifact.ExactUtf8Json.AsSpan()));
     }
 
@@ -2463,7 +2475,7 @@ public sealed partial class CampaignStateContractTests
             var exchange = CreateSizedContentScribeExchange(
                 work,
                 DocumentationPatchValidator.MaximumBlockTextScalars,
-                inputIdentity: maximumInputIdentity);
+                inputIdentity: maximumInputIdentity, scenario: scenario);
             var proposal = AdmitProposal(
                 scenario,
                 WithState(
@@ -2514,7 +2526,7 @@ public sealed partial class CampaignStateContractTests
                 tunableWork,
                 payloadScalars,
                 extraUtf8Bytes,
-                inputIdentity: maximumInputIdentity);
+                inputIdentity: maximumInputIdentity, scenario: scenario);
             var proposal = AdmitProposal(
                 scenario,
                 WithState(
@@ -2578,7 +2590,7 @@ public sealed partial class CampaignStateContractTests
             var requested = CreateSizedContentScribeExchange(
                 tunableWork,
                 payloadScalars: 3,
-                inputIdentity: maximumInputIdentity);
+                inputIdentity: maximumInputIdentity, scenario: scenario);
             var predecessor = CampaignStateJson.CreateArtifact(priorState);
             var admitted = CampaignStateReducer.AdmitProviderInvocation(
                 predecessor,
@@ -2589,7 +2601,7 @@ public sealed partial class CampaignStateContractTests
                 scenario.Plan,
                 tunableWork.WorkItemKey,
                 requested.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(requested.Request.Limits));
             Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
             var attempt = Assert.IsType<CampaignProviderReservation>(
                 admitted.Artifact.State.ActiveReservation).AttemptId;
@@ -2598,13 +2610,13 @@ public sealed partial class CampaignStateContractTests
                 bestScalars,
                 extraUtf8Bytes,
                 attempt.Value,
-                maximumInputIdentity);
+                maximumInputIdentity, scenario: scenario);
             Assert.Equal(requested.Request.ArtifactSha256, exchange.Request.ArtifactSha256);
             var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
                 exchange.Request,
                 attempt,
                 exchange.Result);
-            Assert.NotEqual(
+            Assert.Equal(
                 CampaignBudgetDecisionKind.Invalid,
                 CampaignBudgetAccounting.SettleProviderInvocation(
                     admitted.Artifact.State,
@@ -2618,13 +2630,14 @@ public sealed partial class CampaignStateContractTests
                 scenario.Input,
                 scenario.Plan,
                 exchange.Request);
+            Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
             Assert.True(invocation.TryBeginDispatch(out _));
             var completion = OrdinaryCompletion(
                 invocation,
                 outcome,
                 exchange.Result.RunEnvelope.ElapsedMilliseconds);
             return CampaignStateReducer.CompleteProviderInvocation(
-                admitted.Artifact,
+                completion.Invocation.AcceptedCheckpoint.Artifact,
                 completion,
                 scenario.ExecutionAuthority,
                 "style.synthetic",
@@ -2654,7 +2667,7 @@ public sealed partial class CampaignStateContractTests
         var remainingExchange = CreateSizedContentScribeExchange(
             remainingWork,
             payloadScalars: 3,
-            inputIdentity: maximumInputIdentity);
+            inputIdentity: maximumInputIdentity, scenario: scenario);
         var capacityBlocked = CampaignStateReducer.AdmitProviderInvocation(
             exact.Artifact,
             scenario.ExecutionAuthority,
@@ -2664,7 +2677,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             remainingWork.WorkItemKey,
             remainingExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(exact.Artifact.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(exact.Artifact.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(remainingExchange.Request.Limits));
         Assert.Equal(CampaignTransitionKind.Rejected, capacityBlocked.Kind);
         Assert.Equal(CampaignTransitionFailure.ProjectionCapacityUnavailable, capacityBlocked.Failure);
         Assert.True(exact.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
@@ -2680,6 +2693,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Null(overWork.TrustedProposal);
         Assert.Equal(CampaignWorkOutcomeCode.CompletedOverBound, overWork.ClosedOutcome!.Code);
         Assert.NotNull(overWork.ClosedOutcome.ScribeResultCommitmentSha256);
+        AssertPublishedCampaignRoundTrip(over.Artifact.State);
 
         var successorInput = scenario.Input with
         {
@@ -2749,7 +2763,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(costCurrency: "currency.usd");
         var work = scenario.Plan.WorkItems[0];
-        var requestExchange = CreateScribeExchange(work);
+        var requestExchange = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
             CampaignStateJson.CreateArtifact(scenario.InitialState),
@@ -2760,7 +2774,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             requestExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(scenario.InitialState, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(requestExchange.Request.Limits));
         var attempt = Assert.IsType<CampaignProviderReservation>(
             admitted.Artifact.State.ActiveReservation).AttemptId;
         var completedExchange = CreateScribeExchange(
@@ -2782,7 +2796,7 @@ public sealed partial class CampaignStateContractTests
                         requestExchange.Request.Limits.MaximumCostMicrounits + 1,
                 };
             },
-            resultFixture: "failure-result.json");
+            resultFixture: "failure-result.json", scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             completedExchange.Request,
             attempt,
@@ -2795,6 +2809,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completedExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out var dispatchedAttempt));
         Assert.Equal(attempt, dispatchedAttempt);
         var completion = OrdinaryCompletion(
@@ -2803,7 +2818,7 @@ public sealed partial class CampaignStateContractTests
             completedExchange.Result.RunEnvelope.ElapsedMilliseconds);
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             authority,
             "style.synthetic",
@@ -2815,7 +2830,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Null(completed.Artifact.State.ActiveReservation);
         Assert.Equal(CampaignTerminalKind.Exhausted, completed.Artifact.State.TerminalOutcome!.Kind);
         Assert.Equal(
-            requestExchange.Request.Limits.MaximumUncachedInputTokens + 1,
+            outcome.RunResult.RunEnvelope.ProviderRequestCount == 0 ? 0 : requestExchange.Request.Limits.MaximumUncachedInputTokens + 1,
             completed.Artifact.State.LineageCharges.UncachedInputTokens.Observed);
     }
 
@@ -2830,7 +2845,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(targetLimit: 1, maximumAttemptsPerTarget: 1);
         var work = scenario.Plan.WorkItems[0];
-        var requestExchange = CreateScribeExchange(work);
+        var requestExchange = CreateScribeExchange(work, scenario: scenario);
         var authority = scenario.ExecutionAuthority;
         var predecessor = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var admitted = CampaignStateReducer.AdmitProviderInvocation(
@@ -2842,7 +2857,7 @@ public sealed partial class CampaignStateContractTests
             scenario.Plan,
             work.WorkItemKey,
             requestExchange.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(requestExchange.Request.Limits));
         var attempt = Assert.IsType<CampaignProviderReservation>(
             admitted.Artifact.State.ActiveReservation).AttemptId;
         var completionExchange = CreateScribeExchange(
@@ -2862,7 +2877,7 @@ public sealed partial class CampaignStateContractTests
                 {
                     ["uncachedInputTokens"] = requestExchange.Request.Limits.MaximumUncachedInputTokens + 1,
                 };
-            });
+            }, scenario: scenario);
         var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(
             completionExchange.Request,
             attempt,
@@ -2875,14 +2890,15 @@ public sealed partial class CampaignStateContractTests
             scenario.Input,
             scenario.Plan,
             completionExchange.Request);
+        Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
         Assert.True(invocation.TryBeginDispatch(out _));
         var elapsed = scenario.InitialState.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds!.Value + 1;
-        Assert.Equal(CampaignBudgetDecisionKind.Exhausted,
-            CampaignBudgetAccounting.SettleProviderInvocation(admitted.Artifact.State, outcome, elapsed).Kind);
         var completion = OrdinaryCompletion(invocation, outcome, elapsed);
+        Assert.Equal(CampaignBudgetDecisionKind.Exhausted,
+            CampaignBudgetAccounting.SettleProviderInvocation(invocation.AcceptedCheckpoint.Artifact.State, outcome, elapsed).Kind);
 
         var completed = CampaignStateReducer.CompleteProviderInvocation(
-            admitted.Artifact,
+            completion.Invocation.AcceptedCheckpoint.Artifact,
             completion,
             authority,
             "style.synthetic",
@@ -2894,7 +2910,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(expectedTerminal, completed.Artifact.State.TerminalOutcome!.Kind);
         Assert.Equal(CampaignWorkStatus.Closed, completed.Artifact.State.WorkItems[0].Status);
         Assert.Equal(
-            requestExchange.Request.Limits.MaximumUncachedInputTokens + 1,
+            outcome.RunResult.RunEnvelope.ProviderRequestCount == 0 ? 0 : requestExchange.Request.Limits.MaximumUncachedInputTokens + 1,
             completed.Artifact.State.LineageCharges.UncachedInputTokens.Observed);
     }
 
@@ -2983,7 +2999,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -3010,6 +3026,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "scribe",
                 ["code"] = "insufficient-evidence",
                 ["providerDisposition"] = null,
+                ["scribeCompletionSource"] = "scribe-result",
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = Hash('c'),
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = "scribe-attempt.22222222222222222222222222222222",
@@ -3161,7 +3179,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(maximumPatchBytes: 1);
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -3188,6 +3206,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "scribe",
                 ["code"] = "insufficient-evidence",
                 ["providerDisposition"] = null,
+                ["scribeCompletionSource"] = "scribe-result",
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = Hash('c'),
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = "scribe-attempt.22222222222222222222222222222222",
@@ -3283,8 +3303,8 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario(maximumPatchBytes: 48, workItemCount: 2);
         var first = scenario.Plan.WorkItems[0];
         var second = scenario.Plan.WorkItems[1];
-        var firstExchange = CreateScribeExchange(first);
-        var secondExchange = CreateScribeExchange(second);
+        var firstExchange = CreateScribeExchange(first, scenario: scenario);
+        var secondExchange = CreateScribeExchange(second, scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
             WithState(
@@ -3634,7 +3654,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -3660,6 +3680,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "scribe",
                 ["code"] = "insufficient-evidence",
                 ["providerDisposition"] = null,
+                ["scribeCompletionSource"] = "scribe-result",
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = Hash('c'),
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = "scribe-attempt.22222222222222222222222222222222",
@@ -3676,6 +3698,8 @@ public sealed partial class CampaignStateContractTests
                 ["stage"] = "patch",
                 ["code"] = "patch-rejected",
                 ["providerDisposition"] = null,
+                ["scribeCompletionSource"] = null,
+                ["acceptedDispatchFailureCommitmentSha256"] = null,
                 ["scribeRequestSha256"] = null,
                 ["scribeResultCommitmentSha256"] = null,
                 ["attemptId"] = null,
@@ -3730,10 +3754,10 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var firstExchange = CreateScribeExchange(work);
+        var firstExchange = CreateScribeExchange(work, scenario: scenario);
         var alternateExchange = CreateScribeExchange(work, resultMutation: root =>
             root["terminal"]!["contentUnits"]![0]!["lines"]![0] =
-                "Runs the alternate synthetic widget operation.");
+                "Runs the alternate synthetic widget operation.", scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
             WithState(
@@ -3997,7 +4021,7 @@ public sealed partial class CampaignStateContractTests
         var proposalState = CreateProposalCompleteState();
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var request = CampaignStateFactory.ReconstructPatchRequest(
             proposalState,
             PatchContext(exchange.Request),
@@ -4040,7 +4064,7 @@ public sealed partial class CampaignStateContractTests
         var proposalState = CreateProposalCompleteState();
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var request = CampaignStateFactory.ReconstructPatchRequest(
             proposalState,
             PatchContext(exchange.Request),
@@ -4163,7 +4187,7 @@ public sealed partial class CampaignStateContractTests
         var proposalState = CreateProposalCompleteState();
         var acceptedState = CreateAcceptedCandidateScenario().State;
         var scenario = CreateProposalScenario();
-        var exchange = CreateScribeExchange(scenario.Plan.WorkItems[0]);
+        var exchange = CreateScribeExchange(scenario.Plan.WorkItems[0], scenario: scenario);
         var evidence = CurrentEvidence(exchange)[0];
         var reconstructors = new Action<IEnumerable<DocumentationScribeEvidenceReference>>[]
         {
@@ -4375,7 +4399,7 @@ public sealed partial class CampaignStateContractTests
                         ["assemblyIdentity"] = "synthetic.v1",
                         ["documentationCommentId"] = documentationId,
                     },
-                });
+                }, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -4542,7 +4566,7 @@ public sealed partial class CampaignStateContractTests
 
         Assert.All(variants, mutation =>
         {
-            var exchange = CreateScribeExchange(work, requestMutation: mutation);
+            var exchange = CreateScribeExchange(work, requestMutation: mutation, scenario: scenario);
             var proposal = AdmitProposal(
                 scenario,
                 WithState(
@@ -4917,8 +4941,11 @@ public sealed partial class CampaignStateContractTests
         string attemptId = "scribe-attempt.0123456789abcdef0123456789abcdef",
         Action<JsonObject>? requestMutation = null,
         Action<JsonObject>? resultMutation = null,
-        string resultFixture = "proposal-result.json")
+        string resultFixture = "proposal-result.json", ProposalScenario? scenario = null)
     {
+        if (scenario is not null && attemptId == "scribe-attempt.0123456789abcdef0123456789abcdef")
+            attemptId = CampaignStateFactory.CreateScribeAttemptId(scenario.InitialState.Snapshot.ExecutionCommitmentSha256,
+                scenario.ExecutionAuthority.Projection, work.WorkItemKey, 1).Value;
         var target = Assert.Single(work.Targets);
         var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
         var requestNode = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
@@ -5005,7 +5032,7 @@ public sealed partial class CampaignStateContractTests
     private static ScribeExchange CreateFreshContextExchange(
         CampaignPlanningWorkItem work,
         string contextRef = "repoctx-22222222222222222222222222222222",
-        string inputIdentity = "samples/Synthetic.csproj") =>
+        string inputIdentity = "samples/Synthetic.csproj", ProposalScenario? scenario = null) =>
         CreateScribeExchange(
             work,
             inputIdentity,
@@ -5022,14 +5049,14 @@ public sealed partial class CampaignStateContractTests
                     contextReference!["repositoryContextRef"] = contextRef;
                 }
             },
-            resultMutation: root => root["terminal"]!["target"]!["repositoryContextRef"] = contextRef);
+            resultMutation: root => root["terminal"]!["target"]!["repositoryContextRef"] = contextRef, scenario: scenario);
 
     private static ScribeExchange CreateSizedContentScribeExchange(
         CampaignPlanningWorkItem work,
         int payloadScalars,
         int extraUtf8Bytes = 0,
         string attemptId = "scribe-attempt.0123456789abcdef0123456789abcdef",
-        string inputIdentity = "samples/Synthetic.csproj")
+        string inputIdentity = "samples/Synthetic.csproj", ProposalScenario? scenario = null)
     {
         if (payloadScalars is < 3 or > DocumentationPatchValidator.MaximumBlockTextScalars
             || extraUtf8Bytes < 0)
@@ -5074,7 +5101,7 @@ public sealed partial class CampaignStateContractTests
                     units[0]!["lines"]![0] = new string('\\', extraUtf8Bytes)
                         + line[extraUtf8Bytes..];
                 }
-            });
+            }, scenario: scenario);
     }
 
     private static void ConfigureLargeContentStyle(JsonObject root)
@@ -5091,7 +5118,7 @@ public sealed partial class CampaignStateContractTests
 
     private static ScribeExchange CreateScribeExchangeWithException(
         CampaignPlanningWorkItem work,
-        string typeDocumentationId)
+        string typeDocumentationId, ProposalScenario? scenario = null)
     {
         string? exceptionEvidenceId = null;
         return CreateScribeExchange(
@@ -5125,12 +5152,12 @@ public sealed partial class CampaignStateContractTests
                     ["claimCategoryId"] = "claim.behavior",
                     ["evidenceReferenceIds"] = new JsonArray { evidenceId },
                 });
-            });
+            }, scenario: scenario);
     }
 
-    private static ScribeExchange CreateNonProposalExchange(CampaignPlanningWorkItem work)
+    private static ScribeExchange CreateNonProposalExchange(CampaignPlanningWorkItem work, ProposalScenario? scenario = null)
     {
-        var proposalExchange = CreateScribeExchange(work);
+        var proposalExchange = CreateScribeExchange(work, scenario: scenario);
         var resultNode = ReadJsonFixture("documentation-scribe", "v1", "valid", "skip-result.json");
         resultNode["scribeRequestSha256"] = proposalExchange.Request.ArtifactSha256;
         resultNode["attemptId"] = proposalExchange.Result.AttemptId.Value;
@@ -5182,7 +5209,17 @@ public sealed partial class CampaignStateContractTests
             workItemKey,
             exchange.Request.ArtifactSha256,
             exchange.Result.AttemptId,
-            new CampaignProviderReservationExposure(0, 0, 0, 0, 0, 0));
+            new CampaignProviderReservationExposure(0, 0, 0, 0, 0, 0))
+        {
+            ExecutionStartRevision = 1,
+            CurrentOperationOrdinal = 2L * exchange.Result.RunEnvelope.ProviderRequestCount + 1,
+            LastDispatchOrdinal = exchange.Result.RunEnvelope.ProviderRequestCount,
+            CurrentExecutionSettledProviderRequests = exchange.Result.RunEnvelope.ProviderRequestCount,
+            HostPhase = CampaignProviderHostPhase.Retirement,
+            RetryProgress = exchange.Result.RunEnvelope.ProviderRequestCount == 0 ? CampaignProviderRetryProgress.Empty
+                : new(0, CampaignProviderDispatchDisposition.Success, exchange.Result.RunEnvelope.ProviderRequestCount,
+                    new string('0', 64), new string('0', 64), 0),
+        };
 
     private static ImmutableArray<DocumentationScribeEvidenceReference> CurrentEvidence(
         params ScribeExchange[] exchanges)
@@ -5255,10 +5292,9 @@ public sealed partial class CampaignStateContractTests
         var scenario = CreateProposalScenario();
         var first = scenario.Plan.WorkItems[0];
         var second = scenario.Plan.WorkItems[1];
-        var firstExchange = CreateScribeExchange(first);
+        var firstExchange = CreateScribeExchange(first, scenario: scenario);
         var secondExchange = CreateScribeExchange(
-            second,
-            attemptId: "scribe-attempt.11111111111111111111111111111111");
+            second, scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
             WithState(
@@ -5419,7 +5455,9 @@ public sealed partial class CampaignStateContractTests
                 var code = work["closedOutcome"]!["code"]!.GetValue<string>();
                 progress!["status"] = code is "insufficient-evidence" or "unsupported-domain" ? "skipped"
                     : code == "provider-failure" && work["closedOutcome"]!["providerDisposition"]?.GetValue<string>() == "retryable"
-                        ? "retryable" : "failed";
+                        ? "retryable"
+                        : code is "internal-failure" or "timeout" or "cancelled-by-caller" or "cancelled-by-shutdown"
+                            ? "infrastructure-blocked" : "failed";
             }
             else if (work["status"]!.GetValue<string>() == "planned"
                 && progress!["dispatchable"]!.GetValue<bool>() && progress["status"]!.GetValue<string>() != "deferred")
@@ -5478,10 +5516,15 @@ public sealed partial class CampaignStateContractTests
             basis.ProductRevision,
             basis.CampaignLineage,
             basis.Snapshot,
-            basis.CheckpointRevision,
+            activeReservation is CampaignProviderReservation provider
+                ? Math.Max(basis.CheckpointRevision, provider.ExecutionStartRevision + provider.CurrentOperationOrdinal - 1)
+                : basis.CheckpointRevision,
             basis.ConfiguredCeilings,
             basis.LineageCharges,
-            workItems,
+            activeReservation is CampaignProviderReservation owner
+                ? workItems.Select(item => item.WorkItemKey == owner.WorkItemKey
+                    ? item with { OuterAttemptCount = Math.Max(1, item.OuterAttemptCount) } : item)
+                : workItems,
             basis.Batch,
             activeReservation,
             candidateObservation,
@@ -5544,7 +5587,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -5563,7 +5606,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario();
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchangeWithException(work, typeDocumentationId);
+        var exchange = CreateScribeExchangeWithException(work, typeDocumentationId, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -5586,7 +5629,7 @@ public sealed partial class CampaignStateContractTests
     {
         var scenario = CreateProposalScenario(targetLimit: targetLimit);
         var work = scenario.Plan.WorkItems[0];
-        var exchange = CreateScribeExchange(work);
+        var exchange = CreateScribeExchange(work, scenario: scenario);
         var proposal = AdmitProposal(
             scenario,
             WithState(
@@ -5684,6 +5727,7 @@ public sealed partial class CampaignStateContractTests
         DocumentationScribeValidatedRunOutcome outcome,
         long activeElapsedMilliseconds)
     {
+        SettleSyntheticDispatches(invocation, outcome);
         var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(
             invocation.TryCreateCompletionRegistrar());
         Assert.True(registrar.TryRegister(
@@ -5692,6 +5736,44 @@ public sealed partial class CampaignStateContractTests
             activeElapsedMilliseconds,
             out var authority));
         return Assert.IsType<CampaignProviderCompletionAuthority>(authority);
+    }
+
+    private static void SettleSyntheticDispatches(
+        CampaignProviderInvocationAuthority invocation, DocumentationScribeValidatedRunOutcome outcome)
+    {
+        var allowance = invocation.InvocationAllowance;
+        Assert.NotNull(allowance);
+        var envelope = outcome.RunResult.RunEnvelope;
+        for (var index = 0; index < envelope.ProviderRequestCount; index++)
+        {
+            var current = invocation.AcceptedCheckpoint.Artifact;
+            var claim = Assert.IsType<CampaignProviderReservation>(current.State.ActiveReservation);
+            Assert.True(allowance.TryReserveProvider(out var permit));
+            Assert.NotNull(permit);
+            var descriptor = new DocumentationScribeDispatchDescriptor(Sha256("synthetic physical request " + index),
+                claim.RetryProgress.RetryableFailureCount + 1, index + 1, permit.Exposure.OutputTokens);
+            var dispatch = CampaignStateReducer.ReserveProviderDispatch(invocation, descriptor, permit, 0);
+            Assert.Equal(CampaignTransitionKind.Applied, dispatch.Kind);
+            Assert.True(invocation.AdvanceAcceptedProgress(dispatch, AcceptForTest(current, dispatch)));
+            Assert.True(permit.TryBeginDispatch());
+            var last = index == envelope.ProviderRequestCount - 1;
+            var usage = envelope.Usage;
+            var cost = envelope.Cost;
+            var facts = last && (usage is not null || cost is not null)
+                ? new DocumentationScribeDispatchUsage(usage?.InputTokens, usage?.CachedInputTokens, usage?.UncachedInputTokens,
+                    usage?.OutputTokens, usage?.ReasoningTokens, cost?.CurrencyId, cost?.AmountMicrounits)
+                : !last ? new DocumentationScribeDispatchUsage(0, 0, 0, 0, 0) : null;
+            var disposition = index < envelope.AttemptNumber - envelope.RestoredRetryableProviderFailures - 1
+                ? DocumentationScribeDispatchDisposition.RetryableFailure
+                : last && outcome.RunResult.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Provider } failure
+                    ? failure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
+                        ? DocumentationScribeDispatchDisposition.RetryableFailure : DocumentationScribeDispatchDisposition.TerminalFailure
+                    : DocumentationScribeDispatchDisposition.Success;
+            var settled = CampaignStateReducer.SettleProviderDispatch(invocation, permit, new(disposition, facts), 0);
+            Assert.Equal(CampaignTransitionKind.Applied, settled.Kind);
+            Assert.True(invocation.AdvanceAcceptedProgress(settled, AcceptForTest(dispatch.Artifact, settled)));
+            Assert.True(allowance.SettleProvider(permit, facts));
+        }
     }
 
     private static JsonObject ReadJsonFixture(params string[] segments) =>

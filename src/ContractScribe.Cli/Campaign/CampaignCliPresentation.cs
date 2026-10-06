@@ -21,7 +21,7 @@ internal static class CampaignCliPresentation
     private static readonly HashSet<string> Outcomes = new(StringComparer.Ordinal)
     {
         "campaign.complete", "campaign.no-work", "campaign.invalid-command",
-        "campaign.batch-complete", "campaign.unresolved", "campaign.target-limit",
+        "campaign.batch-complete", "campaign.unresolved", "campaign.target-limit", "campaign.invocation-budget-exhausted",
         "campaign.provider-retryable", "campaign.budget-exhausted", "campaign.attempt-ambiguous",
         "campaign.invalid-configuration", "campaign.state-missing", "campaign.state-present",
         "campaign.state-corrupt", "campaign.state-unsafe", "campaign.state-conflict",
@@ -125,7 +125,7 @@ internal static class CampaignCliPresentation
     {
         "campaign.complete" or "campaign.batch-complete" or "campaign.no-work" => 0,
         "campaign.invalid-command" => 2,
-        "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous" or "campaign.target-limit" => 3,
+        "campaign.provider-retryable" or "campaign.budget-exhausted" or "campaign.attempt-ambiguous" or "campaign.target-limit" or "campaign.invocation-budget-exhausted" => 3,
         "campaign.checkpoint-too-large" or "campaign.invalid-configuration" or "campaign.state-missing" or "campaign.state-present"
             or "campaign.state-corrupt" or "campaign.state-unsafe" or "campaign.state-conflict"
             or "campaign.lease-conflict" or "campaign.lease-unverifiable"

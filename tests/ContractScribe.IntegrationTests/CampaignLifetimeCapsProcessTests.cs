@@ -49,9 +49,9 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(0, server.RequestCount);
             Assert.Equal(0, exhausted.State.LineageCharges.OuterInvocations);
             Assert.Null(exhausted.State.ActiveReservation);
-            Assert.Equal(0, exhausted.State.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits);
+            Assert.Equal(DocumentationScribeContract.MaximumConfiguredCostMicrounits, exhausted.State.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits);
 
-            layer["budgets"]!["campaign"]![field] = monetary ? JsonValue.Create(1_000_000) : null;
+            layer["budgets"]!["campaign"]![field] = monetary ? JsonValue.Create(1_000_000_000) : null;
             await WriteLayerAsync();
             var resumed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c3"),
                 TimeSpan.FromMinutes(5));
@@ -105,4 +105,60 @@ public sealed partial class CampaignCliProcessTests
             return parsed.Artifact!;
         }
     }
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Returned_valid_HTTP_proposal_survives_output_lifetime_crossing_and_cap_clear_without_replay(bool equality)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await SetSingleWorkItemSourceAsync(fixture.Root);
+        await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
+        await using var server = new ProposalLoopbackServer(includeUsage: true, usageOutputTokens: equality ? 7 : 8);
+        var outside = CreatePrivateDirectory("contract-scribe-c4-returned-proposal-cap");
+        try
+        {
+            var configurationPath = Path.Join(outside, "consumer.json");
+            var stateDirectory = Path.Join(outside, "state");
+            Directory.CreateDirectory(stateDirectory);
+            File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var statePath = Path.Join(stateDirectory, "checkpoint.json");
+            var layer = new JsonObject
+            {
+                ["consumerConfigurationVersion"] = 1,
+                ["provider"] = new JsonObject { ["endpoint"] = server.Endpoint.AbsoluteUri },
+                ["budgets"] = new JsonObject
+                {
+                    ["campaign"] = new JsonObject { ["maximumOutputTokens"] = 7 },
+                    ["invocation"] = new JsonObject { ["maximumRequestOutputTokens"] = 7 },
+                },
+            };
+            await File.WriteAllTextAsync(configurationPath, layer.ToJsonString());
+            var started = await RunAsync(Args("start", fixture.Root, statePath, configurationPath, "snapshot.c4.returned"),
+                TimeSpan.FromMinutes(3));
+            var current = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
+            AssertCampaign(started, equality ? 0 : 3, equality ? "campaign.complete" : "campaign.budget-exhausted", current.CheckpointRevision);
+            var work = Assert.Single(current.State.WorkItems.Where(item => item.OuterAttemptCount > 0));
+            Assert.Equal(equality ? CampaignWorkStatus.Accepted : CampaignWorkStatus.ProposalComplete, work.Status);
+            Assert.NotNull(work.TrustedProposal);
+            Assert.Equal(equality ? CampaignTerminalReason.AllWorkClosed : CampaignTerminalReason.LifetimeCap, current.State.TerminalOutcome!.Reason);
+            Assert.Equal(equality ? 7 : 8, current.State.LineageCharges.OutputTokens.Observed);
+            Assert.Equal(0, current.State.LineageCharges.OutputTokens.ConservativeUnobserved);
+            Assert.Equal(1, server.RequestCount);
+            var commitment = work.TrustedProposal.ProposalCommitmentSha256;
+            layer["budgets"]!["campaign"]!["maximumOutputTokens"] = null;
+            await File.WriteAllTextAsync(configurationPath, layer.ToJsonString());
+            var resumed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c4.returned"),
+                TimeSpan.FromMinutes(3));
+            var final = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
+            AssertCampaign(resumed, 0, "campaign.complete", final.CheckpointRevision);
+            Assert.Equal(commitment, Assert.Single(final.State.WorkItems.Where(item => item.Status == CampaignWorkStatus.Accepted))
+                .TrustedProposal!.ProposalCommitmentSha256);
+            Assert.Equal(current.State.LineageCharges.ProviderRequests, final.State.LineageCharges.ProviderRequests);
+            Assert.Equal(current.State.LineageCharges.OutputTokens, final.State.LineageCharges.OutputTokens);
+            Assert.Equal(1, server.RequestCount);
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
 }

@@ -238,7 +238,7 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.Plan,
             planned.WorkItemKey,
             fixture.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(fixture.Request.Limits));
         Assert.True(directAdmission.Kind == CampaignTransitionKind.Applied,
             directAdmission.Failure.ToString());
 
@@ -251,7 +251,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.NotNull(outcome.TrustedProposal);
         Assert.Equal(1, observing.RequestCount);
         Assert.True(observing.SawPersistedReservation);
-        Assert.Equal(2, store.SuccessfulReplaceCount);
+        Assert.Equal(7, store.SuccessfulReplaceCount);
         Assert.Equal(outcome.Artifact!.Sha256, store.Current!.Sha256);
         Assert.True(outcome.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
             store.Current.ExactUtf8Json.AsSpan()));
@@ -263,7 +263,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, replay.Kind);
         Assert.Equal("campaign.proposal.replay", replay.Code);
         Assert.Equal(0, replayExchange.RequestCount);
-        Assert.Equal(2, store.SuccessfulReplaceCount);
+        Assert.Equal(7, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -338,7 +338,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(1, binds);
-        Assert.Equal(2, store.SuccessfulReplaceCount);
+        Assert.Equal(7, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -453,7 +453,8 @@ public sealed partial class DocumentationScribeCompositionTests
             exchange,
             null,
             CancellationToken.None,
-            CancellationToken.None);
+            CancellationToken.None, InvocationAllowance: CampaignInvocationTestPolicy.Create(
+                DocumentationScribeValidation.ParseRequest(proposalFixture.RequestBytes).Request!.Limits));
 
         var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
 
@@ -492,7 +493,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(1, exchange.RequestCount);
-        Assert.Equal(2, store.SuccessfulReplaceCount);
+        Assert.Equal(7, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -539,7 +540,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     RuntimeOptions()));
 
             Assert.Equal(DocumentationCampaignProposalOutcomeKind.TerminalStop, outcome.Kind);
-            Assert.Equal(2, store.SuccessfulReplaceCount);
+            Assert.Equal(7, store.SuccessfulReplaceCount);
             Assert.Null(store.Current!.State.ActiveReservation);
             var closed = Assert.Single(store.Current.State.WorkItems,
                 item => item.Status == CampaignWorkStatus.Closed
@@ -591,7 +592,7 @@ public sealed partial class DocumentationScribeCompositionTests
     }
 
     [Fact]
-    public async Task Proposal_executor_classifies_deterministic_completion_failure_and_settlement_conflict()
+    public async Task Proposal_executor_accepts_zero_host_elapsed_and_classifies_final_settlement_conflict()
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();
         var campaign = fixture.CreateCampaign();
@@ -607,15 +608,15 @@ public sealed partial class DocumentationScribeCompositionTests
                 RuntimeOptions(),
                 timeProvider: new SequencedTimeProvider(0)));
 
-        Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, invalid.Kind);
-        Assert.Equal("campaign.settlement.invalid", invalid.Code);
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, invalid.Kind);
         Assert.Equal(1, invalidExchange.RequestCount);
-        Assert.Equal(1, invalidStore.SuccessfulReplaceCount);
-        Assert.IsType<CampaignProviderReservation>(invalidStore.Current!.State.ActiveReservation);
+        Assert.Equal(7, invalidStore.SuccessfulReplaceCount);
+        Assert.Null(invalidStore.Current!.State.ActiveReservation);
+        Assert.Equal(0, invalidStore.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var conflictStore = new MemoryCampaignStore(initial)
         {
-            ReportedReplaceAttempt = 2,
+            ReportedReplaceAttempt = 7,
             ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
         };
         var conflictExchange = new CountingProposalExchange(fixture.Request);
@@ -625,7 +626,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, conflict.Kind);
         Assert.Equal("campaign.settlement.conflict", conflict.Code);
         Assert.Equal(1, conflictExchange.RequestCount);
-        Assert.Equal(1, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(6, conflictStore.SuccessfulReplaceCount);
         Assert.IsType<CampaignProviderReservation>(conflictStore.Current!.State.ActiveReservation);
     }
 
@@ -665,15 +666,16 @@ public sealed partial class DocumentationScribeCompositionTests
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();
         var campaign = fixture.CreateCampaign();
+        var clock = new ControlledCompositionClock();
         var observedStore = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
 
         var observed = await DocumentationCampaignProposalExecutor.ExecuteAsync(
             campaign.Input(
                 fixture,
                 observedStore,
-                new ProposalExchange(fixture.Request),
+                new TimeAdvancingExchange(new ProposalExchange(fixture.Request), clock, 50_000),
                 RuntimeOptions(),
-                timeProvider: new SequencedTimeProvider(50_000)));
+                timeProvider: clock));
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, observed.Kind);
         Assert.Equal(50_000, observedStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
@@ -690,9 +692,9 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.HostContractError, overflow.Kind);
         Assert.Equal("campaign.preparation.invalid", overflow.Code);
-        Assert.Equal(1, overflowExchange.RequestCount);
-        Assert.Equal(1, overflowStore.SuccessfulReplaceCount);
-        Assert.IsType<CampaignProviderReservation>(overflowStore.Current!.State.ActiveReservation);
+        Assert.Equal(0, overflowExchange.RequestCount);
+        Assert.Equal(0, overflowStore.SuccessfulReplaceCount);
+        Assert.Null(overflowStore.Current!.State.ActiveReservation);
     }
 
     [Fact]
@@ -714,7 +716,7 @@ public sealed partial class DocumentationScribeCompositionTests
     }
 
     [Fact]
-    public async Task Proposal_executor_recovers_active_lineage_with_a_fresh_outer_attempt()
+    public async Task Proposal_executor_recovers_active_lineage_under_the_same_outer_attempt()
     {
         await using var fixture = await CompositionFixture.CreateProposalStageAsync();
         var campaign = fixture.CreateCampaign();
@@ -731,10 +733,11 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         var completed = Assert.Single(store.Current!.State.WorkItems,
             item => item.Status == CampaignWorkStatus.ProposalComplete);
-        Assert.Equal(2, completed.OuterAttemptCount);
-        Assert.True(store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved > 0);
+        Assert.Equal(1, completed.OuterAttemptCount);
+        Assert.Equal(0, store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
+        Assert.True(store.Current.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved > 0);
         Assert.True(store.Current.State.LineageCharges.ProviderRequests.Observed > 0);
-        Assert.Equal(3, store.SuccessfulReplaceCount);
+        Assert.Equal(9, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -781,7 +784,7 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.Plan,
             work.WorkItemKey,
             fixture.Request,
-                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)));
+                CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new CampaignInvocationTargetLimit(100)), CampaignInvocationTestPolicy.Create(fixture.Request.Limits));
         Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
         return admitted;
     }
@@ -967,14 +970,35 @@ public sealed partial class DocumentationScribeCompositionTests
                         "call.semantic",
                         semantic.OperationId,
                         "{}"u8.ToArray())],
-                    []));
+                    [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
             Assert.Equal(2, RequestCount);
             Assert.Single(modelRequest.CompletedToolExchanges);
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]));
+                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))],
+                usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
+        }
+    }
+
+    private sealed class ControlledCompositionClock : TimeProvider
+    {
+        private long timestamp;
+        public override long TimestampFrequency => 1_000;
+        public override long GetTimestamp() => timestamp;
+        internal void Advance(int milliseconds) => timestamp += milliseconds;
+    }
+
+    private sealed class TimeAdvancingExchange(IDocumentationScribeModelExchange inner,
+        ControlledCompositionClock clock, int milliseconds) : IDocumentationScribeModelExchange
+    {
+        public async ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeModelRequest request,
+            CancellationToken cancellationToken)
+        {
+            var response = await inner.SendAsync(request, cancellationToken);
+            clock.Advance(milliseconds);
+            return response;
         }
     }
 
@@ -1851,7 +1875,8 @@ public sealed partial class DocumentationScribeCompositionTests
                 null,
                 executionToken,
                 settlementToken,
-                timeProvider);
+                timeProvider, InvocationAllowance: CampaignInvocationTestPolicy.Create(
+                    DocumentationScribeValidation.ParseRequest(fixture.RequestBytes).Request!.Limits, timeProvider));
     }
 
     private sealed class MemoryCampaignStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
@@ -1859,6 +1884,7 @@ public sealed partial class DocumentationScribeCompositionTests
         private readonly object gate = new();
         private CampaignCheckpointArtifact? current = initial;
         private int replaceAttemptCount;
+        private bool physicalFaultReported;
 
         internal CampaignCheckpointArtifact? Current
         {
@@ -1875,6 +1901,7 @@ public sealed partial class DocumentationScribeCompositionTests
         internal CampaignCheckpointWriteKind? NextReportedReplaceKind { get; init; }
         internal bool ApplyNextReplaceBeforeReporting { get; init; }
         internal int? ReportedReplaceAttempt { get; init; }
+        internal bool? FailPhysicalSettlement { get; init; }
         internal CampaignCheckpointWriteKind? ReportedReplaceKind { get; init; }
         internal Action<int>? AfterSuccessfulReplace { get; init; }
 
@@ -1939,6 +1966,17 @@ public sealed partial class DocumentationScribeCompositionTests
                 var reportedAttempt = ReportedReplaceAttempt
                     ?? (NextReportedReplaceKind is null ? null : 1);
                 var reportedKind = ReportedReplaceKind ?? NextReportedReplaceKind;
+                var successor = Parse(exactUtf8Json);
+                if (!physicalFaultReported && FailPhysicalSettlement is { } settlement
+                    && (settlement
+                        ? current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch }
+                            && successor.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host }
+                        : successor.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch }))
+                {
+                    physicalFaultReported = true;
+                    reportedAttempt = replaceAttempt;
+                    reportedKind = CampaignCheckpointWriteKind.CurrentMismatch;
+                }
                 if (reportedAttempt == replaceAttempt && reportedKind is { } reported)
                 {
                     if (ApplyNextReplaceBeforeReporting)

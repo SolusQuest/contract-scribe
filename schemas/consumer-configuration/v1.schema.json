@@ -54,15 +54,68 @@
             "maximumContextUtf8Bytes": { "type": "integer", "minimum": 0, "maximum": 4194304 },
             "maximumEvidenceReferences": { "type": "integer", "minimum": 0, "maximum": 512 },
             "maximumEvidenceUtf8Bytes": { "type": "integer", "minimum": 0, "maximum": 4194304 },
-            "maximumProviderRequests": { "type": "integer", "minimum": 1, "maximum": 128 },
-            "maximumToolRounds": { "type": "integer", "minimum": 0, "maximum": 128 },
-            "maximumToolCalls": { "type": "integer", "minimum": 0, "maximum": 1024 },
-            "maximumAttempts": { "type": "integer", "minimum": 1 },
-            "maximumInputTokens": { "type": "integer", "minimum": 1 },
-            "maximumUncachedInputTokens": { "type": "integer", "minimum": 0 },
-            "maximumOutputTokens": { "type": "integer", "minimum": 1 },
-            "maximumCostMicrounits": { "type": "integer", "minimum": 0 },
-            "maximumElapsedMilliseconds": { "type": "integer", "minimum": 1 }
+            "maximumAttempts": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "invocation": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "maximumTargets": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 4096
+            },
+            "maximumProviderRequests": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 128
+            },
+            "maximumToolCalls": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1024
+            },
+            "maximumCachedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 134217727
+            },
+            "maximumUncachedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 134217727
+            },
+            "maximumOutputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048575
+            },
+            "maximumElapsedMilliseconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86399999
+            },
+            "maximumRequestOutputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048575
+            },
+            "maximumRequestElapsedMilliseconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86399999
+            },
+            "maximumConnectMilliseconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86399999
+            },
+            "maximumToolCallsPerResponse": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 16
+            }
           }
         }
       }

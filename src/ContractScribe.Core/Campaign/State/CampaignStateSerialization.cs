@@ -355,6 +355,8 @@ public static partial class CampaignStateJson
         WriteProposal(writer, work.TrustedProposal);
         writer.WritePropertyName("closedOutcome");
         WriteClosedOutcome(writer, work.ClosedOutcome);
+        writer.WritePropertyName("pausedProviderAttempt");
+        WritePausedProviderAttempt(writer, work.PausedProviderAttempt);
         writer.WriteEndObject();
     }
 
@@ -667,6 +669,14 @@ public static partial class CampaignStateJson
                 null => null,
                 _ => throw Vocabulary(),
             });
+        WriteNullableString(writer, "scribeCompletionSource", outcome.ScribeCompletionSource switch
+        {
+            CampaignScribeCompletionSource.ScribeResult => "scribe-result",
+            CampaignScribeCompletionSource.RecoveredDispatchFailure => "recovered-dispatch-failure",
+            null => null,
+            _ => throw Vocabulary(),
+        });
+        WriteNullableString(writer, "acceptedDispatchFailureCommitmentSha256", outcome.AcceptedDispatchFailureCommitmentSha256);
         WriteNullableString(writer, "scribeRequestSha256", outcome.ScribeRequestSha256);
         WriteNullableString(writer, "scribeResultCommitmentSha256", outcome.ScribeResultCommitmentSha256);
         WriteNullableString(
@@ -691,10 +701,21 @@ public static partial class CampaignStateJson
                 writer.WriteString("workItemKey", provider.WorkItemKey);
                 writer.WriteString("scribeRequestSha256", provider.ScribeRequestSha256);
                 writer.WriteString("attemptId", provider.AttemptId.Value);
+                writer.WriteNumber("executionStartRevision", provider.ExecutionStartRevision);
+                writer.WriteNumber("currentOperationOrdinal", provider.CurrentOperationOrdinal);
+                writer.WriteNumber("lastDispatchOrdinal", provider.LastDispatchOrdinal);
+                writer.WriteNumber("currentExecutionSettledProviderRequests", provider.CurrentExecutionSettledProviderRequests);
+                writer.WriteNumber("restoredRetryableProviderFailures", provider.RestoredRetryableProviderFailures);
+                writer.WriteString("operationKind", provider.OperationKind == CampaignProviderOperationKind.Dispatch ? "dispatch" : "host");
+                WriteNullableString(writer, "hostPhase", provider.HostPhase is { } phase ? HostPhaseId(phase) : null);
+                WriteNullableString(writer, "requestCommitmentSha256", provider.RequestCommitmentSha256);
+                writer.WritePropertyName("retryProgress");
+                WriteRetryProgress(writer, provider.RetryProgress);
                 writer.WritePropertyName("exposure");
                 writer.WriteStartObject();
                 writer.WriteNumber("providerRequests", provider.Exposure.ProviderRequests);
                 writer.WriteNumber("inputTokens", provider.Exposure.InputTokens);
+                writer.WriteNumber("cachedInputTokens", provider.Exposure.CachedInputTokens);
                 writer.WriteNumber("uncachedInputTokens", provider.Exposure.UncachedInputTokens);
                 writer.WriteNumber("outputTokens", provider.Exposure.OutputTokens);
                 writer.WriteNumber("costMicrounits", provider.Exposure.CostMicrounits);
@@ -1129,7 +1150,8 @@ public static partial class CampaignStateJson
             "status",
             "attemptDisposition",
             "trustedProposal",
-            "closedOutcome");
+            "closedOutcome",
+            "pausedProviderAttempt");
         var workItemKey = ReadString(element, "workItemKey");
         return new CampaignWorkItemState(
             workItemKey,
@@ -1140,6 +1162,7 @@ public static partial class CampaignStateJson
             ParseClosedOutcome(element.GetProperty("closedOutcome"), workItemKey))
         {
             AttemptDisposition = ParseAttemptDisposition(ReadString(element, "attemptDisposition")),
+            PausedProviderAttempt = ParsePausedProviderAttempt(element.GetProperty("pausedProviderAttempt")),
         };
     }
 
@@ -1445,6 +1468,8 @@ public static partial class CampaignStateJson
             "code",
             "providerDisposition",
             "scribeRequestSha256",
+            "scribeCompletionSource",
+            "acceptedDispatchFailureCommitmentSha256",
             "scribeResultCommitmentSha256",
             "attemptId",
             "patchRequestSha256",
@@ -1482,7 +1507,17 @@ public static partial class CampaignStateJson
             ReadNullableString(element, "patchRequestSha256"),
             ReadNullableString(element, "patchResultCommitmentSha256"),
             ReadNullableString(element, "scribeResultCommitmentSha256"),
-            workItemKey);
+            workItemKey)
+        {
+            ScribeCompletionSource = ReadNullableString(element, "scribeCompletionSource") switch
+            {
+                null => null,
+                "scribe-result" => CampaignScribeCompletionSource.ScribeResult,
+                "recovered-dispatch-failure" => CampaignScribeCompletionSource.RecoveredDispatchFailure,
+                _ => throw Vocabulary(),
+            },
+            AcceptedDispatchFailureCommitmentSha256 = ReadNullableString(element, "acceptedDispatchFailureCommitmentSha256"),
+        };
     }
 
     private static CampaignActiveReservation? ParseReservation(JsonElement element)
@@ -1502,32 +1537,33 @@ public static partial class CampaignStateJson
 
     private static CampaignProviderReservation ParseProviderReservation(JsonElement element)
     {
-        ExpectObject(element, "kind", "workItemKey", "scribeRequestSha256", "attemptId", "exposure");
-        if (!DocumentationScribeAttemptId.TryParse(ReadString(element, "attemptId"), out var attempt))
-        {
-            throw Vocabulary();
-        }
-
+        ExpectObject(element, "kind", "workItemKey", "scribeRequestSha256", "attemptId", "exposure",
+            "executionStartRevision", "currentOperationOrdinal", "lastDispatchOrdinal",
+            "currentExecutionSettledProviderRequests", "restoredRetryableProviderFailures",
+            "operationKind", "hostPhase", "requestCommitmentSha256", "retryProgress");
+        if (!DocumentationScribeAttemptId.TryParse(ReadString(element, "attemptId"), out var attempt)) throw Vocabulary();
         var exposure = element.GetProperty("exposure");
-        ExpectObject(
-            exposure,
-            "providerRequests",
-            "inputTokens",
-            "uncachedInputTokens",
-            "outputTokens",
-            "costMicrounits",
-            "elapsedMilliseconds");
-        return new CampaignProviderReservation(
-            ReadString(element, "workItemKey"),
-            ReadString(element, "scribeRequestSha256"),
-            attempt,
-            new CampaignProviderReservationExposure(
-                ReadInt32(exposure, "providerRequests"),
-                ReadInt32(exposure, "inputTokens"),
-                ReadInt32(exposure, "uncachedInputTokens"),
-                ReadInt32(exposure, "outputTokens"),
-                ReadInt64(exposure, "costMicrounits"),
-                ReadInt32(exposure, "elapsedMilliseconds")));
+        ExpectObject(exposure, "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens",
+            "outputTokens", "costMicrounits", "elapsedMilliseconds");
+        return new CampaignProviderReservation(ReadString(element, "workItemKey"),
+            ReadString(element, "scribeRequestSha256"), attempt,
+            new CampaignProviderReservationExposure(ReadInt32(exposure, "providerRequests"),
+                ReadInt32(exposure, "inputTokens"), ReadInt32(exposure, "uncachedInputTokens"),
+                ReadInt32(exposure, "outputTokens"), ReadInt64(exposure, "costMicrounits"),
+                ReadInt32(exposure, "elapsedMilliseconds"))
+            { CachedInputTokens = ReadInt32(exposure, "cachedInputTokens") })
+        {
+            ExecutionStartRevision = ReadInt64(element, "executionStartRevision"),
+            CurrentOperationOrdinal = ReadInt64(element, "currentOperationOrdinal"),
+            LastDispatchOrdinal = ReadInt64(element, "lastDispatchOrdinal"),
+            CurrentExecutionSettledProviderRequests = ReadInt32(element, "currentExecutionSettledProviderRequests"),
+            RestoredRetryableProviderFailures = ReadInt32(element, "restoredRetryableProviderFailures"),
+            OperationKind = ReadString(element, "operationKind") switch
+            { "host" => CampaignProviderOperationKind.Host, "dispatch" => CampaignProviderOperationKind.Dispatch, _ => throw Vocabulary() },
+            HostPhase = ReadNullableString(element, "hostPhase") is { } phase ? ParseHostPhase(phase) : null,
+            RequestCommitmentSha256 = ReadNullableString(element, "requestCommitmentSha256"),
+            RetryProgress = ParseRetryProgress(element.GetProperty("retryProgress")),
+        };
     }
 
     private static CampaignPatchReservation ParsePatchReservation(JsonElement element)
@@ -2225,5 +2261,89 @@ public static partial class CampaignStateJson
                     failureMessage);
             }
         }
+    }
+
+    private static string HostPhaseId(CampaignProviderHostPhase phase) => phase switch
+    {
+        CampaignProviderHostPhase.Preflight => "preflight",
+        CampaignProviderHostPhase.RepositoryTool => "repository-tool",
+        CampaignProviderHostPhase.SemanticTool => "semantic-tool",
+        CampaignProviderHostPhase.RegisteredTool => "registered-tool",
+        CampaignProviderHostPhase.TerminalSubmission => "terminal-submission",
+        CampaignProviderHostPhase.RetryWait => "retry-wait",
+        CampaignProviderHostPhase.Continuation => "continuation",
+        CampaignProviderHostPhase.Postflight => "postflight",
+        CampaignProviderHostPhase.Retirement => "retirement",
+        _ => throw Vocabulary(),
+    };
+
+    private static CampaignProviderHostPhase ParseHostPhase(string phase) => phase switch
+    {
+        "preflight" => CampaignProviderHostPhase.Preflight,
+        "repository-tool" => CampaignProviderHostPhase.RepositoryTool,
+        "semantic-tool" => CampaignProviderHostPhase.SemanticTool,
+        "registered-tool" => CampaignProviderHostPhase.RegisteredTool,
+        "terminal-submission" => CampaignProviderHostPhase.TerminalSubmission,
+        "retry-wait" => CampaignProviderHostPhase.RetryWait,
+        "continuation" => CampaignProviderHostPhase.Continuation,
+        "postflight" => CampaignProviderHostPhase.Postflight,
+        "retirement" => CampaignProviderHostPhase.Retirement,
+        _ => throw Vocabulary(),
+    };
+
+    private static void WriteRetryProgress(Utf8JsonWriter writer, CampaignProviderRetryProgress progress)
+    {
+        writer.WriteStartObject();
+        writer.WriteNumber("retryableFailureCount", progress.RetryableFailureCount);
+        writer.WriteString("lastDisposition", progress.LastDisposition switch
+        {
+            CampaignProviderDispatchDisposition.None => "none",
+            CampaignProviderDispatchDisposition.Success => "success",
+            CampaignProviderDispatchDisposition.RetryableFailure => "retryable-failure",
+            CampaignProviderDispatchDisposition.TerminalFailure => "terminal-failure",
+            CampaignProviderDispatchDisposition.Interrupted => "interrupted",
+            _ => throw Vocabulary(),
+        });
+        writer.WriteNumber("lastSettledDispatchOrdinal", progress.LastSettledDispatchOrdinal);
+        WriteNullableString(writer, "lastRequestCommitmentSha256", progress.LastRequestCommitmentSha256);
+        WriteNullableString(writer, "lastSettlementCommitmentSha256", progress.LastSettlementCommitmentSha256);
+        writer.WriteNumber("pendingRetryAfterMilliseconds", progress.PendingRetryAfterMilliseconds);
+        writer.WriteEndObject();
+    }
+
+    private static CampaignProviderRetryProgress ParseRetryProgress(JsonElement element)
+    {
+        ExpectObject(element, "retryableFailureCount", "lastDisposition", "lastSettledDispatchOrdinal",
+            "lastRequestCommitmentSha256", "lastSettlementCommitmentSha256", "pendingRetryAfterMilliseconds");
+        return new(ReadInt32(element, "retryableFailureCount"), ReadString(element, "lastDisposition") switch
+        {
+            "none" => CampaignProviderDispatchDisposition.None,
+            "success" => CampaignProviderDispatchDisposition.Success,
+            "retryable-failure" => CampaignProviderDispatchDisposition.RetryableFailure,
+            "terminal-failure" => CampaignProviderDispatchDisposition.TerminalFailure,
+            "interrupted" => CampaignProviderDispatchDisposition.Interrupted,
+            _ => throw Vocabulary(),
+        }, ReadInt64(element, "lastSettledDispatchOrdinal"), ReadNullableString(element, "lastRequestCommitmentSha256"),
+            ReadNullableString(element, "lastSettlementCommitmentSha256"), ReadInt32(element, "pendingRetryAfterMilliseconds"));
+    }
+
+    private static void WritePausedProviderAttempt(Utf8JsonWriter writer, CampaignPausedProviderAttempt? paused)
+    {
+        if (paused is null) { writer.WriteNullValue(); return; }
+        writer.WriteStartObject();
+        writer.WriteString("scribeRequestSha256", paused.ScribeRequestSha256);
+        writer.WriteString("attemptId", paused.AttemptId.Value);
+        writer.WriteNumber("lastDispatchOrdinal", paused.LastDispatchOrdinal);
+        writer.WritePropertyName("retryProgress"); WriteRetryProgress(writer, paused.RetryProgress);
+        writer.WriteEndObject();
+    }
+
+    private static CampaignPausedProviderAttempt? ParsePausedProviderAttempt(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Null) return null;
+        ExpectObject(element, "scribeRequestSha256", "attemptId", "lastDispatchOrdinal", "retryProgress");
+        if (!DocumentationScribeAttemptId.TryParse(ReadString(element, "attemptId"), out var attempt)) throw Vocabulary();
+        return new(ReadString(element, "scribeRequestSha256"), attempt, ReadInt64(element, "lastDispatchOrdinal"),
+            ParseRetryProgress(element.GetProperty("retryProgress")));
     }
 }

@@ -503,6 +503,14 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 item.Disposition.Kind == CampaignPlanningDispositionKind.Executable)
             .Take(proposalCount)
             .ToImmutableArray();
+        var invocationAllowance = new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
+            maximumProviderRequests: fixture.Request.Limits.MaximumProviderRequests,
+            maximumToolCalls: fixture.Request.Limits.MaximumToolCalls,
+            maximumCachedInputTokens: fixture.Request.Limits.MaximumInputTokens - fixture.Request.Limits.MaximumUncachedInputTokens,
+            maximumUncachedInputTokens: fixture.Request.Limits.MaximumUncachedInputTokens,
+            maximumOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
+            maximumRequestOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
+            maximumRequestElapsedMilliseconds: fixture.Request.Limits.MaximumElapsedMilliseconds));
         for (var index = 0; index < executable.Length; index++)
         {
             var work = executable[index];
@@ -528,7 +536,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 new CampaignProposalExchange(request.Request),
                 ConfiguredAgentEntrypoint: null,
                 CancellationToken.None,
-                CancellationToken.None));
+                CancellationToken.None,
+                InvocationAllowance: invocationAllowance));
             Assert.True(
                 proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady,
                 $"proposal[{index}]={proposal.Kind}:{proposal.Code}");
@@ -895,7 +904,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(CampaignProposalTerminal(request))]));
         }

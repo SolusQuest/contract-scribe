@@ -143,7 +143,8 @@ public sealed partial class DocumentationScribeCompositionTests
         {
             RequestCount++;
             return ValueTask.FromResult(new DocumentationScribeModelResponse([], [],
-                new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.TransientUnavailable)));
+                new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.TransientUnavailable),
+                usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
         }
     }
 }

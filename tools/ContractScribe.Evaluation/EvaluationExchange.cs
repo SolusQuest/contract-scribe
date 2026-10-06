@@ -119,7 +119,7 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
         ]);
 
     private static DocumentationScribeModelResponse Failure(DocumentationScribeModelFailureCode code) =>
-        new([], [], new DocumentationScribeModelFailure(code));
+        new([], [], new DocumentationScribeModelFailure(code), usage: new(0, 0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse BudgetExhausted()
     {

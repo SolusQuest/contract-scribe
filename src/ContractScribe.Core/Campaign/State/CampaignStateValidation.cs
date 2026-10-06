@@ -1413,6 +1413,7 @@ public static partial class CampaignStateFactory
                     && work.Status is CampaignWorkStatus.Planned or CampaignWorkStatus.Closed
                     && (state.ActiveReservation is not CampaignProviderReservation active || active.WorkItemKey != work.WorkItemKey),
                 CampaignStateValidationCode.InvalidCorrelation);
+            if (work.PausedProviderAttempt is { } paused) ValidatePausedProviderAttempt(state, work, paused);
             var hasProposal = work.TrustedProposal is not null;
             var hasClosed = work.ClosedOutcome is not null;
             Require(work.Status switch
@@ -2102,6 +2103,14 @@ public static partial class CampaignStateFactory
         Require(string.Equals(outcome.BoundWorkItemKey, workItemKey, StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
         Require(Enum.IsDefined(outcome.Stage) && Enum.IsDefined(outcome.Code), CampaignStateValidationCode.InvalidVocabulary);
+        Require(outcome.Stage == CampaignWorkOutcomeStage.Scribe
+            ? outcome.ScribeCompletionSource is { } source && Enum.IsDefined(source)
+                && (source == CampaignScribeCompletionSource.ScribeResult
+                    ? outcome.AcceptedDispatchFailureCommitmentSha256 is null
+                    : outcome.Code == CampaignWorkOutcomeCode.ProviderFailure
+                        && IsSha256(outcome.AcceptedDispatchFailureCommitmentSha256))
+            : outcome.ScribeCompletionSource is null && outcome.AcceptedDispatchFailureCommitmentSha256 is null,
+            CampaignStateValidationCode.InvalidCorrelation);
         if (outcome.Stage == CampaignWorkOutcomeStage.Planning)
         {
             Require(outcome.Code == CampaignWorkOutcomeCode.PlanningTerminal
@@ -2165,33 +2174,7 @@ public static partial class CampaignStateFactory
             case null:
                 return;
             case CampaignProviderReservation provider:
-                Require(IsWorkItemKey(provider.WorkItemKey)
-                    && IsSha256(provider.ScribeRequestSha256)
-                    && DocumentationScribeAttemptId.TryParse(provider.AttemptId.Value, out _)
-                    && provider.Exposure is not null
-                    && provider.Exposure.ProviderRequests >= 0
-                    && provider.Exposure.ProviderRequests <= state.ConfiguredCeilings.ScribeRunLimits.MaximumProviderRequests
-                    && provider.Exposure.InputTokens >= 0
-                    && provider.Exposure.InputTokens <= state.ConfiguredCeilings.ScribeRunLimits.MaximumInputTokens
-                    && provider.Exposure.UncachedInputTokens >= 0
-                    && provider.Exposure.UncachedInputTokens <= provider.Exposure.InputTokens
-                    && provider.Exposure.UncachedInputTokens <= state.ConfiguredCeilings.ScribeRunLimits.MaximumUncachedInputTokens
-                    && provider.Exposure.OutputTokens >= 0
-                    && provider.Exposure.OutputTokens <= state.ConfiguredCeilings.ScribeRunLimits.MaximumOutputTokens
-                    && provider.Exposure.CostMicrounits >= 0
-                    && provider.Exposure.CostMicrounits >= (state.ConfiguredCeilings.CampaignBudget.CostRates
-                        ?.ConservativeCost(provider.Exposure.InputTokens, provider.Exposure.UncachedInputTokens,
-                            provider.Exposure.OutputTokens, Math.Max(1, provider.Exposure.ProviderRequests)) ?? 0)
-                    && provider.Exposure.CostMicrounits <= Math.Max(state.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits,
-                        CampaignBudgetAccounting.ProviderCostExposure(
-                            state.ConfiguredCeilings.CampaignBudget, state.ConfiguredCeilings.ScribeRunLimits))
-                    && provider.Exposure.ElapsedMilliseconds >= 0
-                    && provider.Exposure.ElapsedMilliseconds <= state.ConfiguredCeilings.ScribeRunLimits.MaximumElapsedMilliseconds,
-                    CampaignStateValidationCode.InvalidBound);
-                Require(state.WorkItems.Count(item =>
-                    string.Equals(item.WorkItemKey, provider.WorkItemKey, StringComparison.Ordinal)
-                    && item.Status == CampaignWorkStatus.Planned) == 1,
-                    CampaignStateValidationCode.InvalidCorrelation);
+                ValidateProviderProgress(state, provider);
                 break;
             case CampaignPatchReservation patch:
                 Require(IsSha256(patch.PatchRequestSha256)

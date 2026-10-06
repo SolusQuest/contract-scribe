@@ -5,22 +5,19 @@ namespace ContractScribe.Tests;
 public sealed class CampaignStateTransitionTests
 {
     [Fact]
-    public void Provider_admission_reserves_the_complete_persisted_run_bound()
+    public void Provider_admission_reserves_one_bounded_host_phase_without_physical_requests()
     {
         var state = CreateOpenState();
 
-        var decision = CampaignBudgetAccounting.ReserveProviderInvocation(state);
+        var decision = CampaignBudgetAccounting.ReserveProviderInvocation(state, CampaignInvocationTestPolicy.Create(state.ConfiguredCeilings.ScribeRunLimits, new AdmissionClock()));
 
         Assert.Equal(CampaignBudgetDecisionKind.Admitted, decision.Kind);
         Assert.Equal(1, decision.Charges!.OuterInvocations);
-        Assert.Equal(state.ConfiguredCeilings.ScribeRunLimits.MaximumProviderRequests,
-            decision.Exposure!.ProviderRequests);
-        Assert.Equal(state.ConfiguredCeilings.ScribeRunLimits.MaximumInputTokens,
-            decision.Exposure.InputTokens);
-        Assert.Equal(state.ConfiguredCeilings.ScribeRunLimits.MaximumUncachedInputTokens,
-            decision.Exposure.UncachedInputTokens);
-        Assert.Equal(state.ConfiguredCeilings.ScribeRunLimits.MaximumOutputTokens,
-            decision.Exposure.OutputTokens);
+        Assert.Equal(0, decision.Exposure!.ProviderRequests);
+        Assert.Equal(0, decision.Exposure.InputTokens);
+        Assert.Equal(0, decision.Exposure.CachedInputTokens);
+        Assert.Equal(0, decision.Exposure.UncachedInputTokens);
+        Assert.Equal(0, decision.Exposure.OutputTokens);
         Assert.Equal(state.ConfiguredCeilings.ScribeRunLimits.MaximumElapsedMilliseconds,
             decision.Exposure.ElapsedMilliseconds);
         Assert.Equal(0, decision.Exposure.CostMicrounits);
@@ -28,19 +25,18 @@ public sealed class CampaignStateTransitionTests
     }
 
     [Fact]
-    public void Cancellation_settles_unknown_provider_exposure_once_and_clears_authority()
+    public void Cancellation_settles_only_the_outstanding_host_phase_once_and_clears_authority()
     {
         var state = CreateOpenState();
-        var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
-        Assert.True(DocumentationScribeAttemptId.TryParse(
-            "scribe-attempt.0123456789abcdef0123456789abcdef",
-            out var attemptId));
+        var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state, CampaignInvocationTestPolicy.Create(state.ConfiguredCeilings.ScribeRunLimits, new AdmissionClock()));
+        var attemptId = CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
+            state.ConfiguredCeilings.ScribeExecutionAuthority, state.WorkItems[0].WorkItemKey, 1);
         var work = state.WorkItems[0] with { OuterAttemptCount = 1 };
         var reserved = CampaignStateFactory.CreateValidated(
             state.ProductRevision,
             state.CampaignLineage,
             state.Snapshot,
-            state.CheckpointRevision,
+            1,
             state.ConfiguredCeilings,
             budget.Charges!,
             [work],
@@ -49,7 +45,8 @@ public sealed class CampaignStateTransitionTests
                 work.WorkItemKey,
                 new string('a', 64),
                 attemptId,
-                budget.Exposure!));
+                budget.Exposure!)
+            { ExecutionStartRevision = 1, CurrentOperationOrdinal = 1 });
         var predecessor = CampaignStateJson.CreateArtifact(reserved);
         var unboundStop = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
         Assert.Equal(CampaignTransitionKind.Rejected, unboundStop.Kind);
@@ -122,6 +119,12 @@ public sealed class CampaignStateTransitionTests
         Assert.Equal(CampaignTransitionFailure.RevisionOverflow, result.Failure);
         Assert.True(predecessor.ExactUtf8Json.AsSpan().SequenceEqual(
             result.Artifact.ExactUtf8Json.AsSpan()));
+    }
+
+    private sealed class AdmissionClock : TimeProvider
+    {
+        public override long TimestampFrequency => 1_000;
+        public override long GetTimestamp() => 0;
     }
 
     private static CampaignCheckpointState CreateOpenState()

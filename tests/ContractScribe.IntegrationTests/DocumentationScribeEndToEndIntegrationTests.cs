@@ -429,10 +429,10 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     }
 
     [Fact]
-    public async Task ZeroToolBudgetAllowsADirectTerminal()
+    public async Task OneToolBudgetAllowsTheStructuredTerminal()
     {
         await using var fixture = await EndToEndFixture.CreateAsync();
-        var limited = WithLimit(fixture.RequestBytes, "maximumToolCalls", 0);
+        var limited = WithLimit(fixture.RequestBytes, "maximumToolCalls", 1);
 
         var outcome = await CliHarness.ExecuteAsync(
             fixture.SelectedAudit,
@@ -441,6 +441,21 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             new SkipExchange(limited.Request));
 
         Assert.Equal("ProposalSkipped", outcome.Status);
+        Assert.Null(outcome.PatchOutcome);
+    }
+
+    [Fact]
+    public async Task ZeroToolBudgetRejectsTheStructuredTerminalBeforeProviderInvocation()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var limited = WithLimit(fixture.RequestBytes, "maximumToolCalls", 0);
+        var exchange = new CountingExchange();
+        var outcome = await CliHarness.ExecuteAsync(
+            fixture.SelectedAudit, limited.Bytes, fixture.AttemptId, exchange);
+
+        Assert.Equal("BudgetExhausted", outcome.Status);
+        Assert.Equal("scribe.failure.budget", outcome.Code);
+        Assert.Equal(0, exchange.RequestCount);
         Assert.Null(outcome.PatchOutcome);
     }
 
@@ -2148,6 +2163,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         };
     }
 
+    // These synthetic exchanges perform no provider token work; absent usage would instead reserve the full finite exposure.
+    private static DocumentationScribeModelResponse SyntheticResponse(
+        ImmutableArray<DocumentationScribeModelToolCall> toolCalls,
+        ImmutableArray<DocumentationScribeModelTerminalSubmission> terminals,
+        DocumentationScribeModelFailure? failure = null) =>
+        new(toolCalls, terminals, failure, usage: new(0, 0, 0, 0, 0));
+
     private sealed class ProposalExchange : IDocumentationScribeModelExchange
     {
         private readonly DocumentationScribeRequest request;
@@ -2170,7 +2192,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             RequestCount++;
             if (modelRequest.ProviderRequestNumber == 1)
             {
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2196,7 +2218,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CompletedOutcomes = modelRequest.CompletedToolExchanges
                 .Select(item => item.OutcomeId)
                 .ToImmutableArray();
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]));
         }
@@ -2235,7 +2257,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     arguments["repositoryPath"] = repositoryPath;
                 }
 
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2247,7 +2269,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             }
 
             Completed = request.CompletedToolExchanges;
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2275,7 +2297,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             RequestCount++;
             if (request.ProviderRequestNumber == 1)
             {
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2292,7 +2314,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             }
 
             Completed = request.CompletedToolExchanges;
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2344,13 +2366,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         literal = "changed after prompt materialization",
                         pageSize = 1,
                     });
-                return new DocumentationScribeModelResponse(
+                return SyntheticResponse(
                     [new DocumentationScribeModelToolCall(0, "call.context-after-mutation", operationId, arguments)],
                     []);
             }
 
             await File.WriteAllTextAsync(path, original, new UTF8Encoding(false), cancellationToken);
-            return new DocumentationScribeModelResponse(
+            return SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
         }
@@ -2370,7 +2392,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             if (request.ProviderRequestNumber == 1)
             {
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2382,7 +2404,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             }
 
             Completed = request.CompletedToolExchanges;
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2397,7 +2419,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest modelRequest,
             CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new DocumentationScribeModelResponse(
+            ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
     }
@@ -2419,7 +2441,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             if (modelRequest.ProviderRequestNumber == 1)
             {
-                return new DocumentationScribeModelResponse(
+                return SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2431,7 +2453,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             }
 
             await File.AppendAllTextAsync(sourcePath, Environment.NewLine, cancellationToken);
-            return new DocumentationScribeModelResponse(
+            return SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]);
         }
@@ -2449,7 +2471,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             RequestCount++;
             Requests.Add(request);
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2460,7 +2482,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new DocumentationScribeModelResponse(
+            ValueTask.FromResult(SyntheticResponse(
                 [
                     new DocumentationScribeModelToolCall(
                         0,
@@ -2481,7 +2503,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             RequestCount++;
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [
                     new DocumentationScribeModelToolCall(
                         0,
@@ -2503,7 +2525,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             if (request.ProviderRequestNumber == 1)
             {
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2515,7 +2537,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             }
 
             Completed = request.CompletedToolExchanges;
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2532,7 +2554,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             cancellationToken.ThrowIfCancellationRequested();
             if (request.ProviderRequestNumber == 1)
             {
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2554,7 +2576,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             }
 
             Completed = request.CompletedToolExchanges;
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2587,7 +2609,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         cursor,
                     })
                     : JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1, cursor });
-                return ValueTask.FromResult(new DocumentationScribeModelResponse(
+                return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
                             0,
@@ -2598,7 +2620,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     []));
             }
 
-            return ValueTask.FromResult(new DocumentationScribeModelResponse(
+            return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
         }
@@ -2611,7 +2633,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
-            return new DocumentationScribeModelResponse(
+            return SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
         }
@@ -2622,7 +2644,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new DocumentationScribeModelResponse(
+            ValueTask.FromResult(SyntheticResponse(
                 [],
                 [
                     new DocumentationScribeModelTerminalSubmission(Encoding.UTF8.GetBytes(
@@ -2635,7 +2657,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken) =>
-            ValueTask.FromResult(new DocumentationScribeModelResponse(
+            ValueTask.FromResult(SyntheticResponse(
                 [],
                 [],
                 new DocumentationScribeModelFailure(

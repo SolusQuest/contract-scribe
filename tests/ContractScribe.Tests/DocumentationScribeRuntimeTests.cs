@@ -34,7 +34,7 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(expectedKind, result.Terminal.Kind);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(0, result.RunEnvelope.ToolRoundCount);
-        Assert.Equal(0, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
         Assert.Empty(result.RunEnvelope.Diagnostics);
         Assert.Single(exchange.Requests);
     }
@@ -61,7 +61,7 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
         Assert.Equal(3, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(2, result.RunEnvelope.ToolRoundCount);
-        Assert.Equal(3, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(4, result.RunEnvelope.ToolCallCount);
         Assert.Equal(new[] { "z", "a", "a2" }, port.References.ToArray());
         Assert.Equal(new[] { "tool.alpha", "tool.zeta" }, exchange.Requests[0].Tools.Select(tool => tool.OperationId));
         Assert.Equal(new[] { "call.z", "call.a" }, exchange.Requests[1].CompletedToolExchanges.Select(item => item.CallId));
@@ -461,13 +461,13 @@ public sealed class DocumentationScribeRuntimeTests
         var first = new DocumentationScribeModelResponse(
             [Call(0, "call.one", "tool.read", "one")],
             [],
-            usage: new DocumentationScribeModelUsage(inputTokens: 100, uncachedInputTokens: 40),
+            usage: new DocumentationScribeModelUsage(inputTokens: 100, outputTokens: 0, cachedInputTokens: 60, uncachedInputTokens: 40),
             cache: DocumentationScribeCacheObservation.Hit,
             cost: new DocumentationScribeModelCost("currency.usd", 300));
         var second = new DocumentationScribeModelResponse(
             [],
             [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
-            usage: new DocumentationScribeModelUsage(inputTokens: 50, outputTokens: 20),
+            usage: new DocumentationScribeModelUsage(inputTokens: 50, outputTokens: 20, cachedInputTokens: 50, uncachedInputTokens: 0),
             cache: DocumentationScribeCacheObservation.Miss,
             cost: new DocumentationScribeModelCost("currency.usd", 200));
 
@@ -705,16 +705,27 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
-    public async Task Canonical_tool_exchange_bytes_have_an_independent_evidence_budget_check()
+    public async Task Canonical_tool_exchange_history_is_separate_from_the_evidence_budget()
     {
         var request = Request(root => root["limits"]!["maximumEvidenceUtf8Bytes"] = 141);
         var result = await CreateRuntime(
-            Script(ToolResponse(Call(0, "call.one", "tool.read", "one"))),
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one")), TerminalResponse(ReadTerminal("skip-result.json"))),
             Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
             .RunAsync(request, Attempt(), Prompt(request));
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Single(result.DynamicEvidenceReferences);
+    }
 
-        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
-        Assert.Empty(result.DynamicEvidenceReferences);
+    [Fact]
+    public void Logical_tool_history_retains_the_finite_32MiB_safety_boundary()
+    {
+        var request = Request();
+        var state = new RunState(request, Attempt(), new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"),
+            EmptyRegistry(), TimeProvider.System);
+        Assert.True(state.TryChargeSuccessfulToolExchange(33_554_432));
+        Assert.False(state.IsEvidenceBudgetExceeded);
+        Assert.True(state.TryChargeSuccessfulToolExchange(1));
+        Assert.True(state.IsEvidenceBudgetExceeded);
     }
 
     [Fact]
@@ -1216,7 +1227,7 @@ public sealed class DocumentationScribeRuntimeTests
             new DocumentationScribeModelResponse(
                 [Call(0, "call.one", "tool.read", "one")],
                 [],
-                usage: new DocumentationScribeModelUsage(outputTokens: 90)),
+                usage: new DocumentationScribeModelUsage(inputTokens: 0, outputTokens: 90, cachedInputTokens: 0, uncachedInputTokens: 0)),
             TerminalResponse(ReadTerminal("skip-result.json")));
 
         var result = await CreateRuntime(
@@ -1229,7 +1240,7 @@ public sealed class DocumentationScribeRuntimeTests
     }
 
     [Fact]
-    public async Task Unrepresentable_cumulative_usage_is_omitted_instead_of_clamped()
+    public async Task Unrepresentable_input_is_omitted_while_other_known_dimensions_are_retained()
     {
         var maximum = DocumentationScribeContract.MaximumObservedInputTokens;
         var request = Request(root => root["limits"]!["maximumInputTokens"] = maximum - 1);
@@ -1237,11 +1248,11 @@ public sealed class DocumentationScribeRuntimeTests
             new DocumentationScribeModelResponse(
                 [Call(0, "call.one", "tool.read", "one")],
                 [],
-                usage: new DocumentationScribeModelUsage(inputTokens: maximum - 2)),
+                usage: new DocumentationScribeModelUsage(inputTokens: maximum - 2, outputTokens: 0, cachedInputTokens: maximum - 2, uncachedInputTokens: 0)),
             new DocumentationScribeModelResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
-                usage: new DocumentationScribeModelUsage(inputTokens: 3)));
+                usage: new DocumentationScribeModelUsage(inputTokens: 3, outputTokens: 0, cachedInputTokens: 3, uncachedInputTokens: 0)));
 
         var result = await CreateRuntime(
             exchange,
@@ -1249,7 +1260,10 @@ public sealed class DocumentationScribeRuntimeTests
             .RunAsync(request, Attempt(), Prompt(request));
 
         Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
-        Assert.Null(result.RunEnvelope.Usage);
+        Assert.NotNull(result.RunEnvelope.Usage);
+        Assert.Null(result.RunEnvelope.Usage.InputTokens);
+        Assert.Null(result.RunEnvelope.Usage.CachedInputTokens);
+        Assert.Equal(0, result.RunEnvelope.Usage.OutputTokens);
     }
 
     [Fact]
@@ -1498,18 +1512,57 @@ public sealed class DocumentationScribeRuntimeTests
         Assert.Equal(1, result.RunEnvelope.ToolCallCount);
     }
 
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, false)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, true, true)]
+    public void Selected_elapsed_deadline_keeps_scope_semantics_across_clock_offsets_and_caller_cancellation(bool campaign, bool offset, bool cancelled)
+    {
+        var clock = new ManualTimeProvider();
+        var request = campaign ? ActionSafetyRequest() : Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
+        var deadline = request.Limits.MaximumElapsedMilliseconds;
+        var scope = campaign
+            ? new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(maximumElapsedMilliseconds: deadline), clock), null, 0, 0)
+            : DocumentationScribeExecutionScope.ForStandalone(request, clock);
+        if (offset) clock.AdvanceMilliseconds(1);
+        var state = new RunState(request, Attempt(), new DocumentationScribeRuntimeOptions(
+            "provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), EmptyRegistry(), clock, scope);
+        clock.AdvanceMilliseconds(deadline - (offset ? 1 : 0));
+        Assert.Equal(deadline - (offset ? 1 : 0), state.ElapsedMilliseconds);
+        Assert.Equal(deadline, scope.Allowance.ElapsedMilliseconds);
+        Assert.False(scope.Allowance.CanBeginProviderWork());
+        using var cancellation = new CancellationTokenSource();
+        if (cancelled) cancellation.Cancel();
+        var result = new DocumentationScribeTerminalReducer().TryCommitPriority(state, cancellation.Token);
+        Assert.NotNull(result);
+        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        else Assert.Equal(campaign ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout, FailureCode(result));
+    }
+
     [Fact]
     public async Task Elapsed_deadline_cancels_in_flight_exchange_and_returns_timeout()
     {
         var exchange = new ScriptedDocumentationScribeModelExchange(
             [ScriptedDocumentationScribeStep.WaitForCancellation()]);
         var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
+        var clock = new TrackingTimeProvider(manualDeadlines: true);
 
-        var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(
+        var pending = CreateRuntime(exchange, EmptyRegistry(), clock).RunAsync(
             request, Attempt(), Prompt(request));
+        Assert.Single(exchange.Requests);
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(1, clock.ActiveTimerCount);
+        clock.Expire(50);
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(result));
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(0, clock.ActiveTimerCount);
     }
 
     [Fact]
@@ -1630,6 +1683,124 @@ public sealed class DocumentationScribeRuntimeTests
             "provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"),
             timeProvider ?? TimeProvider.System);
 
+    [Theory]
+    [InlineData(64)]
+    [InlineData(128)]
+    public async Task Shared_request_policy_stops_before_a_65th_or_129th_physical_send(int maximumRequests)
+    {
+        var request = ActionSafetyRequest();
+        var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
+        var builder = new DocumentationScribeToolRegistryBuilder(ToolPolicyId);
+        builder.Add(new SyntheticDescriptor("tool.read"), port, new SyntheticCodec(suppressDynamicEvidence: true),
+            "Reads bounded synthetic evidence.", ToolSchema, 1024);
+        var responses = Enumerable.Range(0, maximumRequests + 1).Select(index =>
+            ToolResponse(Call(0, "call." + index, "tool.read", "small"))).ToArray();
+        var exchange = Script(responses);
+        var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(
+            maximumProviderRequests: maximumRequests)), null, 0, 0);
+        var result = await CreateRuntime(exchange, builder.Build()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Equal(maximumRequests, exchange.Requests.Length);
+        Assert.Equal(maximumRequests, scope.Allowance.ProviderRequestCount);
+        Assert.Equal(maximumRequests, result.RunEnvelope.ToolRoundCount);
+        Assert.Equal(maximumRequests, port.References.Length);
+    }
+
+    [Fact]
+    public async Task Legal_small_calls_reach_512_shared_tools_within_response_width_and_request_policy()
+    {
+        var request = ActionSafetyRequest();
+        var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
+        var builder = new DocumentationScribeToolRegistryBuilder(ToolPolicyId);
+        builder.Add(new SyntheticDescriptor("tool.read"), port, new SyntheticCodec(suppressDynamicEvidence: true),
+            "Reads bounded synthetic evidence.", ToolSchema, 1024);
+        var responses = Enumerable.Range(0, 32).Select(round => ToolResponse(Enumerable.Range(0, round == 31 ? 15 : 16)
+            .Select(index => Call(index, "call." + round + "." + index, "tool.read", "small")).ToArray())).ToList();
+        responses.Add(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(responses.ToArray());
+        var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create()), null, 0, 0);
+        var result = await CreateRuntime(exchange, builder.Build()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
+        Assert.True(result.Terminal.Kind == DocumentationScribeTerminalKind.Skip,
+            $"terminal={result.Terminal} requests={scope.Allowance.ProviderRequestCount} tools={scope.Allowance.ToolCallCount} diagnostics={string.Join(',', result.RunEnvelope.Diagnostics.Select(item => item.ValidationCode))}");
+        Assert.Equal(511, port.References.Length);
+        Assert.Equal(512, scope.Allowance.ToolCallCount);
+        Assert.Equal(512, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(33, scope.Allowance.ProviderRequestCount);
+        Assert.All(exchange.Requests, item => Assert.True(item.ProviderRequestNumber <= 64));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Retry_wait_completes_at_its_host_boundary_and_respects_a_shorter_action(bool restored, bool shorterAction)
+    {
+        var request = ActionSafetyRequest();
+        var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(
+            maximumElapsedMilliseconds: shorterAction ? 500 : 5000)), null, restored ? 1 : 0, restored ? 1000 : 0);
+        var terminal = TerminalResponse(ReadTerminal("skip-result.json"));
+        var transient = new DocumentationScribeModelResponse([], [],
+            new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.TransientUnavailable,
+                retryAfterMilliseconds: 1000), usage: new(0, 0, 0, 0, 0));
+        var exchange = restored ? Script(terminal) : Script(transient, terminal);
+        var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
+        Assert.Equal(shorterAction ? restored ? 0 : 1 : restored ? 1 : 2, exchange.Requests.Length);
+        if (shorterAction)
+        {
+            Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+            Assert.Equal(DocumentationScribeInvocationStopReason.Elapsed, scope.Allowance.StopReason);
+        }
+        else
+        {
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+            Assert.Equal(2, result.RunEnvelope.AttemptNumber);
+            Assert.Equal(restored ? 1 : 2, result.RunEnvelope.ProviderRequestCount);
+            Assert.Equal(0, scope.PendingRetryAfterMilliseconds);
+        }
+    }
+
+    [Fact]
+    public async Task Restored_retry_ordinal_keeps_current_physical_usage_separate()
+    {
+        var request = ActionSafetyRequest();
+        var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create()), null, 1, 0);
+        var exchange = Script(FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable));
+        var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
+        Assert.Equal(DocumentationScribeFailureCode.Provider, FailureCode(result));
+        Assert.Equal(2, result.RunEnvelope.AttemptNumber);
+        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(1, result.RunEnvelope.RestoredRetryableProviderFailures);
+        Assert.Equal(2, Assert.Single(exchange.Requests).AttemptNumber);
+    }
+
+    [Fact]
+    public async Task Missing_partitions_stop_the_action_without_fabricating_another_request()
+    {
+        var request = ActionSafetyRequest();
+        var exchange = Script(new DocumentationScribeModelResponse(
+            [Call(0, "call.one", "tool.read", "small")], [], usage: new(inputTokens: 1)),
+            TerminalResponse(ReadTerminal("skip-result.json")));
+        var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create()), null, 0, 0);
+        var result = await CreateRuntime(exchange, Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
+            .RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Single(exchange.Requests);
+        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(1, result.RunEnvelope.Usage!.InputTokens);
+        Assert.Null(result.RunEnvelope.Usage.CachedInputTokens);
+        Assert.Null(result.RunEnvelope.Usage.UncachedInputTokens);
+    }
+
+    private static DocumentationScribeRequest ActionSafetyRequest() => Request(root =>
+    {
+        var limits = root["limits"]!;
+        limits["maximumProviderRequests"] = 128; limits["maximumToolRounds"] = 128;
+        limits["maximumToolCalls"] = 1024; limits["maximumAttempts"] = 2; limits["maximumInputTokens"] = 134_217_727;
+        limits["maximumUncachedInputTokens"] = 134_217_727; limits["maximumOutputTokens"] = 1_048_575;
+        limits["maximumCostMicrounits"] = 999_999_999_999; limits["maximumElapsedMilliseconds"] = 86_399_999;
+    });
+
     private static DocumentationScribeToolRegistry EmptyRegistry() =>
         new DocumentationScribeToolRegistryBuilder(ToolPolicyId).Build();
 
@@ -1690,7 +1861,7 @@ public sealed class DocumentationScribeRuntimeTests
         new(responses.Select(ScriptedDocumentationScribeStep.Return).ToImmutableArray());
 
     private static DocumentationScribeModelResponse ToolResponse(
-        params DocumentationScribeModelToolCall[] calls) => new([.. calls], []);
+        params DocumentationScribeModelToolCall[] calls) => new([.. calls], [], usage: new(0, 0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse ToolResponseWithContinuation(
         string content,
@@ -1699,17 +1870,17 @@ public sealed class DocumentationScribeRuntimeTests
             [.. calls],
             [],
             failure: null,
-            usage: null,
+            usage: new(0, 0, 0, 0, 0),
             cache: null,
             cost: null,
             new DocumentationScribeAssistantContinuation(content, reasoningContent),
             DocumentationScribeContinuationObservation.Observed);
 
     private static DocumentationScribeModelResponse TerminalResponse(byte[] terminal) =>
-        new([], [new DocumentationScribeModelTerminalSubmission(terminal)]);
+        new([], [new DocumentationScribeModelTerminalSubmission(terminal)], usage: new(0, 0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse FailureResponse(DocumentationScribeModelFailureCode code) =>
-        new([], [], new DocumentationScribeModelFailure(code));
+        new([], [], new DocumentationScribeModelFailure(code), usage: new(0, 0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse ObservedTerminal(DocumentationScribeModelUsage usage) =>
         new([], [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))], usage: usage);
@@ -2254,10 +2425,12 @@ public sealed class DocumentationScribeRuntimeTests
         public override long GetTimestamp() => timestampForRead(Interlocked.Increment(ref reads));
     }
 
-    private sealed class TrackingTimeProvider : TimeProvider
+    private sealed class TrackingTimeProvider(bool manualDeadlines = false) : TimeProvider
     {
         private int activeTimerCount;
         private int createdTimerCount;
+        private long timestamp;
+        private readonly List<Action> deadlines = [];
 
         internal int ActiveTimerCount => Volatile.Read(ref activeTimerCount);
 
@@ -2265,7 +2438,14 @@ public sealed class DocumentationScribeRuntimeTests
 
         public override long TimestampFrequency => 1_000;
 
-        public override long GetTimestamp() => 0;
+        public override long GetTimestamp() => Volatile.Read(ref timestamp);
+
+        internal void Expire(int milliseconds)
+        {
+            Assert.True(manualDeadlines);
+            Interlocked.Add(ref timestamp, milliseconds);
+            foreach (var deadline in deadlines) deadline();
+        }
 
         public override ITimer CreateTimer(
             TimerCallback callback,
@@ -2273,7 +2453,8 @@ public sealed class DocumentationScribeRuntimeTests
             TimeSpan dueTime,
             TimeSpan period)
         {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
+            var timer = base.CreateTimer(callback, state, manualDeadlines ? Timeout.InfiniteTimeSpan : dueTime, period);
+            if (manualDeadlines) deadlines.Add(() => callback(state));
             Interlocked.Increment(ref createdTimerCount);
             Interlocked.Increment(ref activeTimerCount);
             return new TrackingTimer(timer, this);

@@ -204,7 +204,7 @@ public sealed class CampaignChangedBaseProcessTests
             CampaignCliProcessTests.RepositoryRoot,
             "tests", "fixtures", "campaign", "changed-base", "target-evolution-matrix.json");
         using var matrix = JsonDocument.Parse(await File.ReadAllBytesAsync(matrixPath));
-        await using var fixture = await ProcessFixture.CreateAsync(executable: true);
+        await using var fixture = await ProcessFixture.CreateAsync(executable: true, includeUsage: true);
         var baselineProjectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
         var baselineLibraryProjectPath = Path.Join(
             fixture.Repository.Root, "Library", "Library.csproj");
@@ -692,7 +692,8 @@ public sealed class CampaignChangedBaseProcessTests
         internal static async Task<ProcessFixture> CreateAsync(
             bool executable,
             int? maximumCampaignElapsedMilliseconds = null,
-            int? maximumCandidatesPerBlock = null)
+            int? maximumCandidatesPerBlock = null,
+            bool includeUsage = false)
         {
             var repository = await LoaderFixture.CreateAsync();
             if (executable)
@@ -702,7 +703,7 @@ public sealed class CampaignChangedBaseProcessTests
             await File.WriteAllTextAsync(
                 Path.Join(repository.Root, "policy.json"),
                 executable ? CampaignCliProcessTests.RequiredPolicy : CampaignCliProcessTests.OptionalPolicy);
-            var server = new CampaignCliProcessTests.ProposalLoopbackServer();
+            var server = new CampaignCliProcessTests.ProposalLoopbackServer(includeUsage: includeUsage);
             var outside = CampaignCliProcessTests.CreatePrivateDirectory("contract-scribe-changed-base");
             var stateDirectory = Path.Join(outside, "state");
             Directory.CreateDirectory(stateDirectory);

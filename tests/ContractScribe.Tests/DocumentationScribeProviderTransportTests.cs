@@ -1761,7 +1761,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
                 prompt_tokens = DocumentationScribeContract.MaximumObservedInputTokens,
                 completion_tokens = DocumentationScribeContract.MaximumObservedOutputTokens,
                 prompt_cache_hit_tokens = 1,
-                prompt_cache_miss_tokens = 1,
+                prompt_cache_miss_tokens = DocumentationScribeContract.MaximumObservedInputTokens - 1,
             },
         });
         var calls = OpenAiCompatibleChatCompletionsCodec.ParseResponse(callsBody, prepared);
@@ -1842,32 +1842,62 @@ public sealed partial class DocumentationScribeProviderTransportTests
         Assert.Equal("one", result.RootElement.GetProperty("result").GetProperty("value").GetString());
     }
 
-    [Fact]
-    public async Task Runtime_deadline_cancels_the_selected_exchange_and_remains_timeout()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Runtime_deadline_cancels_the_selected_exchange_and_remains_timeout(
+        bool expiredBeforeDispatch,
+        bool callerCancelled)
     {
         const string marker = "deadline-transport-marker";
+        var clock = new TransportDeadlineClock();
         var handler = new HoldingHandler(marker);
         using var exchange = Exchange(handler);
+        using var caller = new CancellationTokenSource();
         var request = ScribeRequest(maximumElapsedMilliseconds: 100);
+        var scope = DocumentationScribeExecutionScope.ForStandalone(request, clock);
         var runtime = new DocumentationScribeRuntime(
             exchange,
             new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
             new DocumentationScribeRuntimeOptions(
                 "provider.direct-http.synthetic.v1",
                 "model.synthetic.v1",
-                "protocol.openai-compatible.v1"));
+                "protocol.openai-compatible.v1"),
+            clock);
         Assert.True(DocumentationScribeAttemptId.TryParse(
             "scribe-attempt.0123456789abcdef0123456789abcdef",
             out var attempt));
 
-        var result = await runtime.RunAsync(request, attempt, ScribePrompt(request));
+        if (expiredBeforeDispatch)
+        {
+            clock.Expire();
+            if (callerCancelled) caller.Cancel();
+        }
 
-        Assert.Equal(DocumentationScribeFailureCode.Timeout,
+        var pending = runtime.RunAsync(request, attempt, ScribePrompt(request), caller.Token, scope);
+        if (!expiredBeforeDispatch)
+        {
+            await handler.WaitForHoldingAsync();
+            Assert.False(pending.IsCompleted);
+            if (callerCancelled) caller.Cancel();
+            clock.Expire();
+        }
+        var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
+
+        if (callerCancelled) Assert.IsType<DocumentationScribeCancelledTerminal>(result.Terminal);
+        else Assert.Equal(DocumentationScribeFailureCode.Timeout,
             Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
-        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
-        Assert.Equal(1, handler.CallCount);
-        await handler.WaitForCancellationAsync();
-        Assert.True(handler.CancellationObserved);
+        var expectedRequests = expiredBeforeDispatch ? 0 : 1;
+        Assert.Equal(expectedRequests, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(expectedRequests, handler.CallCount);
+        Assert.Equal(expectedRequests, clock.CreatedTimerCount);
+        if (!expiredBeforeDispatch)
+        {
+            await handler.WaitForCancellationAsync();
+            Assert.True(handler.CancellationObserved);
+        }
         Assert.DoesNotContain(marker, result.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(marker, result.Terminal.ToString(), StringComparison.Ordinal);
     }
@@ -2291,14 +2321,66 @@ public sealed partial class DocumentationScribeProviderTransportTests
             CancellationToken cancellationToken) => ValueTask.FromResult(response);
     }
 
+    private sealed class TransportDeadlineClock : TimeProvider
+    {
+        private long timestamp;
+        private TransportDeadlineTimer? timer;
+
+        public override long TimestampFrequency => 1_000;
+
+        public override long GetTimestamp() => Volatile.Read(ref timestamp);
+
+        internal int CreatedTimerCount => Volatile.Read(ref timer) is null ? 0 : 1;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            Assert.Equal(TimeSpan.FromMilliseconds(100), dueTime);
+            Assert.Equal(Timeout.InfiniteTimeSpan, period);
+            var created = new TransportDeadlineTimer(callback, state);
+            Assert.Null(Interlocked.CompareExchange(ref timer, created, null));
+            return created;
+        }
+
+        internal void Expire()
+        {
+            Interlocked.Exchange(ref timestamp, 100);
+            Volatile.Read(ref timer)?.Fire();
+        }
+
+        private sealed class TransportDeadlineTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private int disposed;
+
+            internal void Fire()
+            {
+                if (Volatile.Read(ref disposed) == 0) callback(state);
+            }
+
+            public bool Change(TimeSpan dueTime, TimeSpan period) => Volatile.Read(ref disposed) == 0;
+
+            public void Dispose() => Interlocked.Exchange(ref disposed, 1);
+
+            public ValueTask DisposeAsync()
+            {
+                Dispose();
+                return ValueTask.CompletedTask;
+            }
+        }
+    }
+
     private sealed class HoldingHandler(string marker) : HttpMessageHandler
     {
+        private readonly TaskCompletionSource holding = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource cancellationObserved = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal int CallCount { get; private set; }
 
         internal bool CancellationObserved { get; private set; }
+
+        internal Task WaitForHoldingAsync() =>
+            holding.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         internal Task WaitForCancellationAsync() =>
             cancellationObserved.Task.WaitAsync(TimeSpan.FromSeconds(5));
@@ -2311,7 +2393,9 @@ public sealed partial class DocumentationScribeProviderTransportTests
             await request.Content!.CopyToAsync(Stream.Null, cancellationToken);
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                var wait = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                holding.TrySetResult();
+                await wait;
             }
             catch (OperationCanceledException)
             {

@@ -5,6 +5,7 @@ using System.Text.Json.Nodes;
 using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
+using ContractScribe.Cli;
 
 namespace ContractScribe.Tests;
 
@@ -31,7 +32,7 @@ public sealed partial class CampaignStateContractTests
         DocumentationScribeModelUsage Usage(bool missing) => new(
             inputTokens: missing && dimension == "input" ? null : 200,
             outputTokens: missing && dimension == "output" ? null : 100,
-            cachedInputTokens: missing && dimension == "cached" ? null : 100,
+            cachedInputTokens: missing && dimension is "cached" or "input" ? null : 100,
             uncachedInputTokens: missing && dimension == "uncached" ? null : 100,
             reasoningTokens: missing && dimension == "reasoning" ? null : 100);
         var exchange = new ScriptedDocumentationScribeModelExchange([
@@ -43,7 +44,8 @@ public sealed partial class CampaignStateContractTests
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, exchange);
         Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
         Assert.Equal(CampaignWorkStatus.ProposalComplete, artifact.State.WorkItems[0].Status);
-        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount + result.RunEnvelope.RestoredRetryableProviderFailures);
+        Assert.Equal(2, artifact.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(2, exchange.Requests.Length);
         var charges = artifact.State.LineageCharges;
         var charge = dimension switch
@@ -57,14 +59,16 @@ public sealed partial class CampaignStateContractTests
         var limits = artifact.State.ConfiguredCeilings.ScribeRunLimits;
         var bound = dimension switch
         {
-            "input" or "cached" => limits.MaximumInputTokens,
+            "input" => limits.MaximumInputTokens,
+            "cached" => limits.MaximumInputTokens / 2,
             "uncached" => limits.MaximumUncachedInputTokens,
             _ => limits.MaximumOutputTokens,
         };
         Assert.Equal(dimension == "input" ? 200 : 100, charge.Observed);
-        var parentSubsetExcess = dimension == "input" ? 200 : dimension == "output" ? 100 : 0;
-        Assert.Equal(bound + parentSubsetExcess, charge.ConservativeUnobserved);
-        Assert.Equal(bound + parentSubsetExcess + charge.Observed, charge.TotalCharged);
+        var priorKnown = missingFirst ? 0 : dimension == "input" ? 200 : 100;
+        var unknown = bound - priorKnown;
+        Assert.Equal(unknown, charge.ConservativeUnobserved);
+        Assert.Equal(unknown + charge.Observed, charge.TotalCharged);
         var restored = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
         Assert.True(restored.IsValid);
         Assert.Equal(charges, restored.Artifact!.State.LineageCharges);
@@ -75,15 +79,13 @@ public sealed partial class CampaignStateContractTests
         {
             "input" or "cached" => budget with { MaximumInputTokens = bound + 1_000 },
             "uncached" => budget with { MaximumUncachedInputTokens = bound + 1_000 },
-            _ => budget with { MaximumOutputTokens = bound + 1_000 },
+            _ => budget with { MaximumOutputTokens = charges.OutputTokens.TotalCharged + limits.MaximumOutputTokens - 1 },
         };
         var input = WithBudget(scenario, budget);
         var capped = RefreshCaps(restored.Artifact, scenario, input).Artifact;
         var nextWork = scenario.Plan.WorkItems[1];
-        var nextRequest = CreateScribeExchange(nextWork).Request;
-        var admission = CampaignStateReducer.AdmitProviderInvocation(capped, scenario.ExecutionAuthority,
-            "style.synthetic", scenario.StyleProjection, input, CampaignPlanner.Plan(input), nextWork.WorkItemKey,
-            nextRequest, CampaignStateFactory.CreateInvocationTargetAllowance(capped.State, new(100)));
+        var nextRequest = CreateScribeExchange(nextWork, scenario: scenario).Request;
+        var admission = AttemptNextC3PhysicalDispatch(scenario, capped, input, CampaignPlanner.Plan(input), nextWork.WorkItemKey, nextRequest);
         Assert.Equal(CampaignTransitionKind.Applied, admission.Kind);
         Assert.Equal(CampaignTerminalReason.LifetimeCap, admission.Artifact.State.TerminalOutcome!.Reason);
         Assert.Null(admission.Artifact.State.ActiveReservation);
@@ -107,10 +109,11 @@ public sealed partial class CampaignStateContractTests
                 usage: new(outputTokens: 2))),
         ]);
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, exchange);
-        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount + result.RunEnvelope.RestoredRetryableProviderFailures);
+        Assert.Equal(2, artifact.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(bound + 1, artifact.State.LineageCharges.OutputTokens.Observed);
-        Assert.Equal(bound, artifact.State.LineageCharges.OutputTokens.ConservativeUnobserved);
-        Assert.Equal(2 * bound + 1, artifact.State.LineageCharges.OutputTokens.TotalCharged);
+        Assert.Equal(0, artifact.State.LineageCharges.OutputTokens.ConservativeUnobserved);
+        Assert.Equal(bound + 1, artifact.State.LineageCharges.OutputTokens.TotalCharged);
     }
 
     [Theory]
@@ -139,13 +142,14 @@ public sealed partial class CampaignStateContractTests
             {
                 if (pricedTokens) root["limits"]!["maximumCostMicrounits"] = 0;
             }),
-            costRates: pricedTokens ? new CampaignCostRates(1_000_000, 2_000_000, 1_000_000, 3_000_000) : new(0, 0, 0, 0));
+            costRates: pricedTokens ? new CampaignCostRates(1_000_000, 2_000_000, 1_000_000, 3_000_000)
+                : dimension == "cost" ? new(0, 0, 1_000_000, 0) : new(0, 0, 0, 0));
         var limits = scenario.InitialState.ConfiguredCeilings.ScribeRunLimits;
         var bound = dimension switch
         {
             "input" or "cached" or "rate-input" => limits.MaximumInputTokens,
             "uncached" => limits.MaximumUncachedInputTokens,
-            "cost" => limits.MaximumCostMicrounits,
+            "cost" => limits.MaximumOutputTokens,
             _ => limits.MaximumOutputTokens,
         };
         var known = checked(bound + 1);
@@ -195,8 +199,10 @@ public sealed partial class CampaignStateContractTests
             new OpenAiCompatibleHttpTransportOptions(new Uri("https://example.test/v1"), "model", networkEnabled: true),
             handler, disposeHandler: false);
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, actualHttp ? http : exchange);
-        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
-        Assert.Equal(DocumentationScribeFailureCode.Budget,
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount + result.RunEnvelope.RestoredRetryableProviderFailures);
+        Assert.Equal(2, artifact.State.LineageCharges.ProviderRequests.Observed);
+        if (dimension == "cost") Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        else Assert.Equal(DocumentationScribeFailureCode.Budget,
             Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
         var charges = artifact.State.LineageCharges;
         var charge = dimension switch
@@ -211,8 +217,9 @@ public sealed partial class CampaignStateContractTests
         if (!pricedTokens)
         {
             Assert.Equal(known, charge.Observed);
-            Assert.True(charge.ConservativeUnobserved >= bound);
-            Assert.True(charge.TotalCharged >= known + bound);
+            var missingBound = dimension == "cached" ? limits.MaximumInputTokens / 2 : bound;
+            Assert.Equal(missingBound, charge.ConservativeUnobserved);
+            Assert.Equal(known + missingBound, charge.TotalCharged);
         }
         else Assert.True(charge.ConservativeUnobserved > 0);
         var restored = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
@@ -220,8 +227,9 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(charges, restored.Artifact!.State.LineageCharges);
 
         var budget = scenario.Input.ExecutionPolicy.CampaignBudget;
-        var exposure = CampaignBudgetAccounting.ProviderCostExposure(
-            scenario.InitialState.ConfiguredCeilings.CampaignBudget, limits);
+        var exposure = scenario.InitialState.ConfiguredCeilings.CampaignBudget.CostRates?.ConservativeDispatchCost(
+            limits.MaximumInputTokens / 2, Math.Min(limits.MaximumUncachedInputTokens, limits.MaximumInputTokens - limits.MaximumInputTokens / 2),
+            limits.MaximumOutputTokens) ?? 0;
         // These caps admitted equality under the old residual/max rule despite the first missing response.
         if (pricedTokens)
         {
@@ -253,10 +261,8 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(charges, next.Artifact.State.LineageCharges);
         var nextRequest = CreateScribeExchange(plan.WorkItems[0],
             requestMutation: root => root["limits"]!["maximumCostMicrounits"] = limits.MaximumCostMicrounits,
-            resultMutation: root => root["runEnvelope"]!.AsObject().Remove("cost")).Request;
-        var admission = CampaignStateReducer.AdmitProviderInvocation(next.Artifact, scenario.ExecutionAuthority,
-            "style.synthetic", scenario.StyleProjection, input, plan, plan.WorkItems[0].WorkItemKey, nextRequest,
-            CampaignStateFactory.CreateInvocationTargetAllowance(next.Artifact.State, new(100)));
+            resultMutation: root => root["runEnvelope"]!.AsObject().Remove("cost"), scenario: scenario).Request;
+        var admission = AttemptNextC3PhysicalDispatch(scenario, next.Artifact, input, plan, plan.WorkItems[0].WorkItemKey, nextRequest);
         Assert.Equal(CampaignTransitionKind.Applied, admission.Kind);
         Assert.Equal(CampaignTerminalReason.LifetimeCap, admission.Artifact.State.TerminalOutcome!.Reason);
         Assert.Null(admission.Artifact.State.ActiveReservation);
@@ -293,12 +299,12 @@ public sealed partial class CampaignStateContractTests
         var restored = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).Artifact!;
         var input = WithBudget(scenario, scenario.Input.ExecutionPolicy.CampaignBudget with { MaximumOutputTokens = exposure + 1_000 });
         var capped = RefreshCaps(restored, scenario, input).Artifact;
-        Assert.Equal(CampaignBudgetDecisionKind.Exhausted, CampaignBudgetAccounting.ReserveProviderInvocation(capped.State).Kind);
+        Assert.Equal(CampaignBudgetDecisionKind.Exhausted, CampaignBudgetAccounting.ReserveProviderInvocation(capped.State, CampaignInvocationTestPolicy.Create(capped.State.ConfiguredCeilings.ScribeRunLimits)).Kind);
         Assert.Equal(1, handler.Calls);
         var finiteCost = WithBudget(scenario, scenario.Input.ExecutionPolicy.CampaignBudget with
         { MaximumCostMicrounits = restored.State.LineageCharges.CostMicrounits.TotalCharged + 1 });
         var costCapped = RefreshCaps(restored, scenario, finiteCost).Artifact;
-        Assert.Equal(CampaignBudgetDecisionKind.Exhausted, CampaignBudgetAccounting.ReserveProviderInvocation(costCapped.State).Kind);
+        Assert.Equal(CampaignBudgetDecisionKind.Exhausted, CampaignBudgetAccounting.ReserveProviderInvocation(costCapped.State, CampaignInvocationTestPolicy.Create(costCapped.State.ConfiguredCeilings.ScribeRunLimits)).Kind);
         Assert.Equal(1, handler.Calls);
         Assert.Throws<ArgumentException>(() => new DocumentationScribeModelUsage(outputTokens: 1, reasoningTokens: 8192));
     }
@@ -338,34 +344,98 @@ public sealed partial class CampaignStateContractTests
     }
 
     private static async Task<(CampaignCheckpointArtifact Artifact, DocumentationScribeRunResult Result)>
-        CompleteC3RuntimeAsync(ProposalScenario scenario, IDocumentationScribeModelExchange exchange)
+        CompleteC3RuntimeAsync(ProposalScenario scenario, IDocumentationScribeModelExchange exchange,
+            DocumentationScribeInvocationLimits? invocationLimits = null, DocumentationScribeToolRegistry? registry = null)
     {
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var request = CreateScribeExchange(scenario.Plan.WorkItems[0], requestMutation: root =>
             root["limits"]!["maximumCostMicrounits"] = scenario.InitialState.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits,
-            resultMutation: root => root["runEnvelope"]!.AsObject().Remove("cost")).Request;
-        var admitted = AdmitCapProvider(scenario, initial, request);
-        var reservation = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation);
-        var authority = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(initial, admitted),
-            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, request);
-        Assert.True(authority.TryBeginDispatch(out _));
-        var runtime = new DocumentationScribeRuntime(exchange,
-            new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
-            new DocumentationScribeRuntimeOptions("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
-        var prompt = new DocumentationScribePromptInput(
-            request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
-                reference.Kind, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
-                new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),
-            request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
-                reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
-                new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
-        var result = await runtime.RunAsync(request, reservation.AttemptId, prompt);
-        var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(request, reservation.AttemptId, result);
-        var complete = CampaignStateReducer.CompleteProviderInvocation(admitted.Artifact,
-            OrdinaryCompletion(authority, outcome, Math.Max(100, result.RunEnvelope.ElapsedMilliseconds)),
-            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
-        Assert.Equal(CampaignTransitionKind.Applied, complete.Kind);
-        return (complete.Artifact, result);
+            resultMutation: root => root["runEnvelope"]!.AsObject().Remove("cost"), scenario: scenario).Request;
+        var current = initial;
+        var store = new TransitionCheckpointStore(initial);
+        var work = scenario.Plan.WorkItems[0];
+        for (var action = 0; action < 2; action++)
+        {
+            var allowance = invocationLimits is null ? CampaignInvocationTestPolicy.Create(request.Limits)
+                : new DocumentationScribeInvocationAllowance(invocationLimits);
+            var targets = CampaignStateFactory.CreateInvocationTargetAllowance(current.State, new(100));
+            var admitted = current.State.WorkItems[0].PausedProviderAttempt is null
+                ? CampaignStateReducer.AdmitProviderInvocation(current, scenario.ExecutionAuthority, "style.synthetic",
+                    scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey, request, targets, allowance)
+                : CampaignStateReducer.RetryProviderInvocation(current, null, scenario.ExecutionAuthority, "style.synthetic",
+                    scenario.StyleProjection, scenario.Input, scenario.Plan, work.WorkItemKey, request, targets, allowance);
+            Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
+            var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admitted);
+            Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
+            var reservation = Assert.IsType<CampaignProviderReservation>(admitted.Artifact.State.ActiveReservation);
+            var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!,
+                scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, request);
+            var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
+            Assert.True(authority.TryBeginDispatch(out _));
+            var runtime = new DocumentationScribeRuntime(exchange,
+                registry ?? new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
+                new DocumentationScribeRuntimeOptions("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
+            var prompt = new DocumentationScribePromptInput(
+                request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
+                    reference.Kind, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
+                    new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),
+                request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
+                    reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
+                    new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
+            var result = await runtime.RunAsync(request, reservation.AttemptId, prompt, executionScope: coordinator.Scope);
+            CampaignTransitionResult complete;
+            if (result.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }
+                && (allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
+                    || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded))
+            {
+                complete = CampaignStateReducer.PauseProviderInvocation(authority, coordinator.CurrentElapsed,
+                    coordinator.LifetimeStop || coordinator.Scope.LifetimeDeadlineReached);
+            }
+            else
+            {
+                var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(request, reservation.AttemptId, result);
+                var registrar = Assert.IsType<CampaignProviderCompletionRegistrar>(authority.TryCreateCompletionRegistrar());
+                Assert.True(registrar.TryRegister(CampaignProviderCompletionKind.Ordinary, outcome, coordinator.CurrentElapsed, out var completion));
+                complete = CampaignStateReducer.CompleteProviderInvocation(authority.AcceptedCheckpoint.Artifact,
+                    completion!, scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
+            }
+            Assert.Equal(CampaignTransitionKind.Applied, complete.Kind);
+            var final = await CampaignCheckpointAcceptance.AcceptAsync(store, complete);
+            Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, final.Kind);
+            current = final.Artifact!;
+            var paused = current.State.WorkItems[0].PausedProviderAttempt;
+            if (action == 0 && current.State.TerminalOutcome is null && paused?.RetryProgress.LastDisposition == CampaignProviderDispatchDisposition.RetryableFailure
+                && paused.RetryProgress.RetryableFailureCount < request.Limits.MaximumAttempts)
+            {
+                Assert.Null(current.State.TerminalOutcome);
+                Assert.Equal(1, current.State.WorkItems[0].OuterAttemptCount);
+                continue;
+            }
+            return (current, result);
+        }
+        throw new InvalidOperationException("The bounded fixture did not reach its intended terminal observation.");
+    }
+
+    private static CampaignTransitionResult AttemptNextC3PhysicalDispatch(ProposalScenario scenario,
+        CampaignCheckpointArtifact predecessor, CampaignPlanningInput input, CampaignWorkPlan plan,
+        string key, DocumentationScribeRequest request)
+    {
+        var allowance = CampaignInvocationTestPolicy.Create(request.Limits);
+        var admitted = CampaignStateReducer.AdmitProviderInvocation(predecessor, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, input, plan, key, request,
+            CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(100)), allowance);
+        Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
+        if (admitted.Artifact.State.TerminalOutcome is not null) return admitted;
+        var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(predecessor, admitted),
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, input, plan, request);
+        Assert.True(invocation.BindInvocationAllowance(allowance)); Assert.True(invocation.TryBeginDispatch(out _));
+        Assert.True(allowance.TryReserveProvider(out var permit));
+        var dispatch = CampaignStateReducer.ReserveProviderDispatch(invocation,
+            new(Sha256("next synthetic dispatch"), 1, 1, permit!.Exposure.OutputTokens), permit, 0);
+        Assert.Equal(CampaignTransitionFailure.BudgetExhausted, dispatch.Failure);
+        Assert.False(permit.DispatchStarted); Assert.Equal(0, allowance.ProviderRequestCount);
+        Assert.True(allowance.SettleProvider(permit, null));
+        return CampaignStateReducer.PauseProviderInvocation(invocation, 0, lifetimeStop: true);
     }
 
     private sealed class C3UsageHandler(string body, bool transientFirst = false) : HttpMessageHandler

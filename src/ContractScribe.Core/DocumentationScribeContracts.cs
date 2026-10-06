@@ -100,7 +100,7 @@ public static class DocumentationScribeContract
     public const int MaximumReferences = 512;
     public const int MaximumDiagnostics = 64;
     public const int MaximumAttempts = 1_000_000;
-    public const int MaximumObservedInputTokens = 16_777_216;
+    public const int MaximumObservedInputTokens = 134_217_728;
     public const int MaximumObservedOutputTokens = 1_048_576;
     public const long MaximumObservedCostMicrounits = 1_000_000_000_000;
     public const int MaximumObservedElapsedMilliseconds = 86_400_000;
@@ -883,7 +883,10 @@ public sealed record DocumentationScribeRunEnvelopeInput(
     DocumentationScribeUsageObservationInput? Usage,
     DocumentationScribeCacheObservation? Cache,
     DocumentationScribeCostObservationInput? Cost,
-    ImmutableArray<DocumentationScribeDiagnosticInput> Diagnostics);
+    ImmutableArray<DocumentationScribeDiagnosticInput> Diagnostics)
+{
+    public int RestoredRetryableProviderFailures { get; init; }
+}
 
 public sealed record DocumentationScribeRunEnvelope
 {
@@ -896,6 +899,7 @@ public sealed record DocumentationScribeRunEnvelope
         string toolPolicyId,
         string styleProfileId,
         int attemptNumber,
+        int restoredRetryableProviderFailures,
         int providerRequestCount,
         int toolRoundCount,
         int toolCallCount,
@@ -913,6 +917,7 @@ public sealed record DocumentationScribeRunEnvelope
         ToolPolicyId = toolPolicyId;
         StyleProfileId = styleProfileId;
         AttemptNumber = attemptNumber;
+        RestoredRetryableProviderFailures = restoredRetryableProviderFailures;
         ProviderRequestCount = providerRequestCount;
         ToolRoundCount = toolRoundCount;
         ToolCallCount = toolCallCount;
@@ -938,6 +943,8 @@ public sealed record DocumentationScribeRunEnvelope
     public string StyleProfileId { get; }
 
     public int AttemptNumber { get; }
+
+    public int RestoredRetryableProviderFailures { get; }
 
     public int ProviderRequestCount { get; }
 

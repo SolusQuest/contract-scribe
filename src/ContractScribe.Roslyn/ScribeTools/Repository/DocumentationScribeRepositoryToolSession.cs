@@ -1,6 +1,5 @@
 using System.Collections.Immutable;
 using System.Buffers.Binary;
-using System.Diagnostics;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -20,7 +19,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private readonly Func<TimeSpan> elapsed;
     private readonly ImmutableDictionary<string, BoundScope> scopes;
     private readonly string runCorrelation = Guid.NewGuid().ToString("N");
-    private readonly long started = Stopwatch.GetTimestamp();
+    private TimeSpan operationStarted;
     private readonly Dictionary<(ulong Volume, ulong FileId), string> physicalPaths = [];
     private readonly Dictionary<string, Observation> observations = new(StringComparer.Ordinal);
     private readonly Dictionary<string, DocumentationScribeContextPathObservation> absences = new(StringComparer.Ordinal);
@@ -47,14 +46,17 @@ internal sealed class DocumentationScribeRepositoryToolSession
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
         DocumentationScribeRepositoryToolLimits limits,
         Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint,
-        Func<TimeSpan>? elapsed = null)
+        Func<TimeSpan>? elapsed = null,
+        TimeProvider? clock = null)
     {
         this.request = request;
         this.attemptId = attemptId;
         this.loadedContext = loadedContext;
         this.limits = limits;
         this.checkpoint = checkpoint;
-        this.elapsed = elapsed ?? (() => Stopwatch.GetElapsedTime(started));
+        var timer = clock ?? TimeProvider.System;
+        var startedAt = timer.GetTimestamp();
+        this.elapsed = elapsed ?? (() => timer.GetElapsedTime(startedAt));
         if (!DocumentationScribeAttemptId.TryParse(attemptId.Value, out _))
         {
             throw new ArgumentException("A valid attempt identifier is required.", nameof(attemptId));
@@ -390,6 +392,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
     private CallBudget BeginCall(string operationId, CancellationToken cancellationToken)
     {
+        operationStarted = elapsed();
         Check(cancellationToken);
         calls.TryGetValue(operationId, out var count);
         count = checked(count + 1);
@@ -1381,7 +1384,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private void Check(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        if (elapsed().TotalMilliseconds > limits.MaximumElapsedMilliseconds)
+        if ((elapsed() - operationStarted).TotalMilliseconds > limits.MaximumElapsedMilliseconds)
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Timeout);
         }

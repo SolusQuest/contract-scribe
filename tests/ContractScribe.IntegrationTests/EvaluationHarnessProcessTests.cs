@@ -31,7 +31,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal("Performs no operation.", usefulScenario.ProposalLine);
         var structuredSkip = loaded.Manifest.Scenarios.Single(scenario =>
             scenario.Id == "structured-skip");
-        Assert.Equal(0, structuredSkip.OfflineExpectation.ToolCallCount);
+        Assert.Equal(1, structuredSkip.OfflineExpectation.ToolCallCount);
 
         var source = await File.ReadAllTextAsync(Path.Join(
             corpus,
@@ -98,7 +98,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal("useful-proposal", result.CaseId);
         Assert.Equal(2, result.ProviderRequestCount);
         Assert.Equal(1, result.ToolRoundCount);
-        Assert.Equal(1, result.ToolCallCount);
+        Assert.Equal(2, result.ToolCallCount);
         Assert.Equal("matched", result.SafetyToolExpectationStatus);
         if (OperatingSystem.IsLinux())
         {
@@ -277,7 +277,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(2, result.AttemptCount);
         Assert.Equal(repeatSearchAfterRetry ? 4 : 3, result.ProviderRequestCount);
         Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolRoundCount);
-        Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolCallCount);
+        Assert.Equal(repeatSearchAfterRetry ? 3 : 2, result.ToolCallCount);
         Assert.Equal(expectedSafetyStatus, result.SafetyToolExpectationStatus);
         if (repeatSearchAfterRetry)
         {
@@ -330,7 +330,7 @@ public sealed class EvaluationHarnessProcessTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task LocalCaptureFailurePreservesPriorSafeExecutionEvidence(bool rateLimitedFirst)
+    public async Task CaptureFailureAndUnknownRateLimitPreservePriorSafeExecutionEvidence(bool rateLimitedFirst)
     {
         if (!OperatingSystem.IsLinux()
             || RuntimeInformation.ProcessArchitecture != Architecture.X64)
@@ -395,6 +395,22 @@ public sealed class EvaluationHarnessProcessTests
 
             var report = await runner.RunAsync(CancellationToken.None);
             var result = Assert.Single(report.Cases);
+            if (rateLimitedFirst)
+            {
+                // An actual HTTP failure has no trustworthy usage. It consumes its finite dispatch exposure, so this invocation cannot reach a second capture.
+                Assert.Equal("budget-exhausted", result.Status);
+                Assert.Equal("scribe.failure.budget", result.Code);
+                Assert.Equal(1, result.AttemptCount);
+                Assert.Equal(1, result.ProviderRequestCount);
+                Assert.Equal(1, server.RequestCount);
+                var failure = Assert.Single(result.ProviderFailures);
+                Assert.Equal("model.failure.rate-limited", failure.Code);
+                Assert.Equal(0, result.ToolRoundCount);
+                Assert.Equal(0, result.ToolCallCount);
+                Assert.Equal("operator-owned", await File.ReadAllTextAsync(Path.Join(capture, "provider-response-0002.json")));
+                return;
+            }
+
             var serverCompletion = await Task.WhenAny(
                 server.Completion,
                 Task.Delay(TimeSpan.FromSeconds(5)));
@@ -405,33 +421,22 @@ public sealed class EvaluationHarnessProcessTests
             Assert.Equal(2, server.RequestCount);
             Assert.Equal("failed", result.Status);
             Assert.Equal("evaluation.capture.failed", result.Code);
-            Assert.Equal(rateLimitedFirst ? 2 : 1, result.AttemptCount);
+            Assert.Equal(1, result.AttemptCount);
             Assert.Equal(2, result.ProviderRequestCount);
             Assert.Equal(2, result.ProviderResponses[^1].ProviderRequestNumber);
             Assert.Contains("evaluation.capture.failed", result.ObservedCoverage);
             Assert.DoesNotContain(
                 result.ProviderFailures,
                 failure => failure.Code.Contains("capture", StringComparison.Ordinal));
-            if (rateLimitedFirst)
-            {
-                var failure = Assert.Single(result.ProviderFailures);
-                Assert.Equal(1, failure.ProviderRequestNumber);
-                Assert.Equal("model.failure.rate-limited", failure.Code);
-                Assert.Equal(0, result.ToolRoundCount);
-                Assert.Equal(0, result.ToolCallCount);
-            }
-            else
-            {
-                Assert.Empty(result.ProviderFailures);
-                Assert.Equal(1, result.ToolRoundCount);
-                Assert.Equal(1, result.ToolCallCount);
-                Assert.NotNull(result.Usage);
-                Assert.NotEqual("not-reported", result.Cost.Status);
-                Assert.Collection(
-                    result.ProviderResponses,
-                    first => Assert.Equal("codec.accepted-tool", first.CodecDisposition),
-                    second => Assert.Equal("codec.accepted-terminal", second.CodecDisposition));
-            }
+            Assert.Empty(result.ProviderFailures);
+            Assert.Equal(1, result.ToolRoundCount);
+            Assert.Equal(1, result.ToolCallCount);
+            Assert.NotNull(result.Usage);
+            Assert.NotEqual("not-reported", result.Cost.Status);
+            Assert.Collection(
+                result.ProviderResponses,
+                first => Assert.Equal("codec.accepted-tool", first.CodecDisposition),
+                second => Assert.Equal("codec.accepted-terminal", second.CodecDisposition));
         }
         finally
         {
@@ -647,7 +652,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(1, useful.GetProperty("attemptCount").GetInt32());
         Assert.Equal(2, useful.GetProperty("providerRequestCount").GetInt32());
         Assert.Equal(1, useful.GetProperty("toolRoundCount").GetInt32());
-        Assert.Equal(1, useful.GetProperty("toolCallCount").GetInt32());
+        Assert.Equal(2, useful.GetProperty("toolCallCount").GetInt32());
         var usage = useful.GetProperty("usage");
         Assert.Equal(220, usage.GetProperty("inputTokens").GetInt32());
         Assert.Equal(60, usage.GetProperty("outputTokens").GetInt32());
@@ -1229,7 +1234,8 @@ public sealed class EvaluationHarnessProcessTests
                 return new DocumentationScribeModelResponse(
                     [],
                     [],
-                    new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.RateLimited));
+                    new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.RateLimited),
+                    usage: new(0, 0, 0, 0, 0));
             }
 
             if (request.AttemptNumber != 2)
@@ -1351,7 +1357,7 @@ public sealed class EvaluationHarnessProcessTests
                     finish_reason = "tool_calls",
                 },
             },
-            usage = new { prompt_tokens = 100, completion_tokens = 20 },
+            usage = new { prompt_tokens = 100, prompt_cache_hit_tokens = 0, prompt_cache_miss_tokens = 100, completion_tokens = 20 },
         });
     }
 

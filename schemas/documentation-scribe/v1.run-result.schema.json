@@ -850,7 +850,7 @@
         "inputTokens": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 16777216
+          "maximum": 134217728
         },
         "outputTokens": {
           "type": "integer",
@@ -860,12 +860,12 @@
         "cachedInputTokens": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 16777216
+          "maximum": 134217728
         },
         "uncachedInputTokens": {
           "type": "integer",
           "minimum": 0,
-          "maximum": 16777216
+          "maximum": 134217728
         },
         "reasoningTokens": {
           "type": "integer",
@@ -980,6 +980,7 @@
         "toolPolicyId",
         "styleProfileId",
         "attemptNumber",
+        "restoredRetryableProviderFailures",
         "providerRequestCount",
         "toolRoundCount",
         "toolCallCount",
@@ -1050,6 +1051,11 @@
           "items": {
             "$ref": "#/$defs/diagnostic"
           }
+        },
+        "restoredRetryableProviderFailures": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999
         }
       }
     }

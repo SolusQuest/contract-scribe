@@ -17,6 +17,7 @@
     "toolPolicyId": "tool-policy.read-only.v1",
     "styleProfileId": "style.public-api.v1",
     "attemptNumber": 3,
+    "restoredRetryableProviderFailures": 0,
     "providerRequestCount": 3,
     "toolRoundCount": 0,
     "toolCallCount": 0,

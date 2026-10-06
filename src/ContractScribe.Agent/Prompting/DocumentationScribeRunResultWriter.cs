@@ -63,6 +63,7 @@ internal static class DocumentationScribeRunResultWriter
         writer.WriteString("toolPolicyId", request.ToolPolicyId);
         writer.WriteString("styleProfileId", request.StyleProfile.StyleProfileId);
         writer.WriteNumber("attemptNumber", envelope.AttemptNumber);
+        writer.WriteNumber("restoredRetryableProviderFailures", envelope.RestoredRetryableProviderFailures);
         writer.WriteNumber("providerRequestCount", envelope.ProviderRequestCount);
         writer.WriteNumber("toolRoundCount", envelope.ToolRoundCount);
         writer.WriteNumber("toolCallCount", envelope.ToolCallCount);

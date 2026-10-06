@@ -34,6 +34,13 @@ internal static class CampaignProcessBoundaryHooks
     internal const string PatchAfterReductionReadback = "patch.after-reduction-readback";
     internal const string PatchAfterClosedReadback = "patch.after-closed-readback";
 
+    internal const string PhysicalReservationReplacementScope = "proposal.physical-reservation";
+    internal const string PhysicalSettlementReplacementScope = "proposal.physical-settlement";
+    internal const string RetryWaitReplacementScope = "proposal.retry-wait";
+    internal const string PhysicalReservationAfterReadback = "proposal.physical-reservation.after-readback";
+    internal const string PhysicalSettlementAfterReadback = "proposal.physical-settlement.after-readback";
+    internal const string RetryWaitAfterReadback = "proposal.retry-wait.after-readback";
+
     internal const string InitialReplacementScope = "checkpoint.initial";
     internal const string ProposalReservationReplacementScope = "proposal.reservation";
     internal const string ProposalResultReplacementScope = "proposal.result.proposal";
@@ -47,6 +54,15 @@ internal static class CampaignProcessBoundaryHooks
 
     private static readonly HashSet<string> Allowed = new(StringComparer.Ordinal)
     {
+        PhysicalReservationAfterReadback,
+        PhysicalSettlementAfterReadback,
+        RetryWaitAfterReadback,
+        PhysicalReservationReplacementScope + "." + InReplacement,
+        PhysicalReservationReplacementScope + "." + AfterReplacementBeforeReadback,
+        PhysicalSettlementReplacementScope + "." + InReplacement,
+        PhysicalSettlementReplacementScope + "." + AfterReplacementBeforeReadback,
+        RetryWaitReplacementScope + "." + InReplacement,
+        RetryWaitReplacementScope + "." + AfterReplacementBeforeReadback,
         InitialBeforeCreate,
         ProposalBeforeReservationCommit,
         ProposalAfterReservationReadback,
@@ -91,6 +107,9 @@ internal static class CampaignProcessBoundaryHooks
     };
     private static readonly HashSet<string> ReplacementScopes = new(StringComparer.Ordinal)
     {
+        PhysicalReservationReplacementScope,
+        PhysicalSettlementReplacementScope,
+        RetryWaitReplacementScope,
         InitialReplacementScope,
         ProposalReservationReplacementScope,
         ProposalResultReplacementScope,

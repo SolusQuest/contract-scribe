@@ -139,7 +139,8 @@ internal sealed record CampaignPlanningConfiguration(
 
 internal sealed record CampaignBudgetConfiguration(
     CampaignAggregateBudgetConfiguration Campaign,
-    DocumentationScribeRunLimits Scribe);
+    DocumentationScribeRunLimits Scribe,
+    DocumentationScribeInvocationLimits Invocation);
 
 internal sealed record CampaignAggregateBudgetConfiguration(
     int MaximumBlocks,
@@ -315,7 +316,7 @@ internal static class CampaignConfiguration
 
     private static CampaignBudgetConfiguration ParseBudgets(JsonElement value)
     {
-        Expect(value, ["campaign", "scribe"]);
+        Expect(value, ["campaign", "scribe", "invocation"]);
         var campaign = value.GetProperty("campaign");
         Expect(campaign,
         [
@@ -351,38 +352,38 @@ internal static class CampaignConfiguration
             Int(campaign, "maximumCandidatesPerBlock", 1, 1_000));
 
         var scribe = value.GetProperty("scribe");
-        Expect(scribe,
-        [
-            "maximumContextReferences",
-            "maximumContextUtf8Bytes",
-            "maximumEvidenceReferences",
-            "maximumEvidenceUtf8Bytes",
-            "maximumProviderRequests",
-            "maximumToolRounds",
-            "maximumToolCalls",
-            "maximumAttempts",
-            "maximumInputTokens",
-            "maximumUncachedInputTokens",
-            "maximumOutputTokens",
-            "maximumCostMicrounits",
-            "maximumElapsedMilliseconds",
-        ]);
-        var scribeInput = Int(scribe, "maximumInputTokens", 1, DocumentationScribeContract.MaximumConfiguredInputTokens);
+        Expect(scribe, ["maximumContextReferences", "maximumContextUtf8Bytes",
+            "maximumEvidenceReferences", "maximumEvidenceUtf8Bytes", "maximumAttempts"]);
         var limits = new DocumentationScribeRunLimits(
             Int(scribe, "maximumContextReferences", 0, 512),
             Int(scribe, "maximumContextUtf8Bytes", 0, 4_194_304),
             Int(scribe, "maximumEvidenceReferences", 0, 512),
             Int(scribe, "maximumEvidenceUtf8Bytes", 0, 4_194_304),
-            Int(scribe, "maximumProviderRequests", 1, 128),
-            Int(scribe, "maximumToolRounds", 0, 128),
-            Int(scribe, "maximumToolCalls", 0, 1_024),
+            128, 128, 1_024,
             Int(scribe, "maximumAttempts", 1, DocumentationScribeContract.MaximumAttempts),
-            scribeInput,
-            Int(scribe, "maximumUncachedInputTokens", 0, scribeInput),
-            Int(scribe, "maximumOutputTokens", 1, DocumentationScribeContract.MaximumConfiguredOutputTokens),
-            Long(scribe, "maximumCostMicrounits", 0, DocumentationScribeContract.MaximumConfiguredCostMicrounits),
-            Int(scribe, "maximumElapsedMilliseconds", 1, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds));
-        return new CampaignBudgetConfiguration(aggregate, limits);
+            DocumentationScribeContract.MaximumConfiguredInputTokens,
+            DocumentationScribeContract.MaximumConfiguredInputTokens,
+            DocumentationScribeContract.MaximumConfiguredOutputTokens,
+            DocumentationScribeContract.MaximumConfiguredCostMicrounits,
+            DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds);
+        var invocation = value.GetProperty("invocation");
+        Expect(invocation, ["maximumTargets", "maximumProviderRequests", "maximumToolCalls",
+            "maximumCachedInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens",
+            "maximumElapsedMilliseconds", "maximumRequestOutputTokens", "maximumRequestElapsedMilliseconds",
+            "maximumConnectMilliseconds", "maximumToolCallsPerResponse"]);
+        var operational = DocumentationScribeInvocationLimits.Create(
+            Int(invocation, "maximumTargets", 0, CampaignStateContract.MaximumWorkItems),
+            Int(invocation, "maximumProviderRequests", 0, 128),
+            Int(invocation, "maximumToolCalls", 0, 1_024),
+            Int(invocation, "maximumCachedInputTokens", 0, DocumentationScribeContract.MaximumConfiguredInputTokens),
+            Int(invocation, "maximumUncachedInputTokens", 0, DocumentationScribeContract.MaximumConfiguredInputTokens),
+            Int(invocation, "maximumOutputTokens", 0, DocumentationScribeContract.MaximumConfiguredOutputTokens),
+            Int(invocation, "maximumElapsedMilliseconds", 0, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds),
+            Int(invocation, "maximumRequestOutputTokens", 0, DocumentationScribeContract.MaximumConfiguredOutputTokens),
+            Int(invocation, "maximumRequestElapsedMilliseconds", 0, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds),
+            Int(invocation, "maximumConnectMilliseconds", 0, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds),
+            Int(invocation, "maximumToolCallsPerResponse", 0, 16));
+        return new CampaignBudgetConfiguration(aggregate, limits, operational);
     }
 
     private static CampaignRetryConfiguration ParseRetry(JsonElement value)

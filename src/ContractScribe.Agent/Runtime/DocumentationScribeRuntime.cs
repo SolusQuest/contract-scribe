@@ -47,7 +47,7 @@ public sealed class DocumentationScribeRuntime
     {
     }
 
-    internal DocumentationScribeRuntime(
+    public DocumentationScribeRuntime(
         IDocumentationScribeModelExchange exchange,
         DocumentationScribeToolRegistry registry,
         DocumentationScribeRuntimeOptions options,
@@ -67,7 +67,8 @@ public sealed class DocumentationScribeRuntime
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
         DocumentationScribePromptInput promptInput,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        DocumentationScribeExecutionScope? executionScope = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(promptInput);
@@ -76,7 +77,8 @@ public sealed class DocumentationScribeRuntime
             throw new ArgumentException("A validated attempt identity is required.", nameof(attemptId));
         }
 
-        var state = new RunState(request, attemptId, options, registry, timeProvider);
+        var scope = executionScope ?? DocumentationScribeExecutionScope.ForStandalone(request, timeProvider);
+        var state = new RunState(request, attemptId, options, registry, scope.Allowance.Clock, scope);
         var reducer = new DocumentationScribeTerminalReducer();
         var initial = CommitCheckpoint(state, reducer, cancellationToken);
         if (initial is not null)
@@ -90,6 +92,13 @@ public sealed class DocumentationScribeRuntime
             return reducer.CommitValidation(state, cancellationToken, "scribe.prompt.invalid");
         }
 
+        if (scope.PendingRetryAfterMilliseconds > 0)
+        {
+            var restoredDelay = await DelayAsync(scope.PendingRetryAfterMilliseconds, state, cancellationToken).ConfigureAwait(false);
+            if (restoredDelay != OperationCompletionKind.Completed)
+                return restoredDelay == OperationCompletionKind.Cancelled ? reducer.CommitCancelled(state, cancellationToken)
+                    : reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
+        }
         while (true)
         {
             var checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
@@ -98,7 +107,8 @@ public sealed class DocumentationScribeRuntime
                 return checkpoint;
             }
 
-            if (state.ProviderRequestCount >= request.Limits.MaximumProviderRequests)
+            if (!scope.Allowance.CanBeginProviderWork()
+                || state.ProviderRequestCount >= request.Limits.MaximumProviderRequests)
             {
                 return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
             }
@@ -119,7 +129,7 @@ public sealed class DocumentationScribeRuntime
                     state.AttemptNumber,
                     state.ProviderRequestCount + 1,
                     state.ToolCallCount,
-                    state.RemainingOutputTokens,
+                    Math.Min(state.RemainingOutputTokens, scope.Allowance.Limits.MaximumRequestOutputTokens),
                     state.CompletedToolExchanges);
             }
             catch (PromptBoundaryException)
@@ -131,7 +141,6 @@ public sealed class DocumentationScribeRuntime
                 return reducer.CommitInternal(state, cancellationToken);
             }
 
-            state.ProviderRequestCount++;
             OperationCompletion<DocumentationScribeModelResponse> completion;
             try
             {
@@ -145,6 +154,7 @@ public sealed class DocumentationScribeRuntime
                 return reducer.CommitInternal(state, cancellationToken);
             }
 
+            state.ProviderRequestCount = state.Scope.PhysicalProviderRequestCount;
             if (completion.Kind == OperationCompletionKind.Cancelled)
             {
                 return reducer.CommitCancelled(state, cancellationToken);
@@ -152,7 +162,9 @@ public sealed class DocumentationScribeRuntime
 
             if (completion.Kind == OperationCompletionKind.TimedOut)
             {
-                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
+                return reducer.CommitFailure(state, cancellationToken,
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
+                        ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             }
 
             if (completion.Kind == OperationCompletionKind.Faulted || completion.Value is null)
@@ -162,7 +174,9 @@ public sealed class DocumentationScribeRuntime
 
             var response = completion.Value;
             var observationProtocolFailure = !state.TryApplyObservations(response);
-            checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
+            var returnedTerminal = !observationProtocolFailure && response.TerminalSubmissions.Length == 1
+                && response.ToolCalls.Length == 0 && response.Failure is null;
+            checkpoint = CommitCheckpoint(state, reducer, cancellationToken, allowReturnedTerminal: returnedTerminal);
             if (checkpoint is not null)
             {
                 return checkpoint;
@@ -185,6 +199,8 @@ public sealed class DocumentationScribeRuntime
             if (hasFailure)
             {
                 var failure = response.Failure!;
+                if (failure.Origin == DocumentationScribeModelFailureOrigin.RequestPreparation)
+                    return reducer.CommitValidation(state, cancellationToken, "scribe.provider.not-sent");
                 if (!failure.IsTransient || state.AttemptNumber >= request.Limits.MaximumAttempts)
                 {
                     return reducer.CommitProvider(
@@ -212,7 +228,9 @@ public sealed class DocumentationScribeRuntime
 
                     if (delay == OperationCompletionKind.TimedOut)
                     {
-                        return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
+                        return reducer.CommitFailure(state, cancellationToken,
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
+                        ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
                     }
                 }
 
@@ -238,16 +256,21 @@ public sealed class DocumentationScribeRuntime
                 continue;
             }
 
-            checkpoint = CommitCheckpoint(state, reducer, cancellationToken);
+            checkpoint = CommitCheckpoint(state, reducer, cancellationToken, allowReturnedTerminal: true);
             if (checkpoint is not null)
             {
                 return checkpoint;
             }
 
-            return reducer.CommitTerminal(
-                state,
-                cancellationToken,
-                response.TerminalSubmissions[0].TerminalUtf8Json);
+            var submission = await scope.BeginHostAsync(DocumentationScribeHostOperation.TerminalSubmission, cancellationToken).ConfigureAwait(false);
+            if (submission is null || !submission.TryBeginOperation())
+                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
+            try
+            {
+                state.ToolCallCount++;
+                return reducer.CommitTerminal(state, cancellationToken, response.TerminalSubmissions[0].TerminalUtf8Json);
+            }
+            finally { await scope.CompleteHostAsync(submission, CancellationToken.None).ConfigureAwait(false); }
         }
     }
 
@@ -268,7 +291,9 @@ public sealed class DocumentationScribeRuntime
         DocumentationScribeTerminalReducer reducer,
         CancellationToken cancellationToken)
     {
-        if (calls.Length > state.Request.Limits.MaximumToolCalls - state.ToolCallCount
+        if (calls.Length > state.Scope.Allowance.Limits.MaximumToolCallsPerResponse
+            || calls.Length > state.Scope.Allowance.RemainingToolCalls
+            || calls.Length > state.Request.Limits.MaximumToolCalls - state.ToolCallCount
             || state.ToolRoundCount >= state.Request.Limits.MaximumToolRounds)
         {
             return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Budget);
@@ -329,8 +354,7 @@ public sealed class DocumentationScribeRuntime
             }
 
             var registrationIndex = registry.FindRegistrationIndex(toolCall.Call.OperationId);
-            state.ToolCallCount++;
-            state.PerOperationToolCalls[registrationIndex]++;
+
             OperationCompletion<ToolInvocationResult> completion;
             try
             {
@@ -348,7 +372,9 @@ public sealed class DocumentationScribeRuntime
 
             if (completion.Kind == OperationCompletionKind.TimedOut)
             {
-                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
+                return reducer.CommitFailure(state, cancellationToken,
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
+                        ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             }
 
             if (completion.Kind == OperationCompletionKind.Faulted)
@@ -375,7 +401,9 @@ public sealed class DocumentationScribeRuntime
 
             if (invocation.Outcome == DocumentationScribeToolOutcome.TimedOut)
             {
-                return reducer.CommitFailure(state, cancellationToken, DocumentationScribeFailureCode.Timeout);
+                return reducer.CommitFailure(state, cancellationToken,
+                    state.Scope.Allowance.HasCheckedStop || state.Scope.LifetimeDeadlineReached || state.Scope.LifetimeAdmissionDenied
+                        ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             }
 
             if (invocation.Outcome == DocumentationScribeToolOutcome.Cancelled)
@@ -487,58 +515,58 @@ public sealed class DocumentationScribeRuntime
     }
 
     private async Task<OperationCompletion<DocumentationScribeModelResponse>> SendAsync(
-        DocumentationScribeModelRequest request,
-        RunState state,
-        CancellationToken cancellationToken)
+        DocumentationScribeModelRequest request, RunState state, CancellationToken cancellationToken)
     {
-        using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task<DocumentationScribeModelResponse> task;
         try
         {
-            task = exchange.SendAsync(request, operationCancellation.Token).AsTask();
+            // The physical exchange owns its deadline and awaits mandatory settlement before returning.
+            var response = await exchange.SendAsync(request, state.Scope, cancellationToken).ConfigureAwait(false);
+            return OperationCompletion<DocumentationScribeModelResponse>.Completed(response);
+        }
+        catch (OperationCanceledException)
+        {
+            return cancellationToken.IsCancellationRequested ? OperationCompletion<DocumentationScribeModelResponse>.Cancelled()
+            : OperationCompletion<DocumentationScribeModelResponse>.TimedOut();
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-        {
-            return OperationCompletion<DocumentationScribeModelResponse>.Faulted(exception);
-        }
-
-        return await AwaitOperationAsync(
-            task,
-            operationCancellation,
-            state,
-            cancellationToken).ConfigureAwait(false);
+        { return OperationCompletion<DocumentationScribeModelResponse>.Faulted(exception); }
     }
 
     private async Task<OperationCompletion<ToolInvocationResult>> InvokeToolAsync(
-        PreparedToolCall toolCall,
-        RunState state,
-        CancellationToken cancellationToken)
+        PreparedToolCall toolCall, RunState state, CancellationToken cancellationToken)
     {
+        var phase = toolCall.Call.OperationId is "read-excerpt" or "list-files" or "search-text"
+            ? DocumentationScribeHostOperation.RepositoryTool
+            : toolCall.Call.OperationId == "get-target-evidence"
+                ? DocumentationScribeHostOperation.SemanticTool : DocumentationScribeHostOperation.RegisteredTool;
+        var permit = await state.Scope.BeginHostAsync(phase, cancellationToken).ConfigureAwait(false);
+        if (permit is null || !permit.TryBeginOperation()) return OperationCompletion<ToolInvocationResult>.TimedOut();
         using var operationCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Task<ToolInvocationResult> task;
         try
         {
-            task = toolCall.InvokeAsync(operationCancellation.Token).AsTask();
+            state.ToolCallCount++;
+            state.PerOperationToolCalls[registry.FindRegistrationIndex(toolCall.Call.OperationId)]++;
+            var task = toolCall.InvokeAsync(operationCancellation.Token).AsTask();
+            var completion = await AwaitOperationAsync(task, operationCancellation, state, cancellationToken, permit.RemainingMilliseconds).ConfigureAwait(false);
+            if (completion.Kind == OperationCompletionKind.TimedOut
+                || completion.Kind == OperationCompletionKind.Completed && completion.Value.Outcome == DocumentationScribeToolOutcome.TimedOut && permit.RemainingMilliseconds <= 0)
+                state.Scope.ObserveDeadline(permit);
+            return completion;
         }
-        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        finally
         {
-            return OperationCompletion<ToolInvocationResult>.Faulted(exception);
+            if (!await state.Scope.CompleteHostAsync(permit, CancellationToken.None).ConfigureAwait(false))
+                throw new InvalidOperationException("scribe.tool.settlement-unconfirmed");
         }
-
-        return await AwaitOperationAsync(
-            task,
-            operationCancellation,
-            state,
-            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task<OperationCompletion<T>> AwaitOperationAsync<T>(
         Task<T> task,
         CancellationTokenSource operationCancellation,
         RunState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, int? operationRemaining = null)
     {
-        var remaining = state.RemainingMilliseconds;
+        var remaining = Math.Min(state.RemainingMilliseconds, operationRemaining ?? int.MaxValue);
         if (cancellationToken.IsCancellationRequested)
         {
             operationCancellation.Cancel();
@@ -597,46 +625,51 @@ public sealed class DocumentationScribeRuntime
         }
     }
 
-    private async Task<OperationCompletionKind> DelayAsync(
-        int milliseconds,
-        RunState state,
-        CancellationToken cancellationToken)
+    private async Task<OperationCompletionKind> DelayAsync(int milliseconds, RunState state, CancellationToken cancellationToken)
     {
-        if (milliseconds == 0)
+        while (milliseconds > 0)
         {
-            return OperationCompletionKind.Completed;
+            var pendingBefore = state.Scope.PendingRetryAfterMilliseconds;
+            var permit = await state.Scope.BeginHostAsync(DocumentationScribeHostOperation.RetryWait, cancellationToken).ConfigureAwait(false);
+            if (permit is null) return OperationCompletionKind.TimedOut;
+            try
+            {
+                var begun = permit.TryBeginOperation();
+                if (!begun && (permit.RemainingMilliseconds > 0 || state.Scope.Failed || state.Scope.Allowance.HasCheckedStop
+                    || permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation))
+                {
+                    state.Scope.ObserveDeadline(permit);
+                    return OperationCompletionKind.TimedOut;
+                }
+                // The delay is itself the finite host operation. Reservation/readback
+                // time already consumes its interval; a competing equal timer would
+                // cancel a normally completed wait before the provider may retry.
+                var remaining = permit.RemainingMilliseconds;
+                if (remaining > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(remaining), state.Scope.Allowance.Clock, cancellationToken).ConfigureAwait(false);
+                if (permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation)
+                {
+                    state.Scope.ObserveDeadline(permit);
+                    return OperationCompletionKind.TimedOut;
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (!cancellationToken.IsCancellationRequested) state.Scope.ObserveDeadline(permit);
+                return cancellationToken.IsCancellationRequested ? OperationCompletionKind.Cancelled : OperationCompletionKind.TimedOut;
+            }
+            finally { await state.Scope.CompleteHostAsync(permit, CancellationToken.None).ConfigureAwait(false); }
+            milliseconds = state.Scope.PendingRetryAfterMilliseconds;
+            if (milliseconds >= pendingBefore) return OperationCompletionKind.TimedOut;
         }
-
-        if (milliseconds >= state.RemainingMilliseconds)
-        {
-            return OperationCompletionKind.TimedOut;
-        }
-
-        try
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(milliseconds), timeProvider, cancellationToken)
-                .ConfigureAwait(false);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            return OperationCompletionKind.Cancelled;
-        }
-
-        if (cancellationToken.IsCancellationRequested)
-        {
-            return OperationCompletionKind.Cancelled;
-        }
-
-        return state.RemainingMilliseconds <= 0
-            ? OperationCompletionKind.TimedOut
-            : OperationCompletionKind.Completed;
+        return OperationCompletionKind.Completed;
     }
 
     private static DocumentationScribeRunResult? CommitCheckpoint(
         RunState state,
         DocumentationScribeTerminalReducer reducer,
-        CancellationToken cancellationToken) =>
-        reducer.TryCommitPriority(state, cancellationToken);
+        CancellationToken cancellationToken, bool allowReturnedTerminal = false) =>
+        reducer.TryCommitPriority(state, cancellationToken, allowReturnedTerminal);
 
     private static bool EvidenceReferenceEquivalent(
         DocumentationScribeEvidenceReference left,
@@ -677,7 +710,7 @@ internal sealed class DocumentationScribeTerminalReducer
 
     internal DocumentationScribeRunResult? TryCommitPriority(
         RunState state,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, bool allowReturnedTerminal = false)
     {
         lock (gate)
         {
@@ -687,7 +720,7 @@ internal sealed class DocumentationScribeTerminalReducer
             }
 
             var elapsed = state.ElapsedMilliseconds;
-            committed = CreatePriorityResult(state, cancellationToken, elapsed);
+            committed = CreatePriorityResult(state, cancellationToken, elapsed, allowReturnedTerminal);
             return committed;
         }
     }
@@ -782,7 +815,8 @@ internal sealed class DocumentationScribeTerminalReducer
             }
 
             var elapsed = state.ElapsedMilliseconds;
-            committed = CreatePriorityResult(state, cancellationToken, elapsed);
+            committed = CreatePriorityResult(state, cancellationToken, elapsed,
+                allowReturnedTerminal: validationCode is null && candidate?.Result?.Terminal is DocumentationScribeProposalTerminal);
             if (committed is not null)
             {
                 return committed;
@@ -849,14 +883,21 @@ internal sealed class DocumentationScribeTerminalReducer
     private static DocumentationScribeRunResult? CreatePriorityResult(
         RunState state,
         CancellationToken cancellationToken,
-        int elapsedMilliseconds)
+        int elapsedMilliseconds, bool allowReturnedTerminal = false)
     {
         if (cancellationToken.IsCancellationRequested)
         {
             return state.CreateCancelled(elapsedMilliseconds);
         }
 
-        if (elapsedMilliseconds >= state.Request.Limits.MaximumElapsedMilliseconds)
+        if (state.Scope.ResourceBudgetReached
+            && !(allowReturnedTerminal && state.Scope.SettledLifetimeBudgetExceeded
+                && !state.Scope.LifetimeDeadlineReached && !state.Scope.LifetimeAdmissionDenied && !state.Scope.Allowance.HasCheckedStop))
+        {
+            return state.CreateFailure(DocumentationScribeFailureCode.Budget, elapsedMilliseconds);
+        }
+
+        if (elapsedMilliseconds >= state.Request.Limits.MaximumElapsedMilliseconds || state.Scope.StandaloneDeadlineReached)
         {
             return state.CreateFailure(DocumentationScribeFailureCode.Timeout, elapsedMilliseconds);
         }
@@ -887,14 +928,15 @@ internal sealed class RunState
         DocumentationScribeAttemptId attemptId,
         DocumentationScribeRuntimeOptions options,
         DocumentationScribeToolRegistry registry,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider, DocumentationScribeExecutionScope? scope = null)
     {
+        Scope = scope ?? DocumentationScribeExecutionScope.ForStandalone(request, timeProvider);
         Request = request;
         AttemptId = attemptId;
         this.options = options;
         this.timeProvider = timeProvider;
         startedAt = timeProvider.GetTimestamp();
-        AttemptNumber = 1;
+        AttemptNumber = checked(Scope.RestoredRetryableProviderFailures + 1);
         PerOperationToolCalls = new int[registry.Registrations.Length];
         EvidenceItemCount = request.EvidenceReferences.Length;
         try
@@ -908,6 +950,8 @@ internal sealed class RunState
             arithmeticOverflow = true;
         }
     }
+
+    internal DocumentationScribeExecutionScope Scope { get; }
 
     internal DocumentationScribeRequest Request { get; }
 
@@ -974,7 +1018,7 @@ internal sealed class RunState
     internal bool IsEvidenceBudgetExceeded => arithmeticOverflow
         || EvidenceItemCount > Request.Limits.MaximumEvidenceReferences
         || EvidenceUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
-        || SuccessfulToolExchangeUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes;
+        || SuccessfulToolExchangeUtf8ByteCount > 33_554_432;
 
     internal int ElapsedMilliseconds
     {
@@ -990,13 +1034,13 @@ internal sealed class RunState
 
     internal int RemainingMilliseconds => Math.Max(
         0,
-        Request.Limits.MaximumElapsedMilliseconds - ElapsedMilliseconds);
+        Math.Min(Request.Limits.MaximumElapsedMilliseconds - ElapsedMilliseconds, Scope.Allowance.RemainingMilliseconds));
 
-    internal bool IsObservedBudgetExceeded => arithmeticOverflow
+    internal bool IsObservedBudgetExceeded => Scope.Allowance.HasCheckedStop || Scope.LifetimeDeadlineReached || arithmeticOverflow
         || HasUnrepresentableObservation
         || EvidenceItemCount > Request.Limits.MaximumEvidenceReferences
         || EvidenceUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
-        || SuccessfulToolExchangeUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes
+        || SuccessfulToolExchangeUtf8ByteCount > 33_554_432
         || inputTokens > Request.Limits.MaximumInputTokens
         || outputTokens > Request.Limits.MaximumOutputTokens
         || cachedInputTokens > Request.Limits.MaximumInputTokens
@@ -1004,7 +1048,7 @@ internal sealed class RunState
         || reasoningTokens > Request.Limits.MaximumOutputTokens
         || costMicrounits > Request.Limits.MaximumCostMicrounits;
 
-    internal bool CanStartAdditionalModelWork => !arithmeticOverflow
+    internal bool CanStartAdditionalModelWork => Scope.Allowance.CanBeginProviderWork() && !arithmeticOverflow
         && !HasUnrepresentableObservation
         && (inputTokens is null || inputTokens < Request.Limits.MaximumInputTokens)
         && (outputTokens is null || outputTokens < Request.Limits.MaximumOutputTokens)
@@ -1013,9 +1057,9 @@ internal sealed class RunState
         && (reasoningTokens is null || reasoningTokens < Request.Limits.MaximumOutputTokens)
         && (costMicrounits is null || costMicrounits < Request.Limits.MaximumCostMicrounits);
 
-    internal int RemainingOutputTokens => outputTokens is null
+    internal int RemainingOutputTokens => Math.Min(Scope.Allowance.RemainingOutputTokens, outputTokens is null
         ? Request.Limits.MaximumOutputTokens
-        : (int)Math.Max(0, Request.Limits.MaximumOutputTokens - outputTokens.Value);
+        : (int)Math.Max(0, Request.Limits.MaximumOutputTokens - outputTokens.Value));
 
     private bool HasUnrepresentableObservation => inputTokens > DocumentationScribeContract.MaximumObservedInputTokens
         || outputTokens > DocumentationScribeContract.MaximumObservedOutputTokens
@@ -1159,7 +1203,8 @@ internal sealed class RunState
             usage,
             cache,
             cost,
-            diagnostics);
+            diagnostics)
+        { RestoredRetryableProviderFailures = Scope.RestoredRetryableProviderFailures };
     }
 
     private DocumentationScribeUsageObservationInput? CreateUsage(bool allowObservedOverrun)

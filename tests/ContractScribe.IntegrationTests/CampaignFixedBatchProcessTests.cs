@@ -75,7 +75,7 @@ public sealed partial class CampaignCliProcessTests
             "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App {\n"
             + string.Join("\n", Enumerable.Range(0, 105).Select(index => $"public static void Operation{index:D3}() {{ }}")) + "\n}\n");
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
-        await using var server = new ProposalLoopbackServer();
+        await using var server = new ProposalLoopbackServer(includeUsage: true);
         var outside = CreatePrivateDirectory("contract-scribe-fixed-batch");
         try
         {

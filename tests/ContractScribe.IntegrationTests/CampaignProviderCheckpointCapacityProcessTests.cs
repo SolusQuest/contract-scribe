@@ -103,7 +103,7 @@ public sealed partial class CampaignCliProcessTests
                     configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                     configuration.ScribeRequest.StyleProfileTemplate.ExactProjection, input, plan,
                     plan.WorkItems.Single(item => item.Disposition.Kind == CampaignPlanningDispositionKind.Executable).WorkItemKey,
-                    request, CampaignStateFactory.CreateInvocationTargetAllowance(artifact.State, new(1)));
+                    request, CampaignStateFactory.CreateInvocationTargetAllowance(artifact.State, new(1)), CampaignInvocationTestPolicy.Create(request.Limits));
             var rejected = Admit(near.Artifact, near.Input, near.Plan, near.Request);
             Assert.Equal(CampaignTransitionKind.Rejected, rejected.Kind);
             Assert.Equal(CampaignTransitionFailure.CheckpointCapacity, rejected.Failure);
@@ -132,7 +132,7 @@ public sealed partial class CampaignCliProcessTests
             var closedRetry = CampaignStateReducer.RetryProviderInvocation(baselineRetry, null, baseline.Execution,
                 configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                 configuration.ScribeRequest.StyleProfileTemplate.ExactProjection, baseline.Input, baseline.Plan,
-                retryKey, baseline.Request, CampaignStateFactory.CreateInvocationTargetAllowance(baselineRetry.State, new(1)));
+                retryKey, baseline.Request, CampaignStateFactory.CreateInvocationTargetAllowance(baselineRetry.State, new(1)), CampaignInvocationTestPolicy.Create(baseline.Request.Limits));
             Assert.Equal(CampaignTransitionKind.Applied, closedRetry.Kind);
             Assert.Equal(2, closedRetry.Artifact.State.LineageCharges.OuterInvocations);
             var reservationGrowth = valid.Artifact.ExactUtf8Json.Length - baseline.Artifact.ExactUtf8Json.Length;
@@ -148,24 +148,33 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(CampaignStateValidationCode.DocumentTooLarge, retryCapacity.Code);
             Assert.Equal(CampaignTransitionFailure.CheckpointCapacity,
                 Admit(retryTemplate.Artifact, retryTemplate.Input, retryTemplate.Plan, retryTemplate.Request).Failure);
-            // Legacy current-shape checkpoints remain readable, even when a new
-            // producer rejects their missing completion headroom before dispatch.
+            // Intrinsically valid current-shape checkpoints may lack the producer's
+            // completion headroom. Recovery must retire their outstanding host claim
+            // before a fresh invocation attempts the same semantic work.
             var retryArtifact = ProviderCapacityLoadedReservation(retryTemplate.Artifact, retryTemplate.Request);
             Assert.Equal(CampaignStateContract.MaximumArtifactUtf8Bytes, retryArtifact.ExactUtf8Json.Length);
             Assert.True(CampaignStateJson.Parse(retryArtifact.ExactUtf8Json.AsMemory()).IsValid);
+            var retryWorkKey = ((CampaignProviderReservation)retryArtifact.State.ActiveReservation!).WorkItemKey;
             var acceptedRetry = CampaignCheckpointAcceptance.AcceptCurrent(CampaignCheckpointReadResult.Found(
                 retryArtifact.ExactUtf8Json.AsSpan(), retryArtifact.CheckpointRevision, retryArtifact.Sha256)).AcceptedCheckpoint!;
-            var retry = CampaignStateReducer.RetryProviderInvocation(retryArtifact, acceptedRetry, retryTemplate.Execution,
+            var retired = CampaignStateReducer.RetireInterruptedProviderAttempt(acceptedRetry);
+            Assert.Equal(CampaignTransitionKind.Applied, retired.Kind);
+            Assert.Null(retired.Artifact.State.ActiveReservation);
+            Assert.NotNull(retired.Artifact.State.WorkItems.Single(item => item.WorkItemKey == retryWorkKey).PausedProviderAttempt);
+            Assert.Equal(1, retired.Artifact.State.LineageCharges.OuterInvocations);
+            Assert.Equal(0, retired.Artifact.State.LineageCharges.ProviderRequests.TotalCharged);
+            Assert.False(acceptedRetry.TryRetireReservation());
+            var acceptedRetired = CampaignCheckpointAcceptance.AcceptCurrent(CampaignCheckpointReadResult.Found(
+                retired.Artifact.ExactUtf8Json.AsSpan(), retired.Artifact.CheckpointRevision, retired.Artifact.Sha256)).AcceptedCheckpoint!;
+            var retry = CampaignStateReducer.RetryProviderInvocation(retired.Artifact, acceptedRetired, retryTemplate.Execution,
                 configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
                 configuration.ScribeRequest.StyleProfileTemplate.ExactProjection, retryTemplate.Input, retryTemplate.Plan,
                 retryTemplate.Plan.WorkItems.Single(item => item.Disposition.Kind == CampaignPlanningDispositionKind.Executable).WorkItemKey,
-                retryTemplate.Request, CampaignStateFactory.CreateInvocationTargetAllowance(retryArtifact.State, new(1)));
+                retryTemplate.Request, CampaignStateFactory.CreateInvocationTargetAllowance(retired.Artifact.State, new(1)), CampaignInvocationTestPolicy.Create(retryTemplate.Request.Limits));
             Assert.Equal(CampaignTransitionFailure.CheckpointCapacity, retry.Failure);
-            Assert.Equal(retryArtifact.ExactUtf8Json, retry.Artifact.ExactUtf8Json);
+            Assert.Equal(retired.Artifact.ExactUtf8Json, retry.Artifact.ExactUtf8Json);
             Assert.Equal(1, retry.Artifact.State.LineageCharges.OuterInvocations);
-            // A restored lease grants retirement, never a fresh dispatch. Rejection
-            // must leave that retirement authority available to a future recovery.
-            Assert.True(acceptedRetry.TryRetireReservation());
+            Assert.NotNull(retry.Artifact.State.WorkItems.Single(item => item.WorkItemKey == retryWorkKey).PausedProviderAttempt);
 
             var fittingInput = baseline.Input with
             {
@@ -239,8 +248,8 @@ public sealed partial class CampaignCliProcessTests
 
             await File.WriteAllTextAsync(sourcePath, retrySource, new UTF8Encoding(false, true));
             await File.WriteAllBytesAsync(statePath, retryArtifact.ExactUtf8Json.ToArray());
-            AssertCapacity(await Run(CampaignOperation.Resume, "snapshot.provider-capacity", 1), retryArtifact.CheckpointRevision);
-            Assert.Equal(retryArtifact.ExactUtf8Json.ToArray(), await File.ReadAllBytesAsync(statePath));
+            AssertCapacity(await Run(CampaignOperation.Resume, "snapshot.provider-capacity", 1), retired.Artifact.CheckpointRevision);
+            Assert.Equal(retired.Artifact.ExactUtf8Json.ToArray(), await File.ReadAllBytesAsync(statePath));
             await File.WriteAllTextAsync(sourcePath, successorSource, new UTF8Encoding(false, true));
             await File.WriteAllBytesAsync(statePath, baseline.Artifact.ExactUtf8Json.ToArray());
             AssertCapacity(await Run(CampaignOperation.Resume, "snapshot.provider-successor", 1), baseline.Artifact.CheckpointRevision);
@@ -293,7 +302,7 @@ public sealed partial class CampaignCliProcessTests
     {
         var state = initial.State;
         var work = state.WorkItems.Single(item => item.Status == CampaignWorkStatus.Planned);
-        var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state);
+        var budget = CampaignBudgetAccounting.ReserveProviderInvocation(state, CampaignInvocationTestPolicy.Create(state.ConfiguredCeilings.ScribeRunLimits));
         Assert.Equal(CampaignBudgetDecisionKind.Admitted, budget.Kind);
         var attempt = CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
             state.ConfiguredCeilings.ScribeExecutionAuthority, work.WorkItemKey, 1);
@@ -301,7 +310,8 @@ public sealed partial class CampaignCliProcessTests
             state.CampaignLineage, state.Snapshot, state.CheckpointRevision + 1, state.ConfiguredCeilings,
             budget.Charges!, state.WorkItems.Select(item => item.WorkItemKey == work.WorkItemKey
                 ? item with { OuterAttemptCount = 1 } : item), state.Batch,
-            new CampaignProviderReservation(work.WorkItemKey, request.ArtifactSha256, attempt, budget.Exposure!),
+            new CampaignProviderReservation(work.WorkItemKey, request.ArtifactSha256, attempt, budget.Exposure!)
+            { ExecutionStartRevision = state.CheckpointRevision + 1, CurrentOperationOrdinal = 1 },
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             state.TerminalOutcome, state.Predecessor));
     }
