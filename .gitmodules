@@ -1,0 +1,3 @@
+[submodule "docs/shared/solus-book"]
+	path = docs/shared/solus-book
+	url = https://github.com/SolusQuest/solus-book.git

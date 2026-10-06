@@ -1,6 +1,6 @@
 # Test validation
 
-Use this procedure to select validation from the failure surface changed by the work. Do not default to the complete solution merely because a file changed, and do not omit a contract test merely because the changed contract is stored as documentation or data.
+Apply Solus Book's [Validation](../../shared/solus-book/standards/validation.md) and [Test validation](../../shared/solus-book/skills/test-validation/SKILL.md). This local procedure owns ContractScribe's actual commands, environments, suite definitions, timing guidance, process boundaries, fixture rules, and CI qualification.
 
 ## Suite definitions
 
@@ -68,7 +68,7 @@ The cache allocates an ownership container before invoking reusable preparation.
 
 Use `--no-build --no-restore` only after the current working tree completed the applicable build with the same SDK and configuration. Rebuild when production or test source, a `.csproj` or `.slnx`, `Directory.*`, `global.json`, package-version inputs, a generator/helper project, or shared fixture/process infrastructure changed. Restore again when projects, package sources, package versions, SDK selection, lock inputs, or restore properties changed.
 
-Do not reuse Release outputs for Debug commands or outputs from another SDK, worktree, commit, or changed build input. When validity is uncertain, rebuild instead of treating a fast stale run as evidence.
+The shared [Input validity](../../shared/solus-book/standards/validation.md#input-validity) rule applies to these outputs; uncertain build validity requires rebuilding.
 
 ## Result isolation and duration evidence
 
@@ -87,7 +87,7 @@ For a performance comparison, record exact commit, OS, resolved dotnet host, SDK
 
 Before a long run, assign the table's outer observation budget and preserve the terminal or process handle that launched it. The warm full-test-suite budget must be at least twice the measured expected duration; the current 25-minute budget covers the 9–12 minute range. Cold guidance separately includes restore, build, and first template qualification.
 
-If the outer observation budget expires, inspect the original terminal, process handle, and any known directly owned child subtree. Continue waiting when the original run is active or its state is uncertain. Do not automatically kill or restart it. Start a second run only after the first run completed or bounded owned-process evidence proves non-overlap. Never terminate unrelated `dotnet` processes through a global process-name scan.
+At budget expiry, follow shared [Runs and failures](../../shared/solus-book/standards/validation.md#runs-and-failures). Preserve an active or uncertain original run; a second run requires completion or bounded owned-process evidence proving non-overlap.
 
 ## Full validation
 
@@ -114,4 +114,4 @@ Pull-request CI uses one concurrency group per PR and cancels obsolete heads. Ma
 
 Pre-release performance comparisons use a small, prospectively selected set of complete first-attempt runs without overlapping measured workloads. Ordinary PR CI can count; do not require additional manual runs solely for their event type. Complete the ordinary PR latency observation before dispatching an additional unfiltered control so that its extra hosted job does not affect queue or scheduling observations. Keep the runner class, relevant toolchain, configuration, and test workload comparable, and record source/workflow revisions, image facts, all selected results, and any failures. Distinguish summed case/lane time, test-step elapsed time, longest required integration job, integration-group makespan, ordinary complete-CI wall time, and summed runner/setup time; report the control-inclusive dispatch separately. An exact hosted-image build match is not a gate: image rollout alone does not invalidate evidence. Investigate demonstrated relevant differences and state the limits of a small observational sample instead of claiming statistical significance or a hosted-runner SLA.
 
-Reuse evidence for unchanged inputs and refresh only what a correction invalidates. A missing result from an infrastructure failure can be replaced with a disclosed independent run; a test failure requires diagnosis and correction, never a retry-until-green policy. Documentation or tracker changes do not restart performance sampling, and one unrelated or incomplete run does not erase valid observations. [Issue #168](https://github.com/SolusQuest/contract-scribe/issues/168) records the bounded comparison for the initial split; it does not create a permanent multi-run qualification gate for later changes.
+For this performance sample, an infrastructure failure's missing result may be replaced by a disclosed independent run under shared evidence/retry rules. Documentation or tracker changes do not restart sampling, and an unrelated or incomplete run does not erase applicable observations. [Issue #168](https://github.com/SolusQuest/contract-scribe/issues/168) records the bounded comparison for the initial split; it does not create a permanent multi-run qualification gate for later changes.
