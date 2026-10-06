@@ -80,6 +80,7 @@ public sealed partial class CampaignStateContractTests
     [InlineData("recovered-dispatch-failure", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA")]
     [InlineData("recovered-dispatch-failure", "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")]
     [InlineData("recovered-dispatch-failure", "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd")]
+    [InlineData("recovered-dispatch-failure", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\n")]
     public void Published_closed_outcome_rejects_unknown_source_and_malformed_failure_commitment(
         string source, string? failureCommitment)
     {
