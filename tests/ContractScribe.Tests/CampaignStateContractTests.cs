@@ -1067,6 +1067,7 @@ public sealed partial class CampaignStateContractTests
             selected.ClosedOutcome.PatchResultCommitmentSha256);
         Assert.Null(applied.Artifact.State.ActiveReservation);
         Assert.Equal(CampaignCumulativeOutcomeKind.Rejected, applied.Artifact.State.CumulativeOutcome!.Kind);
+        AssertPublishedCampaignRoundTrip(applied.Artifact.State);
         Assert.Equal(500, applied.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var repeatedFromPredecessor = CampaignStateReducer.ApplyPatchRejection(
@@ -1370,6 +1371,7 @@ public sealed partial class CampaignStateContractTests
             CampaignWorkOutcomeCode.CancelledByCaller,
             completed.Artifact.State.WorkItems[0].ClosedOutcome!.Code);
         Assert.Equal(CampaignTerminalKind.Cancelled, completed.Artifact.State.TerminalOutcome!.Kind);
+        AssertPublishedCampaignRoundTrip(completed.Artifact.State);
         Assert.Null(completed.Artifact.State.ActiveReservation);
         Assert.False(invocation.TryBeginDispatch(out _));
         Assert.False(registrar.TryRegister(
@@ -2691,6 +2693,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Null(overWork.TrustedProposal);
         Assert.Equal(CampaignWorkOutcomeCode.CompletedOverBound, overWork.ClosedOutcome!.Code);
         Assert.NotNull(overWork.ClosedOutcome.ScribeResultCommitmentSha256);
+        AssertPublishedCampaignRoundTrip(over.Artifact.State);
 
         var successorInput = scenario.Input with
         {
@@ -5452,7 +5455,9 @@ public sealed partial class CampaignStateContractTests
                 var code = work["closedOutcome"]!["code"]!.GetValue<string>();
                 progress!["status"] = code is "insufficient-evidence" or "unsupported-domain" ? "skipped"
                     : code == "provider-failure" && work["closedOutcome"]!["providerDisposition"]?.GetValue<string>() == "retryable"
-                        ? "retryable" : "failed";
+                        ? "retryable"
+                        : code is "internal-failure" or "timeout" or "cancelled-by-caller" or "cancelled-by-shutdown"
+                            ? "infrastructure-blocked" : "failed";
             }
             else if (work["status"]!.GetValue<string>() == "planned"
                 && progress!["dispatchable"]!.GetValue<bool>() && progress["status"]!.GetValue<string>() != "deferred")

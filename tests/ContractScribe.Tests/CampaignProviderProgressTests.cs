@@ -233,6 +233,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignScribeCompletionSource.RecoveredDispatchFailure, record.ClosedOutcome!.ScribeCompletionSource);
         Assert.NotNull(record.ClosedOutcome.AcceptedDispatchFailureCommitmentSha256);
         Assert.Null(record.ClosedOutcome.ScribeResultCommitmentSha256);
+        AssertPublishedCampaignRoundTrip(closed.Artifact.State);
         Assert.Equal(CampaignAttemptDisposition.SuppressedAtAttemptLimit, record.AttemptDisposition);
         Assert.Null(record.PausedProviderAttempt);
         Assert.Equal(2, closed.Artifact.State.LineageCharges.ProviderRequests.Observed);
