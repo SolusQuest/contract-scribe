@@ -558,7 +558,7 @@ case_acquire_map_null_payload() {
     # Cached bytes cannot restore a revoked acquisition authorization.
     mkdir -p "$w/install/.archives"
     cp "$ARCHIVE" "$w/install/.archives/$ARCHIVE_SHA.tar.gz"
-    expect_fail acquire_leg "$w" "$w/map.json" >"$w/acq.log" 2>&1
+    GITHUB_OUTPUT="$w/step-outputs.txt" expect_fail acquire_leg "$w" "$w/map.json" >"$w/acq.log" 2>&1
     grep -Fq "action-acquire stage=map result=fail reason=no-authorized-payload" "$w/acq.log"
     grep -Fxq "action-status=action.acquire-no-authorized-payload" "$w/step-outputs.txt"
     [ ! -e "$w/acquired.json" ]
