@@ -15,6 +15,8 @@ M1 deterministic audit
   -> governance disposition and first public publication
 ```
 
+[CR1](cr1-plan.md) is the adopted change-request track for replacing the current general Scribe execution machinery with published SolusAgent packages. It runs alongside M7 and supplies the runtime foundation for its remaining Scribe work; M7 does not first need to complete against the old loop. Qualification and production migration remain pending.
+
 Release governance, payload distribution, and deferred topology research are separate tracks. They must not block source-based product work that does not depend on them, but their explicit gates apply before the first consumable release.
 
 The product is not complete when it can only report missing documentation. Its user value is evidence-grounded documentation writing. The earlier milestones exist to make that writing explainable, bounded, and safe to publish.
@@ -22,7 +24,7 @@ The product is not complete when it can only report missing documentation. Its u
 ## Cross-milestone rules
 
 - Deterministic audit stays independent of a model provider, provider secret, GitHub write token, and declared network-dependent operation.
-- The Documentation Scribe is a self-developed, narrow model-assisted role with bounded read-only tools and structured output. It is not a general coding-agent dependency.
+- The Documentation Scribe remains a project-owned, narrow model-assisted role with bounded read-only tools and structured output. CR1 adopts SolusAgent as its general execution library while ContractScribe retains domain policy, validation, persistence and publication authority; no general coding-agent role or ambient mutation capability is introduced.
 - Project-context selection and repository confinement are deterministic product behavior. [M7 plan](m7-plan.md) owns snapshot, fixed-manifest and semantic-grouping product semantics. Exact representations, algorithms, identity/hash composition and cache mechanisms remain choices for their owning implementation issues within that plan's boundaries.
 - M3 selects the smallest provider transport and evaluation set that can validate the current Scribe path. Provider names, compatibility corpora, normalization formats, and cache mechanisms are not frozen by the pre-M3 roadmap.
 - Provider caching is never correctness or resume state. Observe cost and uncached input to the degree needed for the current product decision without creating a permanent economics protocol in advance.
@@ -45,6 +47,7 @@ The product is not complete when it can only report missing documentation. Its u
 | M5 — GitHub proposal workflow | Done | Idempotent ledger, branch, commit, and draft PR workflow |
 | M6 — Action engineering and internal qualification | Engineering complete; closeout under revised scope | Verified payload/Action, release controls, and exact unpublished internal-candidate evidence |
 | M7 — Caller-owned scheduling and automatic bounded continuation | Plan adopted; implementation and exit evidence pending | Fixed batches, one shared Scribe conversation per Action, complete-ref recovery and practical caller-triggered progress |
+| CR1 — Adopt SolusAgent for the Documentation Scribe | Plan adopted; qualification and implementation pending | Supported package/API selection and one coherent production-runtime cutover, preserving product authority |
 | Release Gate — Governance | Deferred until after M7 | License and contribution disposition before publication or external contribution intake |
 | Release Gate — First Publication | Deferred until after M7; #189 remains open | Newly prepared, qualified, explicitly approved public candidate |
 | Release Gate — Payload Distribution | Payload/host selection implemented through M6; separate tracker retained | D2/composite decisions and exact-candidate publication obligations |

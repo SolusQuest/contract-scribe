@@ -28,6 +28,10 @@ The `Core` / `Roslyn` / `Patching` / `Agent` / `GitHub` / `Cli` graph and its im
 
 The GitHub Action host remains an open distribution decision. This document constrains the host boundary, but it does not select composite action or TypeScript/JavaScript action before executable payload evidence exists. That selection is recorded in the payload-distribution ADR.
 
+## Adopted CR1 direction
+
+[CR1](../90_roadmap/cr1-plan.md) replaces the general Scribe loop with a published SolusAgent dependency while retaining the product authority boundary. `ContractScribe.Agent` remains the domain adapter, Core retains product contracts and campaign policy, and CLI constructs the concrete runtime/provider and injects narrow capabilities. Qualification selects the exact supported API/package edges before implementation; no new project is presumed. Core, Roslyn, Patching and GitHub gain no concrete runtime/provider dependency, and Agent gains no source-write, state-store or GitHub authority. Existing dependency/API tests must express the actual new allowed edges and preserve forbidden capabilities in the cutover PR. The current implementation constraints below remain factual until that cutover.
+
 ## Design goals
 
 The project graph must:

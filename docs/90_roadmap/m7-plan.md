@@ -14,6 +14,10 @@ Deliver one automatic caller-triggered Action entrypoint. A consumer configures 
 
 The product selects first start, unpublished fixed-batch recovery, exact publication recovery, fresh work after terminal predecessors, no-op, awaiting review or pause. The consumer does not manually choose start/resume or hand off an artifact from the previous runner. Product state, ownership, resource and publication checks apply to every trigger source. Human review, ready/close decisions and merge remain operator actions.
 
+## CR1 runtime handoff
+
+[CR1](cr1-plan.md) replaces the general execution foundation while this plan retains its product outcomes. Runtime-dependent Scribe work consumes the qualified SolusAgent integration instead of rebuilding a second general loop. CR1 preserves current accepted behavior; M7 still owns multi-target manifests, shared conversation, incremental/cumulative product acceptance, remaining-budget controls, lifecycle and automatic continuation. Existing issue identities and historical completion stay unchanged. The CR1 plan records the #217–#221 ownership handoff and required predecessor results. Independent M7 work keeps its actual prerequisites.
+
 ## Work, snapshot and fixed batch
 
 A target is one complete XML documentation block on a canonical declaration. A type plus ten eligible public properties is eleven targets; accessors do not add targets. A method's summary, parameters, type parameters, returns and remarks together count as one target. Already compliant declarations are excluded.
