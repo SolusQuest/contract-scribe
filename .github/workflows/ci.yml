@@ -6,6 +6,11 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
+      expected_solus_probe_head:
+        description: Exact reviewed branch commit for the one-time SolusAgent install proof
+        required: false
+        default: ''
+        type: string
       include_unfiltered_evidence:
         description: Run the complete integration suite as additional partition-equivalence evidence
         required: false
@@ -2191,3 +2196,42 @@ jobs:
           if ($failures.Count -gt 0) {
             throw "Required CI job failure: $($failures -join ', ')."
           }
+
+
+  solus_agent_install_proof:
+    if: github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/m5-solus-agent-install-proof' && inputs.expected_solus_probe_head != ''
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - name: Require the authorized repository, branch and reviewed workflow head
+        env:
+          EXPECTED_PROBE_HEAD: ${{ inputs.expected_solus_probe_head }}
+          ACTUAL_WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REPOSITORY" = SolusQuest/contract-scribe
+          test "$GITHUB_REF" = refs/heads/codex/m5-solus-agent-install-proof
+          test "$(uname -m)" = x86_64
+          [[ "$EXPECTED_PROBE_HEAD" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_PROBE_HEAD"
+          test "$ACTUAL_WORKFLOW_SHA" = "$EXPECTED_PROBE_HEAD"
+      - name: Check out the qualified public consumer fixtures
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: SolusQuest/solus-agent
+          ref: 076bcda2fbe1da2677ac5c6fd03d75bc0fef66ad
+          persist-credentials: false
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          architecture: x64
+      - name: Install exact private packages and execute the Scribe consumer
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+        run: node scripts/packages/verify-consumers.ts --feed https://nuget.pkg.github.com/SolusQuest/index.json --version 0.1.0-internal.1 --scenario scribe --require scribe
