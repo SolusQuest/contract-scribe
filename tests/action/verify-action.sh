@@ -9,8 +9,8 @@
 #       [--real] [--work <dir>] [--keep] [--only <regex>]
 #
 # --kit supplies the packaging-test-kit layout (tests/packaging + fixture +
-# hook build output). --archive is the payload archive the committed map
-# authorizes (CI passes the fixed-source build of map.payload.sourceRevision).
+# hook build output). --archive is the independently rebuilt current-source
+# payload; a separate CI check rebuilds any authorized historical map pair.
 # --real enables legs that need the real dotnet SDK + installed payload.
 set -uo pipefail
 
@@ -555,7 +555,14 @@ case_acquire_gate_foreign_repo() {
 case_acquire_map_null_payload() {
     local w; w="$(new_work nullmap)"
     printf '{"mapVersion":1,"wrapper":"contract-scribe-action","payload":null}' > "$w/map.json"
-    expect_fail acquire_leg "$w" "$w/map.json"
+    # Cached bytes cannot restore a revoked acquisition authorization.
+    mkdir -p "$w/install/.archives"
+    cp "$ARCHIVE" "$w/install/.archives/$ARCHIVE_SHA.tar.gz"
+    expect_fail acquire_leg "$w" "$w/map.json" >"$w/acq.log" 2>&1
+    grep -Fq "action-acquire stage=map result=fail reason=no-authorized-payload" "$w/acq.log"
+    grep -Fxq "action-status=action.acquire-no-authorized-payload" "$w/step-outputs.txt"
+    [ ! -e "$w/acquired.json" ]
+    cmp "$ARCHIVE" "$w/install/.archives/$ARCHIVE_SHA.tar.gz"
 }
 case_acquire_map_malformed() {
     local w; w="$(new_work badmap)"
@@ -583,7 +590,10 @@ case_acquire_committed_map() {
             python3 "$ACTION_SCRIPTS/acquire.py" >"$w/acq.log" 2>&1 || rc=$?
         release_config "" "" ""
         [ "$rc" -ne 0 ]
-        grep -q "action.acquire-no-authorized-payload" "$w/out.txt"
+        grep -Fq "action-acquire stage=map result=fail reason=no-authorized-payload" "$w/acq.log"
+        grep -Fxq "action-status=action.acquire-no-authorized-payload" "$w/out.txt"
+        [ ! -e "$w/acquired.json" ]
+        [ ! -e "$w/install" ]
         return 0
     fi
     python3 - "$MAP_FILE" "$ARCHIVE_SHA" <<'PY' || { echo "archive != committed map; skipped"; return 0; }
