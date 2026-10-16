@@ -2,6 +2,8 @@
 
 M6 implemented this control plane and qualified an exact unpublished internal candidate. The maintainer deferred license/contribution disposition and first public publication until after M7; follow [Release sequencing after M6](release-policy.md#release-sequencing-after-m6). These procedures do not authorize publication, establish automatic bounded continuation, or qualify a changed post-M7 candidate through the retained M6 evidence.
 
+The current wrapper revokes the stale unpublished payload authorization under #240: `scripts/action/payload-map.json` carries `payload: null`, so production acquisition fails closed with `action.acquire-no-authorized-payload`. Historical M6 candidate identities, draft assets and qualification evidence remain unchanged. Restoring acquisition requires separately authorized preparation of a patched, main-reachable payload and a reviewed map with its genuine archive identity, followed by affected qualification; first public publication remains owned by #189. This security correction performs no preparation, attestation, staging or publication operation.
+
 Operator procedure for the manually initiated release candidate pipeline in
 `.github/workflows/release.yml`. Everything here is invoked by a maintainer
 via `workflow_dispatch`; normal release operations run on `refs/heads/main`, while the explicit draft-only PR qualification mode below runs on an approved PR branch. Nothing is automatic, and

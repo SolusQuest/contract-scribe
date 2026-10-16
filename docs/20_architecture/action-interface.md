@@ -156,7 +156,9 @@ under the install root.
 
 The payload archive is byte-reproducible: `build-payload.sh` publishes with `ContinuousIntegrationBuild=true`, so a clean ubuntu build of a given revision always produces the same bytes and the pinned `sha256` is a rebuild expectation.
 
-A map with `payload: null` fails closed with `no-authorized-payload`. The current checked-in map records an unpublished payload pair; acquisition authority for that pair is not public-release or M7 implementation authority. `action_packaged` proves reproducibility every run (producer artifact vs. independent clean rebuild) and exercises the Action through a strictly gated test map. Once a pair is recorded, the same job rebuilds the mapped `sourceRevision` and requires byte equality — a mismatch halts release work until a separately reviewed map change; CI never edits the map.
+A map with `payload: null` fails closed with `action.acquire-no-authorized-payload` before release lookup, download or installation. The current checked-in map revokes the stale unpublished payload authorization under #240 because its historical source no longer passes NuGet security audit. Production acquisition remains unavailable until a patched, main-reachable source and genuine archive identity are recorded through the existing reviewed preparation flow. Retained M6 candidates and their exact-input qualification remain historical evidence; they do not authorize acquisition from the current wrapper or a public release.
+
+`action_packaged` still proves current-source reproducibility every run (producer artifact vs. independent clean rebuild) and exercises the Action through a strictly gated test map. When a pair is recorded, the same job additionally rebuilds the mapped `sourceRevision` and requires byte equality — a mismatch halts release work until a separately reviewed map change; CI never edits the map.
 
 Install follows the frozen A1 semantics (`payload-install` stage markers):
 bounded copy → digest → member-policy scan → extraction of validated regular
