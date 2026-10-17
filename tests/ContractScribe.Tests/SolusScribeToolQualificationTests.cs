@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -17,19 +18,48 @@ namespace ContractScribe.Tests;
 
 public sealed partial class DocumentationScribeRepositoryToolTests
 {
-    [Fact]
-    public async Task Solus_qualification_repository_prompt_commitments_survive_the_public_runtime()
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    public async Task Solus_qualification_repository_prompt_and_tool_bindings_survive_the_public_runtime(bool badMember, bool retry)
     {
         // Exercise the same committed prompt as the native repository cases on every platform.
         var request = RepositoryToolFixture.ParseRequest();
-        var registry = new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build();
-        var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
-            new([], [new(Encoding.UTF8.GetBytes(
-                "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}"))], usage: new(0, 0, 0, 0)))]);
+        var port = new ControlledReadPort();
+        var registry = new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Add(
+            DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor, port,
+            new DocumentationScribeComposition.ReadCodec(request.EvidenceReferences[0]),
+            DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
+            DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, maximumCallsPerRun: 16).Build();
+        var calls = ImmutableArray.CreateBuilder<DocumentationScribeModelToolCall>();
+        calls.Add(new(0, "call.good", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
+            Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}")));
+        if (badMember) calls.Add(new(1, "call.bad", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
+            Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"startLine\":\"invalid\"}")));
+        var first = new DocumentationScribeModelResponse(calls.ToImmutable(), [], usage: new(0, 0, 0, 0));
+        var steps = new List<ScriptedDocumentationScribeStep> { ScriptedDocumentationScribeStep.Return(first) };
+        if (retry)
+        {
+            steps.Add(ScriptedDocumentationScribeStep.Return(new([], [], new(DocumentationScribeModelFailureCode.TransientUnavailable), usage: new(0, 0, 0, 0))));
+            steps.Add(ScriptedDocumentationScribeStep.Return(first));
+        }
+        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(Encoding.UTF8.GetBytes(
+            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}"))], usage: new(0, 0, 0, 0))));
+        var exchange = new ScriptedDocumentationScribeModelExchange(steps.ToImmutableArray());
         var session = ToolSession(request, registry, exchange);
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, (await session.RunAsync()).Terminal.Kind);
-        Assert.Single(exchange.Requests);
-        Assert.Equal(0, session.State.ToolRoundCount);
+        var result = await session.RunAsync();
+        Assert.Equal(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Assert.Single(session.Requests[0].Tools).OperationId);
+        Assert.Equal(badMember ? 0 : retry ? 2 : 1, port.Calls);
+        Assert.Equal(badMember ? 1 : retry ? 4 : 2, exchange.Requests.Length);
+        if (badMember) Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        else
+        {
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+            Assert.Equal(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
+                Assert.Single(session.Requests[^1].CompletedToolExchanges).OperationId);
+            if (retry) Assert.Empty(session.Requests[2].CompletedToolExchanges);
+        }
     }
 
     [Theory]
@@ -46,7 +76,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
             DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, maximumCallsPerRun: 16).Build();
         var first = new DocumentationScribeModelResponse(
-            [new(0, "call.read", "read-excerpt", Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}"))], [],
+            [new(0, "call.read", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}"))], [],
             failure: null, usage: new(0, 0, 0, 0), cache: null, cost: null,
             assistantContinuation: new("synthetic assistant", "synthetic opaque continuation"),
             continuationObservation: DocumentationScribeContinuationObservation.None);
@@ -145,8 +175,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, maximumCallsPerRun: 16).Build();
         var response = new DocumentationScribeModelResponse(
         [
-            new(0, "call.good", "read-excerpt", Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}")),
-            new(1, "call.bad", "read-excerpt", Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"startLine\":0}")),
+            new(0, "call.good", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}")),
+            new(1, "call.bad", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"startLine\":\"invalid\"}")),
         ], [], usage: new(0, 0, 0, 0));
         var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(response)]);
         var session = ToolSession(fixture.Request, registry, exchange);
@@ -183,6 +213,21 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         using var optionalProvider = new SolusAgent.Providers.DeepSeek.DeepSeekProvider(new("synthetic-qualification-credential", 1));
         Assert.Equal("deepseek-flash", optionalProvider.Scope.Model);
         Assert.NotEqual("deepseek-v4-flash", optionalProvider.Scope.Model);
+    }
+
+    private sealed class ControlledReadPort : IDocumentationScribeToolPort<DocumentationScribeRepositoryReadExcerptRequest, DocumentationScribeRepositoryReadExcerptResult>
+    {
+        internal int Calls { get; private set; }
+        public ValueTask<DocumentationScribeRepositoryReadExcerptResult> InvokeAsync(DocumentationScribeRepositoryReadExcerptRequest request,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            const string text = "synthetic excerpt";
+            return ValueTask.FromResult(new DocumentationScribeRepositoryReadExcerptResult(DocumentationScribeToolOutcome.Complete, null,
+                new("docs/guide.md", text, 0, text.Length, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant(),
+                    text.Length, text.Length, false), null, []));
+        }
     }
 
     private static SolusScribeQualificationSession ToolSession(DocumentationScribeRequest request,

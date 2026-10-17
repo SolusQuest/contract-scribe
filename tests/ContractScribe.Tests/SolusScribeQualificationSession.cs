@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -18,7 +19,8 @@ using SolusAgent.Tools.Api;
 namespace ContractScribe.Tests;
 
 // A public-package qualification fixture. The production loop remains unchanged until #244.
-// Product state/codec/ports are real; only the HTTP handler and checkpoint fault injection are controlled.
+// Product state/codecs are real. Tests identify controlled HTTP, port and checkpoint seams;
+// the native repository cases use the actual confined read port.
 internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntimeExposureHooks
 {
     private const string Instructions = "Execute the Host-bound Documentation Scribe protocol using only registered read tools.";
@@ -54,8 +56,8 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             throw new ArgumentException("The qualification input is not bound to the admitted request.");
         State = new(request, attempt, new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), registry, scope.Allowance.Clock, scope);
         provider = new(this, exchange);
-        var tools = registry.Registrations.Select(registration =>
-            new RuntimeToolRegistration(new ReadTool(this, registration), new ReadCapability())).ToArray();
+        var tools = registry.Registrations.Select((registration, index) =>
+            new RuntimeToolRegistration(new ReadTool(this, registration, RuntimeToolName(index)), new ReadCapability())).ToArray();
         var configuration = new RuntimeConfiguration(provider, tools, this, Bounds());
         runtime = (ICandidateAgent)RuntimeAgentFactory.Create(configuration,
             new RuntimeOptions(scope.Allowance.Clock, maximumAttempts: 128, maximumRecords: 2048,
@@ -305,7 +307,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                     var runtimeId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                         "scribe/tool-call/v1\n" + request.Attempt.PhysicalAttemptId.ToString("N") + "\n" + call.CallId))).ToLowerInvariant();
                     owner.calls[runtimeId] = call;
-                    mapped.Add(new(runtimeId, call.OperationId, Wrap(Encoding.UTF8.GetString(call.ArgumentsUtf8Json.Span))));
+                    mapped.Add(new(runtimeId, RuntimeToolName(index), Wrap(Encoding.UTF8.GetString(call.ArgumentsUtf8Json.Span))));
                 }
                 owner.State.ToolRoundCount++;
                 owner.continuation = response.AssistantContinuation;
@@ -325,12 +327,12 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
 
     private sealed class ReadCapability : IToolCapability
     {
-        public string CapabilityId => "scribe.read";
+        public string CapabilityId => "scribe_read";
     }
 
-    private sealed class ReadTool(SolusScribeQualificationSession owner, ToolRegistration registration)
-        : FunctionTool<ReadCapability>(new(registration.OperationId, "Read authorized Scribe evidence.",
-            ToolSchema.Parse(EnvelopeSchema), ToolSchema.Parse(EnvelopeSchema), "scribe.read", ToolEffect.ReadOnly,
+    private sealed class ReadTool(SolusScribeQualificationSession owner, ToolRegistration registration, string runtimeName)
+        : FunctionTool<ReadCapability>(new(runtimeName, "Read authorized Scribe evidence.",
+            ToolSchema.Parse(EnvelopeSchema), ToolSchema.Parse(EnvelopeSchema), "scribe_read", ToolEffect.ReadOnly,
             maximumArgumentBytes: ToolLimits.MaximumPayloadBytes, maximumResultBytes: ToolLimits.MaximumPayloadBytes))
     {
         protected override bool ValidateArguments(JsonElement arguments)
@@ -416,6 +418,8 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         }
     }
 
+    // Registry ordinals are unique and preserve product operation identity without lossy punctuation replacement.
+    private static string RuntimeToolName(int index) => "scribe_tool_" + index.ToString("D3", CultureInfo.InvariantCulture);
     private static string Wrap(string payload) => JsonSerializer.Serialize(new { payload });
     private static string Unwrap(string envelope)
     {
