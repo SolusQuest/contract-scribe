@@ -294,7 +294,11 @@ public sealed partial class CampaignStateContractTests
             var result = await session.RunAsync();
             Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
             Assert.True(handler.Count <= 1);
-            Assert.Equal(0, session.RuntimeResult!.RepairsAdmitted);
+            Assert.Equal(exhausted ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Validation,
+                Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            if (exhausted) Assert.Equal(0, handler.Count);
+            else Assert.NotNull(session.RuntimeResult);
+            Assert.Equal(0, session.RuntimeResult?.RepairsAdmitted ?? 0);
         }
     }
 

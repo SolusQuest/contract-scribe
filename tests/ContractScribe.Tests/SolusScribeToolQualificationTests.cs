@@ -31,7 +31,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor, port,
             new DocumentationScribeComposition.ReadCodec(request.EvidenceReferences[0]),
             DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
-            DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, maximumCallsPerRun: 16).Build();
+            BoundReadSchema(request), maximumCallsPerRun: 16).Build();
         var calls = ImmutableArray.CreateBuilder<DocumentationScribeModelToolCall>();
         calls.Add(new(0, "call.good", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
             Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}")));
@@ -50,6 +50,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         var session = ToolSession(request, registry, exchange);
         var result = await session.RunAsync();
         Assert.Equal(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Assert.Single(session.Requests[0].Tools).OperationId);
+        AssertBoundReadSchema(request, Assert.Single(session.Requests[0].Tools).InputSchemaJson);
         Assert.Equal(badMember ? 0 : retry ? 2 : 1, port.Calls);
         Assert.Equal(badMember ? 1 : retry ? 4 : 2, exchange.Requests.Length);
         if (badMember) Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
@@ -74,7 +75,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor, bundle.ReadExcerpt,
             new DocumentationScribeComposition.ReadCodec(fixture.Request.EvidenceReferences[0]),
             DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
-            DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, maximumCallsPerRun: 16).Build();
+            BoundReadSchema(fixture.Request), maximumCallsPerRun: 16).Build();
         var first = new DocumentationScribeModelResponse(
             [new(0, "call.read", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}"))], [],
             failure: null, usage: new(0, 0, 0, 0), cache: null, cost: null,
@@ -92,9 +93,12 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         var scripted = new ScriptedDocumentationScribeModelExchange(steps.ToImmutableArray());
         var handler = new QualificationToolHttpHandler(async (message, token, number) =>
         {
+            using var wire = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
+            var definition = Assert.Single(wire.RootElement.GetProperty("tools").EnumerateArray(),
+                tool => tool.GetProperty("function").GetProperty("name").GetString() == "cs_tool_000").GetProperty("function");
+            AssertBoundReadSchema(fixture.Request, definition.GetProperty("parameters").GetRawText());
             if (number == 2)
             {
-                using var wire = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
                 var messages = wire.RootElement.GetProperty("messages").EnumerateArray().ToArray();
                 var assistant = Assert.Single(messages, entry => entry.GetProperty("role").GetString() == "assistant");
                 Assert.Equal("synthetic assistant", assistant.GetProperty("content").GetString());
@@ -172,7 +176,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor, bundle.ReadExcerpt,
             new DocumentationScribeComposition.ReadCodec(fixture.Request.EvidenceReferences[0]),
             DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
-            DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, maximumCallsPerRun: 16).Build();
+            BoundReadSchema(fixture.Request), maximumCallsPerRun: 16).Build();
         var response = new DocumentationScribeModelResponse(
         [
             new(0, "call.good", DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Encoding.UTF8.GetBytes("{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}")),
@@ -213,6 +217,18 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         using var optionalProvider = new SolusAgent.Providers.DeepSeek.DeepSeekProvider(new("synthetic-qualification-credential", 1));
         Assert.Equal("deepseek-flash", optionalProvider.Scope.Model);
         Assert.NotEqual("deepseek-v4-flash", optionalProvider.Scope.Model);
+    }
+
+    private static ReadOnlyMemory<byte> BoundReadSchema(DocumentationScribeRequest request) =>
+        DocumentationScribeComposition.BindRepositoryToolScopes(DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
+            RepositoryToolFixture.ScopesFor(request), DocumentationScribeRepositoryToolOperations.ReadExcerpt);
+
+    private static void AssertBoundReadSchema(DocumentationScribeRequest request, string json)
+    {
+        using var schema = JsonDocument.Parse(json);
+        Assert.Equal(["context.instructions"], schema.RootElement.GetProperty("properties").GetProperty("scopeId")
+            .GetProperty("enum").EnumerateArray().Select(value => value.GetString()));
+        Assert.True(JsonNode.DeepEquals(JsonNode.Parse(BoundReadSchema(request).Span), JsonNode.Parse(json)));
     }
 
     private sealed class ControlledReadPort : IDocumentationScribeToolPort<DocumentationScribeRepositoryReadExcerptRequest, DocumentationScribeRepositoryReadExcerptResult>

@@ -10,7 +10,7 @@ using Json.Schema;
 
 namespace ContractScribe.Tests;
 
-public sealed class DocumentationScribeRuntimeTests
+public sealed partial class DocumentationScribeRuntimeTests
 {
     private const string AttemptId = "scribe-attempt.0123456789abcdef0123456789abcdef";
     private const string ToolPolicyId = "tool-policy.read-only.v1";

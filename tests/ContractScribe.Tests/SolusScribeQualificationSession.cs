@@ -36,6 +36,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
     private bool retryableFailure;
     private DocumentationScribeProviderFinalDisposition providerDisposition = DocumentationScribeProviderFinalDisposition.Terminal;
     private Task hostPending = Task.CompletedTask;
+    private ToolBatch? batch;
     internal readonly RunState State;
     internal readonly List<DocumentationScribeModelRequest> Requests = [];
     internal CandidateExecutionResult? RuntimeResult { get; private set; }
@@ -71,10 +72,19 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
     internal async Task<DocumentationScribeRunResult> RunAsync(CancellationToken token = default, TimeSpan? duration = null)
     {
         var scope = State.Scope;
+        Result = new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
+        if (Result is null && !scope.Allowance.CanBeginProviderWork())
+            Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+        if (Result is not null)
+        {
+            RuntimeReturned.TrySetResult();
+            return Result;
+        }
         var maximum = Math.Min(128, Math.Min(State.Request.Limits.MaximumProviderRequests, scope.Allowance.Limits.MaximumProviderRequests));
         var request = new AgentRequest(Guid.NewGuid(), Instructions,
             [new(AgentInputSource.Repository, JsonSerializer.Serialize(prompt))],
-            new(maximum, duration ?? TimeSpan.FromMilliseconds(State.RemainingMilliseconds)),
+            // Product checkpoints/Scope deny effects if the deadline expires during request construction.
+            new(maximum, duration ?? TimeSpan.FromMilliseconds(Math.Max(1, State.RemainingMilliseconds))),
             AgentCapability.WorkUnitLimit | AgentCapability.DurationLimit | AgentCapability.Cancellation
                 | AgentCapability.DispatchLimits | AgentCapability.UsageReporting,
             new AgentUsageLimits(maximumPhysicalDispatches: maximum,
@@ -101,6 +111,8 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         if (scope.Failed || ProviderFault) return new DocumentationScribeTerminalReducer().CommitInternal(State, token);
         if (RuntimeResult?.StopReason == CandidateStopReason.DurationLimit)
             return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
+        if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.WorkUnitLimit)
+            return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
         if (Result is null && State.ProviderRequestCount == 0)
             return new DocumentationScribeTerminalReducer().CommitInternal(State, token);
         return Result ?? new DocumentationScribeTerminalReducer().CommitProvider(State, token,
@@ -117,9 +129,19 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         return !ProviderFault && !State.Scope.Failed;
     }
 
-    public ValueTask<ExposureAcknowledgement?> BeforeDispatchAsync(RuntimeExposure exposure, CancellationToken token) =>
-        ValueTask.FromResult<ExposureAcknowledgement?>(new(exposure, RuntimeHookStatus.Acknowledged,
-            DenyHook || State.Scope.Failed ? ExposureDecision.Deny : ExposureDecision.Permit, ExposureStrength.Volatile));
+    public ValueTask<ExposureAcknowledgement?> BeforeDispatchAsync(RuntimeExposure exposure, CancellationToken token)
+    {
+        if (!DenyHook && !State.Scope.Failed)
+        {
+            Result ??= new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
+            if (Result is null && (!State.Scope.Allowance.CanBeginProviderWork()
+                || State.ProviderRequestCount >= State.Request.Limits.MaximumProviderRequests
+                || State.ProviderRequestCount > 0 && !State.CanStartAdditionalModelWork))
+                Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+        }
+        return ValueTask.FromResult<ExposureAcknowledgement?>(new(exposure, RuntimeHookStatus.Acknowledged,
+            DenyHook || State.Scope.Failed || Result is not null ? ExposureDecision.Deny : ExposureDecision.Permit, ExposureStrength.Volatile));
+    }
 
     public async ValueTask<SettlementAcknowledgement?> AfterAttemptAsync(RuntimeSettlement settlement, CancellationToken token)
     {
@@ -142,6 +164,10 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
     private async Task<CandidateFeedback?> SubmitProductAsync(CandidateSubmission submission, CancellationToken token)
     {
         if (!await DrainAsync()) return new(submission.ExecutionId, submission.SubmissionId, CandidateAcknowledgement.Failed);
+        Result ??= new DocumentationScribeTerminalReducer().TryCommitPriority(State, token, allowReturnedTerminal: true);
+        if (Result is not null)
+            return new(submission.ExecutionId, submission.SubmissionId, CandidateAcknowledgement.Acknowledged,
+                CandidateDecision.Reject, CandidateContinuation.End);
         var permit = await State.Scope.BeginHostAsync(DocumentationScribeHostOperation.TerminalSubmission, token);
         if (permit is null || !permit.TryBeginOperation())
             Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
@@ -233,7 +259,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 var product = owner.ProductRequest(request);
                 var response = await exchange.SendAsync(product, owner.State.Scope, token);
                 owner.State.ProviderRequestCount = owner.State.Scope.PhysicalProviderRequestCount;
-                if (!owner.State.TryApplyObservations(response)) throw new InvalidOperationException("qualification.usage");
+                var validObservations = owner.State.TryApplyObservations(response);
                 try
                 {
                     observation.ObserveDispatch(before < owner.State.ProviderRequestCount ? DispatchExposure.Dispatched : DispatchExposure.NotDispatched);
@@ -245,6 +271,15 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 }
                 catch (ProviderContractException) when (token.IsCancellationRequested) { }
                 token.ThrowIfCancellationRequested();
+                owner.Result = new DocumentationScribeTerminalReducer().TryCommitPriority(owner.State, token,
+                    allowReturnedTerminal: validObservations && response.TerminalSubmissions.Length == 1
+                        && response.ToolCalls.IsEmpty && response.Failure is null);
+                if (owner.Result is not null) throw new ProviderContractException(ProviderError.LimitExceeded);
+                if (!validObservations)
+                {
+                    owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, "provider-response.invalid");
+                    throw new ProviderContractException(ProviderError.InvalidResponse);
+                }
                 if (Convert.ToInt32(response.Failure is not null) + Convert.ToInt32(!response.ToolCalls.IsEmpty)
                     + Convert.ToInt32(!response.TerminalSubmissions.IsEmpty) != 1 || response.TerminalSubmissions.Length > 1)
                 {
@@ -266,6 +301,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                         owner.State.CompletedToolExchanges = [];
                         owner.State.ActiveDynamicEvidenceReferences = [];
                         owner.continuation = null;
+                        owner.batch = null;
                     }
                     throw new ProviderFailureException(failure.IsTransient ? new ProviderRetry(
                         failure.Code == DocumentationScribeModelFailureCode.RateLimited ? ProviderRetryKind.Throttled : ProviderRetryKind.Transient) : null);
@@ -311,6 +347,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 }
                 owner.State.ToolRoundCount++;
                 owner.continuation = response.AssistantContinuation;
+                owner.batch = new(owner.epoch, mapped.Count, owner.State.ActiveDynamicEvidenceReferences);
                 return new(request.Scope, request.Attempt, ProviderFinish.ToolCalls, null, mapped);
             }
             catch (ProviderFailureException) { throw; }
@@ -323,6 +360,15 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             catch (OperationCanceledException) { throw; }
             catch (Exception) { owner.ProviderFault = true; throw; }
         }
+    }
+
+    private sealed class ToolBatch(int epoch, int count, ImmutableArray<DocumentationScribeEvidenceReference> active)
+    {
+        internal int Epoch { get; } = epoch;
+        internal int Count { get; } = count;
+        internal Dictionary<string, DocumentationScribeEvidenceReference> ProspectiveActive { get; } =
+            active.ToDictionary(reference => reference.EvidenceReferenceId, StringComparer.Ordinal);
+        internal List<(string RuntimeId, DocumentationScribeCompletedToolExchange Exchange)> Completed { get; } = [];
     }
 
     private sealed class ReadCapability : IToolCapability
@@ -359,49 +405,16 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             if (permit is null || !permit.TryBeginOperation()) throw new OperationCanceledException(token);
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), owner.State.Scope.Allowance.Clock);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+            ToolInvocationResult result;
             try
             {
                 owner.State.ToolCallCount++;
                 owner.State.PerOperationToolCalls[owner.registry.FindRegistrationIndex(registration.OperationId)]++;
                 var invocation = registration.Prepare(original).InvokeAsync(linked.Token).AsTask();
-                ToolInvocationResult result;
                 try { result = await invocation.WaitAsync(linked.Token); }
                 catch (OperationCanceledException) when (!invocation.IsCompleted)
                 { _ = DocumentationScribeRuntime.ObserveLateAsync(invocation); throw; }
                 linked.Token.ThrowIfCancellationRequested();
-                if (result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
-                    || result.Outcome == DocumentationScribeToolOutcome.TimedOut
-                    || result.Outcome == DocumentationScribeToolOutcome.Cancelled
-                    || result.Outcome == DocumentationScribeToolOutcome.Failure)
-                {
-                    owner.Result = result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
-                        ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget)
-                        : result.Outcome == DocumentationScribeToolOutcome.TimedOut
-                            ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Timeout)
-                            : token.IsCancellationRequested
-                                ? new DocumentationScribeTerminalReducer().CommitCancelled(owner.State, token)
-                                : new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
-                    throw new ToolContractException(ToolError.InvocationFailed);
-                }
-                var references = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceReference>();
-                foreach (var input in result.DynamicEvidence)
-                {
-                    if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(owner.State.Request, input, out var reference)
-                        || reference is null) throw new InvalidOperationException("qualification.evidence");
-                    if (owner.State.ChargedDynamicEvidenceById.TryGetValue(reference.EvidenceReferenceId, out var prior))
-                        Assert.True(DocumentationScribeValidation.EvidenceReferenceEquivalent(prior, reference));
-                    else Assert.True(owner.State.TryChargeDynamicEvidence(reference));
-                    references.Add(reference);
-                }
-                if (owner.State.IsEvidenceBudgetExceeded) throw new InvalidOperationException("qualification.evidence.budget");
-                owner.State.ActiveDynamicEvidenceReferences = owner.State.ActiveDynamicEvidenceReferences.Concat(references)
-                    .DistinctBy(reference => reference.EvidenceReferenceId).OrderBy(reference => reference.EvidenceReferenceId, StringComparer.Ordinal).ToImmutableArray();
-                var completed = new DocumentationScribeCompletedToolExchange(original.ResponseIndex, original.CallId,
-                    original.OperationId, original.ArgumentsUtf8JsonStorage, result.Outcome.Id, result.ResultUtf8Json,
-                    references.ToImmutable(), original.ResponseIndex == 0 ? owner.continuation : null);
-                Assert.True(owner.State.TryChargeSuccessfulToolExchange(DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completed)));
-                owner.results[call.CallId] = (owner.epoch, completed);
-                return ToolOutput.Success(call, Wrap(Encoding.UTF8.GetString(result.ResultUtf8Json.AsSpan())));
             }
             catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
             {
@@ -414,6 +427,85 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             {
                 if (!await owner.State.Scope.CompleteHostAsync(permit, CancellationToken.None))
                     throw new InvalidOperationException("qualification.tool.settlement-unconfirmed");
+            }
+
+            // Product admission follows mandatory Host completion, as in the current runtime.
+            owner.Result = new DocumentationScribeTerminalReducer().TryCommitPriority(owner.State, token);
+            if (owner.Result is not null) throw new ToolContractException(ToolError.InvocationFailed);
+            if (result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
+                || result.Outcome == DocumentationScribeToolOutcome.TimedOut
+                || result.Outcome == DocumentationScribeToolOutcome.Cancelled
+                || result.Outcome == DocumentationScribeToolOutcome.Failure)
+            {
+                owner.Result = result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
+                    ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget)
+                    : result.Outcome == DocumentationScribeToolOutcome.TimedOut
+                        ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Timeout)
+                        : token.IsCancellationRequested
+                            ? new DocumentationScribeTerminalReducer().CommitCancelled(owner.State, token)
+                            : new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
+                throw new ToolContractException(ToolError.InvocationFailed);
+            }
+            if (result.Outcome == DocumentationScribeToolOutcome.Unavailable && !result.DynamicEvidence.IsEmpty)
+                throw RejectEvidence();
+            var current = owner.batch ?? throw new InvalidOperationException("qualification.tool.batch-missing");
+            if (current.Epoch != owner.epoch) throw new InvalidOperationException("qualification.tool.batch-stale");
+            var references = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceReference>();
+            var ids = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var input in result.DynamicEvidence)
+            {
+                if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(owner.State.Request, input, out var created)
+                    || created is null || !ids.Add(created.EvidenceReferenceId)) throw RejectEvidence();
+                DocumentationScribeEvidenceReference accepted;
+                var originalEvidence = owner.State.Request.EvidenceReferences.FirstOrDefault(reference =>
+                    reference.EvidenceReferenceId == created.EvidenceReferenceId);
+                if (originalEvidence is not null)
+                {
+                    if (!DocumentationScribeValidation.EvidenceReferenceEquivalent(originalEvidence, created)) throw RejectEvidence();
+                    accepted = originalEvidence;
+                }
+                else if (owner.State.ChargedDynamicEvidenceById.TryGetValue(created.EvidenceReferenceId, out var prior))
+                {
+                    if (!DocumentationScribeValidation.EvidenceReferenceEquivalent(prior, created)) throw RejectEvidence();
+                    accepted = prior;
+                    current.ProspectiveActive[accepted.EvidenceReferenceId] = accepted;
+                }
+                else
+                {
+                    accepted = created;
+                    current.ProspectiveActive.Add(accepted.EvidenceReferenceId, accepted);
+                    if (!owner.State.TryChargeDynamicEvidence(accepted)) throw ExhaustedEvidenceBudget();
+                }
+                references.Add(accepted);
+            }
+            var completed = new DocumentationScribeCompletedToolExchange(original.ResponseIndex, original.CallId,
+                original.OperationId, original.ArgumentsUtf8JsonStorage, result.Outcome.Id, result.ResultUtf8Json,
+                references.OrderBy(reference => reference.EvidenceReferenceId, StringComparer.Ordinal).ToImmutableArray(),
+                original.ResponseIndex == 0 ? owner.continuation : null);
+            if (!owner.State.TryChargeSuccessfulToolExchange(DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completed))
+                || owner.State.IsEvidenceBudgetExceeded) throw ExhaustedEvidenceBudget();
+            current.Completed.Add((call.CallId, completed));
+            if (current.Completed.Count == current.Count)
+            {
+                owner.Result = new DocumentationScribeTerminalReducer().TryCommitPriority(owner.State, token);
+                if (owner.Result is not null) throw new ToolContractException(ToolError.InvocationFailed);
+                owner.State.ActiveDynamicEvidenceReferences = current.ProspectiveActive.Values
+                    .OrderBy(reference => reference.EvidenceReferenceId, StringComparer.Ordinal).ToImmutableArray();
+                owner.State.CompletedToolExchanges = owner.State.CompletedToolExchanges.AddRange(current.Completed.Select(item => item.Exchange));
+                foreach (var item in current.Completed) owner.results[item.RuntimeId] = (owner.epoch, item.Exchange);
+                owner.batch = null;
+            }
+            return ToolOutput.Success(call, Wrap(Encoding.UTF8.GetString(result.ResultUtf8Json.AsSpan())));
+
+            ToolContractException RejectEvidence()
+            {
+                owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
+                return new(ToolError.InvalidResult);
+            }
+            ToolContractException ExhaustedEvidenceBudget()
+            {
+                owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget);
+                return new(ToolError.LimitExceeded);
             }
         }
     }
