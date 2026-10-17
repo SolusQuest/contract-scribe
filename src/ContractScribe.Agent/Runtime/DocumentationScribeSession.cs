@@ -212,26 +212,49 @@ internal sealed class DocumentationScribeSession : ICandidateHost, IRuntimeExpos
 
     private async Task WaitForProductRetryAsync(CancellationToken token)
     {
-        if (State.Scope.PendingRetryAfterMilliseconds <= 0) return;
-        var permit = await State.Scope.BeginHostAsync(DocumentationScribeHostOperation.RetryWait, token);
-        if (permit is null || !permit.TryBeginOperation()) throw new OperationCanceledException(token);
-        // A normal retry-wait grant represents the planned wait itself. Only a shorter resource
-        // deadline interrupts it; using the planned delay as a competing timer would race fulfillment.
-        using var deadline = permit.MaximumMilliseconds < State.Scope.PendingRetryAfterMilliseconds
-            ? new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), State.Scope.Allowance.Clock)
-            : new CancellationTokenSource();
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
-        try { await Task.Delay(TimeSpan.FromMilliseconds(State.Scope.PendingRetryAfterMilliseconds), State.Scope.Allowance.Clock, linked.Token); }
-        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
+        // This completes only the product's persisted Host wait. The SDK alone admits retries.
+        while (State.Scope.PendingRetryAfterMilliseconds > 0)
         {
-            State.Scope.ObserveDeadline(permit);
-            Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
-            throw;
-        }
-        finally
-        {
-            if (!await State.Scope.CompleteHostAsync(permit, CancellationToken.None))
-                throw new InvalidOperationException("scribe.retry.settlement-unconfirmed");
+            var pendingBefore = State.Scope.PendingRetryAfterMilliseconds;
+            var permit = await State.Scope.BeginHostAsync(DocumentationScribeHostOperation.RetryWait, token);
+            if (permit is null) throw new OperationCanceledException(token);
+            try
+            {
+                var begun = permit.TryBeginOperation();
+                if (!begun && (permit.RemainingMilliseconds > 0 || State.Scope.Failed || State.Scope.Allowance.HasCheckedStop
+                    || permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation))
+                {
+                    State.Scope.ObserveDeadline(permit);
+                    Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+                    throw new OperationCanceledException(token);
+                }
+                // Reservation/readback already spent part or all of this finite interval.
+                // A zero remaining Host-owned wait still requires mandatory completion.
+                var remaining = permit.RemainingMilliseconds;
+                if (remaining > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(remaining), State.Scope.Allowance.Clock, token).ConfigureAwait(false);
+                if (permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation)
+                {
+                    State.Scope.ObserveDeadline(permit);
+                    Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+                    throw new OperationCanceledException(token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (!token.IsCancellationRequested) State.Scope.ObserveDeadline(permit);
+                throw;
+            }
+            finally
+            {
+                if (!await State.Scope.CompleteHostAsync(permit, CancellationToken.None).ConfigureAwait(false))
+                    throw new InvalidOperationException("scribe.retry.settlement-unconfirmed");
+            }
+            if (State.Scope.PendingRetryAfterMilliseconds >= pendingBefore)
+            {
+                Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+                throw new ProviderContractException(ProviderError.LimitExceeded);
+            }
         }
     }
 

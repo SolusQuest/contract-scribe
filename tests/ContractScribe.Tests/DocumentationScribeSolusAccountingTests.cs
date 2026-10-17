@@ -38,6 +38,31 @@ public sealed partial class CampaignStateContractTests
         await trial.CompleteAsync(result);
     }
 
+    [Theory]
+    [InlineData(250)]
+    [InlineData(1000)]
+    public async Task Solus_runtime_retry_readback_consumes_the_admitted_wait_before_the_next_dispatch(int readbackMilliseconds)
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 5000, invocationMilliseconds: 1500);
+        trial.Store.RetryReadback = () => clock.Advance(readbackMilliseconds);
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [],
+                new(DocumentationScribeModelFailureCode.TransientUnavailable, retryAfterMilliseconds: 1000), usage: new(0, 0, 0, 0))),
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0)))]);
+        var running = trial.Session(exchange).RunAsync();
+        await trial.Store.RetryWaitEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(1000 - readbackMilliseconds);
+        // Always release an incorrect extra wait so the regression leaves no pending operation.
+        if (await Task.WhenAny(running, Task.Delay(200)) != running) clock.Advance(1000);
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        Assert.Equal(2, exchange.Requests.Length);
+        Assert.Equal(0, trial.Coordinator.Scope.PendingRetryAfterMilliseconds);
+        Assert.Equal(2, result.RunEnvelope.AttemptNumber);
+        await trial.CompleteAsync(result);
+    }
+
     [Fact]
     public async Task Solus_runtime_retry_exhaustion_stops_at_the_product_limit()
     {
@@ -485,6 +510,7 @@ public sealed partial class CampaignStateContractTests
         internal bool FailSettlementReadback { get; set; }
         internal bool HoldTerminalCompletion { get; set; }
         private bool failNextRead;
+        internal Action? RetryReadback { get; set; }
         internal TaskCompletionSource SettlementEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseSettlement { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource RetryWaitEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -493,6 +519,12 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token)
         {
             Reads++;
+            if (Current.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.RetryWait }
+                && RetryReadback is { } readback)
+            {
+                RetryReadback = null;
+                readback();
+            }
             if (failNextRead) { failNextRead = false; return ValueTask.FromResult(CampaignCheckpointReadResult.Unreadable()); }
             return inner.ReadAsync(token);
         }
