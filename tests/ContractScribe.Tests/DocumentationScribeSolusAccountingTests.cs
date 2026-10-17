@@ -429,7 +429,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3, TimeProvider? clock = null,
-        int? targetMilliseconds = null, int? invocationMilliseconds = null)
+        int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
@@ -454,7 +454,7 @@ public sealed partial class CampaignStateContractTests
                 maximumOutputTokens: request.Limits.MaximumOutputTokens,
                 maximumElapsedMilliseconds: invocation,
                 maximumRequestOutputTokens: request.Limits.MaximumOutputTokens,
-                maximumRequestElapsedMilliseconds: Math.Min(invocation, request.Limits.MaximumElapsedMilliseconds)), clock)
+                maximumRequestElapsedMilliseconds: Math.Min(hostMilliseconds ?? invocation, request.Limits.MaximumElapsedMilliseconds)), clock)
             : CampaignInvocationTestPolicy.Create(request.Limits, clock);
         var admission = CampaignStateReducer.AdmitProviderInvocation(initial, scenario.ExecutionAuthority, "style.synthetic",
             scenario.StyleProjection, scenario.Input, scenario.Plan, scenario.Plan.WorkItems[0].WorkItemKey, request,
@@ -473,14 +473,17 @@ public sealed partial class CampaignStateContractTests
         DocumentationScribeAttemptId Attempt, SolusCheckpointStore Store, CampaignProviderInvocationAuthority Authority,
         CampaignScribeExecutionCoordinator Coordinator)
     {
-        internal ScribeSessionTestDriver Session(IDocumentationScribeModelExchange exchange) => new(Request, Attempt,
-            new(Request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
+        internal DocumentationScribePromptInput Prompt => new(
+            Request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
                 reference.Kind, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
                 new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),
-                Request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
-                    reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
-                    new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray()),
-            new DocumentationScribeToolRegistryBuilder(Request.ToolPolicyId).Build(), exchange, Coordinator.Scope);
+            Request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
+                reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
+                new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
+
+        internal ScribeSessionTestDriver Session(IDocumentationScribeModelExchange exchange,
+            DocumentationScribeToolRegistry? registry = null) => new(Request, Attempt, Prompt,
+            registry ?? new DocumentationScribeToolRegistryBuilder(Request.ToolPolicyId).Build(), exchange, Coordinator.Scope);
 
         internal async Task CompleteAsync(DocumentationScribeRunResult result)
         {
@@ -510,7 +513,11 @@ public sealed partial class CampaignStateContractTests
         internal bool FailSettlementReadback { get; set; }
         internal bool HoldTerminalCompletion { get; set; }
         private bool failNextRead;
+        private CampaignProviderHostPhase? pendingHostCompletionReadback;
+        internal List<CampaignProviderHostPhase> CompletedHostReadbacks { get; } = [];
         internal Action? RetryReadback { get; set; }
+        internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
+        internal Action? DelayedReadback { get; set; }
         internal TaskCompletionSource SettlementEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseSettlement { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource RetryWaitEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -519,6 +526,12 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token)
         {
             Reads++;
+            if (Current.State.ActiveReservation is CampaignProviderReservation delayed
+                && delayed.HostPhase == DelayedReadbackPhase && DelayedReadback is { } delay)
+            {
+                DelayedReadback = null;
+                delay();
+            }
             if (Current.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.RetryWait }
                 && RetryReadback is { } readback)
             {
@@ -526,6 +539,11 @@ public sealed partial class CampaignStateContractTests
                 readback();
             }
             if (failNextRead) { failNextRead = false; return ValueTask.FromResult(CampaignCheckpointReadResult.Unreadable()); }
+            if (pendingHostCompletionReadback is { } completed)
+            {
+                CompletedHostReadbacks.Add(completed);
+                pendingHostCompletionReadback = null;
+            }
             return inner.ReadAsync(token);
         }
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) =>
@@ -534,6 +552,9 @@ public sealed partial class CampaignStateContractTests
             ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
         {
             var next = CampaignStateJson.Parse(bytes).Artifact!;
+            var completedHost = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } previous
+                && next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } successor
+                && previous.HostPhase != successor.HostPhase ? previous.HostPhase : (CampaignProviderHostPhase?)null;
             var dispatch = next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch };
             var settlement = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch } && !dispatch;
             if (HoldTerminalCompletion
@@ -554,6 +575,7 @@ public sealed partial class CampaignStateContractTests
             if (result.Kind == CampaignCheckpointWriteKind.Written)
             {
                 Current = next;
+                pendingHostCompletionReadback = completedHost;
                 if (dispatch) Dispatches++;
                 if (settlement) Settlements++;
                 failNextRead = dispatch && FailDispatchReadback || settlement && FailSettlementReadback;
