@@ -1723,7 +1723,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             Directory.Delete(Root, recursive: true);
         }
 
-        private static DocumentationScribeRequest ParseRequest()
+        internal static DocumentationScribeRequest ParseRequest()
         {
             var path = Path.Join(
                 FindRepositoryRoot(), "tests", "fixtures", "documentation-scribe", "v1", "valid", "request.json");

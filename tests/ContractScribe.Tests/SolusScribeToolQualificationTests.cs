@@ -17,6 +17,21 @@ namespace ContractScribe.Tests;
 
 public sealed partial class DocumentationScribeRepositoryToolTests
 {
+    [Fact]
+    public async Task Solus_qualification_repository_prompt_commitments_survive_the_public_runtime()
+    {
+        // Exercise the same committed prompt as the native repository cases on every platform.
+        var request = RepositoryToolFixture.ParseRequest();
+        var registry = new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build();
+        var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
+            new([], [new(Encoding.UTF8.GetBytes(
+                "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}"))], usage: new(0, 0, 0, 0)))]);
+        var session = ToolSession(request, registry, exchange);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, (await session.RunAsync()).Terminal.Kind);
+        Assert.Single(exchange.Requests);
+        Assert.Equal(0, session.State.ToolRoundCount);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -174,14 +189,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         DocumentationScribeToolRegistry registry, IDocumentationScribeModelExchange exchange)
     {
         Assert.True(DocumentationScribeAttemptId.TryParse("scribe-attempt.11111111111111111111111111111111", out var attempt));
-        var prompt = new DocumentationScribePromptInput(
-            request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
-                reference.Kind, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
-                new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),
-            request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
-                reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
-                new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
-        return new(request, attempt, prompt, registry, exchange, DocumentationScribeExecutionScope.ForStandalone(request));
+        return new(request, attempt, Prompt(request), registry, exchange, DocumentationScribeExecutionScope.ForStandalone(request));
     }
 
     private sealed class QualificationToolHttpHandler(Func<HttpRequestMessage, CancellationToken, int, Task<HttpResponseMessage>> send) : HttpMessageHandler
