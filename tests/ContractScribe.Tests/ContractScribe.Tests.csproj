@@ -8,6 +8,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="SolusAgent.Api" />
+    <PackageReference Include="SolusAgent.Tools.Api" />
+    <PackageReference Include="SolusAgent.Runtime.Api" />
+    <PackageReference Include="SolusAgent.Runtime" />
+    <PackageReference Include="SolusAgent.Providers.DeepSeek" />
     <PackageDownload Include="Microsoft.NETCore.App.Ref" Version="[10.0.2]" />
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="JsonSchema.Net" />

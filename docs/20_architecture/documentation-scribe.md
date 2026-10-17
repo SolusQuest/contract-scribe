@@ -6,7 +6,7 @@
 
 The Documentation Scribe turns a deterministic audit target, bounded repository evidence, and a style profile into a structured XML-documentation proposal. It is the product's model-assisted writing capability, but it is not a general coding agent.
 
-The current Scribe Runtime is self-developed. [CR1](../90_roadmap/cr1-plan.md) adopts migration of its general execution machinery to published SolusAgent packages while preserving ContractScribe-owned tool policy, scoped evidence, budgets, output validation, durable accounting and failure handling. Qualification and production cutover remain pending; the current implementation described below has not yet been replaced.
+The current Scribe Runtime is self-developed. [CR1](../90_roadmap/cr1-plan.md) adopts migration of its general execution machinery to published SolusAgent packages while preserving ContractScribe-owned tool policy, scoped evidence, budgets, output validation, durable accounting and failure handling. The [Q1 selected integration contract](../90_roadmap/cr1-plan.md#q1-selected-integration-contract) uses published SolusAgent `0.1.0-internal.3` with the existing scoped HTTP transport behind a Scribe-specific provider. Production cutover remains CR1-I1; the current implementation described below has not yet been replaced.
 
 The production implementation lives in `ContractScribe.Agent`, depends on Core-owned ports, and does not reference `ContractScribe.Patching` or `ContractScribe.GitHub`. Roslyn-backed tool implementations are injected by the CLI composition root. See [Project structure](project-structure.md).
 

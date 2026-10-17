@@ -1916,7 +1916,7 @@ internal static class DocumentationScribeComposition
             new(null, null, default, null, [], null, [], new PreflightFailure(kind, code));
     }
 
-    private abstract class RepositoryCodec<TRequest, TResult>
+    internal abstract class RepositoryCodec<TRequest, TResult>
         : IDocumentationScribeToolCodec<TRequest, TResult>
         where TRequest : IDocumentationScribeToolRequest<TResult>
         where TResult : IDocumentationScribeToolResult
@@ -1990,7 +1990,7 @@ internal static class DocumentationScribeComposition
             && itemSpan.End <= sourceSpan.End;
     }
 
-    private sealed class ReadCodec
+    internal sealed class ReadCodec
         : RepositoryCodec<DocumentationScribeRepositoryReadExcerptRequest, DocumentationScribeRepositoryReadExcerptResult>
     {
         internal ReadCodec(DocumentationScribeEvidenceReference authorizedSource)

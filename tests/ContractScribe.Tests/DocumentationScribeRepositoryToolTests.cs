@@ -12,7 +12,7 @@ using ContractScribe.Roslyn;
 
 namespace ContractScribe.Tests;
 
-public sealed class DocumentationScribeRepositoryToolTests
+public sealed partial class DocumentationScribeRepositoryToolTests
 {
     [Fact]
     public void ProviderSchemasEnumerateOnlyScopesAuthorizedForEachOperation()
@@ -1683,16 +1683,8 @@ public sealed class DocumentationScribeRepositoryToolTests
             return new(root, repository, loaded, request, instruction);
         }
 
-        internal DocumentationScribeRepositoryToolBundle Bundle(
-            int pageSize = 8,
-            DocumentationScribeRepositoryToolLimits? limits = null,
-            IEnumerable<DocumentationScribeRepositoryToolScope>? scopes = null,
-            Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint = null,
-            Func<TimeSpan>? elapsed = null)
+        internal static ImmutableArray<DocumentationScribeRepositoryToolScope> ScopesFor(DocumentationScribeRequest request)
         {
-            Assert.True(DocumentationScribeAttemptId.TryParse(
-                "scribe-attempt.11111111111111111111111111111111",
-                out var attempt));
             var subject = EvidenceInput.TargetSubject(
                 request.Target.SymbolRef.CompilationContextRef,
                 request.Target.SymbolRef.DocumentationCommentId);
@@ -1706,11 +1698,24 @@ public sealed class DocumentationScribeRepositoryToolTests
                 extensions: [".md"],
                 subject: subject,
                 claimCategoryIds: ["claim.purpose"]);
+            return [scope];
+        }
+
+        internal DocumentationScribeRepositoryToolBundle Bundle(
+            int pageSize = 8,
+            DocumentationScribeRepositoryToolLimits? limits = null,
+            IEnumerable<DocumentationScribeRepositoryToolScope>? scopes = null,
+            Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint = null,
+            Func<TimeSpan>? elapsed = null)
+        {
+            Assert.True(DocumentationScribeAttemptId.TryParse(
+                "scribe-attempt.11111111111111111111111111111111",
+                out var attempt));
             var configured = limits ?? DocumentationScribeRepositoryToolLimits.Create(maximumPageSize: pageSize);
             return checkpoint is null && elapsed is null
-                ? DocumentationScribeRepositoryToolBundle.Create(request, attempt, loaded, scopes ?? [scope], configured)
+                ? DocumentationScribeRepositoryToolBundle.Create(request, attempt, loaded, scopes ?? ScopesFor(request), configured)
                 : DocumentationScribeRepositoryToolBundle.CreateForTesting(
-                    request, attempt, loaded, scopes ?? [scope], configured, checkpoint ?? (_ => { }), elapsed);
+                    request, attempt, loaded, scopes ?? ScopesFor(request), configured, checkpoint ?? (_ => { }), elapsed);
         }
 
         public void Dispose()
@@ -1723,7 +1728,7 @@ public sealed class DocumentationScribeRepositoryToolTests
             Directory.Delete(Root, recursive: true);
         }
 
-        private static DocumentationScribeRequest ParseRequest()
+        internal static DocumentationScribeRequest ParseRequest()
         {
             var path = Path.Join(
                 FindRepositoryRoot(), "tests", "fixtures", "documentation-scribe", "v1", "valid", "request.json");
