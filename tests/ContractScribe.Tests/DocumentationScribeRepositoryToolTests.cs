@@ -12,7 +12,7 @@ using ContractScribe.Roslyn;
 
 namespace ContractScribe.Tests;
 
-public sealed class DocumentationScribeRepositoryToolTests
+public sealed partial class DocumentationScribeRepositoryToolTests
 {
     [Fact]
     public void ProviderSchemasEnumerateOnlyScopesAuthorizedForEachOperation()

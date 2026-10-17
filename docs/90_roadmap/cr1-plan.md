@@ -1,6 +1,6 @@
 # CR1 — Adopt SolusAgent for the Documentation Scribe
 
-> **Status:** Plan adopted; qualification and implementation pending. Production still uses ContractScribe's current single-target runtime. Adoption of this plan does not claim migration completion or authorize a release.
+> **Status:** Q1 integration contract selected; production cutover remains pending in CR1-I1. Production still uses ContractScribe's current single-target runtime. Adoption of this plan does not claim migration completion or authorize a release.
 
 ## Outcome and boundary
 
@@ -23,18 +23,40 @@ The essential chain is Q1's passing result and available dependencies → I1 →
 
 ## Qualification questions
 
-The available `0.1.0-internal.1` package source is [SolusAgent `076bcda2fbe1da2677ac5c6fd03d75bc0fef66ad`](https://github.com/SolusQuest/solus-agent/tree/076bcda2fbe1da2677ac5c6fd03d75bc0fef66ad). Package installation and synthetic consumer evidence establish availability, not actual ContractScribe equivalence. Qualify at least:
+The selected published version is `0.1.0-internal.3`, from [SolusAgent `87bae040d86a8881b60524d786dfc2d1f20d1416`](https://github.com/SolusQuest/solus-agent/tree/87bae040d86a8881b60524d786dfc2d1f20d1416), released by [Internal release 38994198143](https://github.com/SolusQuest/solus-agent/actions/runs/38994198143). Package availability alone does not establish Scribe equivalence. The selected mapping and executable qualification are below; these preservation questions remain applicable:
 
 | Surface | Required result |
 | --- | --- |
-| Classified input and read-only tools | Preserve instruction/data authority, bounded reads, rich evidence and all domain validation. The current closed scalar-object tool schema requires an explicit supported representation or upstream change. Never silently discard constraints. |
-| Provider configuration | Preserve the selected `deepseek-v4-flash` profile and configured endpoint/model/control semantics. The built-in `.1` DeepSeek adapter fixes `deepseek-flash` and construction-time output bounds; it is optional. Select a supported provider integration without a silent model change or local generic runtime fork. |
-| Capacity and bounds | Compare actual supported single-target/campaign limits and byte/record ceilings, separately from M7's later shared-conversation requirements. `.1` caps retained attempts/records at 64; M7 permits up to 128 requests. No hidden lowering or unsupported readiness claim. |
+| Classified input and read-only tools | Preserve instruction/data authority, bounded reads, rich evidence and all domain validation. Use an explicit supported representation without weakening the current domain checks. Never silently discard constraints. |
+| Provider configuration | Preserve the selected `deepseek-v4-flash` profile and configured endpoint/model/control semantics. The optional built-in DeepSeek adapter fixes `deepseek-flash` and construction-time output bounds. Select a supported provider integration without a silent model change or local generic runtime fork. |
+| Capacity and bounds | Compare actual supported single-target/campaign limits and byte/record ceilings, separately from M7's later shared-conversation requirements. The selected profile must opt into the published larger capacities; small library defaults are insufficient. Do not lower accepted product bounds or infer M7 completion. |
 | Candidate and Host feedback | Product validators retain proposal/skip authority, finite repair and safe partial outcomes. A runtime final response or Host feedback acknowledgement is not patch or publication acceptance. |
 | Dispatch and settlement | Bind public hooks to the actual durable reservation/checkpoint flow; preserve physical attempts/retries, known/unknown observations, conservative exposure, restored history and denied-dispatch behavior. Library in-memory accounting is not durable storage evidence. |
 | Current consumers | Include CLI, campaign, evaluation and packaged payload behavior. Future Actions restore verified business progress into fresh executions; full conversation/reasoning restoration is excluded. |
 
 Generic package gaps belong to SolusAgent. Record precise cross-repository dependencies with full URLs when they exist; upstream issue creation, implementation and package publication retain their own authorization. A later published version may be selected on evidence. Do not copy a missing general runtime implementation into ContractScribe to conceal a gap.
+
+## Q1 selected integration contract
+
+The production package set selected for CR1-I1 is `SolusAgent.Api`, `SolusAgent.Tools.Api`, `SolusAgent.Runtime.Api` and `SolusAgent.Runtime`, each exactly pinned to `0.1.0-internal.3`. The optional `SolusAgent.Providers.DeepSeek` is restored and inspected by qualification at the same version, but is not the selected transport. Its fixed model is not equivalent to the current `deepseek-v4-flash` profile. No source-built package or older install proof substitutes for the published registry dependency.
+
+| Surface | Selected mapping |
+| --- | --- |
+| Instructions and evidence | Retain the current deterministic Scribe prompt builder and ordered wire messages. Fixed Host policy stays separate from repository/context/evidence data. Reconstruct typed prompt inputs from classified runtime data and validate them against the admitted product request. |
+| Tools | Keep the original model-facing schemas and the real product codecs/ports. An explicit bounded string envelope carries exact argument/result JSON through the runtime; no validating schema keywords are removed. Complete effect-free product preparation precedes tool invocation. Concrete read capabilities, source-bound evidence filtering and aggregate charging remain authoritative. |
+| Provider and continuation | Use a Scribe-specific public `ModelProvider` calling the existing scoped HTTP exchange. Preserve model, endpoint/profile, output-token field and exact bounded assistant continuation. Current transport continuation remains private product exchange metadata, reset on a product retry; this does not enable durable runtime conversation restoration. |
+| Candidate acceptance | Convert the structured terminal tool payload to a runtime Final candidate. The Host performs the existing TerminalSubmission admission/tool debit/completion and independent Core proposal/skip validation. Invalid singleton output is Reject + End with the current failure; no new repair policy is introduced. |
+| Dispatch and closure | The scoped physical exchange alone owns the logical-request commitment, durable reservation/readback, physical dispatch and mandatory settlement. Library hooks acknowledge only Volatile orchestration. Track and drain the real provider operation before product completion, retirement or further effects, including after a runtime cut; failed or unknown settlement fails closed. |
+| Retry and recovery | Solus owns retry admission; C4 owns persisted RetryWait and remaining-wait recovery, with library delay disabled. Keep cumulative product attempt numbering and current-execution request ordinals distinct from library correlations. Reset active product tool/evidence/continuation history on retry. Scope runtime tool-call IDs to their physical response while preserving original provider IDs in product/wire commitments, so a fresh product attempt can reuse an ID safely. Recover validated business progress into a fresh Host/runtime, without restoring or recharging conversations. |
+| Usage | Preserve nullable input/output, cache-read, uncached and reasoning observations. Reasoning is an output subset; unknown values are not zero or inferred from a peer. The existing C4 exposure, cost and restored-history accounting remain the product authority. |
+
+Use explicit capacities sufficient for the accepted role: 128 retained attempts and effective retry permission up to 128, 2048 records/inputs, 256 MiB retained runtime bytes, 32 MiB text, 128 MiB aggregate provider requests, 8 MiB aggregate responses and tool envelopes, and a 1 MiB candidate. Existing product bounds still apply first, including 4 MiB prompt blocks, 32 MiB logical requests, 1 MiB artifacts, 1024 total tool calls and 16 calls per response. These ceilings are not simultaneous promised payload sizes. Per-request output is bounded by the remaining product and invocation allowances and the existing physical-request cap. Smaller library defaults remain unchanged.
+
+Qualification lives in the existing fast test project: [accounting tests](../../tests/ContractScribe.Tests/SolusScribeAccountingQualificationTests.cs), [tool/capacity tests](../../tests/ContractScribe.Tests/SolusScribeToolQualificationTests.cs) and their [public-package fixture](../../tests/ContractScribe.Tests/SolusScribeQualificationSession.cs). They exercise actual Scribe prompt/codec/port, C4 checkpoint producer-consumer, terminal validator and completion-registrar seams. The deterministic cases include 65/128 physical attempts, exhaustion, known/partial/missing usage, checkpoint denial/readback loss, delayed settlement under cancellation/duration cuts, persisted-wait reconstruction, a real large repository result, exact HTTP continuation, reused call IDs after retry and complete-batch rejection. Fresh Host reconstruction tests are not a new operating-system crash proof; existing process regressions remain required and CR1-I1 must run them on its replacement production path.
+
+The ordinary CI restores the exact packages from the private registry using existing job-scoped package Read access, then builds and executes these tests on Ubuntu x64. Credentials exist only in Restore-step environments, never in checked-in NuGet configuration, tests or runnable payload inputs. Use `dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --configuration Release --filter "FullyQualifiedName~Solus_qualification"` with a current build under [test validation](../50_ai/skills/test-validation.md). A passing result requires actual registry-consuming execution and all required exact-head CI, not only source inspection or local archive feedback.
+
+This qualification selects a supported adapter contract; the current CLI, campaign and evaluation still use the existing production loop. CR1-I1 must switch all consumers, retain these regressions under the real adapter, delete superseded general machinery and exercise the actual packaged CLI/Action path. The M7 handoff below is unchanged.
 
 ## M7 handoff
 

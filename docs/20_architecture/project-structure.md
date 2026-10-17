@@ -176,6 +176,12 @@ The implemented project/reference and API boundaries prevent the Scribe runtime 
 
 Project-context bootstrap and bounded semantic traversal are component responsibilities, not reasons to create another agent. Later M3 issues place them across the existing or justified projects according to the implemented dependency graph, while Cli composes their lifetimes. See [Scribe context and prompt economics](scribe-context-and-prompt-economics.md).
 
+### Selected CR1 package boundary
+
+[Q1](../90_roadmap/cr1-plan.md#q1-selected-integration-contract) selects exact `0.1.0-internal.3` references to `SolusAgent.Api`, `SolusAgent.Tools.Api`, `SolusAgent.Runtime.Api` and `SolusAgent.Runtime` for the future Scribe adapter. Q1 consumes them in the existing test project only, together with the nonselected optional DeepSeek package for qualification. The current production project and package graph remains unchanged until CR1-I1.
+
+CLI composition owns concrete runtime/provider construction for an admitted execution. Agent retains only Scribe-specific classification, read-tool, terminal-validation and accounting adaptation. Its provider calls the existing scoped HTTP exchange; it does not add another retry loop or durable accounting layer. Core, Roslyn, Patching and GitHub gain no concrete SolusAgent dependency. The role receives no store, source writer or publication authority. CR1-I1 updates architecture tests to its actual allowed package edges while retaining forbidden capabilities and removes the superseded general loop in the same change.
+
 ### `ContractScribe.GitHub`
 
 Issue #159 (active M5-R2) establishes an executable internal production transport boundary, not an empty project reservation. No existing source is migrated. Its only product reference is Core; HTTP and JSON use the .NET runtime with no added package. The closed factory consumes an existing validated publication authority and an already-supplied opaque credential. Issue #165 (M5-H2) adds `Cli -> GitHub` for accepted-candidate publication composition and post-admission credential resolution. GitHub exposes only an internal facade to its CLI friend; Core, Roslyn, Patching, and Agent retain no GitHub reference.

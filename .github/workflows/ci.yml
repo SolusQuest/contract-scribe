@@ -21,6 +21,9 @@ concurrency:
 
 jobs:
   fast_and_static:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -55,6 +58,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build
@@ -138,6 +143,9 @@ jobs:
           }
 
   integration_campaign_crash:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -172,6 +180,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build
@@ -260,6 +270,9 @@ jobs:
           }
 
   integration_http_loss:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -294,6 +307,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build
@@ -384,6 +399,9 @@ jobs:
 
 
   integration_github_proposal:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -418,6 +436,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build
@@ -508,6 +528,9 @@ jobs:
 
 
   integration_other:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -542,6 +565,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build
@@ -631,6 +656,9 @@ jobs:
           }
 
   integration_unfiltered_evidence:
+    permissions:
+      contents: read
+      packages: read
     if: github.event_name == 'workflow_dispatch' && inputs.include_unfiltered_evidence
     runs-on: ubuntu-latest
     steps:
@@ -666,6 +694,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build
@@ -754,6 +784,9 @@ jobs:
           }
 
   payload_producer:
+    permissions:
+      contents: read
+      packages: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -788,6 +821,8 @@ jobs:
           dotnet --info
           dotnet msbuild -version
       - name: Restore
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
         run: dotnet restore ContractScribe.slnx
       - name: Build
         id: build

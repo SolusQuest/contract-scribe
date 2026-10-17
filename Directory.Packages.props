@@ -5,6 +5,11 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageVersion Include="SolusAgent.Api" Version="[0.1.0-internal.3]" />
+    <PackageVersion Include="SolusAgent.Tools.Api" Version="[0.1.0-internal.3]" />
+    <PackageVersion Include="SolusAgent.Runtime.Api" Version="[0.1.0-internal.3]" />
+    <PackageVersion Include="SolusAgent.Runtime" Version="[0.1.0-internal.3]" />
+    <PackageVersion Include="SolusAgent.Providers.DeepSeek" Version="[0.1.0-internal.3]" />
     <PackageVersion Include="coverlet.collector" Version="6.0.4" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
     <PackageVersion Include="JsonSchema.Net" Version="9.2.2" />
