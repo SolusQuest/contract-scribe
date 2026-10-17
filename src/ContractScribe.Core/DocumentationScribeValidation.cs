@@ -785,6 +785,7 @@ public static class DocumentationScribeValidation
 
     private static bool AllowsElapsedObservationOverrun(DocumentationScribeTerminal terminal) => terminal switch
     {
+        DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget } => true,
         DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Timeout } => true,
         DocumentationScribeCancelledTerminal => true,
         _ => false,

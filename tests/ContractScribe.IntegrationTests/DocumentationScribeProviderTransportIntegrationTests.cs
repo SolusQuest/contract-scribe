@@ -54,7 +54,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 server.Endpoint,
                 "synthetic-model-v1",
                 networkEnabled: true));
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             registry,
             new DocumentationScribeRuntimeOptions(
@@ -145,7 +145,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "synthetic-model-v1",
                 profile,
                 networkEnabled: true));
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             Registry(request.ToolPolicyId, new SyntheticPort()),
             new DocumentationScribeRuntimeOptions(
@@ -212,7 +212,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "synthetic-model-v1",
                 profile,
                 networkEnabled: true));
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             Registry(request.ToolPolicyId, new SyntheticPort()),
             new DocumentationScribeRuntimeOptions(
@@ -337,7 +337,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         var request = Request();
         using var exchange = new OpenAiCompatibleHttpModelExchange(
             new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             Registry(request.ToolPolicyId, new SyntheticPort()),
             new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
@@ -390,7 +390,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         var request = Request();
         using var exchange = new OpenAiCompatibleHttpModelExchange(
             new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             Registry(request.ToolPolicyId, new SyntheticPort()),
             new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
@@ -416,7 +416,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         var port = new SyntheticPort();
         using var exchange = new OpenAiCompatibleHttpModelExchange(
             new OpenAiCompatibleHttpTransportOptions(server.Endpoint, "model", networkEnabled: true));
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             Registry(request.ToolPolicyId, port),
             new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
@@ -544,7 +544,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         var request = Request();
         var prompt = Prompt(request);
         var capture = new CaptureExchange();
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             capture,
             tool.Build(),
             new DocumentationScribeRuntimeOptions("provider.synthetic.v1", "model.synthetic.v1", "protocol.v1"));

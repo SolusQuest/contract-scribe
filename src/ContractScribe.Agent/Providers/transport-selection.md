@@ -2,6 +2,8 @@
 
 Issue [#107](https://github.com/SolusQuest/contract-scribe/issues/107) selects one transport mechanism for the already accepted common OpenAI-compatible, non-streaming message/tool/result/terminal direction. This record does not claim compatibility with a provider or model. Live compatibility remains owned by the later executable evaluation corpus.
 
+CR1-I1 preserves this selected HTTP transport and codec. The three SolusAgent API packages in Agent and the concrete runtime package in CLI replace orchestration; they do not introduce an optional provider transport, alternate wire path or credential authority.
+
 ## Decision
 
 Select direct .NET BCL HTTP and JSON for the first transport:

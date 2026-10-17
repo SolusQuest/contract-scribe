@@ -74,12 +74,24 @@ public sealed class DocumentationScribeArchitectureTests
             .ToArray();
 
         Assert.Equal(new[] { "../ContractScribe.Core/ContractScribe.Core.csproj" }, references);
-        var providerRoot = Path.Join(root, "src", "ContractScribe.Agent", "Providers");
-        if (!Directory.Exists(providerRoot)
-            || !Directory.EnumerateFiles(providerRoot, "*.cs", SearchOption.AllDirectories).Any())
-        {
-            Assert.Empty(project.Descendants("PackageReference"));
-        }
+        Assert.Equal(["SolusAgent.Api", "SolusAgent.Runtime.Api", "SolusAgent.Tools.Api"],
+            project.Descendants("PackageReference").Select(item => item.Attribute("Include")!.Value).Order(StringComparer.Ordinal));
+        var cli = XDocument.Load(Path.Join(root, "src", "ContractScribe.Cli", "ContractScribe.Cli.csproj"));
+        Assert.Equal(["SolusAgent.Api", "SolusAgent.Runtime", "SolusAgent.Runtime.Api", "SolusAgent.Tools.Api"],
+            cli.Descendants("PackageReference").Select(item => item.Attribute("Include")!.Value)
+                .Where(name => name.StartsWith("SolusAgent.", StringComparison.Ordinal)).Order(StringComparer.Ordinal));
+        var versions = XDocument.Load(Path.Join(root, "Directory.Packages.props"));
+        var selected = versions.Descendants("PackageVersion").Where(item =>
+            item.Attribute("Include")!.Value.StartsWith("SolusAgent.", StringComparison.Ordinal)).ToArray();
+        Assert.Equal(4, selected.Length);
+        Assert.All(selected, item => Assert.Equal("[0.1.0-internal.3]", item.Attribute("Version")!.Value));
+        Assert.DoesNotContain(typeof(DocumentationScribeRuntimeOptions).Assembly.GetReferencedAssemblies(),
+            item => item.Name == "SolusAgent.Runtime" || item.Name?.StartsWith("SolusAgent.Providers.", StringComparison.Ordinal) == true);
+        Assert.False(File.Exists(Path.Join(root, "src", "ContractScribe.Agent", "Runtime", "DocumentationScribeRuntime.cs")));
+        Assert.False(File.Exists(Path.Join(root, "tests", "ContractScribe.Tests", "SolusScribeQualificationSession.cs")));
+        var constructors = Directory.EnumerateFiles(Path.Join(root, "src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => File.ReadAllText(path).Contains("RuntimeAgentFactory.Create", StringComparison.Ordinal)).ToArray();
+        Assert.Equal("DocumentationScribeExecution.cs", Path.GetFileName(Assert.Single(constructors)));
 
         var solution = File.ReadAllText(Path.Join(root, "ContractScribe.slnx"));
         Assert.Contains("src/ContractScribe.Agent/ContractScribe.Agent.csproj", solution, StringComparison.Ordinal);
@@ -88,7 +100,7 @@ public sealed class DocumentationScribeArchitectureTests
             element.Attribute("Include")?.Value.Replace('\\', '/')
                 == "../../src/ContractScribe.Agent/ContractScribe.Agent.csproj");
 
-        var productReferences = typeof(DocumentationScribeRuntime).Assembly.GetReferencedAssemblies()
+        var productReferences = typeof(DocumentationScribeRuntimeOptions).Assembly.GetReferencedAssemblies()
             .Select(reference => reference.Name)
             .Where(name => name?.StartsWith("ContractScribe.", StringComparison.Ordinal) == true)
             .Select(name => name!)
@@ -107,6 +119,8 @@ public sealed class DocumentationScribeArchitectureTests
                     "ContractScribe.Cli",
                     StringComparison.Ordinal)))
         {
+            Assert.DoesNotContain(XDocument.Load(productProject).Descendants("PackageReference"),
+                reference => reference.Attribute("Include")?.Value.StartsWith("SolusAgent.", StringComparison.Ordinal) == true);
             Assert.DoesNotContain(
                 XDocument.Load(productProject).Descendants("ProjectReference"),
                 reference => reference.Attribute("Include")?.Value.Contains(
@@ -163,7 +177,7 @@ public sealed class DocumentationScribeArchitectureTests
     [Fact]
     public void Public_agent_api_exposes_only_typed_closed_capabilities()
     {
-        var assembly = typeof(DocumentationScribeRuntime).Assembly;
+        var assembly = typeof(DocumentationScribeRuntimeOptions).Assembly;
         var publicTypes = ReachableAgentApiTypes(assembly.GetExportedTypes()
             .Where(type => type.Namespace is "ContractScribe.Agent.Runtime"
                 or "ContractScribe.Agent.Prompting")
@@ -190,7 +204,7 @@ public sealed class DocumentationScribeArchitectureTests
     {
         var assembly = typeof(OpenAiCompatibleResponseDiagnostics).Assembly;
         Assert.Equal(
-            ["ContractScribe.Tests"],
+            ["ContractScribe.Cli", "ContractScribe.Tests"],
             assembly.GetCustomAttributes<InternalsVisibleToAttribute>()
                 .Select(attribute => attribute.AssemblyName)
                 .Order(StringComparer.Ordinal)
@@ -274,7 +288,7 @@ public sealed class DocumentationScribeArchitectureTests
     [Fact]
     public void Scripted_fake_is_internal_and_hermetic()
     {
-        var assembly = typeof(DocumentationScribeRuntime).Assembly;
+        var assembly = typeof(DocumentationScribeRuntimeOptions).Assembly;
         var fake = Assert.Single(
             assembly.GetTypes(),
             type => type.Name == "ScriptedDocumentationScribeModelExchange");
@@ -432,6 +446,9 @@ public sealed class DocumentationScribeArchitectureTests
                 "GlobalUsings.g.cs"))
             .ToArray();
         var references = AppDomain.CurrentDomain.GetAssemblies()
+            .Concat([typeof(SolusAgent.Api.Execution.AgentRequest).Assembly,
+                typeof(SolusAgent.Runtime.Api.Configuration.RuntimeConfiguration).Assembly,
+                typeof(SolusAgent.Tools.Api.ToolCall).Assembly])
             .Where(assembly => !assembly.IsDynamic && !string.IsNullOrEmpty(assembly.Location))
             .Select(assembly => MetadataReference.CreateFromFile(assembly.Location))
             .GroupBy(reference => reference.Display, StringComparer.OrdinalIgnoreCase)

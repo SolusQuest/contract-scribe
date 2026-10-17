@@ -372,7 +372,7 @@ public sealed partial class CampaignStateContractTests
                 scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, request);
             var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
             Assert.True(authority.TryBeginDispatch(out _));
-            var runtime = new DocumentationScribeRuntime(exchange,
+            var runtime = new TestScribeExecution(exchange,
                 registry ?? new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
                 new DocumentationScribeRuntimeOptions("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
             var prompt = new DocumentationScribePromptInput(

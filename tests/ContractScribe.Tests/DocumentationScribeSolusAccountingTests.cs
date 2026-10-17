@@ -16,7 +16,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(65)]
     [InlineData(128)]
-    public async Task Solus_qualification_executes_real_C4_reservation_and_settlement_for_every_retry(int attempts)
+    public async Task Solus_runtime_executes_real_C4_reservation_and_settlement_for_every_retry(int attempts)
     {
         var trial = await SolusTrialAsync(attempts);
         var steps = Enumerable.Range(1, attempts - 1).Select(_ => ScriptedDocumentationScribeStep.Return(
@@ -39,7 +39,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_retry_exhaustion_stops_at_the_product_limit()
+    public async Task Solus_runtime_retry_exhaustion_stops_at_the_product_limit()
     {
         var trial = await SolusTrialAsync(65);
         var exchange = new ScriptedDocumentationScribeModelExchange(Enumerable.Range(0, 66).Select(_ =>
@@ -54,7 +54,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_restores_pending_durable_wait_into_a_fresh_host_execution_without_double_charge()
+    public async Task Solus_runtime_restores_pending_durable_wait_into_a_fresh_host_execution_without_double_charge()
     {
         var trial = await SolusTrialAsync();
         var failed = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
@@ -113,12 +113,12 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_HTTP_uses_the_product_request_commitment_profile_and_completion_authority(bool skip)
+    public async Task Solus_runtime_HTTP_uses_the_product_request_commitment_profile_and_completion_authority(bool skip)
     {
         var trial = await SolusTrialAsync();
         var terminal = skip ? Encoding.UTF8.GetBytes("{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}")
             : C3ProposalTerminal(trial.Scenario);
-        SolusScribeQualificationSession? session = null;
+        ScribeSessionTestDriver? session = null;
         var handler = new SolusHttpHandler(async (message, token) =>
         {
             using var wire = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
@@ -151,15 +151,16 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_denied_hook_or_failed_reservation_has_zero_HTTP_effects(bool hook)
+    public async Task Solus_runtime_denied_admission_or_failed_reservation_has_zero_HTTP_effects(bool admission)
     {
         var trial = await SolusTrialAsync();
-        trial.Store.DenyDispatch = !hook;
+        trial.Store.DenyDispatch = !admission;
+        using var cancellation = new CancellationTokenSource();
+        if (admission) cancellation.Cancel();
         var handler = new SolusHttpHandler((_, _) => Task.FromResult(SolusTerminalHttp(C3ProposalTerminal(trial.Scenario))));
         using var transport = SolusTransport(handler);
         var session = trial.Session(transport);
-        session.DenyHook = hook;
-        var result = await session.RunAsync();
+        var result = await session.RunAsync(cancellation.Token);
         Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
         Assert.Equal(0, handler.Count);
         Assert.Equal(0, trial.Coordinator.Scope.PhysicalProviderRequestCount);
@@ -169,7 +170,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_unconfirmed_checkpoint_readback_never_authorizes_more_effects(bool settlement)
+    public async Task Solus_runtime_unconfirmed_checkpoint_readback_never_authorizes_more_effects(bool settlement)
     {
         var trial = await SolusTrialAsync();
         trial.Store.FailDispatchReadback = !settlement;
@@ -188,19 +189,19 @@ public sealed partial class CampaignStateContractTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Solus_qualification_cut_cannot_retire_before_real_product_settlement(bool failSettlement, bool durationCut)
+    public async Task Solus_runtime_cut_cannot_retire_before_real_product_settlement(bool failSettlement, bool durationCut)
     {
-        var trial = await SolusTrialAsync();
+        var trial = await SolusTrialAsync(targetMilliseconds: durationCut ? 500 : 10_000, invocationMilliseconds: durationCut ? 500 : 10_000);
         trial.Store.HoldSettlement = true;
         trial.Store.FailSettlement = failSettlement;
         var handler = new SolusHttpHandler((_, _) => Task.FromResult(SolusTerminalHttp(C3ProposalTerminal(trial.Scenario))));
         using var transport = SolusTransport(handler);
         var session = trial.Session(transport);
         using var cancellation = new CancellationTokenSource();
-        var running = session.RunAsync(cancellation.Token, durationCut ? TimeSpan.FromMilliseconds(500) : null);
+        var running = session.RunAsync(cancellation.Token);
         await trial.Store.SettlementEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         if (!durationCut) cancellation.Cancel();
-        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.RuntimeTask!.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(SolusAgent.Api.Usage.DispatchExposure.Unknown,
             Assert.Single(session.RuntimeResult!.Outcome.Usage!.Attempts).Exposure);
         Assert.False(running.IsCompleted);
@@ -223,7 +224,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_preserves_partial_cache_and_reasoning_without_inventing_or_double_charging_usage()
+    public async Task Solus_runtime_preserves_partial_cache_and_reasoning_without_inventing_or_double_charging_usage()
     {
         var trial = await SolusTrialAsync();
         var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
@@ -243,7 +244,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_candidate_callback_cut_waits_for_its_product_host_completion()
+    public async Task Solus_runtime_candidate_callback_cut_waits_for_its_product_host_completion()
     {
         var trial = await SolusTrialAsync();
         trial.Store.HoldTerminalCompletion = true;
@@ -254,7 +255,7 @@ public sealed partial class CampaignStateContractTests
         var running = session.RunAsync(cancellation.Token);
         await trial.Store.TerminalCompletionEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         cancellation.Cancel();
-        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.RuntimeTask!.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.False(running.IsCompleted);
         Assert.False(session.HostCompletion.IsCompleted);
         trial.Store.ReleaseTerminalCompletion.TrySetResult();
@@ -265,7 +266,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_missing_usage_and_lost_HTTP_response_remain_conservative(bool lost)
+    public async Task Solus_runtime_missing_usage_and_lost_HTTP_response_remain_conservative(bool lost)
     {
         var trial = await SolusTrialAsync(128);
         var handler = new SolusHttpHandler((_, _) => lost
@@ -282,7 +283,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_invalid_terminal_and_exhausted_terminal_budget_never_trigger_repair()
+    public async Task Solus_runtime_invalid_terminal_and_exhausted_terminal_budget_never_trigger_repair()
     {
         foreach (var exhausted in new[] { false, true })
         {
@@ -350,7 +351,7 @@ public sealed partial class CampaignStateContractTests
     [InlineData(false, false, false)]
     [InlineData(true, true, false)]
     [InlineData(false, true, false)]
-    public async Task Solus_qualification_duration_cut_preserves_shared_campaign_and_target_deadline_ownership(
+    public async Task Solus_runtime_duration_cut_preserves_shared_campaign_and_target_deadline_ownership(
         bool sharedDeadline, bool cancelled, bool hostCompletion)
     {
         var clock = new SolusDeadlineClock();
@@ -384,7 +385,7 @@ public sealed partial class CampaignStateContractTests
             // Complete real C4 settlement before waiting for that acknowledgement to return.
             trial.Store.ReleaseSettlement.TrySetResult();
         }
-        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.RuntimeTask!.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(SolusAgent.Api.Candidates.CandidateStopReason.DurationLimit, session.RuntimeResult!.StopReason);
         if (hostCompletion) Assert.False(running.IsCompleted);
         if (hostCompletion && cancelled) cancellation.Cancel();
@@ -447,7 +448,7 @@ public sealed partial class CampaignStateContractTests
         DocumentationScribeAttemptId Attempt, SolusCheckpointStore Store, CampaignProviderInvocationAuthority Authority,
         CampaignScribeExecutionCoordinator Coordinator)
     {
-        internal SolusScribeQualificationSession Session(IDocumentationScribeModelExchange exchange) => new(Request, Attempt,
+        internal ScribeSessionTestDriver Session(IDocumentationScribeModelExchange exchange) => new(Request, Attempt,
             new(Request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
                 reference.Kind, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
                 new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),

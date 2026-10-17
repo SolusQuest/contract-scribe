@@ -1,4 +1,4 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
     <ProjectReference Include="..\ContractScribe.Agent\ContractScribe.Agent.csproj" />
@@ -27,4 +27,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+  <ItemGroup>
+    <PackageReference Include="SolusAgent.Api" />
+    <PackageReference Include="SolusAgent.Tools.Api" />
+    <PackageReference Include="SolusAgent.Runtime.Api" />
+    <PackageReference Include="SolusAgent.Runtime" />
+  </ItemGroup>
 </Project>

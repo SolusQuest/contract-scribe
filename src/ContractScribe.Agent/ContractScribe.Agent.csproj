@@ -2,4 +2,9 @@
   <ItemGroup>
     <ProjectReference Include="../ContractScribe.Core/ContractScribe.Core.csproj" />
   </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="SolusAgent.Api" />
+    <PackageReference Include="SolusAgent.Tools.Api" />
+    <PackageReference Include="SolusAgent.Runtime.Api" />
+  </ItemGroup>
 </Project>

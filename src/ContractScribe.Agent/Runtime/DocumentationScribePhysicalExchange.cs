@@ -32,7 +32,7 @@ internal static class DocumentationScribePhysicalExchange
                 var task = send.SendAsync(permit, linked.Token).AsTask();
                 try { response = await task.WaitAsync(linked.Token).ConfigureAwait(false); }
                 catch (OperationCanceledException) when (!task.IsCompleted)
-                { _ = DocumentationScribeRuntime.ObserveLateAsync(task); throw; }
+                { _ = DocumentationScribeTaskObservation.ObserveLateAsync(task); throw; }
             }
             catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested && deadline.IsCancellationRequested)
             {
