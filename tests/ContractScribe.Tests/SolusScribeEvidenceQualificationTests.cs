@@ -107,9 +107,40 @@ public sealed partial class DocumentationScribeRuntimeTests
         var result = await EvidenceQualification(request, RegistryForCase(), exchange).RunAsync();
         Assert.Equal(expected, FailureCode(result));
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(legacy.RunEnvelope.AttemptNumber, result.RunEnvelope.AttemptNumber);
         Assert.Single(exchange.Requests);
         Assert.Equal(Assert.IsType<DocumentationScribeFailureTerminal>(legacy.Terminal).ProviderFinalDisposition,
             Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).ProviderFinalDisposition);
+    }
+
+    [Theory]
+    [InlineData(false, 3)]
+    [InlineData(true, 3)]
+    [InlineData(true, 1)]
+    public async Task Solus_qualification_does_not_advance_or_clear_history_when_no_retry_can_start(bool transient, int attempts)
+    {
+        var request = Request(root =>
+        {
+            root["limits"]!["maximumProviderRequests"] = 2;
+            root["limits"]!["maximumAttempts"] = attempts;
+        });
+        var tool = ToolResponse(Call(0, "call.one", "tool.read", "valid"));
+        var failure = FailureResponse(transient ? DocumentationScribeModelFailureCode.TransientUnavailable
+            : DocumentationScribeModelFailureCode.PermanentUnavailable);
+        DocumentationScribeToolRegistry RegistryForCase() =>
+            RegistryWithCodec(new SyntheticPort(DocumentationScribeToolOutcome.Complete), new SyntheticCodec());
+        var legacy = await CreateRuntime(Script(tool, failure), RegistryForCase()).RunAsync(request, Attempt(), Prompt(request));
+        var exchange = Script(tool, failure);
+        var session = EvidenceQualification(request, RegistryForCase(), exchange);
+        var result = await session.RunAsync();
+        Assert.Equal(FailureCode(legacy), FailureCode(result));
+        Assert.Single(session.State.CompletedToolExchanges);
+        Assert.Single(session.State.ActiveDynamicEvidenceReferences);
+        Assert.Equal(legacy.RunEnvelope.AttemptNumber, result.RunEnvelope.AttemptNumber);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(2, exchange.Requests.Length);
+        Assert.Empty(legacy.DynamicEvidenceReferences);
+        Assert.Empty(result.DynamicEvidenceReferences);
     }
 
     private static SolusScribeQualificationSession EvidenceQualification(DocumentationScribeRequest request,

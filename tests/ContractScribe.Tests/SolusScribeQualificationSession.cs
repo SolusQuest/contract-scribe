@@ -33,6 +33,8 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
     private readonly Dictionary<string, DocumentationScribeModelToolCall> calls = [];
     private DocumentationScribeAssistantContinuation? continuation;
     private int epoch;
+    private int observedRetryFailures;
+    private bool retryAdvancePending;
     private bool retryableFailure;
     private DocumentationScribeProviderFinalDisposition providerDisposition = DocumentationScribeProviderFinalDisposition.Terminal;
     private Task hostPending = Task.CompletedTask;
@@ -148,7 +150,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         // Solus may seal its numeric channel before the actual scoped provider task has settled.
         var settled = await DrainAsync().WaitAsync(token);
         HookSettlements++;
-        var stopped = retryableFailure && (State.Scope.RestoredRetryableProviderFailures + epoch >= State.Request.Limits.MaximumAttempts
+        var stopped = retryableFailure && (State.Scope.RestoredRetryableProviderFailures + observedRetryFailures >= State.Request.Limits.MaximumAttempts
             || !State.Scope.Allowance.CanBeginProviderWork());
         return settled ? new(settlement.Exposure, RuntimeHookStatus.Acknowledged, stopped ? RuntimeContinuation.Stop : RuntimeContinuation.Continue,
             settlement.Accounting) : new(settlement.Exposure, RuntimeHookStatus.Failed);
@@ -252,6 +254,18 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             try
             {
                 await owner.WaitForProductRetryAsync(token);
+                token.ThrowIfCancellationRequested();
+                // A failure observation alone does not start the next product attempt or retire its history.
+                if (owner.retryAdvancePending)
+                {
+                    owner.State.AttemptNumber++;
+                    owner.epoch++;
+                    owner.State.CompletedToolExchanges = [];
+                    owner.State.ActiveDynamicEvidenceReferences = [];
+                    owner.continuation = null;
+                    owner.batch = null;
+                    owner.retryAdvancePending = false;
+                }
                 owner.retryableFailure = false;
                 // Until the scoped operation completes, HTTP may have begun even if a runtime cut
                 // prevents this callback from reporting again. Keep the channel conservatively Unknown.
@@ -295,13 +309,8 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                     if (failure.IsTransient)
                     {
                         owner.retryableFailure = true;
-                        if (owner.State.AttemptNumber < owner.State.Request.Limits.MaximumAttempts)
-                            owner.State.AttemptNumber++;
-                        owner.epoch++;
-                        owner.State.CompletedToolExchanges = [];
-                        owner.State.ActiveDynamicEvidenceReferences = [];
-                        owner.continuation = null;
-                        owner.batch = null;
+                        owner.observedRetryFailures++;
+                        owner.retryAdvancePending = true;
                     }
                     throw new ProviderFailureException(failure.IsTransient ? new ProviderRetry(
                         failure.Code == DocumentationScribeModelFailureCode.RateLimited ? ProviderRetryKind.Throttled : ProviderRetryKind.Transient) : null);

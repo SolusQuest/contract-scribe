@@ -65,7 +65,10 @@ public sealed partial class CampaignStateContractTests
         var running = first.RunAsync(cancellation.Token);
         await trial.Store.RetryWaitEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         cancellation.Cancel();
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, (await running).Terminal.Kind);
+        var interrupted = await running;
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, interrupted.Terminal.Kind);
+        Assert.Equal(1, interrupted.RunEnvelope.AttemptNumber);
+        Assert.Equal(1, interrupted.RunEnvelope.ProviderRequestCount);
         var current = await CampaignCheckpointAcceptance.AcceptCurrentAsync(trial.Store);
         var saved = Assert.IsType<CampaignProviderReservation>(current.Artifact!.State.ActiveReservation).RetryProgress;
         Assert.InRange(saved.PendingRetryAfterMilliseconds, 1, 100);
