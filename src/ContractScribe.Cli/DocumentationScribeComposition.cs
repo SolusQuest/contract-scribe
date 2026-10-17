@@ -522,12 +522,8 @@ internal static class DocumentationScribeComposition
                 preflight.SourceReference!,
                 preflight.Repository!,
                 preflight.RepositoryScopes);
-            var runtime = new DocumentationScribeRuntime(exchange, registry, runtimeOptions, executionScope?.Allowance.Clock ?? TimeProvider.System);
-            var run = await runtime.RunAsync(
-                request,
-                attemptId,
-                prompt,
-                cancellationToken, executionScope).ConfigureAwait(false);
+            var run = await DocumentationScribeExecution.RunAsync(request, attemptId, prompt, registry, exchange,
+                runtimeOptions, executionScope?.Allowance.Clock ?? TimeProvider.System, cancellationToken, executionScope).ConfigureAwait(false);
             DocumentationScribeValidatedRunOutcome bound;
             try
             {

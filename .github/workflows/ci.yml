@@ -1003,6 +1003,9 @@ jobs:
     # equality with the map.
     needs: payload_producer
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -1021,6 +1024,10 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           global-json-file: kit/global.json
+      - name: Restore independent CLI runtime graph
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ secrets.GITHUB_TOKEN }};ValidAuthenticationTypes=Basic
+        run: dotnet restore action-src/src/ContractScribe.Cli/ContractScribe.Cli.csproj -r linux-x64
       - name: Independent clean rebuild of the checked-out revision
         id: payload_build
         shell: bash

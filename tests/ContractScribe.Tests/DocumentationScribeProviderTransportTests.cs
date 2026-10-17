@@ -1493,7 +1493,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
         var handler = new CapturingHandler((_, _) => Task.FromResult(JsonResponse(Encoding.UTF8.GetString(body))));
         using var exchange = Exchange(handler);
         var request = ScribeRequest(maximumElapsedMilliseconds: 5_000);
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
             new DocumentationScribeRuntimeOptions("provider.direct-http.synthetic.v1", "model.synthetic.v1", "protocol.v1"));
@@ -1858,7 +1858,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
         using var caller = new CancellationTokenSource();
         var request = ScribeRequest(maximumElapsedMilliseconds: 100);
         var scope = DocumentationScribeExecutionScope.ForStandalone(request, clock);
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
             new DocumentationScribeRuntimeOptions(
@@ -1892,7 +1892,9 @@ public sealed partial class DocumentationScribeProviderTransportTests
         var expectedRequests = expiredBeforeDispatch ? 0 : 1;
         Assert.Equal(expectedRequests, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(expectedRequests, handler.CallCount);
-        Assert.Equal(expectedRequests, clock.CreatedTimerCount);
+        if (expiredBeforeDispatch) Assert.Equal(0, clock.CreatedTimerCount);
+        else Assert.True(clock.CreatedTimerCount >= 1);
+        Assert.Equal(0, clock.ActiveTimerCount);
         if (!expiredBeforeDispatch)
         {
             await handler.WaitForCancellationAsync();
@@ -1932,7 +1934,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
     }
 
     [Fact]
-    public void Selection_record_pins_candidates_and_adds_no_package()
+    public void Transport_selection_keeps_the_direct_HTTP_codec_without_provider_packages()
     {
         var root = FindRepositoryRoot();
         var record = File.ReadAllText(Path.Join(
@@ -1944,7 +1946,10 @@ public sealed partial class DocumentationScribeProviderTransportTests
         Assert.Contains("Microsoft.Extensions.AI` 10.8.3", record, StringComparison.Ordinal);
         Assert.Contains(".NET runtime v10.0.2", record, StringComparison.Ordinal);
         Assert.Contains("4d4fccd7033d2b4cdc5bd1bcf906c389d00e6cfe", record, StringComparison.Ordinal);
-        Assert.DoesNotContain("PackageReference", project, StringComparison.Ordinal);
+        var packages = System.Xml.Linq.XDocument.Parse(project).Descendants("PackageReference")
+            .Select(item => item.Attribute("Include")!.Value).ToArray();
+        Assert.DoesNotContain(packages, name => name is "OpenAI" or "Microsoft.Extensions.AI" or "Microsoft.Extensions.AI.OpenAI"
+            || name.StartsWith("SolusAgent.Providers.", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -2324,47 +2329,47 @@ public sealed partial class DocumentationScribeProviderTransportTests
     private sealed class TransportDeadlineClock : TimeProvider
     {
         private long timestamp;
-        private TransportDeadlineTimer? timer;
-
+        private readonly List<TransportDeadlineTimer> timers = [];
         public override long TimestampFrequency => 1_000;
-
         public override long GetTimestamp() => Volatile.Read(ref timestamp);
-
-        internal int CreatedTimerCount => Volatile.Read(ref timer) is null ? 0 : 1;
+        internal int CreatedTimerCount { get { lock (timers) return timers.Count; } }
+        internal int ActiveTimerCount { get { lock (timers) return timers.Count(timer => timer.Active); } }
 
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            Assert.Equal(TimeSpan.FromMilliseconds(100), dueTime);
             Assert.Equal(Timeout.InfiniteTimeSpan, period);
-            var created = new TransportDeadlineTimer(callback, state);
-            Assert.Null(Interlocked.CompareExchange(ref timer, created, null));
-            return created;
+            var timer = new TransportDeadlineTimer(this, callback, state);
+            timer.Change(dueTime, period);
+            lock (timers) timers.Add(timer);
+            return timer;
         }
 
         internal void Expire()
         {
             Interlocked.Exchange(ref timestamp, 100);
-            Volatile.Read(ref timer)?.Fire();
+            TransportDeadlineTimer[] due;
+            lock (timers) due = timers.ToArray();
+            foreach (var timer in due) timer.Fire();
         }
 
-        private sealed class TransportDeadlineTimer(TimerCallback callback, object? state) : ITimer
+        private sealed class TransportDeadlineTimer(TransportDeadlineClock clock, TimerCallback callback, object? state) : ITimer
         {
             private int disposed;
-
+            private long deadline = long.MaxValue;
+            internal bool Active => Volatile.Read(ref disposed) == 0;
             internal void Fire()
             {
-                if (Volatile.Read(ref disposed) == 0) callback(state);
+                if (Active && Volatile.Read(ref deadline) <= clock.GetTimestamp()) callback(state);
             }
-
-            public bool Change(TimeSpan dueTime, TimeSpan period) => Volatile.Read(ref disposed) == 0;
-
-            public void Dispose() => Interlocked.Exchange(ref disposed, 1);
-
-            public ValueTask DisposeAsync()
+            public bool Change(TimeSpan dueTime, TimeSpan period)
             {
-                Dispose();
-                return ValueTask.CompletedTask;
+                if (!Active) return false;
+                Interlocked.Exchange(ref deadline, dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue
+                    : checked(clock.GetTimestamp() + (long)Math.Ceiling(dueTime.TotalMilliseconds)));
+                return true;
             }
+            public void Dispose() => Interlocked.Exchange(ref disposed, 1);
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
         }
     }
 

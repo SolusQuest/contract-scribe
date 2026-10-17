@@ -1023,6 +1023,7 @@ public sealed class DocumentationScribeContractTests
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         var budgetEnvelope = CreateEnvelope(request) with
         {
+            ElapsedMilliseconds = request.Limits.MaximumElapsedMilliseconds + 1,
             Usage = new DocumentationScribeUsageObservationInput(
                 request.Limits.MaximumInputTokens + 1,
                 request.Limits.MaximumOutputTokens + 1,
@@ -1039,6 +1040,7 @@ public sealed class DocumentationScribeContractTests
             DocumentationScribeFailureCode.Budget,
             budgetEnvelope);
         Assert.Equal(request.Limits.MaximumUncachedInputTokens + 1, budget.RunEnvelope.Usage?.UncachedInputTokens);
+        Assert.Equal(request.Limits.MaximumElapsedMilliseconds + 1, budget.RunEnvelope.ElapsedMilliseconds);
 
         var timeout = DocumentationScribeValidation.CreateFailureResult(
             request,
@@ -1066,6 +1068,7 @@ public sealed class DocumentationScribeContractTests
 
         var rawBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
         rawBudget["terminal"]!["code"] = "scribe.failure.budget";
+        rawBudget["runEnvelope"]!["elapsedMilliseconds"] = request.Limits.MaximumElapsedMilliseconds + 1;
         rawBudget["terminal"]!.AsObject().Remove("providerFinalDisposition");
         rawBudget["runEnvelope"]!["usage"] = new JsonObject
         {

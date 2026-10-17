@@ -967,7 +967,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
                 DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json, 8)
             .Build();
         var exchange = new RepositoryR2Exchange();
-        var runtime = new DocumentationScribeRuntime(
+        var runtime = new TestScribeExecution(
             exchange,
             registry,
             new DocumentationScribeRuntimeOptions("provider.test.v1", "model.test.v1", "scribe-protocol.v1"),

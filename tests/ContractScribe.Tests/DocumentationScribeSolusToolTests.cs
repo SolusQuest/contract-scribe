@@ -22,7 +22,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
     [InlineData(false, false)]
     [InlineData(false, true)]
     [InlineData(true, false)]
-    public async Task Solus_qualification_repository_prompt_and_tool_bindings_survive_the_public_runtime(bool badMember, bool retry)
+    public async Task Solus_runtime_repository_prompt_and_tool_bindings_survive_the_public_runtime(bool badMember, bool retry)
     {
         // Exercise the same committed prompt as the native repository cases on every platform.
         var request = RepositoryToolFixture.ParseRequest();
@@ -66,7 +66,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_real_repository_result_evidence_and_continuation_survive_the_public_runtime(bool retry)
+    public async Task Solus_runtime_real_repository_result_evidence_and_continuation_survive_the_public_runtime(bool retry)
     {
         using var fixture = RepositoryToolFixture.Create();
         File.WriteAllText(Path.Join(fixture.Root, "docs", "guide.md"), new string('a', 32_768), new UTF8Encoding(false));
@@ -91,7 +91,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         }
         steps.Add(ScriptedDocumentationScribeStep.Return(terminal));
         var scripted = new ScriptedDocumentationScribeModelExchange(steps.ToImmutableArray());
-        var handler = new QualificationToolHttpHandler(async (message, token, number) =>
+        var handler = new ScribeToolHttpHandler(async (message, token, number) =>
         {
             using var wire = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
             var definition = Assert.Single(wire.RootElement.GetProperty("tools").EnumerateArray(),
@@ -167,7 +167,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
-    public async Task Solus_qualification_bad_member_in_a_real_read_batch_produces_zero_repository_effects()
+    public async Task Solus_runtime_bad_member_in_a_real_read_batch_produces_zero_repository_effects()
     {
         using var fixture = RepositoryToolFixture.Create();
         var entered = 0;
@@ -192,12 +192,12 @@ public sealed partial class DocumentationScribeRepositoryToolTests
     }
 
     [Fact]
-    public void Solus_qualification_preserves_opt_in_capacities_without_changing_small_defaults()
+    public void Solus_runtime_preserves_opt_in_capacities_without_changing_small_defaults()
     {
         Assert.Equal(16_384, new ProviderExchangeBounds().MaximumTextBytes);
         Assert.Equal(64, new RuntimeOptions().MaximumAttempts);
         Assert.Equal(65_536, new CandidateExecutionBounds(1, 0, 0).MaximumPayloadBytes);
-        var bounds = SolusScribeQualificationSession.Bounds();
+        var bounds = DocumentationScribeSession.Bounds();
         var scope = new ProviderScope("deepseek", "deepseek-v4-flash");
         var attempt = new ProviderAttempt(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
         var block = new string('b', 4_194_304);
@@ -214,9 +214,6 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         Assert.Equal(ToolError.None, schema.Validate(escaped, ToolLimits.MaximumPayloadBytes));
         Assert.Throws<ArgumentOutOfRangeException>(() => new SolusAgent.Api.Usage.AgentRetryPolicy(129));
         Assert.Equal(128, new SolusAgent.Api.Usage.AgentRetryPolicy(128).MaximumAttemptsPerLogicalCall);
-        using var optionalProvider = new SolusAgent.Providers.DeepSeek.DeepSeekProvider(new("synthetic-qualification-credential", 1));
-        Assert.Equal("deepseek-flash", optionalProvider.Scope.Model);
-        Assert.NotEqual("deepseek-v4-flash", optionalProvider.Scope.Model);
     }
 
     private static ReadOnlyMemory<byte> BoundReadSchema(DocumentationScribeRequest request) =>
@@ -246,14 +243,14 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         }
     }
 
-    private static SolusScribeQualificationSession ToolSession(DocumentationScribeRequest request,
+    private static ScribeSessionTestDriver ToolSession(DocumentationScribeRequest request,
         DocumentationScribeToolRegistry registry, IDocumentationScribeModelExchange exchange)
     {
         Assert.True(DocumentationScribeAttemptId.TryParse("scribe-attempt.11111111111111111111111111111111", out var attempt));
         return new(request, attempt, Prompt(request), registry, exchange, DocumentationScribeExecutionScope.ForStandalone(request));
     }
 
-    private sealed class QualificationToolHttpHandler(Func<HttpRequestMessage, CancellationToken, int, Task<HttpResponseMessage>> send) : HttpMessageHandler
+    private sealed class ScribeToolHttpHandler(Func<HttpRequestMessage, CancellationToken, int, Task<HttpResponseMessage>> send) : HttpMessageHandler
     {
         internal int Count { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage message, CancellationToken token) => send(message, token, ++Count);

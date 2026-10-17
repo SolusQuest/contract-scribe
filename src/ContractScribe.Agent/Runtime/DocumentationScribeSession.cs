@@ -13,25 +13,25 @@ using SolusAgent.Api.Usage;
 using SolusAgent.Runtime.Api.Configuration;
 using SolusAgent.Runtime.Api.Exposure;
 using SolusAgent.Runtime.Api.Providers;
-using SolusAgent.Runtime.Startup;
 using SolusAgent.Tools.Api;
 
-namespace ContractScribe.Tests;
+namespace ContractScribe.Agent.Runtime;
 
-// A public-package qualification fixture. The production loop remains unchanged until #244.
-// Product state/codecs are real. Tests identify controlled HTTP, port and checkpoint seams;
-// the native repository cases use the actual confined read port.
-internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntimeExposureHooks
+// The Scribe-specific adapter. SolusAgent owns generic execution; product scopes own
+// physical operations, read authority, accounting and independent terminal validation.
+internal sealed class DocumentationScribeSession : ICandidateHost, IRuntimeExposureHooks
 {
     private const string Instructions = "Execute the Host-bound Documentation Scribe protocol using only registered read tools.";
     private const string EnvelopeSchema = "{\"type\":\"object\",\"additionalProperties\":false,\"required\":[\"payload\"],\"properties\":{\"payload\":{\"type\":\"string\"}}}";
     private readonly DocumentationScribeToolRegistry registry;
     private readonly DocumentationScribePromptInput prompt;
-    private readonly ICandidateAgent runtime;
-    private readonly QualificationProvider provider;
-    private readonly Dictionary<string, (int Epoch, DocumentationScribeCompletedToolExchange Exchange)> results = [];
-    private readonly Dictionary<string, DocumentationScribeModelToolCall> calls = [];
+    private readonly ScribeProvider provider;
+    private ImmutableDictionary<string, (int Epoch, DocumentationScribeCompletedToolExchange Exchange)> results =
+        ImmutableDictionary.Create<string, (int, DocumentationScribeCompletedToolExchange)>(StringComparer.Ordinal);
+    private ImmutableDictionary<string, DocumentationScribeModelToolCall> calls =
+        ImmutableDictionary.Create<string, DocumentationScribeModelToolCall>(StringComparer.Ordinal);
     private DocumentationScribeAssistantContinuation? continuation;
+    private ReadOnlyMemory<byte>? terminalBytes;
     private int epoch;
     private int observedRetryFailures;
     private bool retryAdvancePending;
@@ -40,52 +40,62 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
     private Task hostPending = Task.CompletedTask;
     private ToolBatch? batch;
     internal readonly RunState State;
-    internal readonly List<DocumentationScribeModelRequest> Requests = [];
     internal CandidateExecutionResult? RuntimeResult { get; private set; }
     internal DocumentationScribeRunResult? Result { get; private set; }
     internal bool ProviderFault { get; private set; }
-    internal bool DenyHook { get; set; }
     internal Task ProviderCompletion => provider.Pending;
     internal Task HostCompletion => hostPending;
-    internal int HookSettlements { get; private set; }
-    internal TaskCompletionSource RuntimeReturned { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal Task<CandidateExecutionResult>? RuntimeTask { get; private set; }
+    internal RuntimeConfiguration? Configuration { get; }
 
-    internal SolusScribeQualificationSession(DocumentationScribeRequest request, DocumentationScribeAttemptId attempt,
+    internal DocumentationScribeSession(DocumentationScribeRequest request, DocumentationScribeAttemptId attempt,
         DocumentationScribePromptInput prompt, DocumentationScribeToolRegistry registry,
-        IDocumentationScribeModelExchange exchange, DocumentationScribeExecutionScope scope)
+        IDocumentationScribeModelExchange exchange, DocumentationScribeRuntimeOptions options,
+        TimeProvider clock, CancellationToken token, DocumentationScribeExecutionScope? executionScope = null)
     {
-        this.registry = registry; this.prompt = prompt;
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(prompt);
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(exchange);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(clock);
+        if (string.IsNullOrEmpty(attempt.Value))
+            throw new ArgumentException("A validated attempt identity is required.", nameof(attempt));
+        this.registry = registry;
+        this.prompt = prompt;
+        var scope = executionScope ?? DocumentationScribeExecutionScope.ForStandalone(request, clock);
+        State = new(request, attempt, options, registry, scope.Allowance.Clock, scope);
+        provider = new(this, exchange, options);
+        Result ??= new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
+        if (Result is not null) return;
         if (registry.ToolPolicyId != request.ToolPolicyId || !DocumentationScribePromptBuilder.IsPromptInputValid(request, prompt))
-            throw new ArgumentException("The qualification input is not bound to the admitted request.");
-        State = new(request, attempt, new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), registry, scope.Allowance.Clock, scope);
-        provider = new(this, exchange);
+        {
+            Result = new DocumentationScribeTerminalReducer().CommitValidation(State, token, "scribe.prompt.invalid");
+            return;
+        }
         var tools = registry.Registrations.Select((registration, index) =>
             new RuntimeToolRegistration(new ReadTool(this, registration, RuntimeToolName(index)), new ReadCapability())).ToArray();
-        var configuration = new RuntimeConfiguration(provider, tools, this, Bounds());
-        runtime = (ICandidateAgent)RuntimeAgentFactory.Create(configuration,
-            new RuntimeOptions(scope.Allowance.Clock, maximumAttempts: 128, maximumRecords: 2048,
-                maximumRetainedBytes: RuntimeOptions.MaximumRetainedCapacityBytes));
+        Configuration = new(provider, tools, this, Bounds());
     }
 
     internal static ProviderExchangeBounds Bounds() => new(maximumInputs: 2048,
         maximumRequestBytes: ProviderLimits.MaximumRequestBytes, maximumResponseBytes: ProviderLimits.MaximumResponseBytes,
         maximumContinuationBytes: ProviderLimits.MaximumContinuationBytes, maximumTextBytes: ProviderLimits.MaximumTextBytes);
 
-    internal async Task<DocumentationScribeRunResult> RunAsync(CancellationToken token = default, TimeSpan? duration = null)
+    internal async Task<DocumentationScribeRunResult> RunAsync(ICandidateAgent runtime, CancellationToken token = default)
     {
         var scope = State.Scope;
-        Result = new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
+        Result ??= new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
         if (Result is null && !scope.Allowance.CanBeginProviderWork())
             Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
         if (Result is not null)
         {
-            RuntimeReturned.TrySetResult();
             return Result;
         }
         var maximum = Math.Min(128, Math.Min(State.Request.Limits.MaximumProviderRequests, scope.Allowance.Limits.MaximumProviderRequests));
         var targetRemaining = State.Request.Limits.MaximumElapsedMilliseconds - State.ElapsedMilliseconds;
         var invocationRemaining = scope.Allowance.RemainingMilliseconds;
-        var runtimeDuration = duration ?? TimeSpan.FromMilliseconds(Math.Max(1, Math.Min(targetRemaining, invocationRemaining)));
+        var runtimeDuration = TimeSpan.FromMilliseconds(Math.Max(1, Math.Min(targetRemaining, invocationRemaining)));
         var invocationOwnsDuration = invocationRemaining <= targetRemaining
             && runtimeDuration >= TimeSpan.FromMilliseconds(invocationRemaining);
         var request = new AgentRequest(Guid.NewGuid(), Instructions,
@@ -100,9 +110,9 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                     State.Request.Limits.MaximumAttempts - scope.RestoredRetryableProviderFailures)))));
         try
         {
-            RuntimeResult = await runtime.ExecuteCandidatesAsync(new(request, new(1, 0, 0,
-                DocumentationScribeContract.MaximumArtifactUtf8Bytes)), this, cancellationToken: token);
-            RuntimeReturned.TrySetResult();
+            RuntimeTask = runtime.ExecuteCandidatesAsync(new(request, new(1, 0, 0,
+                DocumentationScribeContract.MaximumArtifactUtf8Bytes)), this, cancellationToken: token).AsTask();
+            RuntimeResult = await RuntimeTask.ConfigureAwait(false);
         }
         finally
         {
@@ -110,7 +120,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             try { await hostPending; }
             catch (OperationCanceledException) { }
             catch (ToolContractException) when (Result is not null) { }
-            catch (Exception) { ProviderFault = true; }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { ProviderFault = true; }
         }
         State.ProviderRequestCount = scope.PhysicalProviderRequestCount;
         // A runtime cut or normalized provider exception cannot certify product settlement/acceptance.
@@ -120,7 +130,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         {
             // A local SDK cut also owns the deadline when only Host completion was pending;
             // provider settlement is not guaranteed to have observed this invocation boundary.
-            if (invocationOwnsDuration) scope.ObserveDeadline(DocumentationScribeDeadlineOwner.Invocation);
+            if (invocationOwnsDuration) _ = scope.Allowance.CanBeginProviderWork();
             return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
         }
         if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.WorkUnitLimit)
@@ -137,13 +147,13 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         catch (ProviderFailureException) { }
         catch (ProviderContractException) { }
         catch (OperationCanceledException) { }
-        catch (Exception) { ProviderFault = true; }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { ProviderFault = true; }
         return !ProviderFault && !State.Scope.Failed;
     }
 
     public ValueTask<ExposureAcknowledgement?> BeforeDispatchAsync(RuntimeExposure exposure, CancellationToken token)
     {
-        if (!DenyHook && !State.Scope.Failed)
+        if (!State.Scope.Failed)
         {
             Result ??= new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
             if (Result is null && (!State.Scope.Allowance.CanBeginProviderWork()
@@ -152,14 +162,13 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
         }
         return ValueTask.FromResult<ExposureAcknowledgement?>(new(exposure, RuntimeHookStatus.Acknowledged,
-            DenyHook || State.Scope.Failed || Result is not null ? ExposureDecision.Deny : ExposureDecision.Permit, ExposureStrength.Volatile));
+            State.Scope.Failed || Result is not null ? ExposureDecision.Deny : ExposureDecision.Permit, ExposureStrength.Volatile));
     }
 
     public async ValueTask<SettlementAcknowledgement?> AfterAttemptAsync(RuntimeSettlement settlement, CancellationToken token)
     {
         // Solus may seal its numeric channel before the actual scoped provider task has settled.
         var settled = await DrainAsync().WaitAsync(token);
-        HookSettlements++;
         var stopped = retryableFailure && (State.Scope.RestoredRetryableProviderFailures + observedRetryFailures >= State.Request.Limits.MaximumAttempts
             || !State.Scope.Allowance.CanBeginProviderWork());
         return settled ? new(settlement.Exposure, RuntimeHookStatus.Acknowledged, stopped ? RuntimeContinuation.Stop : RuntimeContinuation.Continue,
@@ -181,77 +190,119 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             return new(submission.ExecutionId, submission.SubmissionId, CandidateAcknowledgement.Acknowledged,
                 CandidateDecision.Reject, CandidateContinuation.End);
         var permit = await State.Scope.BeginHostAsync(DocumentationScribeHostOperation.TerminalSubmission, token);
-        if (permit is null || !permit.TryBeginOperation())
+        if (permit is null)
             Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
         else
         {
+            var begun = false;
             try
             {
-                State.ToolCallCount++;
-                Result = new DocumentationScribeTerminalReducer().CommitTerminal(State, token, Encoding.UTF8.GetBytes(submission.Payload));
+                begun = permit.TryBeginOperation();
+                if (begun)
+                {
+                    State.ToolCallCount++;
+                    Result = new DocumentationScribeTerminalReducer().CommitTerminal(State, token,
+                        terminalBytes ?? throw new InvalidOperationException("scribe.terminal.missing"));
+                }
+                else State.Scope.ObserveDeadline(permit);
             }
             finally
             {
                 if (!await State.Scope.CompleteHostAsync(permit, CancellationToken.None))
-                    throw new InvalidOperationException("qualification.terminal.settlement-unconfirmed");
+                    throw new InvalidOperationException("scribe.terminal.settlement-unconfirmed");
             }
+            if (!begun)
+                Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token,
+                    State.Scope.ResourceBudgetReached ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
         }
+        var terminalResult = Result ?? throw new InvalidOperationException("scribe.terminal.result-missing");
         return new(submission.ExecutionId, submission.SubmissionId, CandidateAcknowledgement.Acknowledged,
-            Result.Terminal.Kind is DocumentationScribeTerminalKind.Proposal or DocumentationScribeTerminalKind.Skip
+            terminalResult.Terminal.Kind is DocumentationScribeTerminalKind.Proposal or DocumentationScribeTerminalKind.Skip
                 ? CandidateDecision.Accept : CandidateDecision.Reject, CandidateContinuation.End);
     }
 
     private async Task WaitForProductRetryAsync(CancellationToken token)
     {
-        if (State.Scope.PendingRetryAfterMilliseconds <= 0) return;
-        var permit = await State.Scope.BeginHostAsync(DocumentationScribeHostOperation.RetryWait, token);
-        if (permit is null || !permit.TryBeginOperation()) throw new OperationCanceledException(token);
-        // A normal retry-wait grant represents the planned wait itself. Only a shorter resource
-        // deadline interrupts it; using the planned delay as a competing timer would race fulfillment.
-        using var deadline = permit.MaximumMilliseconds < State.Scope.PendingRetryAfterMilliseconds
-            ? new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), State.Scope.Allowance.Clock)
-            : new CancellationTokenSource();
-        using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
-        try { await Task.Delay(TimeSpan.FromMilliseconds(State.Scope.PendingRetryAfterMilliseconds), State.Scope.Allowance.Clock, linked.Token); }
-        catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
+        // This completes only the product's persisted Host wait. The SDK alone admits retries.
+        while (State.Scope.PendingRetryAfterMilliseconds > 0)
         {
-            State.Scope.ObserveDeadline(permit);
-            Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
-            throw;
-        }
-        finally
-        {
-            if (!await State.Scope.CompleteHostAsync(permit, CancellationToken.None))
-                throw new InvalidOperationException("qualification.retry.settlement-unconfirmed");
+            var pendingBefore = State.Scope.PendingRetryAfterMilliseconds;
+            var permit = await State.Scope.BeginHostAsync(DocumentationScribeHostOperation.RetryWait, token);
+            if (permit is null) throw new OperationCanceledException(token);
+            try
+            {
+                var begun = permit.TryBeginOperation();
+                if (!begun && (permit.RemainingMilliseconds > 0 || State.Scope.Failed || State.Scope.Allowance.HasCheckedStop
+                    || permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation))
+                {
+                    State.Scope.ObserveDeadline(permit);
+                    Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+                    throw new OperationCanceledException(token);
+                }
+                // Reservation/readback already spent part or all of this finite interval.
+                // A zero remaining Host-owned wait still requires mandatory completion.
+                var remaining = permit.RemainingMilliseconds;
+                if (remaining > 0)
+                    await Task.Delay(TimeSpan.FromMilliseconds(remaining), State.Scope.Allowance.Clock, token).ConfigureAwait(false);
+                if (permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation)
+                {
+                    State.Scope.ObserveDeadline(permit);
+                    Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+                    throw new OperationCanceledException(token);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                if (!token.IsCancellationRequested) State.Scope.ObserveDeadline(permit);
+                throw;
+            }
+            finally
+            {
+                if (!await State.Scope.CompleteHostAsync(permit, CancellationToken.None).ConfigureAwait(false))
+                    throw new InvalidOperationException("scribe.retry.settlement-unconfirmed");
+            }
+            if (State.Scope.PendingRetryAfterMilliseconds >= pendingBefore)
+            {
+                Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+                throw new ProviderContractException(ProviderError.LimitExceeded);
+            }
         }
     }
 
-    private DocumentationScribeModelRequest ProductRequest(ProviderRequest request)
+    private DocumentationScribeModelRequest ProductRequest(ProviderRequest request, CancellationToken token)
     {
-        Assert.Equal(ProviderInputKind.HostInstruction, request.Inputs[0].Kind);
-        Assert.Equal(Instructions, request.Inputs[0].Text);
-        Assert.Equal(ProviderInputKind.InputData, request.Inputs[1].Kind);
-        var received = JsonSerializer.Deserialize<DocumentationScribePromptInput>(request.Inputs[1].Text!)!;
-        Assert.True(DocumentationScribePromptBuilder.IsPromptInputValid(State.Request, received));
+        DocumentationScribePromptInput? received = null;
+        if (request.Inputs.Count >= 2 && request.Inputs[0].Kind == ProviderInputKind.HostInstruction
+            && request.Inputs[0].Text == Instructions && request.Inputs[1].Kind == ProviderInputKind.InputData)
+        {
+            try { received = JsonSerializer.Deserialize<DocumentationScribePromptInput>(request.Inputs[1].Text!); }
+            catch (Exception exception) when (exception is JsonException or ArgumentException or NotSupportedException)
+            { received = null; }
+        }
+        if (received is null || !DocumentationScribePromptBuilder.IsPromptInputValid(State.Request, received))
+        {
+            Result = new DocumentationScribeTerminalReducer().CommitValidation(State, token, "scribe.prompt.invalid");
+            throw new ProviderContractException(ProviderError.InvalidInput);
+        }
         var completed = ImmutableArray.CreateBuilder<DocumentationScribeCompletedToolExchange>();
         foreach (var input in request.Inputs.Where(input => input.ToolResult is not null))
         {
             var result = input.ToolResult!;
             if (!results.TryGetValue(result.Call.CallId, out var trusted) || trusted.Epoch != epoch) continue;
-            Assert.Equal(Encoding.UTF8.GetString(trusted.Exchange.ArgumentsUtf8Json.Span), Unwrap(result.Call.ArgumentsJson));
-            Assert.Equal(Encoding.UTF8.GetString(trusted.Exchange.ResultUtf8Json.Span), Unwrap(result.Json!));
+            if (Encoding.UTF8.GetString(trusted.Exchange.ArgumentsUtf8Json.Span) != Unwrap(result.Call.ArgumentsJson)
+                || Encoding.UTF8.GetString(trusted.Exchange.ResultUtf8Json.Span) != Unwrap(result.Json!))
+                throw new ProviderContractException(ProviderError.InvalidResponse);
             completed.Add(trusted.Exchange);
         }
         State.CompletedToolExchanges = completed.ToImmutable();
         var output = Math.Min(State.RemainingOutputTokens, State.Scope.Allowance.Limits.MaximumRequestOutputTokens);
         var product = DocumentationScribePromptBuilder.BuildRequest(State.Request, State.AttemptId, received, registry,
             State.AttemptNumber, State.Scope.PhysicalProviderRequestCount + 1, State.ToolCallCount, output, State.CompletedToolExchanges);
-        Requests.Add(product);
         return product;
     }
 
-    private sealed class QualificationProvider(SolusScribeQualificationSession owner, IDocumentationScribeModelExchange exchange)
-        : ModelProvider(new("deepseek", "deepseek-v4-flash"), ProviderCapabilities.ToolCalls | ProviderCapabilities.UsageReporting)
+    private sealed class ScribeProvider(DocumentationScribeSession owner, IDocumentationScribeModelExchange exchange, DocumentationScribeRuntimeOptions options)
+        : ModelProvider(new(options.ProviderConfigurationId, options.ModelConfigurationId), ProviderCapabilities.ToolCalls | ProviderCapabilities.UsageReporting)
     {
         internal Task<ProviderResponse> Pending { get; private set; } = Task.FromResult<ProviderResponse>(null!);
         protected override ValueTask<ProviderResponse> ExchangeCoreAsync(ProviderRequest request, ProviderObservation observation, CancellationToken token)
@@ -270,6 +321,9 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 {
                     owner.State.AttemptNumber++;
                     owner.epoch++;
+                    owner.calls = owner.calls.Clear();
+                    owner.results = owner.results.Clear();
+                    owner.terminalBytes = null;
                     owner.State.CompletedToolExchanges = [];
                     owner.State.ActiveDynamicEvidenceReferences = [];
                     owner.continuation = null;
@@ -280,7 +334,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 // Until the scoped operation completes, HTTP may have begun even if a runtime cut
                 // prevents this callback from reporting again. Keep the channel conservatively Unknown.
                 var before = owner.State.Scope.PhysicalProviderRequestCount;
-                var product = owner.ProductRequest(request);
+                var product = owner.ProductRequest(request, token);
                 var response = await exchange.SendAsync(product, owner.State.Scope, token);
                 owner.State.ProviderRequestCount = owner.State.Scope.PhysicalProviderRequestCount;
                 var validObservations = owner.State.TryApplyObservations(response);
@@ -326,14 +380,21 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                         failure.Code == DocumentationScribeModelFailureCode.RateLimited ? ProviderRetryKind.Throttled : ProviderRetryKind.Transient) : null);
                 }
                 if (response.TerminalSubmissions.Length == 1 && response.ToolCalls.IsEmpty)
+                {
+                    // Keep the original bytes authoritative for independent Core validation.
+                    // The SDK string must not repair malformed UTF-8 or normalize valid JSON.
+                    owner.terminalBytes = response.TerminalSubmissions[0].TerminalUtf8Json;
                     return new(request.Scope, request.Attempt, ProviderFinish.Final,
-                        Encoding.UTF8.GetString(response.TerminalSubmissions[0].TerminalUtf8Json.Span), []);
+                        Encoding.UTF8.GetString(owner.terminalBytes.Value.Span), []);
+                }
                 if (!response.TerminalSubmissions.IsEmpty || response.ToolCalls.IsEmpty)
                 {
                     owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, "provider-response.conflict");
                     throw new ProviderContractException(ProviderError.InvalidResponse);
                 }
-                if (response.ToolCalls.Length > owner.State.Scope.Allowance.RemainingToolCalls
+                if (response.ToolCalls.Length > owner.State.Scope.Allowance.Limits.MaximumToolCallsPerResponse
+                    || response.ToolCalls.Length > owner.State.Scope.Allowance.RemainingToolCalls
+                    || response.ToolCalls.Length > owner.State.Request.Limits.MaximumToolCalls - owner.State.ToolCallCount
                     || owner.State.ToolRoundCount >= owner.State.Request.Limits.MaximumToolRounds)
                 {
                     owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget);
@@ -361,7 +422,7 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                     // unique across its retained inventory without changing original wire/C4 call identity.
                     var runtimeId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                         "scribe/tool-call/v1\n" + request.Attempt.PhysicalAttemptId.ToString("N") + "\n" + call.CallId))).ToLowerInvariant();
-                    owner.calls[runtimeId] = call;
+                    owner.calls = owner.calls.Add(runtimeId, call);
                     mapped.Add(new(runtimeId, RuntimeToolName(index), Wrap(Encoding.UTF8.GetString(call.ArgumentsUtf8Json.Span))));
                 }
                 owner.State.ToolRoundCount++;
@@ -371,13 +432,18 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             }
             catch (ProviderFailureException) { throw; }
             catch (ProviderContractException) { throw; }
+            catch (PromptBoundaryException)
+            {
+                owner.Result = new DocumentationScribeTerminalReducer().CommitValidation(owner.State, token, "scribe.prompt.over-budget");
+                throw new ProviderContractException(ProviderError.LimitExceeded);
+            }
             catch (ToolProtocolException exception)
             {
                 owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, exception.ReferenceId);
                 throw new ProviderContractException(ProviderError.InvalidResponse);
             }
             catch (OperationCanceledException) { throw; }
-            catch (Exception) { owner.ProviderFault = true; throw; }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { owner.ProviderFault = true; throw; }
         }
     }
 
@@ -385,8 +451,8 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
     {
         internal int Epoch { get; } = epoch;
         internal int Count { get; } = count;
-        internal Dictionary<string, DocumentationScribeEvidenceReference> ProspectiveActive { get; } =
-            active.ToDictionary(reference => reference.EvidenceReferenceId, StringComparer.Ordinal);
+        internal ImmutableDictionary<string, DocumentationScribeEvidenceReference> ProspectiveActive { get; set; } =
+            active.ToImmutableDictionary(reference => reference.EvidenceReferenceId, StringComparer.Ordinal);
         internal List<(string RuntimeId, DocumentationScribeCompletedToolExchange Exchange)> Completed { get; } = [];
     }
 
@@ -395,14 +461,14 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         public string CapabilityId => "scribe_read";
     }
 
-    private sealed class ReadTool(SolusScribeQualificationSession owner, ToolRegistration registration, string runtimeName)
+    private sealed class ReadTool(DocumentationScribeSession owner, ToolRegistration registration, string runtimeName)
         : FunctionTool<ReadCapability>(new(runtimeName, "Read authorized Scribe evidence.",
             ToolSchema.Parse(EnvelopeSchema), ToolSchema.Parse(EnvelopeSchema), "scribe_read", ToolEffect.ReadOnly,
             maximumArgumentBytes: ToolLimits.MaximumPayloadBytes, maximumResultBytes: ToolLimits.MaximumPayloadBytes))
     {
         protected override bool ValidateArguments(JsonElement arguments)
         {
-            _ = registration.Prepare(new(0, "qualification.prepare", registration.OperationId,
+            _ = registration.Prepare(new(0, "scribe.prepare", registration.OperationId,
                 Encoding.UTF8.GetBytes(arguments.GetProperty("payload").GetString()!)));
             return true;
         }
@@ -415,63 +481,92 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
 
         private async Task<ToolOutput> InvokeProductAsync(ToolCall call, CancellationToken token)
         {
+            try { return await InvokeProductCoreAsync(call, token).ConfigureAwait(false); }
+            catch (ToolProtocolException exception)
+            {
+                owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, exception.ReferenceId);
+                throw new ToolContractException(ToolError.InvalidResult);
+            }
+        }
+
+        private async Task<ToolOutput> InvokeProductCoreAsync(ToolCall call, CancellationToken token)
+        {
             var original = owner.calls[call.CallId];
-            Assert.Equal(Encoding.UTF8.GetString(original.ArgumentsUtf8Json.Span), Unwrap(call.ArgumentsJson));
+            if (Encoding.UTF8.GetString(original.ArgumentsUtf8Json.Span) != Unwrap(call.ArgumentsJson))
+                throw new ToolContractException(ToolError.InvalidArguments);
             var phase = original.OperationId is "read-excerpt" or "list-files" or "search-text"
                 ? DocumentationScribeHostOperation.RepositoryTool : original.OperationId == "get-target-evidence"
                     ? DocumentationScribeHostOperation.SemanticTool : DocumentationScribeHostOperation.RegisteredTool;
             var permit = await owner.State.Scope.BeginHostAsync(phase, token);
-            if (permit is null || !permit.TryBeginOperation()) throw new OperationCanceledException(token);
-            using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), owner.State.Scope.Allowance.Clock);
-            using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
-            ToolInvocationResult result;
+            if (permit is null)
+            {
+                owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget);
+                throw new ToolContractException(ToolError.InvocationFailed);
+            }
+            ToolInvocationResult? result = null;
+            var timedOut = false;
             try
             {
-                owner.State.ToolCallCount++;
-                owner.State.PerOperationToolCalls[owner.registry.FindRegistrationIndex(registration.OperationId)]++;
-                var invocation = registration.Prepare(original).InvokeAsync(linked.Token).AsTask();
-                try { result = await invocation.WaitAsync(linked.Token); }
-                catch (OperationCanceledException) when (!invocation.IsCompleted)
-                { _ = DocumentationScribeRuntime.ObserveLateAsync(invocation); throw; }
-                linked.Token.ThrowIfCancellationRequested();
-            }
-            catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
-            {
-                owner.State.Scope.ObserveDeadline(permit);
-                owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token,
-                    owner.State.Scope.ResourceBudgetReached ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
-                throw new ToolContractException(ToolError.InvocationFailed);
+                if (!permit.TryBeginOperation())
+                {
+                    owner.State.Scope.ObserveDeadline(permit);
+                    timedOut = true;
+                }
+                else
+                {
+                    using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), owner.State.Scope.Allowance.Clock);
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+                    try
+                    {
+                        owner.State.ToolCallCount++;
+                        owner.State.PerOperationToolCalls[owner.registry.FindRegistrationIndex(registration.OperationId)]++;
+                        var invocation = registration.Prepare(original).InvokeAsync(linked.Token).AsTask();
+                        try { result = await invocation.WaitAsync(linked.Token); }
+                        catch (OperationCanceledException) when (!invocation.IsCompleted)
+                        { _ = DocumentationScribeTaskObservation.ObserveLateAsync(invocation); throw; }
+                        linked.Token.ThrowIfCancellationRequested();
+                    }
+                    catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
+                    {
+                        owner.State.Scope.ObserveDeadline(permit);
+                        timedOut = true;
+                    }
+                }
             }
             finally
             {
                 if (!await owner.State.Scope.CompleteHostAsync(permit, CancellationToken.None))
-                    throw new InvalidOperationException("qualification.tool.settlement-unconfirmed");
+                    throw new InvalidOperationException("scribe.tool.settlement-unconfirmed");
             }
 
-            // Product admission follows mandatory Host completion, as in the current runtime.
+            // Reduction follows mandatory completion so its current resource observations win.
             owner.Result = new DocumentationScribeTerminalReducer().TryCommitPriority(owner.State, token);
+            if (owner.Result is null && timedOut)
+                owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token,
+                    owner.State.Scope.ResourceBudgetReached ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             if (owner.Result is not null) throw new ToolContractException(ToolError.InvocationFailed);
-            if (result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
-                || result.Outcome == DocumentationScribeToolOutcome.TimedOut
-                || result.Outcome == DocumentationScribeToolOutcome.Cancelled
-                || result.Outcome == DocumentationScribeToolOutcome.Failure)
+            var returned = result ?? throw new InvalidOperationException("scribe.tool.result-missing");
+            if (returned.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
+                || returned.Outcome == DocumentationScribeToolOutcome.TimedOut
+                || returned.Outcome == DocumentationScribeToolOutcome.Cancelled
+                || returned.Outcome == DocumentationScribeToolOutcome.Failure)
             {
-                owner.Result = result.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
+                owner.Result = returned.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
                     ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget)
-                    : result.Outcome == DocumentationScribeToolOutcome.TimedOut
+                    : returned.Outcome == DocumentationScribeToolOutcome.TimedOut
                         ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Timeout)
                         : token.IsCancellationRequested
                             ? new DocumentationScribeTerminalReducer().CommitCancelled(owner.State, token)
                             : new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
                 throw new ToolContractException(ToolError.InvocationFailed);
             }
-            if (result.Outcome == DocumentationScribeToolOutcome.Unavailable && !result.DynamicEvidence.IsEmpty)
+            if (returned.Outcome == DocumentationScribeToolOutcome.Unavailable && !returned.DynamicEvidence.IsEmpty)
                 throw RejectEvidence();
-            var current = owner.batch ?? throw new InvalidOperationException("qualification.tool.batch-missing");
-            if (current.Epoch != owner.epoch) throw new InvalidOperationException("qualification.tool.batch-stale");
+            var current = owner.batch ?? throw new InvalidOperationException("scribe.tool.batch-missing");
+            if (current.Epoch != owner.epoch) throw new InvalidOperationException("scribe.tool.batch-stale");
             var references = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceReference>();
             var ids = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var input in result.DynamicEvidence)
+            foreach (var input in returned.DynamicEvidence)
             {
                 if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(owner.State.Request, input, out var created)
                     || created is null || !ids.Add(created.EvidenceReferenceId)) throw RejectEvidence();
@@ -480,25 +575,25 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                     reference.EvidenceReferenceId == created.EvidenceReferenceId);
                 if (originalEvidence is not null)
                 {
-                    if (!DocumentationScribeValidation.EvidenceReferenceEquivalent(originalEvidence, created)) throw RejectEvidence();
+                    if (!EvidenceReferenceEquivalent(originalEvidence, created)) throw RejectEvidence();
                     accepted = originalEvidence;
                 }
                 else if (owner.State.ChargedDynamicEvidenceById.TryGetValue(created.EvidenceReferenceId, out var prior))
                 {
-                    if (!DocumentationScribeValidation.EvidenceReferenceEquivalent(prior, created)) throw RejectEvidence();
+                    if (!EvidenceReferenceEquivalent(prior, created)) throw RejectEvidence();
                     accepted = prior;
-                    current.ProspectiveActive[accepted.EvidenceReferenceId] = accepted;
+                    current.ProspectiveActive = current.ProspectiveActive.SetItem(accepted.EvidenceReferenceId, accepted);
                 }
                 else
                 {
                     accepted = created;
-                    current.ProspectiveActive.Add(accepted.EvidenceReferenceId, accepted);
+                    current.ProspectiveActive = current.ProspectiveActive.Add(accepted.EvidenceReferenceId, accepted);
                     if (!owner.State.TryChargeDynamicEvidence(accepted)) throw ExhaustedEvidenceBudget();
                 }
                 references.Add(accepted);
             }
             var completed = new DocumentationScribeCompletedToolExchange(original.ResponseIndex, original.CallId,
-                original.OperationId, original.ArgumentsUtf8JsonStorage, result.Outcome.Id, result.ResultUtf8Json,
+                original.OperationId, original.ArgumentsUtf8JsonStorage, returned.Outcome.Id, returned.ResultUtf8Json,
                 references.OrderBy(reference => reference.EvidenceReferenceId, StringComparer.Ordinal).ToImmutableArray(),
                 original.ResponseIndex == 0 ? owner.continuation : null);
             if (!owner.State.TryChargeSuccessfulToolExchange(DocumentationScribePromptBuilder.MeasureCompletedToolExchange(completed))
@@ -511,10 +606,10 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
                 owner.State.ActiveDynamicEvidenceReferences = current.ProspectiveActive.Values
                     .OrderBy(reference => reference.EvidenceReferenceId, StringComparer.Ordinal).ToImmutableArray();
                 owner.State.CompletedToolExchanges = owner.State.CompletedToolExchanges.AddRange(current.Completed.Select(item => item.Exchange));
-                foreach (var item in current.Completed) owner.results[item.RuntimeId] = (owner.epoch, item.Exchange);
+                foreach (var item in current.Completed) owner.results = owner.results.Add(item.RuntimeId, (owner.epoch, item.Exchange));
                 owner.batch = null;
             }
-            return ToolOutput.Success(call, Wrap(Encoding.UTF8.GetString(result.ResultUtf8Json.AsSpan())));
+            return ToolOutput.Success(call, Wrap(Encoding.UTF8.GetString(returned.ResultUtf8Json.AsSpan())));
 
             ToolContractException RejectEvidence()
             {
@@ -528,6 +623,22 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             }
         }
     }
+
+    private static bool EvidenceReferenceEquivalent(
+        DocumentationScribeEvidenceReference left,
+        DocumentationScribeEvidenceReference right) =>
+        string.Equals(left.EvidenceReferenceId, right.EvidenceReferenceId, StringComparison.Ordinal)
+        && left.RepositoryContextRef == right.RepositoryContextRef
+        && Equals(left.Subject, right.Subject)
+        && left.Kind == right.Kind
+        && left.Relation == right.Relation
+        && left.Authority == right.Authority
+        && Equals(left.Locator, right.Locator)
+        && string.Equals(left.ContentSha256, right.ContentSha256, StringComparison.Ordinal)
+        && left.OriginalUtf8ByteCount == right.OriginalUtf8ByteCount
+        && left.IncludedUtf8ByteCount == right.IncludedUtf8ByteCount
+        && left.IsTruncated == right.IsTruncated
+        && left.ClaimCategoryIds.SequenceEqual(right.ClaimCategoryIds, StringComparer.Ordinal);
 
     // Registry ordinals are unique and preserve product operation identity without lossy punctuation replacement.
     private static string RuntimeToolName(int index) => "scribe_tool_" + index.ToString("D3", CultureInfo.InvariantCulture);

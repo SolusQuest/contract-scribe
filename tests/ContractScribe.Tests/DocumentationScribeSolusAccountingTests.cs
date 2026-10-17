@@ -16,7 +16,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(65)]
     [InlineData(128)]
-    public async Task Solus_qualification_executes_real_C4_reservation_and_settlement_for_every_retry(int attempts)
+    public async Task Solus_runtime_executes_real_C4_reservation_and_settlement_for_every_retry(int attempts)
     {
         var trial = await SolusTrialAsync(attempts);
         var steps = Enumerable.Range(1, attempts - 1).Select(_ => ScriptedDocumentationScribeStep.Return(
@@ -38,8 +38,33 @@ public sealed partial class CampaignStateContractTests
         await trial.CompleteAsync(result);
     }
 
+    [Theory]
+    [InlineData(250)]
+    [InlineData(1000)]
+    public async Task Solus_runtime_retry_readback_consumes_the_admitted_wait_before_the_next_dispatch(int readbackMilliseconds)
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 5000, invocationMilliseconds: 1500);
+        trial.Store.RetryReadback = () => clock.Advance(readbackMilliseconds);
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [],
+                new(DocumentationScribeModelFailureCode.TransientUnavailable, retryAfterMilliseconds: 1000), usage: new(0, 0, 0, 0))),
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0)))]);
+        var running = trial.Session(exchange).RunAsync();
+        await trial.Store.RetryWaitEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        clock.Advance(1000 - readbackMilliseconds);
+        // Always release an incorrect extra wait so the regression leaves no pending operation.
+        if (await Task.WhenAny(running, Task.Delay(200)) != running) clock.Advance(1000);
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        Assert.Equal(2, exchange.Requests.Length);
+        Assert.Equal(0, trial.Coordinator.Scope.PendingRetryAfterMilliseconds);
+        Assert.Equal(2, result.RunEnvelope.AttemptNumber);
+        await trial.CompleteAsync(result);
+    }
+
     [Fact]
-    public async Task Solus_qualification_retry_exhaustion_stops_at_the_product_limit()
+    public async Task Solus_runtime_retry_exhaustion_stops_at_the_product_limit()
     {
         var trial = await SolusTrialAsync(65);
         var exchange = new ScriptedDocumentationScribeModelExchange(Enumerable.Range(0, 66).Select(_ =>
@@ -54,7 +79,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_restores_pending_durable_wait_into_a_fresh_host_execution_without_double_charge()
+    public async Task Solus_runtime_restores_pending_durable_wait_into_a_fresh_host_execution_without_double_charge()
     {
         var trial = await SolusTrialAsync();
         var failed = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
@@ -113,12 +138,12 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_HTTP_uses_the_product_request_commitment_profile_and_completion_authority(bool skip)
+    public async Task Solus_runtime_HTTP_uses_the_product_request_commitment_profile_and_completion_authority(bool skip)
     {
         var trial = await SolusTrialAsync();
         var terminal = skip ? Encoding.UTF8.GetBytes("{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}")
             : C3ProposalTerminal(trial.Scenario);
-        SolusScribeQualificationSession? session = null;
+        ScribeSessionTestDriver? session = null;
         var handler = new SolusHttpHandler(async (message, token) =>
         {
             using var wire = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
@@ -151,15 +176,16 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_denied_hook_or_failed_reservation_has_zero_HTTP_effects(bool hook)
+    public async Task Solus_runtime_denied_admission_or_failed_reservation_has_zero_HTTP_effects(bool admission)
     {
         var trial = await SolusTrialAsync();
-        trial.Store.DenyDispatch = !hook;
+        trial.Store.DenyDispatch = !admission;
+        using var cancellation = new CancellationTokenSource();
+        if (admission) cancellation.Cancel();
         var handler = new SolusHttpHandler((_, _) => Task.FromResult(SolusTerminalHttp(C3ProposalTerminal(trial.Scenario))));
         using var transport = SolusTransport(handler);
         var session = trial.Session(transport);
-        session.DenyHook = hook;
-        var result = await session.RunAsync();
+        var result = await session.RunAsync(cancellation.Token);
         Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
         Assert.Equal(0, handler.Count);
         Assert.Equal(0, trial.Coordinator.Scope.PhysicalProviderRequestCount);
@@ -169,7 +195,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_unconfirmed_checkpoint_readback_never_authorizes_more_effects(bool settlement)
+    public async Task Solus_runtime_unconfirmed_checkpoint_readback_never_authorizes_more_effects(bool settlement)
     {
         var trial = await SolusTrialAsync();
         trial.Store.FailDispatchReadback = !settlement;
@@ -188,19 +214,19 @@ public sealed partial class CampaignStateContractTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Solus_qualification_cut_cannot_retire_before_real_product_settlement(bool failSettlement, bool durationCut)
+    public async Task Solus_runtime_cut_cannot_retire_before_real_product_settlement(bool failSettlement, bool durationCut)
     {
-        var trial = await SolusTrialAsync();
+        var trial = await SolusTrialAsync(targetMilliseconds: durationCut ? 500 : 10_000, invocationMilliseconds: durationCut ? 500 : 10_000);
         trial.Store.HoldSettlement = true;
         trial.Store.FailSettlement = failSettlement;
         var handler = new SolusHttpHandler((_, _) => Task.FromResult(SolusTerminalHttp(C3ProposalTerminal(trial.Scenario))));
         using var transport = SolusTransport(handler);
         var session = trial.Session(transport);
         using var cancellation = new CancellationTokenSource();
-        var running = session.RunAsync(cancellation.Token, durationCut ? TimeSpan.FromMilliseconds(500) : null);
+        var running = session.RunAsync(cancellation.Token);
         await trial.Store.SettlementEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         if (!durationCut) cancellation.Cancel();
-        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.RuntimeTask!.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(SolusAgent.Api.Usage.DispatchExposure.Unknown,
             Assert.Single(session.RuntimeResult!.Outcome.Usage!.Attempts).Exposure);
         Assert.False(running.IsCompleted);
@@ -223,7 +249,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_preserves_partial_cache_and_reasoning_without_inventing_or_double_charging_usage()
+    public async Task Solus_runtime_preserves_partial_cache_and_reasoning_without_inventing_or_double_charging_usage()
     {
         var trial = await SolusTrialAsync();
         var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
@@ -243,7 +269,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_candidate_callback_cut_waits_for_its_product_host_completion()
+    public async Task Solus_runtime_candidate_callback_cut_waits_for_its_product_host_completion()
     {
         var trial = await SolusTrialAsync();
         trial.Store.HoldTerminalCompletion = true;
@@ -254,7 +280,7 @@ public sealed partial class CampaignStateContractTests
         var running = session.RunAsync(cancellation.Token);
         await trial.Store.TerminalCompletionEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         cancellation.Cancel();
-        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.RuntimeTask!.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.False(running.IsCompleted);
         Assert.False(session.HostCompletion.IsCompleted);
         trial.Store.ReleaseTerminalCompletion.TrySetResult();
@@ -265,7 +291,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Solus_qualification_missing_usage_and_lost_HTTP_response_remain_conservative(bool lost)
+    public async Task Solus_runtime_missing_usage_and_lost_HTTP_response_remain_conservative(bool lost)
     {
         var trial = await SolusTrialAsync(128);
         var handler = new SolusHttpHandler((_, _) => lost
@@ -282,7 +308,7 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
-    public async Task Solus_qualification_invalid_terminal_and_exhausted_terminal_budget_never_trigger_repair()
+    public async Task Solus_runtime_invalid_terminal_and_exhausted_terminal_budget_never_trigger_repair()
     {
         foreach (var exhausted in new[] { false, true })
         {
@@ -350,7 +376,7 @@ public sealed partial class CampaignStateContractTests
     [InlineData(false, false, false)]
     [InlineData(true, true, false)]
     [InlineData(false, true, false)]
-    public async Task Solus_qualification_duration_cut_preserves_shared_campaign_and_target_deadline_ownership(
+    public async Task Solus_runtime_duration_cut_preserves_shared_campaign_and_target_deadline_ownership(
         bool sharedDeadline, bool cancelled, bool hostCompletion)
     {
         var clock = new SolusDeadlineClock();
@@ -384,7 +410,7 @@ public sealed partial class CampaignStateContractTests
             // Complete real C4 settlement before waiting for that acknowledgement to return.
             trial.Store.ReleaseSettlement.TrySetResult();
         }
-        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        await session.RuntimeTask!.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(SolusAgent.Api.Candidates.CandidateStopReason.DurationLimit, session.RuntimeResult!.StopReason);
         if (hostCompletion) Assert.False(running.IsCompleted);
         if (hostCompletion && cancelled) cancellation.Cancel();
@@ -403,13 +429,15 @@ public sealed partial class CampaignStateContractTests
     }
 
     private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3, TimeProvider? clock = null,
-        int? targetMilliseconds = null, int? invocationMilliseconds = null)
+        int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null,
+        DocumentationScribeInvocationLimits? invocationLimits = null, int? targetToolCalls = null)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
         limits["maximumAttempts"] = attempts;
         limits["maximumProviderRequests"] = 128;
         if (targetMilliseconds is { } target) limits["maximumElapsedMilliseconds"] = target;
+        if (targetToolCalls is { } calls) limits["maximumToolCalls"] = calls;
         var template = DocumentationScribeValidation.ParseRequest(Encoding.UTF8.GetBytes(node.ToJsonString())).Request!;
         var scenario = CreateProposalScenario(scribeRequestTemplate: template, targetLimit: 1,
             maximumAttemptsPerTarget: attempts, maximumProviderRequests: null, maximumInputTokens: null,
@@ -418,7 +446,8 @@ public sealed partial class CampaignStateContractTests
             resultMutation: root => root["runEnvelope"]!["elapsedMilliseconds"] = 0, scenario: scenario).Request;
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var store = new SolusCheckpointStore(initial);
-        var allowance = invocationMilliseconds is { } invocation
+        var allowance = invocationLimits is not null ? new DocumentationScribeInvocationAllowance(invocationLimits, clock)
+            : invocationMilliseconds is { } invocation
             ? new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
                 maximumProviderRequests: request.Limits.MaximumProviderRequests,
                 maximumToolCalls: request.Limits.MaximumToolCalls,
@@ -428,7 +457,7 @@ public sealed partial class CampaignStateContractTests
                 maximumOutputTokens: request.Limits.MaximumOutputTokens,
                 maximumElapsedMilliseconds: invocation,
                 maximumRequestOutputTokens: request.Limits.MaximumOutputTokens,
-                maximumRequestElapsedMilliseconds: Math.Min(invocation, request.Limits.MaximumElapsedMilliseconds)), clock)
+                maximumRequestElapsedMilliseconds: Math.Min(hostMilliseconds ?? invocation, request.Limits.MaximumElapsedMilliseconds)), clock)
             : CampaignInvocationTestPolicy.Create(request.Limits, clock);
         var admission = CampaignStateReducer.AdmitProviderInvocation(initial, scenario.ExecutionAuthority, "style.synthetic",
             scenario.StyleProjection, scenario.Input, scenario.Plan, scenario.Plan.WorkItems[0].WorkItemKey, request,
@@ -447,14 +476,17 @@ public sealed partial class CampaignStateContractTests
         DocumentationScribeAttemptId Attempt, SolusCheckpointStore Store, CampaignProviderInvocationAuthority Authority,
         CampaignScribeExecutionCoordinator Coordinator)
     {
-        internal SolusScribeQualificationSession Session(IDocumentationScribeModelExchange exchange) => new(Request, Attempt,
-            new(Request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
+        internal DocumentationScribePromptInput Prompt => new(
+            Request.ContextReferences.Select(reference => new DocumentationScribeContextContent(reference.ContextReferenceId,
                 reference.Kind, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
                 new string('c', reference.IncludedUtf8ByteCount))).ToImmutableArray(),
-                Request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
-                    reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
-                    new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray()),
-            new DocumentationScribeToolRegistryBuilder(Request.ToolPolicyId).Build(), exchange, Coordinator.Scope);
+            Request.EvidenceReferences.Select(reference => new DocumentationScribeEvidenceContent(reference.EvidenceReferenceId,
+                reference.Authority, reference.ContentSha256, reference.IncludedUtf8ByteCount, reference.IsTruncated,
+                new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
+
+        internal ScribeSessionTestDriver Session(IDocumentationScribeModelExchange exchange,
+            DocumentationScribeToolRegistry? registry = null) => new(Request, Attempt, Prompt,
+            registry ?? new DocumentationScribeToolRegistryBuilder(Request.ToolPolicyId).Build(), exchange, Coordinator.Scope);
 
         internal async Task CompleteAsync(DocumentationScribeRunResult result)
         {
@@ -484,6 +516,12 @@ public sealed partial class CampaignStateContractTests
         internal bool FailSettlementReadback { get; set; }
         internal bool HoldTerminalCompletion { get; set; }
         private bool failNextRead;
+        private CampaignProviderHostPhase? pendingHostCompletionReadback;
+        internal List<CampaignProviderHostPhase> CompletedHostReadbacks { get; } = [];
+        internal List<CampaignProviderHostPhase> AdmittedHostPhases { get; } = [];
+        internal Action? RetryReadback { get; set; }
+        internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
+        internal Action? DelayedReadback { get; set; }
         internal TaskCompletionSource SettlementEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseSettlement { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource RetryWaitEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -492,7 +530,24 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token)
         {
             Reads++;
+            if (Current.State.ActiveReservation is CampaignProviderReservation delayed
+                && delayed.HostPhase == DelayedReadbackPhase && DelayedReadback is { } delay)
+            {
+                DelayedReadback = null;
+                delay();
+            }
+            if (Current.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.RetryWait }
+                && RetryReadback is { } readback)
+            {
+                RetryReadback = null;
+                readback();
+            }
             if (failNextRead) { failNextRead = false; return ValueTask.FromResult(CampaignCheckpointReadResult.Unreadable()); }
+            if (pendingHostCompletionReadback is { } completed)
+            {
+                CompletedHostReadbacks.Add(completed);
+                pendingHostCompletionReadback = null;
+            }
             return inner.ReadAsync(token);
         }
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) =>
@@ -501,6 +556,9 @@ public sealed partial class CampaignStateContractTests
             ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
         {
             var next = CampaignStateJson.Parse(bytes).Artifact!;
+            var completedHost = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } previous
+                && next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } successor
+                && previous.HostPhase != successor.HostPhase ? previous.HostPhase : (CampaignProviderHostPhase?)null;
             var dispatch = next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch };
             var settlement = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch } && !dispatch;
             if (HoldTerminalCompletion
@@ -520,7 +578,11 @@ public sealed partial class CampaignStateContractTests
             var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
             if (result.Kind == CampaignCheckpointWriteKind.Written)
             {
+                if (next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host, HostPhase: { } admittedPhase }
+                    && (Current.State.ActiveReservation is not CampaignProviderReservation priorHost || priorHost.HostPhase != admittedPhase))
+                    AdmittedHostPhases.Add(admittedPhase);
                 Current = next;
+                pendingHostCompletionReadback = completedHost;
                 if (dispatch) Dispatches++;
                 if (settlement) Settlements++;
                 failNextRead = dispatch && FailDispatchReadback || settlement && FailSettlementReadback;
