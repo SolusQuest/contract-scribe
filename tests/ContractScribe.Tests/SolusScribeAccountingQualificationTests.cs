@@ -341,20 +341,95 @@ public sealed partial class CampaignStateContractTests
         return new(HttpStatusCode.OK) { Content = new StringContent(root.ToJsonString(), Encoding.UTF8, "application/json") };
     }
 
-    private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3)
+    [Theory]
+    [InlineData(true, false, true)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(false, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, true, false)]
+    public async Task Solus_qualification_duration_cut_preserves_shared_campaign_and_target_deadline_ownership(
+        bool sharedDeadline, bool cancelled, bool hostCompletion)
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: sharedDeadline ? 1500 : 500,
+            invocationMilliseconds: 1000);
+        var scope = trial.Coordinator.Scope;
+        var preflight = Assert.IsType<DocumentationScribeHostPermit>(
+            await scope.BeginHostAsync(DocumentationScribeHostOperation.Preflight, default));
+        Assert.True(preflight.TryBeginOperation());
+        clock.Advance(250);
+        Assert.True(await scope.CompleteHostAsync(preflight, default));
+        Assert.Equal(250, trial.Store.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        trial.Store.HoldTerminalCompletion = hostCompletion;
+        trial.Store.HoldSettlement = !hostCompletion;
+        var exchange = new ScriptedDocumentationScribeModelExchange([hostCompletion
+            ? ScriptedDocumentationScribeStep.Return(new DocumentationScribeModelResponse([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0)))
+            : ScriptedDocumentationScribeStep.WaitForCancellation()]);
+        var session = trial.Session(exchange);
+        using var cancellation = new CancellationTokenSource();
+        var running = session.RunAsync(cancellation.Token);
+        if (hostCompletion) await trial.Store.TerminalCompletionEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        else Assert.Single(exchange.Requests);
+        Assert.Equal(sharedDeadline ? 750 : 500, session.State.RemainingMilliseconds);
+        clock.Advance(sharedDeadline ? 750 : 500);
+        if (!hostCompletion)
+        {
+            await trial.Store.SettlementEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.False(running.IsCompleted);
+            if (cancelled) cancellation.Cancel();
+            // The SDK delivers settlement with its separate closure grace after a provider cut.
+            // Complete real C4 settlement before waiting for that acknowledgement to return.
+            trial.Store.ReleaseSettlement.TrySetResult();
+        }
+        await session.RuntimeReturned.Task.WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(SolusAgent.Api.Candidates.CandidateStopReason.DurationLimit, session.RuntimeResult!.StopReason);
+        if (hostCompletion) Assert.False(running.IsCompleted);
+        if (hostCompletion && cancelled) cancellation.Cancel();
+        trial.Store.ReleaseTerminalCompletion.TrySetResult();
+        var result = await running.WaitAsync(TimeSpan.FromSeconds(10));
+        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        else Assert.Equal(sharedDeadline ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout,
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        Assert.Equal(1, trial.Store.Dispatches);
+        Assert.Equal(1, trial.Store.Settlements);
+        Assert.Single(exchange.Requests);
+        await trial.CompleteAsync(result);
+        Assert.Equal(cancelled ? CampaignWorkOutcomeCode.CancelledByCaller
+            : sharedDeadline ? CampaignWorkOutcomeCode.BudgetExhausted : CampaignWorkOutcomeCode.Timeout,
+            trial.Store.Current.State.WorkItems.Single(item => item.WorkItemKey == trial.Scenario.Plan.WorkItems[0].WorkItemKey).ClosedOutcome!.Code);
+    }
+
+    private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3, TimeProvider? clock = null,
+        int? targetMilliseconds = null, int? invocationMilliseconds = null)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
         limits["maximumAttempts"] = attempts;
         limits["maximumProviderRequests"] = 128;
+        if (targetMilliseconds is { } target) limits["maximumElapsedMilliseconds"] = target;
         var template = DocumentationScribeValidation.ParseRequest(Encoding.UTF8.GetBytes(node.ToJsonString())).Request!;
         var scenario = CreateProposalScenario(scribeRequestTemplate: template, targetLimit: 1,
             maximumAttemptsPerTarget: attempts, maximumProviderRequests: null, maximumInputTokens: null,
             maximumUncachedInputTokens: null, maximumOutputTokens: null, maximumCostMicrounits: null, maximumElapsedMilliseconds: null);
-        var request = CreateScribeExchange(scenario.Plan.WorkItems[0], requestMutation: root => root["limits"] = limits.DeepClone(), scenario: scenario).Request;
+        var request = CreateScribeExchange(scenario.Plan.WorkItems[0], requestMutation: root => root["limits"] = limits.DeepClone(),
+            resultMutation: root => root["runEnvelope"]!["elapsedMilliseconds"] = 0, scenario: scenario).Request;
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var store = new SolusCheckpointStore(initial);
-        var allowance = CampaignInvocationTestPolicy.Create(request.Limits);
+        var allowance = invocationMilliseconds is { } invocation
+            ? new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
+                maximumProviderRequests: request.Limits.MaximumProviderRequests,
+                maximumToolCalls: request.Limits.MaximumToolCalls,
+                maximumCachedInputTokens: request.Limits.MaximumInputTokens / 2,
+                maximumUncachedInputTokens: Math.Min(request.Limits.MaximumUncachedInputTokens,
+                    request.Limits.MaximumInputTokens - request.Limits.MaximumInputTokens / 2),
+                maximumOutputTokens: request.Limits.MaximumOutputTokens,
+                maximumElapsedMilliseconds: invocation,
+                maximumRequestOutputTokens: request.Limits.MaximumOutputTokens,
+                maximumRequestElapsedMilliseconds: Math.Min(invocation, request.Limits.MaximumElapsedMilliseconds)), clock)
+            : CampaignInvocationTestPolicy.Create(request.Limits, clock);
         var admission = CampaignStateReducer.AdmitProviderInvocation(initial, scenario.ExecutionAuthority, "style.synthetic",
             scenario.StyleProjection, scenario.Input, scenario.Plan, scenario.Plan.WorkItems[0].WorkItemKey, request,
             CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
@@ -461,5 +536,44 @@ public sealed partial class CampaignStateContractTests
         internal int Count { get; private set; }
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         { Count++; return send(request, token); }
+    }
+
+    private sealed class SolusDeadlineClock : TimeProvider
+    {
+        private long timestamp;
+        private readonly List<DeadlineTimer> timers = [];
+        public override long TimestampFrequency => 1000;
+        public override long GetTimestamp() => timestamp;
+        internal void Advance(int milliseconds)
+        {
+            timestamp += milliseconds;
+            foreach (var timer in timers.ToArray()) timer.Tick();
+        }
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = new DeadlineTimer(this, callback, state);
+            timers.Add(timer);
+            timer.Change(dueTime, period);
+            return timer;
+        }
+        private sealed class DeadlineTimer(SolusDeadlineClock owner, TimerCallback callback, object? state) : ITimer
+        {
+            private long due = long.MaxValue;
+            private bool disposed;
+            public bool Change(TimeSpan dueTime, TimeSpan period)
+            {
+                if (disposed) return false;
+                due = dueTime == Timeout.InfiniteTimeSpan ? long.MaxValue : owner.timestamp + (long)dueTime.TotalMilliseconds;
+                return true;
+            }
+            internal void Tick()
+            {
+                if (disposed || owner.timestamp < due) return;
+                due = long.MaxValue;
+                callback(state);
+            }
+            public void Dispose() => disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 }

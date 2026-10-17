@@ -83,10 +83,15 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
             return Result;
         }
         var maximum = Math.Min(128, Math.Min(State.Request.Limits.MaximumProviderRequests, scope.Allowance.Limits.MaximumProviderRequests));
+        var targetRemaining = State.Request.Limits.MaximumElapsedMilliseconds - State.ElapsedMilliseconds;
+        var invocationRemaining = scope.Allowance.RemainingMilliseconds;
+        var runtimeDuration = duration ?? TimeSpan.FromMilliseconds(Math.Max(1, Math.Min(targetRemaining, invocationRemaining)));
+        var invocationOwnsDuration = invocationRemaining <= targetRemaining
+            && runtimeDuration >= TimeSpan.FromMilliseconds(invocationRemaining);
         var request = new AgentRequest(Guid.NewGuid(), Instructions,
             [new(AgentInputSource.Repository, JsonSerializer.Serialize(prompt))],
             // Product checkpoints/Scope deny effects if the deadline expires during request construction.
-            new(maximum, duration ?? TimeSpan.FromMilliseconds(Math.Max(1, State.RemainingMilliseconds))),
+            new(maximum, runtimeDuration),
             AgentCapability.WorkUnitLimit | AgentCapability.DurationLimit | AgentCapability.Cancellation
                 | AgentCapability.DispatchLimits | AgentCapability.UsageReporting,
             new AgentUsageLimits(maximumPhysicalDispatches: maximum,
@@ -112,7 +117,12 @@ internal sealed class SolusScribeQualificationSession : ICandidateHost, IRuntime
         if (token.IsCancellationRequested) return new DocumentationScribeTerminalReducer().CommitCancelled(State, token);
         if (scope.Failed || ProviderFault) return new DocumentationScribeTerminalReducer().CommitInternal(State, token);
         if (RuntimeResult?.StopReason == CandidateStopReason.DurationLimit)
+        {
+            // A local SDK cut also owns the deadline when only Host completion was pending;
+            // provider settlement is not guaranteed to have observed this invocation boundary.
+            if (invocationOwnsDuration) scope.ObserveDeadline(DocumentationScribeDeadlineOwner.Invocation);
             return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
+        }
         if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.WorkUnitLimit)
             return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
         if (Result is null && State.ProviderRequestCount == 0)
