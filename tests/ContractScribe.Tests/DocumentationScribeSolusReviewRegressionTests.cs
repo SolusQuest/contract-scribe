@@ -1,3 +1,4 @@
+using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -10,6 +11,58 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Theory]
+    [InlineData(2, 8, 8, 0, 1, false, true)]
+    [InlineData(2, 8, 8, 0, 2, false, true)]
+    [InlineData(2, 8, 8, 0, 3, false, false)]
+    [InlineData(2, 8, 8, 0, 3, true, false)]
+    [InlineData(4, 3, 8, 1, 3, false, false)]
+    [InlineData(4, 8, 3, 1, 3, false, false)]
+    [InlineData(2, 4, 8, 1, 2, false, true)]
+    [InlineData(2, 8, 4, 1, 2, false, true)]
+    public async Task Solus_runtime_checks_the_whole_batch_against_configured_width_and_both_remaining_budgets(
+        int width, int invocationCalls, int targetCalls, int precedingCalls, int batchCalls, bool invalidTail, bool accepted)
+    {
+        var trial = await SolusTrialAsync(invocationLimits: DocumentationScribeInvocationLimits.Create(
+            maximumProviderRequests: 128, maximumToolCalls: invocationCalls,
+            maximumCachedInputTokens: 32768, maximumUncachedInputTokens: 32768,
+            maximumOutputTokens: 8192, maximumElapsedMilliseconds: 120000,
+            maximumRequestOutputTokens: 8192, maximumRequestElapsedMilliseconds: 120000,
+            maximumToolCallsPerResponse: width), targetToolCalls: targetCalls);
+        var port = new ReviewBoundaryPort();
+        var steps = ImmutableArray.CreateBuilder<ScriptedDocumentationScribeStep>();
+        if (precedingCalls > 0) steps.Add(Batch(precedingCalls, "prior"));
+        steps.Add(Batch(batchCalls, "current"));
+        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0))));
+        var exchange = new ScriptedDocumentationScribeModelExchange(steps.ToImmutable());
+        var session = trial.Session(exchange, ReviewBoundaryRegistry(trial.Request, port));
+        var result = await session.RunAsync();
+        var reads = precedingCalls + (accepted ? batchCalls : 0);
+        Assert.Equal(reads, port.Calls);
+        Assert.Equal(reads + (accepted ? 1 : 0), result.RunEnvelope.ToolCallCount);
+        Assert.Equal(result.RunEnvelope.ToolCallCount, trial.Coordinator.Scope.Allowance.ToolCallCount);
+        Assert.Equal(reads, trial.Store.CompletedHostReadbacks.Count(phase => phase == CampaignProviderHostPhase.SemanticTool));
+        Assert.Equal(reads, trial.Store.AdmittedHostPhases.Count(phase => phase == CampaignProviderHostPhase.SemanticTool));
+        Assert.Equal(reads, session.State.CompletedToolExchanges.Length);
+        Assert.Equal(precedingCalls > 0 ? accepted ? 3 : 2 : accepted ? 2 : 1, exchange.Requests.Length);
+        Assert.Equal(exchange.Requests.Length, trial.Store.Dispatches);
+        Assert.Equal(exchange.Requests.Length, trial.Store.Settlements);
+        Assert.Equal(exchange.Requests.Length, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal((precedingCalls > 0 ? 2 : 1) * 3, result.RunEnvelope.Usage?.InputTokens);
+        Assert.Equal((precedingCalls > 0 ? 2 : 1) * 2, result.RunEnvelope.Usage?.OutputTokens);
+        if (accepted) Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        else
+            Assert.Equal(DocumentationScribeFailureCode.Budget, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        await trial.CompleteAsync(result);
+        Assert.Equal(exchange.Requests.Length, trial.Store.Current.State.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal((precedingCalls > 0 ? 2 : 1) * 3, trial.Store.Current.State.LineageCharges.InputTokens.Observed);
+
+        ScriptedDocumentationScribeStep Batch(int count, string prefix) => ScriptedDocumentationScribeStep.Return(new(
+            Enumerable.Range(0, count).Select(index => new DocumentationScribeModelToolCall(index, prefix + index,
+                invalidTail && prefix == "current" && index == count - 1 ? "unregistered" : "get-target-evidence", "{}"u8.ToArray())).ToImmutableArray(),
+            [], usage: new(3, 2, 1, 2)));
+    }
+
     [Theory]
     [InlineData(false, false)]
     [InlineData(false, true)]

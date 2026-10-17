@@ -429,13 +429,15 @@ public sealed partial class CampaignStateContractTests
     }
 
     private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3, TimeProvider? clock = null,
-        int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null)
+        int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null,
+        DocumentationScribeInvocationLimits? invocationLimits = null, int? targetToolCalls = null)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
         limits["maximumAttempts"] = attempts;
         limits["maximumProviderRequests"] = 128;
         if (targetMilliseconds is { } target) limits["maximumElapsedMilliseconds"] = target;
+        if (targetToolCalls is { } calls) limits["maximumToolCalls"] = calls;
         var template = DocumentationScribeValidation.ParseRequest(Encoding.UTF8.GetBytes(node.ToJsonString())).Request!;
         var scenario = CreateProposalScenario(scribeRequestTemplate: template, targetLimit: 1,
             maximumAttemptsPerTarget: attempts, maximumProviderRequests: null, maximumInputTokens: null,
@@ -444,7 +446,8 @@ public sealed partial class CampaignStateContractTests
             resultMutation: root => root["runEnvelope"]!["elapsedMilliseconds"] = 0, scenario: scenario).Request;
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var store = new SolusCheckpointStore(initial);
-        var allowance = invocationMilliseconds is { } invocation
+        var allowance = invocationLimits is not null ? new DocumentationScribeInvocationAllowance(invocationLimits, clock)
+            : invocationMilliseconds is { } invocation
             ? new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
                 maximumProviderRequests: request.Limits.MaximumProviderRequests,
                 maximumToolCalls: request.Limits.MaximumToolCalls,
@@ -515,6 +518,7 @@ public sealed partial class CampaignStateContractTests
         private bool failNextRead;
         private CampaignProviderHostPhase? pendingHostCompletionReadback;
         internal List<CampaignProviderHostPhase> CompletedHostReadbacks { get; } = [];
+        internal List<CampaignProviderHostPhase> AdmittedHostPhases { get; } = [];
         internal Action? RetryReadback { get; set; }
         internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
         internal Action? DelayedReadback { get; set; }
@@ -574,6 +578,9 @@ public sealed partial class CampaignStateContractTests
             var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
             if (result.Kind == CampaignCheckpointWriteKind.Written)
             {
+                if (next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host, HostPhase: { } admittedPhase }
+                    && (Current.State.ActiveReservation is not CampaignProviderReservation priorHost || priorHost.HostPhase != admittedPhase))
+                    AdmittedHostPhases.Add(admittedPhase);
                 Current = next;
                 pendingHostCompletionReadback = completedHost;
                 if (dispatch) Dispatches++;

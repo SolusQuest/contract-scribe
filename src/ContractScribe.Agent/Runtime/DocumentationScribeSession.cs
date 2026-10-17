@@ -392,7 +392,9 @@ internal sealed class DocumentationScribeSession : ICandidateHost, IRuntimeExpos
                     owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, "provider-response.conflict");
                     throw new ProviderContractException(ProviderError.InvalidResponse);
                 }
-                if (response.ToolCalls.Length > owner.State.Scope.Allowance.RemainingToolCalls
+                if (response.ToolCalls.Length > owner.State.Scope.Allowance.Limits.MaximumToolCallsPerResponse
+                    || response.ToolCalls.Length > owner.State.Scope.Allowance.RemainingToolCalls
+                    || response.ToolCalls.Length > owner.State.Request.Limits.MaximumToolCalls - owner.State.ToolCallCount
                     || owner.State.ToolRoundCount >= owner.State.Request.Limits.MaximumToolRounds)
                 {
                     owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget);
