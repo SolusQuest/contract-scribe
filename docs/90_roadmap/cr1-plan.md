@@ -58,21 +58,21 @@ Useful cases now execute the actual production adapter in the existing fast proj
 
 Ordinary CI restores the exact selected packages from the private registry using existing job-scoped package Read access, then executes the production tests and actual packaged CLI/Action paths on Ubuntu x64. Credentials exist only in Restore-step environments, including the Action's independent linux-x64 restore. The runnable payload needs no feed credentials. Focused feedback uses `dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --configuration Release --filter "FullyQualifiedName~Solus_runtime|FullyQualifiedName~DocumentationScribeRuntimeTests"` with a current build under [test validation](../50_ai/skills/test-validation.md). Historical Q1 results or local source-built archives do not substitute for current-head registry-consuming CI.
 
-The actual adapter lives in [Agent](../../src/ContractScribe.Agent/Runtime/DocumentationScribeSession.cs), and [CLI](../../src/ContractScribe.Cli/DocumentationScribeExecution.cs) constructs the concrete runtime. Campaign and evaluation share the CLI composition. The superseded general loop is absent. The M7 handoff below remains unchanged.
+The actual adapter lives in [Agent](../../src/ContractScribe.Agent/Runtime/DocumentationScribeSession.cs), and [CLI](../../src/ContractScribe.Cli/DocumentationScribeExecution.cs) constructs the concrete runtime. Campaign and evaluation share the CLI composition. The superseded general loop is absent. The M7 handoff below reflects the post-migration scope reconciliation.
 
 ## M7 handoff
 
-Preserve existing issue identity, type, milestone, parentage and historical completion. The [post-CR1 audit](m7-post-cr1-audit.md) reconciles the original ownership below with delivered evidence and records adopted residual acceptance transfers. Until the post-merge tracker synchronization, the existing graph remains operative; this does not reopen CR1. Reconcile only current execution assumptions and real direct prerequisites:
+Preserve existing issue identity, type, milestone, parentage and historical completion. The [post-CR1 audit](m7-post-cr1-audit.md) establishes the residual ownership below from delivered evidence and explicit acceptance transfers. Until the post-merge tracker synchronization, the existing graph remains operative; this does not reopen CR1.
 
-| Existing owner | Retained outcome after CR1 |
+| Issue | Adopted outcome or disposition after CR1 |
 | --- | --- |
 | [#217 / M7-S1](https://github.com/SolusQuest/contract-scribe/issues/217) | Multi-target manifest, scoped evidence/instructions and current consumers; use the adopted runtime adapter. Its runtime-dependent cutover follows CR1-I1. |
-| [#218 / M7-S2](https://github.com/SolusQuest/contract-scribe/issues/218) | Product request-level usage and unknown-outcome semantics for the shared execution path; consume library observations rather than build a second provider engine. |
-| [#219 / M7-S3](https://github.com/SolusQuest/contract-scribe/issues/219) | Remaining-budget provider bounds and adopted M7 capacity; consume the selected provider/runtime contract. |
+| [#218 / M7-S2](https://github.com/SolusQuest/contract-scribe/issues/218) | Superseded as a standalone delivery. S1 preserves manifest/request correlation, S4 proves incremental known/unknown usage and retry/continuation, and S5 proves durable progress/usage recovery. Preserve the original issue as a transferred-scope record, not an executable owner. |
+| [#219 / M7-S3](https://github.com/SolusQuest/contract-scribe/issues/219) | Superseded as a standalone delivery. S1 owns representable manifest/scoped-context admission; S4 proves cumulative context stops, deadlines and remaining-output bounds across incremental turns. Preserve the original issue as a transferred-scope record, not an executable owner. |
 | [#220 / M7-S4](https://github.com/SolusQuest/contract-scribe/issues/220) | Multi-target incremental acknowledgement, truthful coverage and shared-session product behavior using the candidate API. |
 | [#221 / M7-S5](https://github.com/SolusQuest/contract-scribe/issues/221) | Durable cumulative candidate acceptance and recovery through existing product authorities. |
 
-These remain executable product outcomes. CR1 does not close them by inference from upstream acceptance. If qualification proves an outcome is already delivered by the actual migration, reconcile its precise remaining scope against evidence before scheduling duplicate implementation; preserve historical state unless separately authorized.
+S1, S4 and S5 remain executable product outcomes, including every transferred S2/S3 obligation in the audit. S2/S3 close as `not_planned` only through the documented post-merge synchronization; their supersession is not implementation evidence. CR1 completion does not establish acceptance of the remaining multi-target behavior.
 
 ## Acceptance and validation
 
