@@ -977,6 +977,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.Equal(
             fixture.Request.ContextReferences.Select(item => item.ContextReferenceId)
                 .Append("evidence.source")
+                .Concat(fixture.Request.Manifest.Select(member => member.TargetId))
                 .Order(StringComparer.Ordinal),
             properties.GetProperty("scopeId").GetProperty("enum").EnumerateArray()
                 .Select(item => item.GetString()!));

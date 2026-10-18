@@ -46,14 +46,15 @@ public sealed partial class DocumentationScribeCompositionTests
             + string.Join(" ", Enumerable.Range(0, propertyCount).Select(index => $"public int P{index:D3} {{ get; set; }}")) + " }";
         await using var fixture = await CompositionFixture.CreateBatchGroupingAsync(source);
         var campaign = fixture.CreateCampaign(includeAllOwners: true);
-        Assert.Equal(propertyCount + 2, campaign.Plan.Batch.CompleteTargets.Length);
+        Assert.Equal(propertyCount + 2, fixture.Classified.Classification.ClassificationSet!.Targets.Length);
+        Assert.Equal(propertyCount + (propertyCount > 10 ? 1 : 2), campaign.Plan.Batch.CompleteTargets.Length);
         if (propertyCount > 10)
         {
             var audit = DocumentationScribeAuditAuthority.Create(fixture.Classified, fixture.Observed, fixture.Policy,
                 fixture.AuditInputs, fixture.AuditDocument);
             var type = fixture.Classified.Classification.ClassificationSet!.Targets.Single(target => target.SymbolRef.DocumentationCommentId == "T:EndToEnd.Fixture");
             Assert.Equal(AuditOutcome.Compliant, audit.Select(type).Outcome);
-            Assert.Contains(campaign.Plan.Batch.CompleteTargets, target => target.SymbolRef == type.SymbolRef && !target.BatchEligible);
+            Assert.DoesNotContain(campaign.Plan.Batch.CompleteTargets, target => target.SymbolRef == type.SymbolRef);
             Assert.Equal(propertyCount + 1, campaign.Plan.Batch.CompleteTargets.Count(target => target.BatchEligible));
         }
         var all = campaign.Plan.WorkItems.SelectMany(work => work.Targets).ToDictionary(target => target.SymbolRef);
