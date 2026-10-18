@@ -678,7 +678,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 timeProvider: clock));
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, observed.Kind);
-        Assert.Equal(50_000, observedStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        Assert.Equal(100_000, observedStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var overflowStore = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
         var overflowExchange = new CountingProposalExchange(fixture.Request);

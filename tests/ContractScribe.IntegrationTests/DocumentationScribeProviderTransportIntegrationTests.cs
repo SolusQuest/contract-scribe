@@ -18,6 +18,26 @@ namespace ContractScribe.IntegrationTests;
 
 public sealed class DocumentationScribeProviderTransportIntegrationTests
 {
+    [Fact]
+    public async Task Current_campaign_loopback_producer_obeys_required_continuation_on_submit_and_finish()
+    {
+        var request = Request();
+        await using var server = new ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.ProposalLoopbackServer("closed-proposal", includeUsage: true);
+        using var exchange = new OpenAiCompatibleHttpModelExchange(new(server.Endpoint, "synthetic-model",
+            new(OpenAiCompatibleThinkingMode.Enabled, OpenAiCompatibleReasoningEffort.High, OpenAiCompatibleToolChoice.Omitted,
+                OpenAiCompatibleContinuationPolicy.RequiredForToolCalls, OpenAiCompatibleOutputTokenField.MaxTokens), networkEnabled: true));
+        var runtime = new TestScribeExecution(exchange, new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
+            new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
+        var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
+        Assert.Equal(DocumentationScribeFinishReason.Unresolved, Assert.IsType<DocumentationScribeFinishedTerminal>(result.Stop).Reason);
+        Assert.IsType<DocumentationScribeSkipTerminal>(Assert.Single(result.Submissions).Result);
+        Assert.Equal(2, server.RequestCount); Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        using var finishRequest = JsonDocument.Parse(server.RequestBodies[1]);
+        var messages = finishRequest.RootElement.GetProperty("messages");
+        Assert.Equal("synthetic-campaign-continuation", messages[5].GetProperty("reasoning_content").GetString());
+        Assert.Equal("call.submit", messages[6].GetProperty("tool_call_id").GetString());
+    }
+
     private const string AttemptId = "scribe-attempt.0123456789abcdef0123456789abcdef";
     private static readonly byte[] ToolSchema = """
         {"additionalProperties":false,"properties":{"referenceId":{"type":"string"}},"required":["referenceId"],"type":"object"}

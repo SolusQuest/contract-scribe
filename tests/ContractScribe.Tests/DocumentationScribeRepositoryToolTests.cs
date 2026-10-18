@@ -978,7 +978,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         var result = await runtime.RunAsync(fixture.Request, attempt, Prompt(fixture.Request));
 
         Assert.True(
-            result.Stop.Kind == DocumentationScribeTerminalKind.Skip,
+            result.Submissions.Length == 1 && result.Submissions[0].Result.Kind == DocumentationScribeTerminalKind.Skip,
             result.Stop is DocumentationScribeFailureTerminal failure
                 ? $"failure={failure.Code}; diagnostics={string.Join(',', result.RunEnvelope.Diagnostics.Select(item => item.Code + ':' + item.ValidationCode))}; completed={exchange.Completed.Length}; anchor={exchange.AnchorId ?? "null"}"
                 : $"terminal={result.Stop.Kind}");
@@ -997,7 +997,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         Assert.All(searches, item => Assert.Equal(
             preRetryEvidence.EvidenceReferenceId,
             item.EvidenceReferences[0].EvidenceReferenceId));
-        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.IsType<DocumentationScribeFinishedTerminal>(result.Stop);
     }
 
     [Fact]

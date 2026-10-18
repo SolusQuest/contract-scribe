@@ -933,6 +933,8 @@ public sealed partial class CampaignCliProcessTests
                         message = new
                         {
                             role = "assistant",
+                            content = (string?)null,
+                            reasoning_content = "synthetic-campaign-continuation",
                             tool_calls = new[]
                             {
                                 new

@@ -138,11 +138,18 @@ public sealed partial class DocumentationScribeCompositionTests
                 Assert.Single(forged.Requests);
             }
             var singleton = CampaignScribeRequestBuilder.BuildManifest(bundle, [method], [method.SymbolRef], policy, config, default);
-            var singleExchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(
-                """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0)))]);
-            await DocumentationScribeComposition.ExecuteAsync(singleton.Selection, singleton.RequestUtf8Json,
+            var singletonRequest = DocumentationScribeValidation.ParseRequest(singleton.RequestUtf8Json).Request!;
+            var singleExchange = new ScriptedDocumentationScribeModelExchange([
+                ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Submit(singletonRequest,
+                    """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray()))], usage: new(0, 0, 0, 0))),
+                ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(singletonRequest))], usage: new(0, 0, 0, 0, 0))),
+            ]);
+            var singletonOutcome = await DocumentationScribeComposition.ExecuteAsync(singleton.Selection, singleton.RequestUtf8Json,
                 fixture.AttemptId, null, RuntimeOptions(), singleExchange);
-            var singleStartup = Assert.Single(singleExchange.Requests);
+            Assert.IsType<DocumentationScribeSkipTerminal>(Assert.Single(singletonOutcome.RunResult!.Submissions).Result);
+            Assert.IsType<DocumentationScribeFinishedTerminal>(singletonOutcome.RunResult.Stop);
+            Assert.Equal(2, singleExchange.Requests.Length);
+            var singleStartup = singleExchange.Requests[0];
             Assert.Equal(startup.Messages.Take(3).Select(message => message.Content), singleStartup.Messages.Take(3).Select(message => message.Content));
             Assert.NotEqual(string.Join("\n", startup.Tools.Select(tool => tool.InputSchemaJson)),
                 string.Join("\n", singleStartup.Tools.Select(tool => tool.InputSchemaJson)));

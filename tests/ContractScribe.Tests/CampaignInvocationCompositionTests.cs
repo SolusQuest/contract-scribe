@@ -35,7 +35,7 @@ public sealed partial class DocumentationScribeCompositionTests
         var state = resumedStore.Current!.State;
         Assert.Equal(1, state.LineageCharges.OuterInvocations);
         Assert.Equal(1, state.WorkItems.Single(item => item.Status == CampaignWorkStatus.ProposalComplete).OuterAttemptCount);
-        Assert.Equal(settlement && applied ? 2 : 1, state.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal(settlement && applied ? 3 : 2, state.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(claim.OperationKind == CampaignProviderOperationKind.Dispatch ? 1 : 0,
             state.LineageCharges.ProviderRequests.ConservativeUnobserved);
         var charges = state.LineageCharges;
