@@ -62,7 +62,7 @@ The actual adapter lives in [Agent](../../src/ContractScribe.Agent/Runtime/Docum
 
 ## M7 handoff
 
-Preserve existing issue identity, type, milestone, parentage and historical completion. Reconcile only current execution assumptions and real direct prerequisites:
+Preserve existing issue identity, type, milestone, parentage and historical completion. The [post-CR1 audit](m7-post-cr1-audit.md) reconciles the original ownership below with delivered evidence and records adopted residual acceptance transfers. Until the post-merge tracker synchronization, the existing graph remains operative; this does not reopen CR1. Reconcile only current execution assumptions and real direct prerequisites:
 
 | Existing owner | Retained outcome after CR1 |
 | --- | --- |

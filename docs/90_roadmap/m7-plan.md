@@ -20,6 +20,10 @@ The product selects first start, unpublished fixed-batch recovery, exact publica
 
 CR1-I1 supplies the current singleton production adapter and concrete CLI construction over the four selected `0.1.0-internal.3` packages. It preserves classified prompts, confined read tools, C4 physical dispatch/settlement, nullable usage and persisted retry waits, plus independent proposal/skip validation and provider/Host drainage after cuts. CLI, campaign and evaluation share that owner; the old general loop is removed. These delivered seams are inputs to S1–S5, not evidence that shared multi-target conversation, incremental acknowledgement or cumulative acceptance is complete. [CR1's handoff](cr1-plan.md#m7-handoff) retains those owners; actual current-head package/Action and process CI remain the migration acceptance evidence.
 
+## Post-CR1 scope reconciliation
+
+The [post-CR1 audit](m7-post-cr1-audit.md) records delivered foundations, remaining acceptance and the reduction of the executable Scribe chain from S1–S5 to S1 → S4 → S5. It transfers all remaining S2/S3 obligations to the actual manifest, incremental-runtime and durable-host owners. The extended audit also transfers A2's complete wrapper/payload and caller-guidance acceptance to A1, and changes A3's direct prerequisite to A1. This reconciliation is adopted with the governing documentation; tracker synchronization follows merge, and existing issue dependencies remain operative until that synchronization. S2/S3/A2 are superseded as `not_planned`, not implementation-complete. M7 product semantics remain unchanged.
+
 ## Work, snapshot and fixed batch
 
 A target is one complete XML documentation block on a canonical declaration. A type plus ten eligible public properties is eleven targets; accessors do not add targets. A method's summary, parameters, type parameters, returns and remarks together count as one target. Already compliant declarations are excluded.
