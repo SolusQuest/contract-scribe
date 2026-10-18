@@ -64,7 +64,8 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(includeUsage ? 3 : 2, server.RequestCount);
             var final = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
             Assert.Equal(batch, final.State.Batch.Identity);
-            Assert.Equal(2, final.State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
+            Assert.True(final.State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted) == 2,
+                $"resume={completed.Stdout}; terminal={final.State.TerminalOutcome}; works={string.Join(",", final.State.WorkItems.Select(item => $"{item.Status}:{item.ClosedOutcome?.Code}"))}; charges={System.Text.Json.JsonSerializer.Serialize(final.State.LineageCharges)}");
             Assert.Equal(includeUsage ? 3 : 2, final.State.LineageCharges.ProviderRequests.Observed);
             Assert.Equal(0, final.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
             Assert.Equal(CampaignTerminalReason.AllWorkClosed, final.State.TerminalOutcome!.Reason);
@@ -128,9 +129,9 @@ public sealed partial class CampaignCliProcessTests
             var accepted = Assert.Single(final.State.WorkItems.Where(item => item.Status == CampaignWorkStatus.Accepted));
             Assert.Equal(1, accepted.OuterAttemptCount);
             Assert.Equal(1, final.State.LineageCharges.OuterInvocations);
-            Assert.Equal(2, final.State.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(3, final.State.LineageCharges.ProviderRequests.Observed);
             Assert.Equal(0, final.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
-            Assert.Equal(2, server.RequestCount);
+            Assert.Equal(3, server.RequestCount);
             Assert.Null(final.State.ActiveReservation);
             Assert.Null(accepted.PausedProviderAttempt);
             Assert.Equal(CampaignTerminalReason.AllWorkClosed, final.State.TerminalOutcome!.Reason);

@@ -2551,10 +2551,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             RequestCount++;
+            Requests.Add(request);
             if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
                 return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
-
-            Requests.Add(request);
             return ValueTask.FromResult(SyntheticResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));

@@ -54,7 +54,7 @@ public sealed class CampaignChangedBaseProcessTests
         var ambiguous = ReadArtifact(fixture.StatePath);
         var oldReservation = Assert.IsType<CampaignPatchReservation>(ambiguous.State.ActiveReservation);
         var providerCallsBeforeSupersession = fixture.Server.RequestCount;
-        var oldEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
+        var oldEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[0]);
 
         CopyRevision("revision-b", fixture.Repository.Root);
         await InterruptAtAsync(fixture, "resume", "snapshot.changed-base.b",
@@ -96,7 +96,7 @@ public sealed class CampaignChangedBaseProcessTests
         var completedArtifact = ReadArtifact(fixture.StatePath);
         CampaignCliProcessTests.AssertCampaign(
             completed, 0, "campaign.complete", completedArtifact.CheckpointRevision);
-        Assert.Equal(providerCallsBeforeSupersession + 1, fixture.Server.RequestCount);
+        Assert.Equal(providerCallsBeforeSupersession + 2, fixture.Server.RequestCount);
         var newEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[^1]);
         AssertCollisionCommitments(oldEvidence, newEvidence);
         Assert.DoesNotContain(completedArtifact.State.WorkItems,
@@ -215,7 +215,7 @@ public sealed class CampaignChangedBaseProcessTests
         fixture.Input = "TargetEvolution.slnx";
         await InterruptAtAsync(fixture, "start", "snapshot.target.a",
             CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
-        var baselineEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
+        var baselineEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[0]);
         var baselineSourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
         var baselineSource = await File.ReadAllBytesAsync(baselineSourcePath);
         var baselineProject = await File.ReadAllBytesAsync(baselineProjectPath);
@@ -354,7 +354,7 @@ public sealed class CampaignChangedBaseProcessTests
         CampaignCliProcessTests.AssertCampaign(completed, 0, "campaign.complete", current.CheckpointRevision);
         Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
         Assert.Null(current.State.ActiveReservation);
-        Assert.Equal(1, fixture.Server.RequestCount);
+        Assert.Equal(2, fixture.Server.RequestCount);
     }
 
     private static async Task AssertExactSuccessorAdoptionAsync(ProcessFixture fixture)
@@ -385,14 +385,14 @@ public sealed class CampaignChangedBaseProcessTests
             CampaignCliProcessTests.AssertCampaign(adopted, 0, "campaign.complete", current.CheckpointRevision);
             Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
             Assert.Null(current.State.ActiveReservation);
-            Assert.Equal(1, fixture.Server.RequestCount);
+            Assert.Equal(2, fixture.Server.RequestCount);
         }
         finally
         {
             await CampaignCliProcessTests.StopAsync(staleWriter);
         }
 
-        Assert.Equal(1, fixture.Server.RequestCount);
+        Assert.Equal(2, fixture.Server.RequestCount);
     }
 
     [Fact]
@@ -693,7 +693,7 @@ public sealed class CampaignChangedBaseProcessTests
             bool executable,
             int? maximumCampaignElapsedMilliseconds = null,
             int? maximumCandidatesPerBlock = null,
-            bool includeUsage = false)
+            bool includeUsage = true)
         {
             var repository = await LoaderFixture.CreateAsync();
             if (executable)

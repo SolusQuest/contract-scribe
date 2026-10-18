@@ -122,7 +122,7 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
         [
             new DocumentationScribeModelTerminalSubmission(Submission(request, Encoding.UTF8.GetBytes(
                 "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[],\"rawResponse\":\"forbidden\"}"))),
-        ], usage: new(0, 0));
+        ], usage: new(0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse Failure(DocumentationScribeModelFailureCode code) =>
         new([], [], new DocumentationScribeModelFailure(code), usage: new(0, 0, 0, 0, 0));

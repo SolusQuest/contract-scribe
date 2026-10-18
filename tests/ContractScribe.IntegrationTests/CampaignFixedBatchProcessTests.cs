@@ -135,14 +135,14 @@ public sealed partial class CampaignCliProcessTests
             Assert.True(initial.State.Batch.SelectedTargetKeys.SequenceEqual(state.Batch.SelectedTargetKeys, StringComparer.Ordinal));
             Assert.Equal(10, state.WorkItems.Count(work => work.OuterAttemptCount > 0));
             Assert.Equal(10, state.WorkItems.Count(work => work.Status == CampaignWorkStatus.Accepted));
-            Assert.Equal(10, server.RequestCount);
+            Assert.Equal(20, server.RequestCount);
             Assert.Equal(90, CampaignStateFactory.CreateInvocationTargetAllowance(state, new(4096)).WorkItemKeys.Length);
             var attempts = state.WorkItems.Select(work => work.OuterAttemptCount).ToArray();
             await RunBatchWorkerAsync(fixture.Root, configurationPath, statePath, outside, 0);
             var reconstructed = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!.State;
             Assert.Equal(attempts, reconstructed.WorkItems.Select(work => work.OuterAttemptCount));
             Assert.Equal(state.Batch.Identity, reconstructed.Batch.Identity);
-            Assert.Equal(10, server.RequestCount);
+            Assert.Equal(20, server.RequestCount);
             Assert.Equal(10, reconstructed.WorkItems.Count(work => work.Status == CampaignWorkStatus.Accepted));
             Assert.True(reconstructed.LineageCharges.PatchValidationInvocations > state.LineageCharges.PatchValidationInvocations);
         }

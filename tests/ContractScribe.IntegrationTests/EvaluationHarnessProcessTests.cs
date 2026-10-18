@@ -1326,7 +1326,7 @@ public sealed class EvaluationHarnessProcessTests
         var alias = request.RootElement.GetProperty("tools").EnumerateArray()
             .Select(tool => tool.GetProperty("function"))
             .Single(function => function.GetProperty("parameters")
-                .GetProperty("properties")
+                .TryGetProperty("properties", out var properties) && properties
                 .TryGetProperty("literal", out _))
             .GetProperty("name")
             .GetString() ?? throw new InvalidDataException();

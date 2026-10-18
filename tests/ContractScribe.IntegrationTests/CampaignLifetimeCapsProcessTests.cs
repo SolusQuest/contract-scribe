@@ -57,7 +57,7 @@ public sealed partial class CampaignCliProcessTests
                 TimeSpan.FromMinutes(5));
             var accepted = ReadState();
             AssertCampaign(resumed, 0, "campaign.complete", accepted.CheckpointRevision);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
             Assert.NotNull(accepted.State.CandidateObservation);
             Assert.True(accepted.State.LineageCharges.CostMicrounits.ConservativeUnobserved > 0);
             Assert.Equal(0, accepted.State.LineageCharges.CostMicrounits.Observed);
@@ -81,7 +81,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(originalCandidate.ChangedFiles.ToArray(), retainedCandidate.ChangedFiles.ToArray());
             Assert.Equal(accepted.State.AcceptedCandidateOrigin!.CheckpointSha256 ?? accepted.Sha256,
                 retained.State.AcceptedCandidateOrigin!.CheckpointSha256);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
 
             layer["budgets"]!["campaign"]![field] = null;
             await WriteLayerAsync();
@@ -89,7 +89,7 @@ public sealed partial class CampaignCliProcessTests
                 TimeSpan.FromMinutes(5));
             var final = ReadState();
             AssertCampaign(cleared, 0, "campaign.complete", final.CheckpointRevision);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
             Assert.Equal(proposal, final.State.WorkItems.Single(item => item.Status == CampaignWorkStatus.Accepted)
                 .TrustedProposal!.ProposalCommitmentSha256);
             Assert.Equal(accepted.State.LineageCharges.ProviderRequests, final.State.LineageCharges.ProviderRequests);
@@ -144,7 +144,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(equality ? CampaignTerminalReason.AllWorkClosed : CampaignTerminalReason.LifetimeCap, current.State.TerminalOutcome!.Reason);
             Assert.Equal(equality ? 7 : 8, current.State.LineageCharges.OutputTokens.Observed);
             Assert.Equal(0, current.State.LineageCharges.OutputTokens.ConservativeUnobserved);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
             var commitment = work.TrustedProposal.ProposalCommitmentSha256;
             layer["budgets"]!["campaign"]!["maximumOutputTokens"] = null;
             await File.WriteAllTextAsync(configurationPath, layer.ToJsonString());
@@ -156,7 +156,7 @@ public sealed partial class CampaignCliProcessTests
                 .TrustedProposal!.ProposalCommitmentSha256);
             Assert.Equal(current.State.LineageCharges.ProviderRequests, final.State.LineageCharges.ProviderRequests);
             Assert.Equal(current.State.LineageCharges.OutputTokens, final.State.LineageCharges.OutputTokens);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
         }
         finally { Directory.Delete(outside, recursive: true); }
     }

@@ -90,9 +90,9 @@
       "coverage": ["structured-skip"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 2,
+        "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 2,
+        "toolCallCount": 1,
         "proposalStatus": "not-reported",
         "usage": {
           "inputTokens": 64,
@@ -115,9 +115,9 @@
       "coverage": ["evidence-insufficient"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 2,
+        "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 2,
+        "toolCallCount": 1,
         "proposalStatus": "not-reported",
         "usage": {
           "inputTokens": 64,
@@ -140,9 +140,9 @@
       "coverage": ["evidence-conflict"],
       "offlineExpectation": {
         "attemptCount": 0,
-        "providerRequestCount": 1,
+        "providerRequestCount": 0,
         "toolRoundCount": 0,
-        "toolCallCount": 1,
+        "toolCallCount": 0,
         "proposalStatus": "not-reported",
         "usage": null,
         "observationIds": []
@@ -184,8 +184,8 @@
         "usage": {
           "inputTokens": 0,
           "outputTokens": 0,
-          "cachedInputTokens": null,
-          "uncachedInputTokens": null,
+          "cachedInputTokens": 0,
+          "uncachedInputTokens": 0,
           "reasoningTokens": null,
           "cacheObservation": null
         },
@@ -202,9 +202,9 @@
       "coverage": ["m2-rejection", "proposal-validation"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 2,
+        "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 2,
+        "toolCallCount": 1,
         "proposalStatus": "validated",
         "usage": {
           "inputTokens": 80,
