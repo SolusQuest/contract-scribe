@@ -7,8 +7,10 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class CampaignCliProcessTests
 {
-    [Fact]
-    public async Task Shared_request_stop_preserves_the_accepted_candidate_and_fresh_action_finishes_original_membership()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Shared_request_stop_preserves_the_accepted_candidate_and_fresh_action_finishes_original_membership(bool includeUsage)
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -17,7 +19,7 @@ public sealed partial class CampaignCliProcessTests
             "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App\n{\n    public static void First() { }\n    public static void Second() { }\n}\n");
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
         var originalSource = await File.ReadAllBytesAsync(sourcePath);
-        await using var server = new ProposalLoopbackServer(includeUsage: true);
+        await using var server = new ProposalLoopbackServer(includeUsage: includeUsage);
         var outside = CreatePrivateDirectory("contract-scribe-c4-shared-budget");
         try
         {
@@ -49,17 +51,21 @@ public sealed partial class CampaignCliProcessTests
             Assert.Single(paused.State.CandidateObservation!.AcceptedWorkItemKeys);
             Assert.Equal(1, paused.State.LineageCharges.ProviderRequests.Observed);
             Assert.Equal(0, paused.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
+            if (!includeUsage)
+                Assert.True(paused.State.LineageCharges.InputTokens.ConservativeUnobserved > 0);
             var batch = paused.State.Batch.Identity;
             layer["budgets"]!["invocation"]!["maximumProviderRequests"] = 2;
             await File.WriteAllTextAsync(configurationPath, layer.ToJsonString(), new UTF8Encoding(false, true));
             var completed = await RunAsync(Args("resume", fixture.Root, statePath, configurationPath, "snapshot.c4"),
                 timeout: TimeSpan.FromMinutes(3));
             AssertControlledCampaign(completed, "fresh-action");
-            Assert.Equal(2, server.RequestCount);
+            // Known usage admits the explicit finish; unknown usage stops after
+            // the returned proposal, which still closes the final work item.
+            Assert.Equal(includeUsage ? 3 : 2, server.RequestCount);
             var final = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
             Assert.Equal(batch, final.State.Batch.Identity);
             Assert.Equal(2, final.State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
-            Assert.Equal(2, final.State.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(includeUsage ? 3 : 2, final.State.LineageCharges.ProviderRequests.Observed);
             Assert.Equal(0, final.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
             Assert.Equal(CampaignTerminalReason.AllWorkClosed, final.State.TerminalOutcome!.Reason);
             Assert.Equal(originalSource, await File.ReadAllBytesAsync(sourcePath));

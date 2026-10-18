@@ -828,7 +828,7 @@ public sealed partial class CampaignCliProcessTests
         private readonly string? summaryText;
         private readonly bool includeUsage;
         private readonly int usageOutputTokens;
-        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = false, int usageOutputTokens = 7)
+        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = true, int usageOutputTokens = 7)
         {
             this.usageOutputTokens = usageOutputTokens;
             this.scenario = scenario;

@@ -785,7 +785,8 @@ internal static class DocumentationScribeComposition
                 bound.Request,
                 attemptId,
                 configuredAgentEntrypoint,
-                postflightCancellation?.Token ?? cancellationToken, executionScope, manifestSelection).ConfigureAwait(false);
+                postflightCancellation?.Token ?? cancellationToken, executionScope, manifestSelection,
+                prepareModelContext: false).ConfigureAwait(false);
             if (postflight.Failure is { } postflightFailure)
             {
                 if (postflightFailure.Kind == PreflightFailureKind.Cancelled && !cancellationToken.IsCancellationRequested
@@ -990,7 +991,7 @@ internal static class DocumentationScribeComposition
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
         CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope,
-        DocumentationScribeManifestSelection manifestSelection)
+        DocumentationScribeManifestSelection manifestSelection, bool prepareModelContext = true)
     {
         if (!selection.IsCurrent
             || request.Context.RepositoryContextRef
@@ -1097,6 +1098,11 @@ internal static class DocumentationScribeComposition
         {
             return PreflightResult.Rejected("scribe.preflight.edit-authorization-unavailable");
         }
+
+        // Postflight needs fresh patch authorization, but sends no new model prompt.
+        // Do not spend repository-tool quota rematerializing its unused prompt context.
+        if (!prepareModelContext)
+            return new(context, declaration, editKind.Value, manifestContext, [], null, [], null);
 
         // Start the shared repository-tool session only after patch authorization so
         // unrelated baseline capture and declaration resolution cannot consume its timer.
