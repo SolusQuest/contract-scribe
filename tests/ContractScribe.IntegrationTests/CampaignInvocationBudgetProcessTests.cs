@@ -8,9 +8,10 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class CampaignCliProcessTests
 {
     [Theory]
-    [InlineData(true)]
-    [InlineData(false)]
-    public async Task Shared_request_stop_preserves_the_accepted_candidate_and_fresh_action_finishes_original_membership(bool includeUsage)
+    [InlineData(true, 1)]
+    [InlineData(false, 1)]
+    [InlineData(false, 2)]
+    public async Task Shared_request_stop_preserves_the_accepted_candidate_and_fresh_action_finishes_original_membership(bool includeUsage, int initialMaximumRequests)
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await LoaderFixture.CreateAsync();
@@ -32,7 +33,7 @@ public sealed partial class CampaignCliProcessTests
             var layer = JsonNode.Parse(await File.ReadAllTextAsync(configurationPath))!.AsObject();
             layer["budgets"] = new JsonObject
             {
-                ["invocation"] = new JsonObject { ["maximumTargets"] = 2, ["maximumProviderRequests"] = 1 },
+                ["invocation"] = new JsonObject { ["maximumTargets"] = 2, ["maximumProviderRequests"] = initialMaximumRequests },
                 // C4 retains G4 quotas: first acceptance, stop handoff, resume reconstruction and the two-block acceptance.
                 ["campaign"] = new JsonObject { ["maximumCandidatesPerBlock"] = 4 },
             };

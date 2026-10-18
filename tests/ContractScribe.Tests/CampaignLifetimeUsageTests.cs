@@ -12,6 +12,58 @@ namespace ContractScribe.Tests;
 public sealed partial class CampaignStateContractTests
 {
     [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    public async Task Runtime_unknown_usage_retains_returned_proposal_before_continuation_capacity_stop(int maximumRequests, bool actualHttp)
+    {
+        var scenario = CreateProposalScenario(targetLimit: 1, maximumProviderRequests: null,
+            maximumInputTokens: null, maximumUncachedInputTokens: null, maximumOutputTokens: null,
+            maximumCostMicrounits: null, maximumElapsedMilliseconds: null);
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(scenario))]))]);
+        var response = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant", content = (string?)null, reasoning_content = "synthetic-unknown-usage",
+                        tool_calls = new[] { new { id = "call.unknown-proposal", type = "function",
+                            function = new { name = "cs_terminal", arguments = Encoding.UTF8.GetString(C3Submission(scenario)) } } }
+                    },
+                    finish_reason = "tool_calls"
+                }
+            }
+        });
+        using var handler = new C3UsageHandler(response);
+        var profile = new OpenAiCompatibleChatCompletionsRequestProfile(OpenAiCompatibleThinkingMode.Enabled,
+            OpenAiCompatibleReasoningEffort.High, OpenAiCompatibleToolChoice.Required,
+            OpenAiCompatibleContinuationPolicy.RequiredForToolCalls, OpenAiCompatibleOutputTokenField.MaxTokens);
+        using var http = new OpenAiCompatibleHttpModelExchange(
+            new(new Uri("https://example.test/v1"), "model", profile, networkEnabled: true), handler, disposeHandler: false);
+        var limits = C3Request(scenario).Limits;
+        var (artifact, result) = await CompleteC3RuntimeAsync(scenario, actualHttp ? http : exchange,
+            DocumentationScribeInvocationLimits.Create(maximumProviderRequests: maximumRequests,
+                maximumCachedInputTokens: limits.MaximumInputTokens / 2,
+                maximumUncachedInputTokens: Math.Min(limits.MaximumUncachedInputTokens, limits.MaximumInputTokens / 2),
+                maximumOutputTokens: limits.MaximumOutputTokens, maximumRequestOutputTokens: limits.MaximumOutputTokens,
+                maximumToolCalls: limits.MaximumToolCalls, maximumElapsedMilliseconds: limits.MaximumElapsedMilliseconds,
+                maximumRequestElapsedMilliseconds: Math.Min(300_000, limits.MaximumElapsedMilliseconds)));
+        Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(result.Submissions).Result);
+        Assert.Equal(DocumentationScribeFailureCode.Budget, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
+        Assert.Equal(CampaignWorkStatus.ProposalComplete, artifact.State.WorkItems[0].Status);
+        Assert.Equal(1, actualHttp ? handler.Calls : exchange.Requests.Length);
+        Assert.Equal(1, artifact.State.LineageCharges.ProviderRequests.Observed);
+        Assert.True(artifact.State.LineageCharges.InputTokens.ConservativeUnobserved > 0);
+        Assert.Null(result.RunEnvelope.Usage);
+    }
+
+    [Theory]
     [InlineData("input", false)]
     [InlineData("input", true)]
     [InlineData("cached", false)]

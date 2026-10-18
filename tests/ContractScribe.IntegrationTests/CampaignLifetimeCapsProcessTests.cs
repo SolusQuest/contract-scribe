@@ -144,7 +144,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(equality ? CampaignTerminalReason.AllWorkClosed : CampaignTerminalReason.LifetimeCap, current.State.TerminalOutcome!.Reason);
             Assert.Equal(equality ? 7 : 8, current.State.LineageCharges.OutputTokens.Observed);
             Assert.Equal(0, current.State.LineageCharges.OutputTokens.ConservativeUnobserved);
-            Assert.Equal(2, server.RequestCount);
+            Assert.Equal(1, server.RequestCount);
             var commitment = work.TrustedProposal.ProposalCommitmentSha256;
             layer["budgets"]!["campaign"]!["maximumOutputTokens"] = null;
             await File.WriteAllTextAsync(configurationPath, layer.ToJsonString());
@@ -156,7 +156,7 @@ public sealed partial class CampaignCliProcessTests
                 .TrustedProposal!.ProposalCommitmentSha256);
             Assert.Equal(current.State.LineageCharges.ProviderRequests, final.State.LineageCharges.ProviderRequests);
             Assert.Equal(current.State.LineageCharges.OutputTokens, final.State.LineageCharges.OutputTokens);
-            Assert.Equal(2, server.RequestCount);
+            Assert.Equal(1, server.RequestCount);
         }
         finally { Directory.Delete(outside, recursive: true); }
     }

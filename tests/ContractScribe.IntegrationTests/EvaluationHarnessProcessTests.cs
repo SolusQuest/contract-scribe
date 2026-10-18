@@ -31,7 +31,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal("Performs no operation.", usefulScenario.ProposalLine);
         var structuredSkip = loaded.Manifest.Scenarios.Single(scenario =>
             scenario.Id == "structured-skip");
-        Assert.Equal(2, structuredSkip.OfflineExpectation.ToolCallCount);
+        Assert.Equal(1, structuredSkip.OfflineExpectation.ToolCallCount);
 
         var source = await File.ReadAllTextAsync(Path.Join(
             corpus,

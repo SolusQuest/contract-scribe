@@ -590,7 +590,7 @@ public sealed class CampaignChangedBaseProcessTests
         {
             Assert.Equal(
                 new[] { "parameter:parameter/0", "return:return" },
-                evidence[0].GetProperty("applicableComponents").EnumerateArray().Select(component =>
+                evidence[0].GetProperty("manifest")[0].GetProperty("applicableComponents").EnumerateArray().Select(component =>
                     component.GetProperty("kind").GetString() + ":"
                     + component.GetProperty("identity").GetString()));
             Assert.NotEqual(baselineContent, firstContent);
