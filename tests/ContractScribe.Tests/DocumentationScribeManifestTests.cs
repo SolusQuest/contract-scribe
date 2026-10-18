@@ -18,16 +18,17 @@ public sealed partial class DocumentationScribeRuntimeTests
     public async Task Complete_manifest_reaches_the_Solus_runtime_with_one_truthful_partial_terminal(int count)
     {
         var request = Request(root => AddManifestMembers(root, count));
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request));
-        var sent = Assert.Single(exchange.Requests);
+        Assert.Equal(2, exchange.Requests.Length);
+        var sent = exchange.Requests[0];
         using var startup = JsonDocument.Parse(sent.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
         Assert.Equal(count, startup.RootElement.GetProperty("manifest").GetArrayLength());
-        Assert.Equal("target.selected", startup.RootElement.GetProperty("executionTargetId").GetString());
+        Assert.Equal("target.selected", startup.RootElement.GetProperty("executableTargetIds")[0].GetString());
         Assert.Equal(1, startup.RootElement.GetProperty("executableTargetIds").GetArrayLength());
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
         Assert.True(sent.DeterministicUtf8.Length < 1_048_576);
         Assert.Equal(request.ArtifactSha256, result.ScribeRequestSha256);
     }
@@ -98,10 +99,10 @@ public sealed partial class DocumentationScribeRuntimeTests
         var identities = new List<string[]>();
         foreach (var request in new[] { first, second })
         {
-            var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+            var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
             var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request));
-            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-            using var content = JsonDocument.Parse(Assert.Single(exchange.Requests).Messages.Single(message =>
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+            using var content = JsonDocument.Parse(exchange.Requests[0].Messages.Single(message =>
                 message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
             identities.Add(content.RootElement.GetProperty("content").EnumerateArray()
                 .Select(item => item.GetProperty("contentId").GetString()!).ToArray());
@@ -152,15 +153,15 @@ public sealed partial class DocumentationScribeRuntimeTests
             "call." + index, DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
             JsonSerializer.SerializeToUtf8Bytes(new { scopeId = member.TargetId }))).ToArray();
         var round = ToolResponseWithContinuation("exact assistant", "exact opaque reasoning", calls);
-        var terminal = TerminalResponse("""{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray());
+        var terminal = SubmitResponse("""{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray(), request);
         var responses = retry
             ? new[] { round, FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable), round,
-                terminal }
-            : new[] { round, terminal };
+                terminal, FinishResponse(request) }
+            : new[] { round, terminal, FinishResponse(request) };
         var exchange = Script(responses);
         var result = await CreateRuntime(exchange, registry).RunAsync(request, Attempt(), Prompt(request));
-        Assert.True(result.Terminal.Kind == DocumentationScribeTerminalKind.Skip, JsonSerializer.Serialize(result.RunEnvelope.Diagnostics));
-        var visible = exchange.Requests[^1].CompletedToolExchanges;
+        Assert.True(Assert.Single(result.Submissions).Result.Kind == DocumentationScribeTerminalKind.Skip, JsonSerializer.Serialize(result.RunEnvelope.Diagnostics));
+        var visible = exchange.Requests[^1].CompletedToolExchanges.Where(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId).ToArray();
         Assert.Equal(2, visible.Length);
         using var firstResult = JsonDocument.Parse(visible[0].ResultUtf8Json);
         using var secondResult = JsonDocument.Parse(visible[1].ResultUtf8Json);
@@ -274,10 +275,12 @@ public sealed partial class DocumentationScribeRuntimeTests
         var terminal = JsonNode.Parse(ReadTerminal(proposal ? "proposal-result.json" : "skip-result.json"))!;
         if (proposal) terminal["target"]!["symbolRef"]!["documentationCommentId"] = siblingId;
         else terminal["evidenceReferenceIds"] = new JsonArray("evidence.zsummary");
-        var exchange = Script(TerminalResponse(Encoding.UTF8.GetBytes(terminal.ToJsonString())));
+        var exchange = Script(SubmitResponse(Encoding.UTF8.GetBytes(terminal.ToJsonString()), request), FinishResponse(request));
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(DocumentationScribeFailureCode.Validation, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
-        Assert.Single(exchange.Requests);
+        Assert.Empty(result.Submissions);
+        Assert.Single(result.TargetFailures);
+        Assert.Equal(DocumentationScribeFinishReason.Unresolved, Assert.IsType<DocumentationScribeFinishedTerminal>(result.Stop).Reason);
+        Assert.Equal(2, exchange.Requests.Length);
     }
 
     private static void AddManifestMembers(JsonObject root, int count)

@@ -43,6 +43,7 @@ internal sealed record EvaluationProviderFailureReport(
                 "model.failure.authentication",
             DocumentationScribeModelFailureCode.Unsupported =>
                 "model.failure.unsupported",
+            DocumentationScribeModelFailureCode.ContextLimit => "model.failure.context-limit",
             DocumentationScribeModelFailureCode.MalformedResponse =>
                 "model.failure.malformed-response",
             _ => throw new ArgumentOutOfRangeException(nameof(code)),
@@ -469,7 +470,8 @@ internal static class EvaluationReportWriter
         string patchStatus,
         string? expectedLine)
     {
-        if (runResult?.Terminal is not DocumentationScribeProposalTerminal proposal)
+        if (runResult is null || runResult.Submissions.Length != 1
+            || runResult.Submissions[0] is not { Stage: >= DocumentationScribeAcknowledgementStage.Validated, Result: DocumentationScribeProposalTerminal proposal })
         {
             return null;
         }

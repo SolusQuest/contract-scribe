@@ -45,8 +45,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         }
 
         var firstResponse = Completion("cs_tool_000", "call.one", "{\"referenceId\":\"one\"}");
-        var secondResponse = Completion("cs_terminal", "call.terminal", Encoding.UTF8.GetString(terminal));
-        await using var server = new LoopbackServer(firstResponse, secondResponse);
+        var secondResponse = Completion("cs_terminal", "call.submit", Encoding.UTF8.GetString(ScribeProtocolFixture.Submit(request, terminal)));
+        var finishResponse = Completion("cs_terminal", "call.finish", Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(request)));
+        await using var server = new LoopbackServer(firstResponse, secondResponse, finishResponse);
         var port = new SyntheticPort();
         var registry = Registry(request.ToolPolicyId, port);
         using var exchange = new OpenAiCompatibleHttpModelExchange(
@@ -63,12 +64,12 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "scribe-protocol.openai-compatible.v1"));
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(expectedKind, result.Terminal.Kind);
+        Assert.Equal(expectedKind, Assert.Single(result.Submissions).Result.Kind);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(3, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal("one", Assert.Single(port.References));
-        Assert.Equal(2, server.Requests.Length);
+        Assert.Equal(3, server.Requests.Length);
         using (var first = JsonDocument.Parse(server.Requests[0].Body))
         {
             Assert.Equal(5, first.RootElement.GetProperty("messages").GetArrayLength());
@@ -100,7 +101,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
 
         if (expectedKind == DocumentationScribeTerminalKind.Proposal)
         {
-            var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(result.Terminal);
+            var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(result.Submissions).Result);
             Assert.Equal("M:Synthetic.Widget.Run(System.String)",
                 proposal.Target.SymbolRef.DocumentationCommentId);
             Assert.Equal(
@@ -112,8 +113,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 proposal.ContentUnits.SelectMany(unit => unit.EvidenceReferenceIds));
         }
 
-        Assert.Equal(expectedDynamic!.EvidenceReferenceId,
-            Assert.Single(result.DynamicEvidenceReferences).EvidenceReferenceId);
+        if (expectedKind == DocumentationScribeTerminalKind.Proposal)
+            Assert.Equal(expectedDynamic!.EvidenceReferenceId, Assert.Single(result.DynamicEvidenceReferences).EvidenceReferenceId);
+        else Assert.Empty(result.DynamicEvidenceReferences);
     }
 
     [Fact]
@@ -121,18 +123,21 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     {
         const string marker = "synthetic-integration-reasoning-marker";
         var request = Request();
-        var terminal = Encoding.UTF8.GetString(ReadTerminal("skip-result.json"));
+        var terminal = Encoding.UTF8.GetString(ScribeProtocolFixture.Submit(request, ReadTerminal("skip-result.json")));
         var toolResponse = ThinkingCompletion(
             "cs_tool_000",
             "call.one",
             "{\"referenceId\":\"one\"}",
             marker);
-        var terminalResponse = ThinkingCompletion("cs_terminal", "call.terminal", terminal, "terminal-marker");
+        var terminalResponse = ThinkingCompletion("cs_terminal", "call.submit", terminal, "terminal-marker");
+        var finishResponse = ThinkingCompletion("cs_terminal", "call.finish", Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(request)), "finish-marker");
         await using var server = new LoopbackServer(
             toolResponse,
             terminalResponse,
+            finishResponse,
             toolResponse,
-            terminalResponse);
+            terminalResponse,
+            finishResponse);
         var profile = new OpenAiCompatibleChatCompletionsRequestProfile(
             OpenAiCompatibleThinkingMode.Enabled,
             OpenAiCompatibleReasoningEffort.High,
@@ -154,12 +159,12 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "scribe-protocol.openai-compatible.v1"));
 
         var first = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, first.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(first.Submissions).Result.Kind);
         var second = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, second.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(second.Submissions).Result.Kind);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(4, server.Requests.Length);
-        foreach (var index in new[] { 0, 2 })
+        Assert.Equal(6, server.Requests.Length);
+        foreach (var index in new[] { 0, 3 })
         {
             using var initial = JsonDocument.Parse(server.Requests[index].Body);
             Assert.Equal(5, initial.RootElement.GetProperty("messages").GetArrayLength());
@@ -169,7 +174,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 StringComparison.Ordinal);
         }
 
-        foreach (var index in new[] { 1, 3 })
+        foreach (var index in new[] { 1, 4 })
         {
             using var replay = JsonDocument.Parse(server.Requests[index].Body);
             var messages = replay.RootElement.GetProperty("messages");
@@ -187,7 +192,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     {
         const string marker = "synthetic-integration-reasoning-marker";
         var request = Request();
-        var terminal = Encoding.UTF8.GetString(ReadTerminal("skip-result.json"));
+        var terminal = Encoding.UTF8.GetString(ScribeProtocolFixture.Submit(request, ReadTerminal("skip-result.json")));
         var contentProperty = contentShape switch
         {
             "missing" => string.Empty,
@@ -198,8 +203,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         var toolResponse = WithKnownSyntheticUsage(Encoding.UTF8.GetBytes("{\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\","
             + contentProperty
             + "\"reasoning_content\":\"" + marker + "\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\\\"referenceId\\\":\\\"one\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}"));
-        var terminalResponse = ThinkingCompletion("cs_terminal", "call.terminal", terminal, "terminal-marker");
-        await using var server = new LoopbackServer(toolResponse, terminalResponse);
+        var terminalResponse = ThinkingCompletion("cs_terminal", "call.submit", terminal, "terminal-marker");
+        var finishResponse = ThinkingCompletion("cs_terminal", "call.finish", Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(request)), "finish-marker");
+        await using var server = new LoopbackServer(toolResponse, terminalResponse, finishResponse);
         var profile = new OpenAiCompatibleChatCompletionsRequestProfile(
             OpenAiCompatibleThinkingMode.Enabled,
             OpenAiCompatibleReasoningEffort.High,
@@ -221,9 +227,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
                 "scribe-protocol.openai-compatible.v1"));
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
-        Assert.Equal(2, server.Requests.Length);
+        Assert.Equal(3, server.Requests.Length);
         using var replay = JsonDocument.Parse(server.Requests[1].Body);
         var assistant = replay.RootElement.GetProperty("messages")[5];
         var contentPresent = assistant.TryGetProperty("content", out var content);
@@ -346,7 +352,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(DocumentationScribeFailureCode.Provider,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
         Assert.Single(server.Requests);
     }
@@ -397,7 +403,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
         Assert.Equal(DocumentationScribeFailureCode.Budget,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
@@ -423,7 +429,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
 
         var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
         Assert.Equal(DocumentationScribeFailureCode.Budget,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         await server.Completion.WaitAsync(TimeSpan.FromSeconds(5));
 
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
@@ -603,7 +609,7 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
     private static byte[] ReadTerminal(string fixture)
     {
         using var document = JsonDocument.Parse(ReadFixture(fixture));
-        return Encoding.UTF8.GetBytes(document.RootElement.GetProperty("terminal").GetRawText());
+        return Encoding.UTF8.GetBytes(document.RootElement.GetProperty("submissions")[0].GetProperty("result").GetRawText());
     }
 
     private static byte[] ReadFixture(string name) => File.ReadAllBytes(Path.Join(
@@ -858,10 +864,12 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
             byte[]? second = null,
             byte[]? third = null,
             byte[]? fourth = null,
+            byte[]? fifth = null,
+            byte[]? sixth = null,
             string statusLine = "HTTP/1.1 200 OK",
             string extraHeaders = "")
         {
-            responses = new[] { first, second, third, fourth }
+            responses = new[] { first, second, third, fourth, fifth, sixth }
                 .Where(response => response is not null)
                 .Select(response => response!)
                 .ToImmutableArray();

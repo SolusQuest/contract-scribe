@@ -503,14 +503,14 @@ public sealed class CampaignChangedBaseProcessTests
 
     private static void AssertCollisionCommitments(JsonElement oldEvidence, JsonElement newEvidence)
     {
-        var oldTarget = oldEvidence.GetProperty("terminalTarget");
-        var newTarget = newEvidence.GetProperty("terminalTarget");
+        var oldTarget = oldEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
+        var newTarget = newEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
         Assert.Equal(oldTarget.GetProperty("symbolRef").GetRawText(),
             newTarget.GetProperty("symbolRef").GetRawText());
         Assert.Equal(oldTarget.GetProperty("sourceCommitment").GetRawText(),
             newTarget.GetProperty("sourceCommitment").GetRawText());
-        Assert.Equal(oldEvidence.GetProperty("applicableComponents").GetRawText(),
-            newEvidence.GetProperty("applicableComponents").GetRawText());
+        Assert.Equal(oldEvidence.GetProperty("manifest")[0].GetProperty("applicableComponents").GetRawText(),
+            newEvidence.GetProperty("manifest")[0].GetProperty("applicableComponents").GetRawText());
         Assert.Equal(
             oldEvidence.GetProperty("evidenceReferences")[0].GetProperty("contentSha256").GetString(),
             newEvidence.GetProperty("evidenceReferences")[0].GetProperty("contentSha256").GetString());
@@ -527,7 +527,7 @@ public sealed class CampaignChangedBaseProcessTests
             return;
         }
 
-        var evidence = requestBodies.Select(ReadTargetEvidence).ToArray();
+        var evidence = requestBodies.Select(ReadTargetEvidence).Where(item => item.GetProperty("progress").GetArrayLength() == 0).ToArray();
         var expectedDocumentationIds = evolution switch
         {
             "changed-applicable-components" => new[] { "M:Fixture.App.Run(System.Int32)" },
@@ -536,15 +536,15 @@ public sealed class CampaignChangedBaseProcessTests
             _ => new[] { "M:Fixture.App.Run" },
         };
         Assert.Equal(expectedDocumentationIds, evidence.Select(item => item
-            .GetProperty("terminalTarget")
+            .GetProperty("manifest")[0].GetProperty("proposalTarget")
             .GetProperty("symbolRef")
             .GetProperty("documentationCommentId")
             .GetString()));
 
-        var baselineTarget = baselineEvidence.GetProperty("terminalTarget");
+        var baselineTarget = baselineEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
         foreach (var item in evidence)
         {
-            var target = item.GetProperty("terminalTarget");
+            var target = item.GetProperty("manifest")[0].GetProperty("proposalTarget");
             var source = target.GetProperty("sourceCommitment");
             var sourceLocator = source.GetProperty("locator").GetProperty("repository");
             var reference = item.GetProperty("evidenceReferences")[0];
@@ -560,7 +560,7 @@ public sealed class CampaignChangedBaseProcessTests
                 > sourceLocator.GetProperty("span").GetProperty("start").GetInt32());
         }
 
-        var firstTarget = evidence[0].GetProperty("terminalTarget");
+        var firstTarget = evidence[0].GetProperty("manifest")[0].GetProperty("proposalTarget");
         var firstSymbol = firstTarget.GetProperty("symbolRef");
         var baselineSymbol = baselineTarget.GetProperty("symbolRef");
         var firstPath = firstTarget.GetProperty("sourceCommitment")

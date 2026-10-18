@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.Core;
+using ContractScribe.Agent.Prompting;
 using Json.Schema;
 
 namespace ContractScribe.Tests;
@@ -43,7 +44,7 @@ public sealed class DocumentationScribeContractTests
             var parsed = DocumentationScribeValidation.ParseRunResult(request, attemptId, [], resultBytes);
             var result = Assert.IsType<DocumentationScribeRunResult>(parsed.Result);
             Assert.Null(parsed.Failure);
-            Assert.Equal(pair.Value, result.Terminal.Kind);
+            Assert.Equal(pair.Value, result.Submissions.IsEmpty ? result.Stop.Kind : Assert.Single(result.Submissions).Result.Kind);
             Assert.Equal(request.ArtifactSha256, result.ScribeRequestSha256);
             Assert.Equal(attemptId, result.AttemptId);
         }
@@ -93,7 +94,8 @@ public sealed class DocumentationScribeContractTests
             toolOutcomeIds,
             registry["toolOutcomes"]!.AsArray().Select(node => node!.GetValue<string>()));
         var schemaText = Encoding.UTF8.GetString(ReadContractFile("v1.request.schema.json"))
-            + Encoding.UTF8.GetString(ReadContractFile("v1.run-result.schema.json"));
+            + Encoding.UTF8.GetString(ReadContractFile("v1.run-result.schema.json"))
+            + Encoding.UTF8.GetString(DocumentationScribeTerminalSchema.Utf8.AsSpan());
         foreach (var registeredValue in registry
             .Where(pair => pair.Key is not (
                 "documentationScribeRegistryVersion" or "requestSchema" or "runResultSchema" or "toolOutcomes"))
@@ -155,7 +157,7 @@ public sealed class DocumentationScribeContractTests
             ReadFixture("valid", "failure-result.json"));
         Assert.Equal(
             DocumentationScribeProviderFinalDisposition.Terminal,
-            Assert.IsType<DocumentationScribeFailureTerminal>(terminal.Result!.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(terminal.Result!.Stop).ProviderFinalDisposition);
 
         var retryable = DocumentationScribeValidation.ParseRunResult(
             request,
@@ -164,40 +166,40 @@ public sealed class DocumentationScribeContractTests
             ReadFixture("valid", "retryable-failure-result.json"));
         Assert.Equal(
             DocumentationScribeProviderFinalDisposition.Retryable,
-            Assert.IsType<DocumentationScribeFailureTerminal>(retryable.Result!.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(retryable.Result!.Stop).ProviderFinalDisposition);
 
         var missing = ParseObject(ReadFixture("valid", "failure-result.json"));
-        missing["terminal"]!.AsObject().Remove("providerFinalDisposition");
-        AssertResultFails(request, missing, "scribe.result.invalid-shape", "/terminal/providerFinalDisposition");
+        ScribeResultFixture.Payload(missing).AsObject().Remove("providerFinalDisposition");
+        AssertResultFails(request, missing, "scribe.result.invalid-shape", "/stop/providerFinalDisposition");
 
         foreach (var invalidValue in new[] { "provider.http-429", "Bearer private-credential", "unknown" })
         {
             var invalid = ParseObject(ReadFixture("valid", "failure-result.json"));
-            invalid["terminal"]!["providerFinalDisposition"] = invalidValue;
-            AssertResultFails(request, invalid, "scribe.result.invalid-vocabulary", "/terminal/providerFinalDisposition");
+            ScribeResultFixture.Payload(invalid)["providerFinalDisposition"] = invalidValue;
+            AssertResultFails(request, invalid, "scribe.result.invalid-vocabulary", "/stop/providerFinalDisposition");
         }
 
         var wrongType = ParseObject(ReadFixture("valid", "failure-result.json"));
-        wrongType["terminal"]!["providerFinalDisposition"] = 1;
-        AssertResultFails(request, wrongType, "scribe.result.invalid-shape", "/terminal/providerFinalDisposition");
+        ScribeResultFixture.Payload(wrongType)["providerFinalDisposition"] = 1;
+        AssertResultFails(request, wrongType, "scribe.result.invalid-shape", "/stop/providerFinalDisposition");
 
         var overBound = ParseObject(ReadFixture("valid", "failure-result.json"));
-        overBound["terminal"]!["providerFinalDisposition"] = new string('x', 17);
-        AssertResultFails(request, overBound, "scribe.result.invalid-vocabulary", "/terminal/providerFinalDisposition");
+        ScribeResultFixture.Payload(overBound)["providerFinalDisposition"] = new string('x', 17);
+        AssertResultFails(request, overBound, "scribe.result.invalid-vocabulary", "/stop/providerFinalDisposition");
 
         var misplaced = ParseObject(ReadFixture("valid", "failure-result.json"));
-        misplaced["terminal"]!["code"] = "scribe.failure.budget";
-        AssertResultFails(request, misplaced, "scribe.result.invalid-shape", "/terminal/providerFinalDisposition");
+        ScribeResultFixture.Payload(misplaced)["code"] = "scribe.failure.budget";
+        AssertResultFails(request, misplaced, "scribe.result.invalid-shape", "/stop/providerFinalDisposition");
 
         foreach (var fixture in new[] { "proposal-result.json", "skip-result.json", "cancelled-result.json" })
         {
             var misplacedTerminal = ParseObject(ReadFixture("valid", fixture));
-            misplacedTerminal["terminal"]!["providerFinalDisposition"] = "terminal";
+            ScribeResultFixture.Payload(misplacedTerminal)["providerFinalDisposition"] = "terminal";
             AssertResultFails(
                 request,
                 misplacedTerminal,
                 "scribe.result.unknown-field",
-                "/terminal/providerFinalDisposition");
+                fixture == "cancelled-result.json" ? "/stop/providerFinalDisposition" : "/submissions/0/result/providerFinalDisposition");
         }
 
         var duplicateText = Encoding.UTF8.GetString(ReadFixture("valid", "failure-result.json"))
@@ -211,7 +213,7 @@ public sealed class DocumentationScribeContractTests
             [],
             Encoding.UTF8.GetBytes(duplicateText));
         Assert.Equal("scribe.result.duplicate-property", duplicate.Failure?.Code);
-        Assert.Equal("/terminal/providerFinalDisposition", duplicate.Failure?.Pointer);
+        Assert.Equal("/stop/providerFinalDisposition", duplicate.Failure?.Pointer);
 
         var zeroRequests = ParseObject(ReadFixture("valid", "failure-result.json"));
         zeroRequests["runEnvelope"]!["providerRequestCount"] = 0;
@@ -224,7 +226,7 @@ public sealed class DocumentationScribeContractTests
 
         var prematureRetryable = ParseObject(ReadFixture("valid", "retryable-failure-result.json"));
         prematureRetryable["runEnvelope"]!["attemptNumber"] = 2;
-        AssertResultFails(request, prematureRetryable, "scribe.result.invalid-correlation", "/terminal/providerFinalDisposition");
+        AssertResultFails(request, prematureRetryable, "scribe.result.invalid-correlation", "/stop/providerFinalDisposition");
 
         Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateFailureResult(
             request,
@@ -314,7 +316,7 @@ public sealed class DocumentationScribeContractTests
 
         var result = ParseObject(ReadFixture("valid", "proposal-result.json"));
         result["dynamicEvidenceReferences"] = new JsonArray(DynamicEvidenceJson(first));
-        result["terminal"]!["contentUnits"]![0]!["evidenceReferenceIds"]!
+        ScribeResultFixture.Payload(result)["contentUnits"]![0]!["evidenceReferenceIds"]!
             .AsArray().Insert(0, first.EvidenceReferenceId);
         var bytes = Serialize(result);
         AssertSchemaValid(ResultSchema.Value, bytes, "dynamic-evidence-result");
@@ -358,7 +360,8 @@ public sealed class DocumentationScribeContractTests
         var skip = ParseObject(ReadFixture("valid", "skip-result.json"));
         skip["dynamicEvidenceReferences"] = new JsonArray(
             orderedOverlay.Select(reference => DynamicEvidenceJson(reference)).ToArray());
-        skip["terminal"]!["evidenceReferenceIds"] = new JsonArray(first.EvidenceReferenceId);
+        ScribeResultFixture.Payload(skip)["evidenceReferenceIds"] = new JsonArray(orderedOverlay
+            .Select(reference => (JsonNode?)JsonValue.Create(reference.EvidenceReferenceId)).ToArray());
         var skipBytes = Serialize(skip);
         AssertSchemaValid(ResultSchema.Value, skipBytes, "dynamic-evidence-skip");
         Assert.True(DocumentationScribeValidation.ParseRunResult(
@@ -576,7 +579,7 @@ public sealed class DocumentationScribeContractTests
         AssertSchemaValid(RequestSchema.Value, syntheticRequestBytes, "m1-synthetic-locator");
         var syntheticRequest = ParseValidRequest(syntheticRequestBytes);
         var syntheticResult = ParseObject(ReadFixture("valid", "proposal-result.json"));
-        syntheticResult["terminal"]!["target"]!["sourceCommitment"]!["locator"] = CreateSyntheticLocator();
+        ScribeResultFixture.Payload(syntheticResult)["target"]!["sourceCommitment"]!["locator"] = CreateSyntheticLocator();
         Correlate(syntheticResult, syntheticRequest.ArtifactSha256);
         var syntheticResultBytes = Serialize(syntheticResult);
         AssertSchemaValid(ResultSchema.Value, syntheticResultBytes, "m1-synthetic-result-locator");
@@ -602,7 +605,7 @@ public sealed class DocumentationScribeContractTests
         AssertSchemaValid(RequestSchema.Value, supplementaryRequestBytes, "m1-scalar-bounded-symbol");
         var supplementaryRequest = ParseValidRequest(supplementaryRequestBytes);
         var supplementaryResult = ParseObject(ReadFixture("valid", "proposal-result.json"));
-        supplementaryResult["terminal"]!["target"]!["symbolRef"]!["documentationCommentId"] = supplementaryDocumentationId;
+        ScribeResultFixture.Payload(supplementaryResult)["target"]!["symbolRef"]!["documentationCommentId"] = supplementaryDocumentationId;
         Correlate(supplementaryResult, supplementaryRequest.ArtifactSha256);
         var supplementaryResultBytes = Serialize(supplementaryResult);
         AssertSchemaValid(ResultSchema.Value, supplementaryResultBytes, "m1-scalar-bounded-result-symbol");
@@ -678,40 +681,40 @@ public sealed class DocumentationScribeContractTests
     {
         AssertResultMutationFails(
             request => request["manifest"]![0]!["styleProfile"]!["summary"]!["disposition"] = "optional",
-            result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(0),
+            result => ScribeResultFixture.Payload(result)["contentUnits"]!.AsArray().RemoveAt(0),
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             request => request["manifest"]![0]!["styleProfile"]!["componentPolicies"]![1]!["disposition"] = "optional",
-            result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(2),
+            result => ScribeResultFixture.Payload(result)["contentUnits"]!.AsArray().RemoveAt(2),
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Uses <see cref=\"T:System.String\"/>.",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = "Uses <see cref=\"T:System.String\"/>.",
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Uses &amp; escaping.",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = "Uses &amp; escaping.",
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "<é/>",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = "<é/>",
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "&é;",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = "&é;",
             "scribe.result.invalid-content");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = new string('a', 2_049),
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = new string('a', 2_049),
             "scribe.result.invalid-vocabulary");
 
         var request = ParseValidRequest(ReadFixture("valid", "request.json"));
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         var ordinaryAmpersand = ParseObject(ReadFixture("valid", "proposal-result.json"));
-        ordinaryAmpersand["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Describes the R&D strategy; no entity is present.";
+        ScribeResultFixture.Payload(ordinaryAmpersand)["contentUnits"]![0]!["lines"]![0] = "Describes the R&D strategy; no entity is present.";
         Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(ordinaryAmpersand)).IsValid);
         var supplementaryException = ParseObject(ReadFixture("valid", "proposal-result.json"));
-        supplementaryException["terminal"]!["contentUnits"]!.AsArray().Add(new JsonObject
+        ScribeResultFixture.Payload(supplementaryException)["contentUnits"]!.AsArray().Add(new JsonObject
         {
             ["kind"] = "content.exception",
             ["typeDocumentationId"] = "T:" + string.Concat(
@@ -732,7 +735,7 @@ public sealed class DocumentationScribeContractTests
             attempt,
             [],
             ReadFixture("valid", "proposal-result.json"));
-        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
+        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(parsed.Result!.Submissions).Result);
         var patch = ParseObject(ReadRepositoryFixture("documentation-patch", "v1", "valid", "repository-request.json"));
         var block = patch["blocks"]![0]!;
         block["applicableComponents"] = new JsonArray(request.ExecutionTarget.Target.ApplicableComponents
@@ -779,20 +782,20 @@ public sealed class DocumentationScribeContractTests
     {
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["evidenceReferenceIds"] = new JsonArray(),
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["evidenceReferenceIds"] = new JsonArray(),
             "scribe.result.invalid-shape");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["evidenceReferenceIds"] =
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["evidenceReferenceIds"] =
                 new JsonArray("evidence.summary", "evidence.summary"),
             "scribe.result.invalid-order");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["evidenceReferenceIds"]![0] = "evidence.unknown",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["evidenceReferenceIds"]![0] = "evidence.unknown",
             "scribe.result.invalid-reference");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![1]!["name"] = "other",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![1]!["name"] = "other",
             "scribe.result.invalid-component");
 
         AssertRequestMutationFails(
@@ -852,11 +855,11 @@ public sealed class DocumentationScribeContractTests
             "/manifest/0/styleProfile/forbiddenLiterals");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "A guaranteed outcome.",
+            result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = "A guaranteed outcome.",
             "scribe.result.invalid-style");
 
         var awkward = ParseObject(ReadFixture("valid", "proposal-result.json"));
-        awkward["terminal"]!["contentUnits"]![0]!["lines"]![0] = "Widget operation banana syntax perhaps.";
+        ScribeResultFixture.Payload(awkward)["contentUnits"]![0]!["lines"]![0] = "Widget operation banana syntax perhaps.";
         var request = ParseValidRequest(ReadFixture("valid", "request.json"));
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         Assert.True(DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(awkward)).IsValid);
@@ -872,7 +875,7 @@ public sealed class DocumentationScribeContractTests
             attempt,
             [],
             ReadFixture("valid", "proposal-result.json"));
-        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
+        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(parsed.Result!.Submissions).Result);
         var projected = Assert.IsType<DocumentationPatchStructuredContent>(proposal.PatchContent);
         Assert.Equal(3, proposal.ContentUnits.Length);
         Assert.Equal("Runs the synthetic widget operation.", Assert.Single(projected.SummaryLines));
@@ -903,7 +906,7 @@ public sealed class DocumentationScribeContractTests
         var request = ParseValidRequest(Serialize(requestNode));
         var result = ParseObject(ReadFixture("valid", "proposal-result.json"));
         Correlate(result, request.ArtifactSha256);
-        result["terminal"]!["contentUnits"] = new JsonArray(new JsonObject
+        ScribeResultFixture.Payload(result)["contentUnits"] = new JsonArray(new JsonObject
         {
             ["kind"] = "content.inherit-doc",
             ["lines"] = new JsonArray(),
@@ -912,7 +915,7 @@ public sealed class DocumentationScribeContractTests
         });
         Assert.True(DocumentationScribeAttemptId.TryParse(AttemptId, out var attempt));
         var parsed = DocumentationScribeValidation.ParseRunResult(request, attempt, [], Serialize(result));
-        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
+        var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(parsed.Result!.Submissions).Result);
         Assert.IsType<DocumentationPatchInheritDocContent>(proposal.PatchContent);
         Assert.Single(proposal.ContentUnits);
     }
@@ -942,20 +945,20 @@ public sealed class DocumentationScribeContractTests
             "/runEnvelope/attemptId");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["target"]!["symbolRef"]!["documentationCommentId"] = "M:Synthetic.Other.Run",
+            result => ScribeResultFixture.Payload(result)["target"]!["symbolRef"]!["documentationCommentId"] = "M:Synthetic.Other.Run",
             "scribe.result.invalid-correlation");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
+            result => ScribeResultFixture.Payload(result)["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
                 "src/Synthetic/Other.cs",
             "scribe.result.invalid-correlation");
         AssertResultMutationFails(
             null,
-            result => result["terminal"]!["reason"] = "scribe.skip.insufficient-evidence",
+            result => ScribeResultFixture.Payload(result)["reason"] = "scribe.skip.insufficient-evidence",
             "scribe.result.unknown-field");
 
         var skip = ParseObject(ReadFixture("valid", "skip-result.json"));
-        skip["terminal"]!["reason"] = "scribe.failure.provider";
+        ScribeResultFixture.Payload(skip)["reason"] = "scribe.failure.provider";
         AssertResultFails(ParseValidRequest(ReadFixture("valid", "request.json")), skip, "scribe.result.invalid-vocabulary");
 
         AssertResultMutationFails(
@@ -968,7 +971,7 @@ public sealed class DocumentationScribeContractTests
             "scribe.result.over-budget");
         AssertResultMutationFails(
             null,
-            result => result["runEnvelope"]!["styleProfileId"] = "style.other.v1",
+            result => result["runEnvelope"]!["styleProfileIds"] = new JsonArray("style.other.v1"),
             "scribe.result.invalid-correlation");
     }
 
@@ -1068,9 +1071,9 @@ public sealed class DocumentationScribeContractTests
             }));
 
         var rawBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
-        rawBudget["terminal"]!["code"] = "scribe.failure.budget";
+        ScribeResultFixture.Payload(rawBudget)["code"] = "scribe.failure.budget";
         rawBudget["runEnvelope"]!["elapsedMilliseconds"] = request.Limits.MaximumElapsedMilliseconds + 1;
-        rawBudget["terminal"]!.AsObject().Remove("providerFinalDisposition");
+        ScribeResultFixture.Payload(rawBudget).AsObject().Remove("providerFinalDisposition");
         rawBudget["runEnvelope"]!["usage"] = new JsonObject
         {
             ["uncachedInputTokens"] = request.Limits.MaximumUncachedInputTokens + 1,
@@ -1116,8 +1119,8 @@ public sealed class DocumentationScribeContractTests
 
         var rawBoundaryBudget = ParseObject(ReadFixture("valid", "failure-result.json"));
         Correlate(rawBoundaryBudget, boundaryRequest.ArtifactSha256);
-        rawBoundaryBudget["terminal"]!["code"] = "scribe.failure.budget";
-        rawBoundaryBudget["terminal"]!.AsObject().Remove("providerFinalDisposition");
+        ScribeResultFixture.Payload(rawBoundaryBudget)["code"] = "scribe.failure.budget";
+        ScribeResultFixture.Payload(rawBoundaryBudget).AsObject().Remove("providerFinalDisposition");
         rawBoundaryBudget["runEnvelope"]!["usage"] = new JsonObject
         {
             ["inputTokens"] = DocumentationScribeContract.MaximumObservedInputTokens,
@@ -1149,8 +1152,8 @@ public sealed class DocumentationScribeContractTests
 
         var rawSimultaneousTimeout = ParseObject(ReadFixture("valid", "failure-result.json"));
         Correlate(rawSimultaneousTimeout, boundaryRequest.ArtifactSha256);
-        rawSimultaneousTimeout["terminal"]!["code"] = "scribe.failure.timeout";
-        rawSimultaneousTimeout["terminal"]!.AsObject().Remove("providerFinalDisposition");
+        ScribeResultFixture.Payload(rawSimultaneousTimeout)["code"] = "scribe.failure.timeout";
+        ScribeResultFixture.Payload(rawSimultaneousTimeout).AsObject().Remove("providerFinalDisposition");
         rawSimultaneousTimeout["runEnvelope"]!["elapsedMilliseconds"] =
             DocumentationScribeContract.MaximumObservedElapsedMilliseconds;
         rawSimultaneousTimeout["runEnvelope"]!["usage"] = new JsonObject
@@ -1263,15 +1266,15 @@ public sealed class DocumentationScribeContractTests
         Assert.Equal(request.ArtifactSha256, failure.ScribeRequestSha256);
         Assert.Equal(attempt, failure.AttemptId);
         Assert.Equal(request.ToolPolicyId, failure.RunEnvelope.ToolPolicyId);
-        Assert.IsType<DocumentationScribeFailureTerminal>(failure.Terminal);
+        Assert.IsType<DocumentationScribeFailureTerminal>(failure.Stop);
 
-        var skip = DocumentationScribeValidation.CreateSkipResult(
+        var skip = DocumentationScribeValidation.CreateSingletonSkipResult(
             request,
             attempt,
             DocumentationScribeSkipReason.InsufficientEvidence,
             new[] { "evidence.summary" },
             envelope);
-        Assert.IsType<DocumentationScribeSkipTerminal>(skip.Terminal);
+        Assert.IsType<DocumentationScribeSkipTerminal>(Assert.Single(skip.Submissions).Result);
 
         Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.CreateCancelledResult(
             request,
@@ -1292,7 +1295,7 @@ public sealed class DocumentationScribeContractTests
         Assert.Equal("/manifest/0/target/sourceText", requestFailure?.Pointer);
 
         var result = ParseObject(ReadFixture("valid", "failure-result.json"));
-        result["terminal"]!["reason"] = "scribe.skip.insufficient-evidence";
+        ScribeResultFixture.Payload(result)["reason"] = "scribe.skip.insufficient-evidence";
         Assert.False(Evaluate(ResultSchema.Value, Serialize(result)));
 
         var untrustedPropertyName = "private provider content " + new string('x', 900_000);
@@ -1483,7 +1486,7 @@ public sealed class DocumentationScribeContractTests
 
     private static JsonObject ParseObject(byte[] bytes) => JsonNode.Parse(bytes)!.AsObject();
 
-    private static byte[] Serialize(JsonObject value) => Encoding.UTF8.GetBytes(value.ToJsonString());
+    private static byte[] Serialize(JsonObject value) => ScribeResultFixture.Serialize(value);
 
     private static JsonSchema LoadSchema(string name) => JsonSchema.FromText(
         Encoding.UTF8.GetString(ReadContractFile(name)));

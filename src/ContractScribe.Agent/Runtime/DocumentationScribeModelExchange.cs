@@ -275,13 +275,16 @@ public sealed class DocumentationScribeModelToolCall
 
 public sealed class DocumentationScribeModelTerminalSubmission
 {
-    public DocumentationScribeModelTerminalSubmission(ReadOnlyMemory<byte> terminalUtf8Json)
+    public DocumentationScribeModelTerminalSubmission(ReadOnlyMemory<byte> terminalUtf8Json, string? callId = null)
     {
+        CallId = callId is null ? null : DocumentationScribeBoundary.ValidateCorrelationId(callId, nameof(callId));
         TerminalUtf8JsonStorage = DocumentationScribeBoundary.ValidateJson(
             terminalUtf8Json,
             nameof(terminalUtf8Json),
             DocumentationScribeContract.MaximumArtifactUtf8Bytes);
     }
+
+    public string? CallId { get; }
 
     public ReadOnlyMemory<byte> TerminalUtf8Json => TerminalUtf8JsonStorage.AsMemory();
 
@@ -298,6 +301,7 @@ public enum DocumentationScribeModelFailureCode
     Authentication,
     Unsupported,
     MalformedResponse,
+    ContextLimit,
 }
 
 public enum DocumentationScribeModelFailureOrigin
@@ -504,7 +508,7 @@ public sealed class DocumentationScribeModelResponse
             | DocumentationScribeContinuationObservation.HistoryReplayed
             | DocumentationScribeContinuationObservation.MissingRequired;
         if ((continuationObservation & ~knownObservations) != 0
-            || assistantContinuation is not null && toolCalls.IsEmpty)
+            || assistantContinuation is not null && toolCalls.IsEmpty && terminalSubmissions.IsEmpty)
         {
             throw new ArgumentException("The continuation observation is outside the product boundary.");
         }
@@ -612,7 +616,11 @@ public sealed class DocumentationScribeModelResponse
             writer.WriteStartArray();
             foreach (var terminal in terminalSubmissions)
             {
+                writer.WriteStartObject();
+                if (terminal.CallId is not null) writer.WriteString("callId", terminal.CallId);
+                writer.WritePropertyName("result");
                 writer.WriteRawValue(terminal.TerminalUtf8Json.Span, skipInputValidation: true);
+                writer.WriteEndObject();
             }
 
             writer.WriteEndArray();

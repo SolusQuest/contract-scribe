@@ -62,8 +62,8 @@ public sealed record DocumentationScribeInvocationLimits
             maximumConnectMilliseconds, maximumToolCallsPerResponse);
     }
 
-    internal static DocumentationScribeInvocationLimits ForStandalone(DocumentationScribeRunLimits limits) =>
-        new(1, limits.MaximumProviderRequests, limits.MaximumToolCalls,
+    internal static DocumentationScribeInvocationLimits ForStandalone(DocumentationScribeRunLimits limits, int maximumTargets = 1) =>
+        new(maximumTargets, limits.MaximumProviderRequests, limits.MaximumToolCalls,
             limits.MaximumInputTokens, limits.MaximumUncachedInputTokens, limits.MaximumOutputTokens,
             limits.MaximumElapsedMilliseconds, limits.MaximumOutputTokens, limits.MaximumElapsedMilliseconds,
             Math.Min(15_000, limits.MaximumElapsedMilliseconds), 1_024);
@@ -174,7 +174,7 @@ public sealed class DocumentationScribeInvocationAllowance
         DocumentationScribeRequest request, TimeProvider? clock = null)
     {
         ArgumentNullException.ThrowIfNull(request);
-        return new(DocumentationScribeInvocationLimits.ForStandalone(request.Limits), clock ?? TimeProvider.System,
+        return new(DocumentationScribeInvocationLimits.ForStandalone(request.Limits, request.ExecutableTargetIds.Length), clock ?? TimeProvider.System,
             request.Limits.MaximumInputTokens, request.Limits.MaximumCostMicrounits);
     }
 

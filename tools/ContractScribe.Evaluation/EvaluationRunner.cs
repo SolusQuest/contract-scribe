@@ -1239,14 +1239,13 @@ internal sealed class EvaluationRunner
             usage is not null,
             providerObservations.Any(observation => observation.CacheSupplied),
             EvaluationLiveObservationMatcher.HasReportedCache(usage),
-            outcome.RunResult?.Terminal is DocumentationScribeProposalTerminal
-                or DocumentationScribeSkipTerminal
-                or DocumentationScribeFailureTerminal,
+            outcome.RunResult is { } boundedResult && boundedResult.Stop.Kind is DocumentationScribeTerminalKind.Finished
+                or DocumentationScribeTerminalKind.Failure or DocumentationScribeTerminalKind.Cancelled,
             providerObservations.Any(observation => observation.ContinuationObservation.HasFlag(
                 DocumentationScribeContinuationObservation.MissingRequired)),
             providerObservations.Any(observation =>
                 observation.FailureCode == DocumentationScribeModelFailureCode.MalformedResponse),
-            outcome.RunResult?.Terminal is DocumentationScribeFailureTerminal terminalFailure
+            outcome.RunResult?.Stop is DocumentationScribeFailureTerminal terminalFailure
                 && terminalFailure.Code == DocumentationScribeFailureCode.ToolProtocol,
             envelope?.Diagnostics.Any(diagnostic =>
                 diagnostic.Code == "scribe.diagnostic.result-rejected") == true,
@@ -1301,7 +1300,8 @@ internal sealed class EvaluationRunner
             observed.Add(DocumentationScribeVocabulary.GetId(cache));
         }
 
-        if (runResult?.Terminal is DocumentationScribeProposalTerminal)
+        if (runResult?.Submissions.Any(item => item.Stage >= DocumentationScribeAcknowledgementStage.Validated
+            && item.Result is DocumentationScribeProposalTerminal) == true)
         {
             observed.Add("proposal-validated");
         }
@@ -1334,6 +1334,7 @@ internal sealed class EvaluationRunner
                 DocumentationScribeModelFailureCode.Authentication => "provider-authentication",
                 DocumentationScribeModelFailureCode.Unsupported => "provider-unsupported",
                 DocumentationScribeModelFailureCode.MalformedResponse => "provider-malformed-response",
+                DocumentationScribeModelFailureCode.ContextLimit => "context-limit",
                 null => null,
                 _ => throw new ArgumentOutOfRangeException(nameof(providerObservations)),
             };

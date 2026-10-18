@@ -111,7 +111,7 @@ public sealed partial class CampaignStateContractTests
             "retry" => new DocumentationScribeModelResponse([], [], failure: new(DocumentationScribeModelFailureCode.TransientUnavailable,
                 retryAfterMilliseconds: 300000)),
             "invalid" => new DocumentationScribeModelResponse([], [new("{}"u8.ToArray())]),
-            _ => new DocumentationScribeModelResponse([], [new(C3ProposalTerminal(scenario))]),
+            _ => new DocumentationScribeModelResponse([], [new(C3Submission(scenario))]),
         };
         first = new(first.ToolCalls, first.TerminalSubmissions, failure: first.Failure,
             usage: new(inputTokens: 0, outputTokens: count, cachedInputTokens: 0, uncachedInputTokens: 0, reasoningTokens: 0), cost: dimension == "cost" ? new("currency.usd", count) : null);
@@ -124,7 +124,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(responseKind == "tool" && equality ? 1 : 0, tool.Calls);
         Assert.Equal(count, artifact.State.LineageCharges.OutputTokens.Observed);
         Assert.Equal(responseKind == "proposal" ? DocumentationScribeTerminalKind.Proposal : DocumentationScribeTerminalKind.Failure,
-            result.Terminal.Kind);
+            responseKind == "proposal" ? Assert.Single(result.Submissions).Result.Kind : result.Stop.Kind);
         Assert.Equal(responseKind == "proposal" ? CampaignWorkStatus.ProposalComplete : CampaignWorkStatus.Planned,
             artifact.State.WorkItems[0].Status);
         Assert.Equal(equality && responseKind == "proposal" ? null : CampaignTerminalReason.LifetimeCap, artifact.State.TerminalOutcome?.Reason);

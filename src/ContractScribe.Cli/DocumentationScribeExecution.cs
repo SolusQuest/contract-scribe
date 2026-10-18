@@ -12,11 +12,13 @@ internal static class DocumentationScribeExecution
     internal static DocumentationScribeSession Prepare(DocumentationScribeRequest request, DocumentationScribeAttemptId attempt,
         DocumentationScribePromptInput prompt, DocumentationScribeToolRegistry registry, IDocumentationScribeModelExchange exchange,
         DocumentationScribeRuntimeOptions options, TimeProvider clock, CancellationToken token = default,
-        DocumentationScribeExecutionScope? scope = null) => new(request, attempt, prompt, registry, exchange, options, clock, token, scope);
+        DocumentationScribeExecutionScope? scope = null, IDocumentationScribeSubmissionHost? submissionHost = null,
+        DocumentationScribeRunResult? restoredProgress = null) => new(request, attempt, prompt, registry, exchange, options, clock, token, scope, submissionHost, restoredProgress);
 
     internal static Task<DocumentationScribeRunResult> RunAsync(DocumentationScribeSession session, CancellationToken token = default)
     {
-        if (session.Result is { } early) return Task.FromResult(early);
+        if (session.Result is { } early) return Task.FromResult(token.IsCancellationRequested
+            ? new DocumentationScribeTerminalReducer().CommitCancelled(session.State, token) : early);
         var runtime = (ICandidateAgent)RuntimeAgentFactory.Create(session.Configuration!,
             new RuntimeOptions(session.State.Scope.Allowance.Clock, maximumAttempts: 128, maximumRecords: 2048,
                 maximumRetainedBytes: RuntimeOptions.MaximumRetainedCapacityBytes));
@@ -26,6 +28,7 @@ internal static class DocumentationScribeExecution
     internal static Task<DocumentationScribeRunResult> RunAsync(DocumentationScribeRequest request, DocumentationScribeAttemptId attempt,
         DocumentationScribePromptInput prompt, DocumentationScribeToolRegistry registry, IDocumentationScribeModelExchange exchange,
         DocumentationScribeRuntimeOptions options, TimeProvider clock, CancellationToken token = default,
-        DocumentationScribeExecutionScope? scope = null) =>
-        RunAsync(Prepare(request, attempt, prompt, registry, exchange, options, clock, token, scope), token);
+        DocumentationScribeExecutionScope? scope = null, IDocumentationScribeSubmissionHost? submissionHost = null,
+        DocumentationScribeRunResult? restoredProgress = null) =>
+        RunAsync(Prepare(request, attempt, prompt, registry, exchange, options, clock, token, scope, submissionHost, restoredProgress), token);
 }

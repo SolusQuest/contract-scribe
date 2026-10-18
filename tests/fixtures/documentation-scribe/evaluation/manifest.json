@@ -53,9 +53,9 @@
       "coverage": ["m2-acceptance", "nested-instructions", "prompt-injection", "tool-loop", "usage-cache", "useful-proposal"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 2,
+        "providerRequestCount": 3,
         "toolRoundCount": 1,
-        "toolCallCount": 2,
+        "toolCallCount": 3,
         "proposalStatus": "validated",
         "usage": {
           "inputTokens": 220,
@@ -90,9 +90,9 @@
       "coverage": ["structured-skip"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 1,
+        "providerRequestCount": 2,
         "toolRoundCount": 0,
-        "toolCallCount": 1,
+        "toolCallCount": 2,
         "proposalStatus": "not-reported",
         "usage": {
           "inputTokens": 64,
@@ -115,9 +115,9 @@
       "coverage": ["evidence-insufficient"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 1,
+        "providerRequestCount": 2,
         "toolRoundCount": 0,
-        "toolCallCount": 1,
+        "toolCallCount": 2,
         "proposalStatus": "not-reported",
         "usage": {
           "inputTokens": 64,
@@ -140,9 +140,9 @@
       "coverage": ["evidence-conflict"],
       "offlineExpectation": {
         "attemptCount": 0,
-        "providerRequestCount": 0,
+        "providerRequestCount": 1,
         "toolRoundCount": 0,
-        "toolCallCount": 0,
+        "toolCallCount": 1,
         "proposalStatus": "not-reported",
         "usage": null,
         "observationIds": []
@@ -177,12 +177,19 @@
       "coverage": ["model-output-malformed", "proposal-validation"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 1,
+        "providerRequestCount": 3,
         "toolRoundCount": 0,
-        "toolCallCount": 1,
+        "toolCallCount": 3,
         "proposalStatus": "not-reported",
-        "usage": null,
-        "observationIds": ["model-output-malformed", "provider-request", "tool-call"]
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedInputTokens": null,
+          "uncachedInputTokens": null,
+          "reasoningTokens": null,
+          "cacheObservation": null
+        },
+        "observationIds": ["model-output-malformed", "provider-request", "tool-call", "usage-observed"]
       }
     },
     {
@@ -195,9 +202,9 @@
       "coverage": ["m2-rejection", "proposal-validation"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 1,
+        "providerRequestCount": 2,
         "toolRoundCount": 0,
-        "toolCallCount": 1,
+        "toolCallCount": 2,
         "proposalStatus": "validated",
         "usage": {
           "inputTokens": 80,

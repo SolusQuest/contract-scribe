@@ -276,18 +276,18 @@ public sealed partial class CampaignStateContractTests
                     SetSymbol(subject["parentSymbolRef"] ?? subject["symbolRef"]!, "synthetic.v1", alternate);
                 }
             }, result => SetSymbol(
-                result["terminal"]!["target"]!["symbolRef"]!,
+                ScribeResultFixture.Payload(result)["target"]!["symbolRef"]!,
                 "synthetic.v1",
                 "M:Synthetic.Widget.Alternate(System.String)")),
             (request => request["manifest"]![0]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('a'),
-                result => result["terminal"]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('a')),
+                result => ScribeResultFixture.Payload(result)["target"]!["sourceCommitment"]!["contentSha256"] = Hash('a')),
             (request =>
             {
                 request["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray().RemoveAt(1);
                 request["manifest"]![0]!["styleProfile"]!["componentPolicies"]!.AsArray().RemoveAt(1);
                 request["evidenceReferences"]!.AsArray().RemoveAt(1);
                 request["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().RemoveAt(1);
-            }, result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(2)),
+            }, result => ScribeResultFixture.Payload(result)["contentUnits"]!.AsArray().RemoveAt(2)),
             (request => request["evidenceReferences"]![0]!["contentSha256"] = Hash('a'), null),
             (request => request["manifest"]![0]!["styleProfile"]!["allowedLiterals"]!.AsArray().Add("Zeta"), null),
             (request => request["toolPolicyId"] = "tool-policy.alternate.v1",
@@ -365,19 +365,19 @@ public sealed partial class CampaignStateContractTests
                         alternate);
                 }
             }, root => SetSymbol(
-                root["terminal"]!["target"]!["symbolRef"]!,
+                ScribeResultFixture.Payload(root)["target"]!["symbolRef"]!,
                 "synthetic.v1",
                 "M:Synthetic.Widget.Alternate(System.String)")),
             ("source-locator", root =>
                 root["manifest"]![0]!["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
                     "src/Synthetic/Alternate.cs",
-                root => root["terminal"]!["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
+                root => ScribeResultFixture.Payload(root)["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
                     "src/Synthetic/Alternate.cs"),
             ("source-sha", root => root["manifest"]![0]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('f'),
-                root => root["terminal"]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('f')),
+                root => ScribeResultFixture.Payload(root)["target"]!["sourceCommitment"]!["contentSha256"] = Hash('f')),
             ("component-name", root =>
                 root["manifest"]![0]!["target"]!["applicableComponents"]![0]!["name"] = "alternate",
-                root => root["terminal"]!["contentUnits"]![1]!["name"] = "alternate"),
+                root => ScribeResultFixture.Payload(root)["contentUnits"]![1]!["name"] = "alternate"),
             ("style-profile", root => root["manifest"]![0]!["styleProfile"]!["allowedLiterals"]!.AsArray().Add("Zeta"), null),
             ("limits", root => root["limits"]!["maximumOutputTokens"] = 4_096, null),
             ("tool-policy", root => root["toolPolicyId"] = "tool-policy.alternate.v1",
@@ -2375,7 +2375,7 @@ public sealed partial class CampaignStateContractTests
 
         void MutateResult(JsonObject root)
         {
-            foreach (var ids in root["terminal"]!["contentUnits"]!
+            foreach (var ids in ScribeResultFixture.Payload(root)["contentUnits"]!
                 .AsArray()
                 .Select(unit => unit!["evidenceReferenceIds"]!.AsArray()))
             {
@@ -2786,8 +2786,8 @@ public sealed partial class CampaignStateContractTests
             attemptId: attempt.Value,
             resultMutation: root =>
             {
-                root["terminal"]!["code"] = "scribe.failure.budget";
-                root["terminal"]!.AsObject().Remove("providerFinalDisposition");
+                ScribeResultFixture.Payload(root)["code"] = "scribe.failure.budget";
+                ScribeResultFixture.Payload(root).AsObject().Remove("providerFinalDisposition");
                 root["runEnvelope"]!["usage"] = new JsonObject
                 {
                     ["uncachedInputTokens"] =
@@ -2872,10 +2872,10 @@ public sealed partial class CampaignStateContractTests
             {
                 if (outcomeKind is "timeout" or "budget")
                 {
-                    root["terminal"]!["code"] = "scribe.failure." + outcomeKind;
-                    root["terminal"]!.AsObject().Remove("providerFinalDisposition");
+                    ScribeResultFixture.Payload(root)["code"] = "scribe.failure." + outcomeKind;
+                    ScribeResultFixture.Payload(root).AsObject().Remove("providerFinalDisposition");
                 }
-                if (outcomeKind == "shutdown") root["terminal"]!["code"] = "scribe.cancelled.shutdown";
+                if (outcomeKind == "shutdown") ScribeResultFixture.Payload(root)["code"] = "scribe.cancelled.shutdown";
 
                 root["runEnvelope"]!["usage"] = new JsonObject
                 {
@@ -3760,7 +3760,7 @@ public sealed partial class CampaignStateContractTests
         var work = scenario.Plan.WorkItems[0];
         var firstExchange = CreateScribeExchange(work, scenario: scenario);
         var alternateExchange = CreateScribeExchange(work, resultMutation: root =>
-            root["terminal"]!["contentUnits"]![0]!["lines"]![0] =
+            ScribeResultFixture.Payload(root)["contentUnits"]![0]!["lines"]![0] =
                 "Runs the alternate synthetic widget operation.", scenario: scenario);
         var firstProposal = AdmitProposal(
             scenario,
@@ -4997,13 +4997,13 @@ public sealed partial class CampaignStateContractTests
         resultNode["attemptId"] = attemptId;
         resultNode["runEnvelope"]!["scribeRequestSha256"] = request.ArtifactSha256;
         resultNode["runEnvelope"]!["attemptId"] = attemptId;
-        if (resultNode["terminal"]!["target"] is { } resultTarget)
+        if (ScribeResultFixture.Payload(resultNode)["target"] is { } resultTarget)
         {
             SetSymbol(resultTarget["symbolRef"]!, target.SymbolRef);
             SetSource(resultTarget["sourceCommitment"]!, source);
         }
 
-        if (resultNode["terminal"]!["contentUnits"] is JsonArray contentUnits)
+        if (ScribeResultFixture.Payload(resultNode)["contentUnits"] is JsonArray contentUnits)
         {
             foreach (var ids in contentUnits
                 .Select(unit => unit!["evidenceReferenceIds"]!.AsArray()))
@@ -5015,7 +5015,7 @@ public sealed partial class CampaignStateContractTests
                 }
             }
         }
-        if (resultNode["terminal"]!["evidenceReferenceIds"] is JsonArray terminalEvidenceReferenceIds)
+        if (ScribeResultFixture.Payload(resultNode)["evidenceReferenceIds"] is JsonArray terminalEvidenceReferenceIds)
         {
             for (var index = 0; index < terminalEvidenceReferenceIds.Count; index++)
             {
@@ -5023,12 +5023,14 @@ public sealed partial class CampaignStateContractTests
                 terminalEvidenceReferenceIds[index] = evidenceIdMap[originalId];
             }
         }
+        ScribeResultFixture.RefreshCoverage(resultNode, request);
         resultMutation?.Invoke(resultNode);
+        ScribeResultFixture.RefreshCommitments(resultNode);
         var resultParse = DocumentationScribeValidation.ParseRunResult(
             request,
             parsedAttempt,
             [],
-            Encoding.UTF8.GetBytes(resultNode.ToJsonString()));
+            ScribeResultFixture.Serialize(resultNode));
         Assert.Null(resultParse.Failure);
         return new ScribeExchange(
             request,
@@ -5055,7 +5057,7 @@ public sealed partial class CampaignStateContractTests
                     contextReference!["repositoryContextRef"] = contextRef;
                 }
             },
-            resultMutation: root => root["terminal"]!["target"]!["repositoryContextRef"] = contextRef, scenario: scenario);
+            resultMutation: root => ScribeResultFixture.Payload(root)["target"]!["repositoryContextRef"] = contextRef, scenario: scenario);
 
     private static ScribeExchange CreateSizedContentScribeExchange(
         CampaignPlanningWorkItem work,
@@ -5077,7 +5079,7 @@ public sealed partial class CampaignStateContractTests
             requestMutation: ConfigureLargeContentStyle,
             resultMutation: root =>
             {
-                var units = root["terminal"]!["contentUnits"]!.AsArray();
+                var units = ScribeResultFixture.Payload(root)["contentUnits"]!.AsArray();
                 var remaining = payloadScalars;
                 for (var index = 0; index < units.Count; index++)
                 {
@@ -5151,7 +5153,7 @@ public sealed partial class CampaignStateContractTests
             {
                 var evidenceId = exceptionEvidenceId
                     ?? throw new InvalidOperationException("The exception evidence ID was not projected.");
-                root["terminal"]!["contentUnits"]!.AsArray().Add(new JsonObject
+                ScribeResultFixture.Payload(root)["contentUnits"]!.AsArray().Add(new JsonObject
                 {
                     ["kind"] = "content.exception",
                     ["typeDocumentationId"] = typeDocumentationId,
@@ -5170,14 +5172,14 @@ public sealed partial class CampaignStateContractTests
         resultNode["attemptId"] = proposalExchange.Result.AttemptId.Value;
         resultNode["runEnvelope"]!["scribeRequestSha256"] = proposalExchange.Request.ArtifactSha256;
         resultNode["runEnvelope"]!["attemptId"] = proposalExchange.Result.AttemptId.Value;
-        resultNode["terminal"]!["evidenceReferenceIds"]![0] = proposalExchange.Request.EvidenceReferences
+        ScribeResultFixture.Payload(resultNode)["evidenceReferenceIds"]![0] = proposalExchange.Request.EvidenceReferences
             .Single(evidence => evidence.EvidenceReferenceId.StartsWith("evidence.summary.", StringComparison.Ordinal))
             .EvidenceReferenceId;
         var parsed = DocumentationScribeValidation.ParseRunResult(
             proposalExchange.Request,
             proposalExchange.Result.AttemptId,
             [],
-            Encoding.UTF8.GetBytes(resultNode.ToJsonString()));
+            ScribeResultFixture.Serialize(resultNode));
         Assert.Null(parsed.Failure);
         return new ScribeExchange(
             proposalExchange.Request,
@@ -5232,7 +5234,7 @@ public sealed partial class CampaignStateContractTests
         params ScribeExchange[] exchanges)
     {
         var referenced = exchanges
-            .SelectMany(exchange => Assert.IsType<DocumentationScribeProposalTerminal>(exchange.Result.Terminal)
+            .SelectMany(exchange => Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(exchange.Result!.Submissions).Result)
                 .ContentUnits.SelectMany(unit => unit.EvidenceReferenceIds))
             .ToHashSet(StringComparer.Ordinal);
         return exchanges
@@ -5772,7 +5774,7 @@ public sealed partial class CampaignStateContractTests
                 : !last ? new DocumentationScribeDispatchUsage(0, 0, 0, 0, 0) : null;
             var disposition = index < envelope.AttemptNumber - envelope.RestoredRetryableProviderFailures - 1
                 ? DocumentationScribeDispatchDisposition.RetryableFailure
-                : last && outcome.RunResult.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Provider } failure
+                : last && outcome.RunResult.Stop is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Provider } failure
                     ? failure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
                         ? DocumentationScribeDispatchDisposition.RetryableFailure : DocumentationScribeDispatchDisposition.TerminalFailure
                     : DocumentationScribeDispatchDisposition.Success;

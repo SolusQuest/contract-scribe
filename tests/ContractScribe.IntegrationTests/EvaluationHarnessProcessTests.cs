@@ -31,7 +31,7 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal("Performs no operation.", usefulScenario.ProposalLine);
         var structuredSkip = loaded.Manifest.Scenarios.Single(scenario =>
             scenario.Id == "structured-skip");
-        Assert.Equal(1, structuredSkip.OfflineExpectation.ToolCallCount);
+        Assert.Equal(2, structuredSkip.OfflineExpectation.ToolCallCount);
 
         var source = await File.ReadAllTextAsync(Path.Join(
             corpus,
@@ -96,9 +96,9 @@ public sealed class EvaluationHarnessProcessTests
         Assert.Equal(1, factoryCalls);
         var result = Assert.Single(report.Cases);
         Assert.Equal("useful-proposal", result.CaseId);
-        Assert.Equal(2, result.ProviderRequestCount);
+        Assert.Equal(3, result.ProviderRequestCount);
         Assert.Equal(1, result.ToolRoundCount);
-        Assert.Equal(2, result.ToolCallCount);
+        Assert.Equal(3, result.ToolCallCount);
         Assert.Equal("matched", result.SafetyToolExpectationStatus);
         if (OperatingSystem.IsLinux())
         {
@@ -275,9 +275,9 @@ public sealed class EvaluationHarnessProcessTests
         var result = Assert.Single(report.Cases);
         Assert.NotNull(result.Proposal);
         Assert.Equal(2, result.AttemptCount);
-        Assert.Equal(repeatSearchAfterRetry ? 4 : 3, result.ProviderRequestCount);
+        Assert.Equal(repeatSearchAfterRetry ? 5 : 4, result.ProviderRequestCount);
         Assert.Equal(repeatSearchAfterRetry ? 2 : 1, result.ToolRoundCount);
-        Assert.Equal(repeatSearchAfterRetry ? 3 : 2, result.ToolCallCount);
+        Assert.Equal(repeatSearchAfterRetry ? 4 : 3, result.ToolCallCount);
         Assert.Equal(expectedSafetyStatus, result.SafetyToolExpectationStatus);
         if (repeatSearchAfterRetry)
         {
@@ -650,9 +650,9 @@ public sealed class EvaluationHarnessProcessTests
         Assert.All(cases, item => Assert.Empty(item.GetProperty("differenceIds").EnumerateArray()));
         var useful = Assert.Single(cases, item => item.GetProperty("caseId").GetString() == "useful-proposal");
         Assert.Equal(1, useful.GetProperty("attemptCount").GetInt32());
-        Assert.Equal(2, useful.GetProperty("providerRequestCount").GetInt32());
+        Assert.Equal(3, useful.GetProperty("providerRequestCount").GetInt32());
         Assert.Equal(1, useful.GetProperty("toolRoundCount").GetInt32());
-        Assert.Equal(2, useful.GetProperty("toolCallCount").GetInt32());
+        Assert.Equal(3, useful.GetProperty("toolCallCount").GetInt32());
         var usage = useful.GetProperty("usage");
         Assert.Equal(220, usage.GetProperty("inputTokens").GetInt32());
         Assert.Equal(60, usage.GetProperty("outputTokens").GetInt32());
@@ -1255,6 +1255,8 @@ public sealed class EvaluationHarnessProcessTests
             }
 
             var expectedProposalRequest = repeatSearchAfterRetry ? 4 : 3;
+            if (request.ProviderRequestNumber == expectedProposalRequest + 1)
+                return new([], [new(ScribeProtocolFixture.Finish(request))], usage: new(0, 0));
             if (request.ProviderRequestNumber != expectedProposalRequest)
             {
                 throw new InvalidOperationException("evaluation.retry-split.sequence.invalid");
@@ -1294,7 +1296,7 @@ public sealed class EvaluationHarnessProcessTests
             var terminal = Assert.Single(response.TerminalSubmissions);
             var document = JsonNode.Parse(terminal.TerminalUtf8Json.Span)
                 ?? throw new InvalidDataException();
-            document["contentUnits"]!.AsArray()[0]!["lines"]!.AsArray()[0] =
+            document["items"]![0]!["result"]!["contentUnits"]!.AsArray()[0]!["lines"]!.AsArray()[0] =
                 "Performs the selected operation.";
             return new DocumentationScribeModelResponse(
                 response.ToolCalls,
