@@ -243,7 +243,10 @@ internal sealed partial class DocumentationScribeSession
             if (DocumentationScribeRunResultWriter.Write(State.Request, complete).Length
                 <= DocumentationScribeContract.MaximumArtifactUtf8Bytes - 16_384) return true;
         }
-        catch (JsonException) { }
+        catch (JsonException)
+        {
+            // An unrepresentable prospective result takes the controlled Budget stop below.
+        }
         Result = new DocumentationScribeTerminalReducer().CommitFailure(State, CancellationToken.None, DocumentationScribeFailureCode.Budget);
         return false;
     }

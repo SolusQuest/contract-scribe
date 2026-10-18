@@ -143,7 +143,7 @@ public static partial class DocumentationScribeValidation
             || result.Stop.Kind is not (DocumentationScribeTerminalKind.Finished or DocumentationScribeTerminalKind.Failure
                 or DocumentationScribeTerminalKind.Cancelled)
             || result.RepairCount is < 0 or > MaximumInvalidSubmissions
-            || result.NextSequence < 1 || result.NextSequence > int.MaxValue
+            || result.NextSequence < 1
             || result.Submissions.Length > request.ExecutableTargetIds.Length || result.TargetFailures.Length > request.ExecutableTargetIds.Length)
             throw new ArgumentException("Invalid incremental result correlation.", nameof(result));
         if (result.Submissions.IsEmpty && !result.DynamicEvidenceReferences.IsEmpty)
