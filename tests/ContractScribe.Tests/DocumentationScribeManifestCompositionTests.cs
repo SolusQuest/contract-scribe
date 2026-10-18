@@ -12,6 +12,30 @@ namespace ContractScribe.Tests;
 
 public sealed partial class DocumentationScribeCompositionTests
 {
+    [Fact]
+    public async Task Prepared_patch_retains_instruction_freshness_and_exact_manifest_selection()
+    {
+        await using var fixture = await CompositionFixture.CreateAsync();
+        var prepared = await PrepareAsync(fixture, new ProposalExchange(fixture.Request));
+        Assert.True(prepared.IsProposalReady);
+        var instructionPath = Path.Join(fixture.Root, fixture.Request.ContextReferences
+            .First(reference => reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction).Path);
+        var original = File.ReadAllBytes(instructionPath);
+        await File.AppendAllTextAsync(instructionPath, "\nChanged after preparation.\n", new UTF8Encoding(false));
+        var rejected = DocumentationScribeComposition.ConsumePreparedOutcome(fixture.SelectedAudit, prepared);
+        Assert.Equal(DocumentationScribeCompositionStatus.PatchStale, rejected.Status);
+        Assert.Null(rejected.PatchRequest);
+        Assert.Null(rejected.AcceptedCandidate);
+        await File.WriteAllBytesAsync(instructionPath, original);
+        var fresh = await PrepareAsync(fixture, new ProposalExchange(fixture.Request));
+        Assert.True(fresh.IsProposalReady);
+        var replacement = DocumentationScribeManifestSelection.CreateSingleton(fixture.AuditSelection, fixture.Request.ExecutionStyleProfile);
+        Assert.Same(fixture.SelectedAudit.PrimaryAudit, replacement.PrimaryAudit);
+        var substituted = DocumentationScribeComposition.ConsumePreparedOutcome(replacement, fresh);
+        Assert.Equal(DocumentationScribeCompositionStatus.PatchStale, substituted.Status);
+        Assert.Null(substituted.PatchRequest);
+    }
+
     [Theory]
     [InlineData(10)]
     [InlineData(230)]

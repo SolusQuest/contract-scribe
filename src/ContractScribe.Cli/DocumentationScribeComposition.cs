@@ -397,7 +397,8 @@ internal static class DocumentationScribeComposition
     }
 
     private sealed record PatchAuthorization(
-        DocumentationScribeSelectedAudit Selection,
+        DocumentationScribeManifestSelection Selection,
+        DocumentationScribeLoadedManifestContext Context,
         DocumentationPatchResolvedDeclaration Declaration,
         DocumentationPatchEditKind EditKind);
 
@@ -419,7 +420,8 @@ internal static class DocumentationScribeComposition
     }
 
     private static PreparedOutcome CreateProposalReady(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection selection,
+        DocumentationScribeLoadedManifestContext context,
         DocumentationScribeValidatedRunOutcome m3Outcome,
         DocumentationPatchResolvedDeclaration declaration,
         DocumentationPatchEditKind editKind) =>
@@ -427,7 +429,7 @@ internal static class DocumentationScribeComposition
             DocumentationScribeCompositionStatus.ProposalReady,
             "scribe.proposal.ready",
             m3Outcome,
-            new PatchAuthorization(selection, declaration, editKind));
+            new PatchAuthorization(selection, context, declaration, editKind));
 
     private static readonly JsonSerializerOptions ToolJson = new()
     {
@@ -512,7 +514,7 @@ internal static class DocumentationScribeComposition
                 return CreatePrepared(mapped.Status, mapped.Code);
             }
 
-            var loaded = preflight.Context!;
+            var loaded = preflight.ManifestContext!;
             var prompt = BuildPrompt(
                 manifestSelection,
                 request,
@@ -712,7 +714,7 @@ internal static class DocumentationScribeComposition
         DocumentationScribeSelectedAudit selection,
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
-        DocumentationScribeLoadedContext loaded,
+        DocumentationScribeLoadedManifestContext loaded,
         DocumentationScribeValidatedRunOutcome bound,
         CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope,
         CampaignScribeExecutionCoordinator? coordinator,
@@ -800,7 +802,8 @@ internal static class DocumentationScribeComposition
             }
 
             return CreateProposalReady(
-                selection,
+                manifestSelection,
+                loaded,
                 bound,
                 postflight.Declaration!,
                 postflight.EditKind);
@@ -860,8 +863,8 @@ internal static class DocumentationScribeComposition
 
         try
         {
-            if (!ReferenceEquals(selection, authorization.Selection)
-                || !IsPreparedAuthorizationCurrent(selection, owned.M3Outcome.Request, authorization, cancellationToken))
+            if (!ReferenceEquals(manifestSelection, authorization.Selection)
+                || !IsPreparedAuthorizationCurrent(manifestSelection, owned.M3Outcome.Request, authorization, cancellationToken))
             {
                 return DocumentationScribeCompositionOutcome.Create(
                     DocumentationScribeCompositionStatus.PatchStale,
@@ -933,12 +936,14 @@ internal static class DocumentationScribeComposition
     }
 
     private static bool IsPreparedAuthorizationCurrent(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection manifestSelection,
         DocumentationScribeRequest request,
         PatchAuthorization authorization,
         CancellationToken cancellationToken)
     {
-        if (!selection.IsCurrent
+        var selection = manifestSelection.PrimaryAudit;
+        if (!manifestSelection.Matches(request)
+            || !selection.IsCurrent
             || request.Context.RepositoryContextRef
                 != selection.Session.RepositorySession.RepositoryContextRef
             || !string.Equals(
@@ -967,7 +972,8 @@ internal static class DocumentationScribeComposition
             .CaptureDocumentationPatchResolutionBaseline(cancellationToken);
         return capture.Baseline is { } baseline
             && baseline.TryGetEntry(repositoryPath, out var entry)
-            && string.Equals(entry.Sha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal);
+            && string.Equals(entry.Sha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal)
+            && authorization.Context.VerifyFreshness(cancellationToken);
     }
 
     private static async Task<PreflightResult> PreflightAsync(
