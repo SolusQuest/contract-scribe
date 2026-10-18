@@ -39,30 +39,35 @@ public sealed partial class DocumentationScribeCompositionTests
     [Theory]
     [InlineData(10)]
     [InlineData(230)]
-    public async Task Actual_builder_and_composition_expose_selected_members_without_request_owned_authorization(int propertyCount)
+    public async Task Actual_builder_and_composition_expose_selected_members_without_request_owned_authorization(int additionalMemberCount)
     {
-        var typeDocumentation = propertyCount > 10 ? "/// <summary>Represents the bounded fixture.</summary>\n" : string.Empty;
+        var propertyCount = Math.Min(additionalMemberCount, 80);
+        var methodCount = additionalMemberCount - propertyCount;
+        var typeDocumentation = additionalMemberCount > 10 ? "/// <summary>Represents the bounded fixture.</summary>\n" : string.Empty;
         var source = "namespace EndToEnd;\n" + typeDocumentation + "public class Fixture { public void Run() { } "
-            + string.Join(" ", Enumerable.Range(0, propertyCount).Select(index => $"public int P{index:D3} {{ get; set; }}")) + " }";
+            + string.Join(" ", Enumerable.Range(0, propertyCount).Select(index => $"public int P{index:D3} {{ get; set; }}"))
+            + " " + string.Join(" ", Enumerable.Range(0, methodCount).Select(index => $"public void M{index:D3}() {{ }}")) + " }";
         await using var fixture = await CompositionFixture.CreateBatchGroupingAsync(source);
         var campaign = fixture.CreateCampaign(includeAllOwners: true);
-        Assert.Equal(propertyCount + 2, fixture.Classified.Classification.ClassificationSet!.Targets.Length);
-        Assert.Equal(propertyCount + (propertyCount > 10 ? 1 : 2), campaign.Plan.Batch.CompleteTargets.Length);
-        if (propertyCount > 10)
+        Assert.Equal(additionalMemberCount + 2, fixture.Classified.Classification.ClassificationSet!.Targets.Length);
+        Assert.Equal(additionalMemberCount + (additionalMemberCount > 10 ? 1 : 2), campaign.Plan.Batch.CompleteTargets.Length);
+        if (additionalMemberCount > 10)
         {
             var audit = DocumentationScribeAuditAuthority.Create(fixture.Classified, fixture.Observed, fixture.Policy,
                 fixture.AuditInputs, fixture.AuditDocument);
             var type = fixture.Classified.Classification.ClassificationSet!.Targets.Single(target => target.SymbolRef.DocumentationCommentId == "T:EndToEnd.Fixture");
             Assert.Equal(AuditOutcome.Compliant, audit.Select(type).Outcome);
             Assert.DoesNotContain(campaign.Plan.Batch.CompleteTargets, target => target.SymbolRef == type.SymbolRef);
-            Assert.Equal(propertyCount + 1, campaign.Plan.Batch.CompleteTargets.Count(target => target.BatchEligible));
+            Assert.Equal(additionalMemberCount + 1, campaign.Plan.Batch.CompleteTargets.Count(target => target.BatchEligible));
         }
         var all = campaign.Plan.WorkItems.SelectMany(work => work.Targets).ToDictionary(target => target.SymbolRef);
+        Assert.Equal(propertyCount, all.Values.Count(target => target.PrimaryKind == PrimarySymbolKind.Property));
+        Assert.Equal(methodCount + 1, all.Values.Count(target => target.M3Eligible));
         var selected = campaign.Plan.Batch.SelectedTargetKeys.Select(key => campaign.Plan.Batch.CompleteTargets
             .Single(target => target.TargetKey == key)).Select(target => all[target.SymbolRef]).ToImmutableArray();
-        // The default quota includes class/property metadata; select the independently authorized supported method for this partial run.
-        var method = all[fixture.Target.SymbolRef];
-        Assert.Contains(selected, target => target.SymbolRef == method.SymbolRef);
+        // At most 80 properties cannot fill the actual default quota; every 100-member chunk has a supported method.
+        // Choose from the planner's selected collection rather than assuming Run's position in canonical order.
+        var method = selected.First(target => target.M3Eligible);
         var config = CampaignConfiguration.Parse(File.ReadAllBytes(Path.Join(FindRepositoryRoot(), "tests", "fixtures", "campaign", "cli", "configuration-valid.json")));
         var policy = campaign.PlanningInput.ExecutionPolicy;
         var bundle = new ProductionRepositorySessionBundle(
@@ -71,9 +76,12 @@ public sealed partial class DocumentationScribeCompositionTests
             fixture.Observed, fixture.Extraction, fixture.AuditInputs, fixture.AuditDocument, [], HostToolchainFact.NotSelected, null);
         var built = CampaignScribeRequestBuilder.BuildManifest(bundle, selected, [method.SymbolRef], policy, config, default);
         var request = DocumentationScribeValidation.ParseRequest(built.RequestUtf8Json).Request!;
-        Assert.Equal(Math.Min(propertyCount + 2, 100), request.Manifest.Length);
+        Assert.Equal(Math.Min(additionalMemberCount + 2, 100), request.Manifest.Length);
+        Assert.Equal(selected.Select(target => target.SymbolRef), request.Manifest.Select(member => member.Target.SymbolRef));
+        Assert.Equal(method.SymbolRef, request.ExecutionTarget.Target.SymbolRef);
+        Assert.Equal(request.ExecutionTarget.TargetId, Assert.Single(request.ExecutableTargetIds));
         Assert.True(request.EvidenceReferences.Length <= 1);
-        Assert.All(request.Manifest.Where(member => member.Target.SymbolRef != method.SymbolRef), member => Assert.Null(member.StyleProfile));
+        Assert.All(request.Manifest.Where(member => !all[member.Target.SymbolRef].M3Eligible), member => Assert.Null(member.StyleProfile));
         Assert.True(built.Selection.Matches(request));
         var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(
             """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0)))]);
@@ -87,7 +95,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(1, outcome.RunResult.RunEnvelope.ProviderRequestCount);
         var repeated = CampaignScribeRequestBuilder.BuildManifest(bundle, selected, [method.SymbolRef], policy, config, default);
         Assert.Equal(built.RequestUtf8Json.ToArray(), repeated.RequestUtf8Json.ToArray());
-        if (propertyCount == 10)
+        if (additionalMemberCount == 10)
         {
             var singleton = CampaignScribeRequestBuilder.BuildManifest(bundle, [method], [method.SymbolRef], policy, config, default);
             var singleExchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(
@@ -114,7 +122,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
 
         // A valid same-snapshot sibling is still outside Host[A], even when the raw request authorizes it.
-        var narrow = DocumentationScribeManifestSelection.CreateSingleton(fixture.AuditSelection, fixture.Request.ExecutionStyleProfile);
+        var narrow = DocumentationScribeManifestSelection.CreateSingleton(built.Selection.PrimaryAudit, request.ExecutionStyleProfile);
         var deniedExchange = new CountingExchange();
         var denied = await DocumentationScribeComposition.ExecuteAsync(narrow, built.RequestUtf8Json,
             fixture.AttemptId, null, RuntimeOptions(), deniedExchange);
@@ -127,7 +135,7 @@ public sealed partial class DocumentationScribeCompositionTests
             root => { var first = root["manifest"]![0]!.DeepClone(); root["manifest"]!.AsArray().RemoveAt(0); root["manifest"]!.AsArray().Add(first); },
             root => root["manifest"]![0]!["auditOutcome"] = "audit.outcome.compliant",
             root => root["manifest"]![0]!["target"]!["sourceCommitment"]!["contentSha256"] = new string('0', 64),
-            root => root["manifest"]!.AsArray().Single(member => member!["styleProfile"] is not null)!["styleProfile"]!["summary"]!["maximumScalars"] = 401,
+            root => root["manifest"]!.AsArray().Single(member => member!["targetId"]!.GetValue<string>() == request.ExecutionTarget.TargetId)!["styleProfile"]!["summary"]!["maximumScalars"] = 401,
         })
         {
             var changed = JsonNode.Parse(built.RequestUtf8Json.Span)!.AsObject();
@@ -137,7 +145,7 @@ public sealed partial class DocumentationScribeCompositionTests
             Assert.Null(rejected.RunResult);
             Assert.Equal(0, deniedExchange.RequestCount);
         }
-        if (propertyCount == 230)
+        if (additionalMemberCount == 230)
         {
             var deferred = campaign.Plan.Batch.CompleteTargets.First(target => target.BatchEligible
                 && !campaign.Plan.Batch.SelectedTargetKeys.Contains(target.TargetKey, StringComparer.Ordinal));
