@@ -969,7 +969,7 @@ public sealed partial class DocumentationScribeCompositionTests
                         0,
                         "call.semantic",
                         semantic.OperationId,
-                        "{}"u8.ToArray())],
+                        JsonSerializer.SerializeToUtf8Bytes(new { targetId = request.ExecutionTarget.TargetId }))],
                     [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
@@ -1320,8 +1320,11 @@ public sealed partial class DocumentationScribeCompositionTests
                 new CampaignPlanningEvidenceAuthority(
                     observations.Observations.Single(observation => observation.Subject == binding.Subject),
                     binding.Evidence)).ToImmutableArray();
+            var auditAuthority = DocumentationScribeAuditAuthority.Create(Classified, Observed, Policy, AuditInputs, AuditDocument);
             var targetAuthorities = classifications.Targets
                 .Where(target => target.SupportStatus == SupportStatus.Supported)
+                // Owners cover violation parents; other audit rows remain in the complete plan.
+                .Where(target => !includeAllOwners || auditAuthority.Select(target).Outcome == AuditOutcome.Violation)
                 .Select(target =>
                 {
                     if (includeAllOwners)

@@ -73,6 +73,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.NotEqual(root.GroupingAuthority.ContainingTypeDocumentationCommentId, nested.GroupingAuthority.ContainingTypeDocumentationCommentId);
         var stop = methods.Single(authority => authority.Target.SymbolRef.DocumentationCommentId == "M:EndToEnd.Fixture.Stop");
         Assert.Equal(root.GroupingAuthority.ContainingTypeDocumentationCommentId, stop.GroupingAuthority!.ContainingTypeDocumentationCommentId);
+        Assert.NotEqual(root.GroupingAuthority.MemberFamilySha256, stop.GroupingAuthority.MemberFamilySha256);
         var partialType = fixture.Classified.Classification.ClassificationSet!.Targets.Single(target =>
             target.SymbolRef.DocumentationCommentId == "T:EndToEnd.Fixture");
         Assert.False(projector.Project(fixture.Observed, partialType, null).IsSuccess);

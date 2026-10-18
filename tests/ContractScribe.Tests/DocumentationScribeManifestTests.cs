@@ -62,6 +62,53 @@ public sealed partial class DocumentationScribeRuntimeTests
     }
 
     [Fact]
+    public void Shared_bytes_cannot_import_another_members_claim_policy()
+    {
+        const string siblingId = "M:Synthetic.Widget.Other(System.String)";
+        var request = Request(root =>
+        {
+            AddManifestMembers(root, 2);
+            var first = root["manifest"]![0]!;
+            var second = root["manifest"]![1]!;
+            second["styleProfile"] = first["styleProfile"]!.DeepClone();
+            second["target"]!["applicableComponents"] = first["target"]!["applicableComponents"]!.DeepClone();
+            second["target"]!["symbolRef"]!["documentationCommentId"] = siblingId;
+            second["styleProfile"]!["claimPolicies"]!.AsArray().Single(policy => policy!["claimCategoryId"]!.GetValue<string>() == "claim.purpose")!["allowedAuthorities"] =
+                new JsonArray("authority.public-contract");
+        });
+        var source = SyntheticDynamicEvidenceInput(Sha256("e"));
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, source, out _));
+        var siblingSource = new DocumentationScribeDynamicEvidenceInput(EvidenceInput.TargetSubject("synthetic.v1", siblingId),
+            source.Kind, source.Relation, source.Authority, source.Locator, source.ContentSha256,
+            source.OriginalUtf8ByteCount, source.IncludedUtf8ByteCount, source.IsTruncated, source.ClaimCategoryIds);
+        Assert.False(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, siblingSource, out _));
+        var siblingContract = new DocumentationScribeDynamicEvidenceInput(siblingSource.Subject,
+            EvidenceKind.PublicContract, EvidenceRelation.Constrains, DocumentationScribeEvidenceAuthority.PublicContract,
+            source.Locator, source.ContentSha256, source.OriginalUtf8ByteCount, source.IncludedUtf8ByteCount,
+            source.IsTruncated, source.ClaimCategoryIds);
+        Assert.True(DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, siblingContract, out _));
+    }
+
+    [Fact]
+    public async Task Content_identity_excludes_volatile_repository_correlation()
+    {
+        var first = Request();
+        var second = Request(root => ReplaceRepositoryContext(root, "repoctx-22222222222222222222222222222222"));
+        var identities = new List<string[]>();
+        foreach (var request in new[] { first, second })
+        {
+            var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+            var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request));
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+            using var content = JsonDocument.Parse(Assert.Single(exchange.Requests).Messages.Single(message =>
+                message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+            identities.Add(content.RootElement.GetProperty("content").EnumerateArray()
+                .Select(item => item.GetProperty("contentId").GetString()!).ToArray());
+        }
+        Assert.Equal(identities[0], identities[1]);
+    }
+
+    [Fact]
     public void Old_single_target_shape_is_rejected_by_the_current_draft()
     {
         var root = JsonNode.Parse(ReadFixture("request.json"))!.AsObject();

@@ -41,10 +41,21 @@ public sealed partial class DocumentationScribeCompositionTests
     [InlineData(230)]
     public async Task Actual_builder_and_composition_expose_selected_members_without_request_owned_authorization(int propertyCount)
     {
-        var source = "namespace EndToEnd; public class Fixture { public void Run() { } "
+        var typeDocumentation = propertyCount > 10 ? "/// <summary>Represents the bounded fixture.</summary>\n" : string.Empty;
+        var source = "namespace EndToEnd;\n" + typeDocumentation + "public class Fixture { public void Run() { } "
             + string.Join(" ", Enumerable.Range(0, propertyCount).Select(index => $"public int P{index:D3} {{ get; set; }}")) + " }";
         await using var fixture = await CompositionFixture.CreateBatchGroupingAsync(source);
         var campaign = fixture.CreateCampaign(includeAllOwners: true);
+        Assert.Equal(propertyCount + 2, campaign.Plan.Batch.CompleteTargets.Length);
+        if (propertyCount > 10)
+        {
+            var audit = DocumentationScribeAuditAuthority.Create(fixture.Classified, fixture.Observed, fixture.Policy,
+                fixture.AuditInputs, fixture.AuditDocument);
+            var type = fixture.Classified.Classification.ClassificationSet!.Targets.Single(target => target.SymbolRef.DocumentationCommentId == "T:EndToEnd.Fixture");
+            Assert.Equal(AuditOutcome.Compliant, audit.Select(type).Outcome);
+            Assert.Contains(campaign.Plan.Batch.CompleteTargets, target => target.SymbolRef == type.SymbolRef && !target.BatchEligible);
+            Assert.Equal(propertyCount + 1, campaign.Plan.Batch.CompleteTargets.Count(target => target.BatchEligible));
+        }
         var all = campaign.Plan.WorkItems.SelectMany(work => work.Targets).ToDictionary(target => target.SymbolRef);
         var selected = campaign.Plan.Batch.SelectedTargetKeys.Select(key => campaign.Plan.Batch.CompleteTargets
             .Single(target => target.TargetKey == key)).Select(target => all[target.SymbolRef]).ToImmutableArray();
@@ -86,15 +97,17 @@ public sealed partial class DocumentationScribeCompositionTests
             Assert.Equal(startup.Messages.Take(3).Select(message => message.Content), singleStartup.Messages.Take(3).Select(message => message.Content));
             Assert.NotEqual(string.Join("\n", startup.Tools.Select(tool => tool.InputSchemaJson)),
                 string.Join("\n", singleStartup.Tools.Select(tool => tool.InputSchemaJson)));
-            foreach (var tool in startup.Tools)
+            foreach (var schema in startup.Tools.Select(tool => JsonDocument.Parse(tool.InputSchemaJson)))
             {
-                using var schema = JsonDocument.Parse(tool.InputSchemaJson);
-                var selector = schema.RootElement.GetProperty("properties").TryGetProperty("targetId", out var semantic)
-                    ? semantic : schema.RootElement.GetProperty("properties").GetProperty("scopeId");
-                Assert.All(selector.GetProperty("enum").EnumerateArray(), id =>
-                    Assert.True(request.Manifest.Any(member => member.TargetId == id.GetString())
-                        || request.ContextReferences.Any(reference => reference.ContextReferenceId == id.GetString())
-                        || request.EvidenceReferences.Any(reference => reference.EvidenceReferenceId == id.GetString())));
+                using (schema)
+                {
+                    var selector = schema.RootElement.GetProperty("properties").TryGetProperty("targetId", out var semantic)
+                        ? semantic : schema.RootElement.GetProperty("properties").GetProperty("scopeId");
+                    Assert.All(selector.GetProperty("enum").EnumerateArray(), id =>
+                        Assert.True(request.Manifest.Any(member => member.TargetId == id.GetString())
+                            || request.ContextReferences.Any(reference => reference.ContextReferenceId == id.GetString())
+                            || request.EvidenceReferences.Any(reference => reference.EvidenceReferenceId == id.GetString())));
+                }
             }
         }
 
@@ -125,8 +138,17 @@ public sealed partial class DocumentationScribeCompositionTests
         }
         if (propertyCount == 230)
         {
-            var unselected = all.Values.First(target => selected.All(member => member.SymbolRef != target.SymbolRef));
+            var deferred = campaign.Plan.Batch.CompleteTargets.First(target => target.BatchEligible
+                && !campaign.Plan.Batch.SelectedTargetKeys.Contains(target.TargetKey, StringComparer.Ordinal));
+            var unselected = all[deferred.SymbolRef];
             Assert.DoesNotContain(request.Manifest, member => member.Target.SymbolRef == unselected.SymbolRef);
+            var enlarged = CampaignScribeRequestBuilder.BuildManifest(bundle, selected.Add(unselected), [method.SymbolRef], policy, config, default);
+            var enlargedRequest = DocumentationScribeValidation.ParseRequest(enlarged.RequestUtf8Json).Request!;
+            Assert.Contains(enlargedRequest.Manifest, member => member.Target.SymbolRef == unselected.SymbolRef);
+            var deniedChunk = await DocumentationScribeComposition.ExecuteAsync(built.Selection, enlarged.RequestUtf8Json,
+                fixture.AttemptId, null, RuntimeOptions(), deniedExchange);
+            Assert.Equal("scribe.preflight.authority-mismatch", deniedChunk.Code);
+            Assert.Equal(0, deniedExchange.RequestCount);
             var widened = JsonNode.Parse(built.RequestUtf8Json.Span)!.AsObject();
             widened["executableTargetIds"]!.AsArray().Add("target.unselected-chunk-member");
             var rejected = await DocumentationScribeComposition.ExecuteAsync(built.Selection, Encoding.UTF8.GetBytes(widened.ToJsonString()),

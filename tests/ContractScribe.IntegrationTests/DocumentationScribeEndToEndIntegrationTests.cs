@@ -865,7 +865,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("PreflightRejected", outcome.Status);
-        Assert.Equal("scribe.preflight.source-evidence-mismatch", outcome.Code);
+        // Optional seed evidence is rejected when materializing its exact committed content.
+        Assert.Equal("scribe.preflight.prompt-evidence-mismatch", outcome.Code);
         Assert.Equal(0, exchange.RequestCount);
         Assert.Null(outcome.AcceptedCandidate);
     }
@@ -963,7 +964,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             var cursor = schema.RootElement.GetProperty("properties").GetProperty("cursor")
                 .GetProperty("description").GetString();
             Assert.Contains("Omit on the first call", cursor, StringComparison.Ordinal);
-            Assert.Contains("same operation and page size", cursor, StringComparison.Ordinal);
+            Assert.Contains("same target, operation and page size", cursor, StringComparison.Ordinal);
             Assert.Contains("never use a repository cursor", cursor, StringComparison.Ordinal);
         }
 

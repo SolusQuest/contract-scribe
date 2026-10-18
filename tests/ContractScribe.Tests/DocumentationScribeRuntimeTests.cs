@@ -1628,7 +1628,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             Assert.Equal(5, exchange.Requests[2].Messages.Length);
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            Assert.Equal("4c88b12172fbdb1a326405e8c2929e171561a5b8e7dc5245fe50c30fb54de4b9", digest);
+            Assert.Equal("465e5cfb24a6dc0c5c909abccf9dbd1c7a1c54186963ca5a9d8c5f9d3ed415ac", digest);
         }
         finally
         {

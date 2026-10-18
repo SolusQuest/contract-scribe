@@ -42,8 +42,8 @@ internal sealed class DocumentationScribePromptContent(DocumentationScribeReques
     {
         if (node is JsonArray array)
         {
-            foreach (var child in array)
-                if (child is not null) Project(child);
+            foreach (var child in array.OfType<JsonNode>())
+                Project(child);
             return;
         }
         if (node is not JsonObject value) return;
@@ -62,16 +62,16 @@ internal sealed class DocumentationScribePromptContent(DocumentationScribeReques
                         : value["includedRange"] is JsonObject range ? range["start"]!.GetValue<int>() + ":" + range["end"]!.GetValue<int>()
                         : "partial", content);
         }
-        // Copy the property list because Share may replace content with a reference.
-        foreach (var property in value.ToArray())
-            if (property.Value is JsonObject or JsonArray) Project(property.Value);
+        // Copy children because Share may replace content with a reference.
+        foreach (var child in value.Select(property => property.Value)
+            .Where(child => child is JsonObject or JsonArray).ToArray())
+            Project(child!);
     }
 
     private void Share(JsonObject value, string path, string sourceSha, string range, string content)
     {
         var identity = CanonicalJson.Serialize(new
         {
-            request.Context.RepositoryContextRef,
             path,
             sourceSha,
             range,
