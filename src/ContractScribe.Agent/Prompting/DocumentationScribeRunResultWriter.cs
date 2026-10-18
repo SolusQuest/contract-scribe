@@ -61,7 +61,7 @@ internal static class DocumentationScribeRunResultWriter
         writer.WriteString("modelConfigurationId", envelope.ModelConfigurationId);
         writer.WriteString("scribeProtocolId", envelope.ScribeProtocolId);
         writer.WriteString("toolPolicyId", request.ToolPolicyId);
-        writer.WriteString("styleProfileId", request.StyleProfile.StyleProfileId);
+        writer.WriteString("styleProfileId", request.ExecutionStyleProfile.StyleProfileId);
         writer.WriteNumber("attemptNumber", envelope.AttemptNumber);
         writer.WriteNumber("restoredRetryableProviderFailures", envelope.RestoredRetryableProviderFailures);
         writer.WriteNumber("providerRequestCount", envelope.ProviderRequestCount);

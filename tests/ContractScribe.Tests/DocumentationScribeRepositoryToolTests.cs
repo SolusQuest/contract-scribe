@@ -1288,8 +1288,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
     {
         using var fixture = RepositoryToolFixture.Create();
         var subject = EvidenceInput.TargetSubject(
-            fixture.Request.Target.SymbolRef.CompilationContextRef,
-            fixture.Request.Target.SymbolRef.DocumentationCommentId);
+            fixture.Request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+            fixture.Request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId);
         var contradictory = DocumentationScribeRepositoryToolScope.Directory(
             "context.instructions",
             string.Empty,
@@ -1632,9 +1632,9 @@ public sealed partial class DocumentationScribeRepositoryToolTests
                 request.Context.RepositoryContextRef,
                 request.Context.InputIdentity,
                 request.Context.TargetProfile,
-                request.Target.SymbolRef,
-                request.Target.SourceLocator,
-                request.Target.SourceSha256);
+                request.ExecutionTarget.Target.SymbolRef,
+                request.ExecutionTarget.Target.SourceLocator,
+                request.ExecutionTarget.Target.SourceSha256);
             var visible = Assert.Single(request.ContextReferences);
             var commitment = DocumentationScribeContextValidation.CreateSourceCommitment(
                 visible.Path,
@@ -1686,8 +1686,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         internal static ImmutableArray<DocumentationScribeRepositoryToolScope> ScopesFor(DocumentationScribeRequest request)
         {
             var subject = EvidenceInput.TargetSubject(
-                request.Target.SymbolRef.CompilationContextRef,
-                request.Target.SymbolRef.DocumentationCommentId);
+                request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+                request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId);
             var scope = DocumentationScribeRepositoryToolScope.Directory(
                 "context.instructions",
                 string.Empty,

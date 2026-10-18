@@ -724,16 +724,16 @@ public sealed class DocumentationScribeContextContractTests
         Assert.True(RepositoryContextRef.TryParse(
             "repoctx-" + new string(contextValue, 32),
             out var contextRef));
-        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.Target.SourceLocator);
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.ExecutionTarget.Target.SourceLocator);
         return DocumentationScribeContextValidation.CreateBootstrapSelection(
             contextRef,
             request.Context.InputIdentity,
             request.Context.TargetProfile,
-            request.Target.SymbolRef,
+            request.ExecutionTarget.Target.SymbolRef,
             locator.Path,
             locator.Span!.Value.Start,
             locator.Span.Value.End,
-            request.Target.SourceSha256);
+            request.ExecutionTarget.Target.SourceSha256);
     }
 
     private static DocumentationScribeInstructionContextFact Instruction(

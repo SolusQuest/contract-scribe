@@ -24,7 +24,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var allowance = StopCauseAllowance(fixture, clock, elapsed: owner.StartsWith("action", StringComparison.Ordinal) ? 1000 : 900000);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
-        var source = Path.Join(fixture.Root, ((RepositoryEvidenceLocator)request.Request.Target.SourceLocator).Path);
+        var source = Path.Join(fixture.Root, ((RepositoryEvidenceLocator)request.Request.ExecutionTarget.Target.SourceLocator).Path);
         var original = await File.ReadAllBytesAsync(source);
         var sends = 0;
         var credentialReads = 0;
@@ -127,7 +127,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var allowance = StopCauseAllowance(fixture, clock, output: nonelapsed ? 7 : null);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
-        var source = Path.Join(fixture.Root, ((RepositoryEvidenceLocator)request.Request.Target.SourceLocator).Path);
+        var source = Path.Join(fixture.Root, ((RepositoryEvidenceLocator)request.Request.ExecutionTarget.Target.SourceLocator).Path);
         var original = await File.ReadAllBytesAsync(source);
         var sends = 0;
         var exchange = new StopCauseExchange(request.Request, () =>

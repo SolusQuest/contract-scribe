@@ -217,7 +217,7 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
 
         return new PreparedEvaluationCase(
             scenario,
-            selected,
+            adapter.CreateManifestSelection(selected, parsed.Request.HasExecutableTargets ? parsed.Request.ExecutionStyleProfile : null),
             requestBytes,
             parsed.Request,
             attemptId);
@@ -344,6 +344,11 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
         var allowedAuthorities = addEvidenceConflict
             ? new JsonArray("authority.source-declaration", "authority.public-contract")
             : new JsonArray("authority.source-declaration");
+        var grouping = new DocumentationDeclarationAuthorityProjector().Project(observations, target, null).Authority?.GroupingAuthority;
+        var executable = target.PrimaryKind == PrimarySymbolKind.Method;
+        var manifestContextReferences = contextReferences;
+        var manifestEvidenceReferences = evidenceReferences;
+        if (!executable) manifestEvidenceReferences.Clear();
         var root = new JsonObject
         {
             ["scribeRequestVersion"] = 1,
@@ -352,49 +357,52 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
                 ["repositoryContextRef"] = session.RepositoryContextRef.Value,
                 ["inputIdentity"] = session.InputIdentity,
                 ["targetProfile"] = "profile.external-api",
-                ["auditOutcome"] = auditOutcome,
             },
-            ["target"] = new JsonObject
+            ["manifest"] = new JsonArray(new JsonObject
             {
-                ["symbolRef"] = Symbol(target.SymbolRef),
-                ["sourceCommitment"] = new JsonObject
+                ["targetId"] = "target.selected",
+                ["target"] = new JsonObject
                 {
-                    ["locator"] = RepositoryLocator(sourcePath, targetSpan),
-                    ["contentSha256"] = sourceSha256,
-                },
-                ["applicableComponents"] = new JsonArray(components.Select(item =>
-                {
-                    var component = new JsonObject
+                    ["symbolRef"] = Symbol(target.SymbolRef),
+                    ["sourceCommitment"] = new JsonObject
                     {
-                        ["kind"] = item.Kind,
-                        ["identity"] = item.Identity,
-                    };
-                    if (item.Name is not null)
+                        ["locator"] = RepositoryLocator(sourcePath, targetSpan),
+                        ["contentSha256"] = sourceSha256,
+                    },
+                    ["applicableComponents"] = new JsonArray(components.Select(item =>
                     {
-                        component["name"] = item.Name;
-                    }
+                        var component = new JsonObject
+                        {
+                            ["kind"] = item.Kind,
+                            ["identity"] = item.Identity,
+                        };
+                        if (item.Name is not null)
+                        {
+                            component["name"] = item.Name;
+                        }
 
-                    return (JsonNode?)component;
-                }).ToArray()),
-            },
-            ["styleProfile"] = new JsonObject
-            {
-                ["styleProfileId"] = "style.evaluation.public-api.v1",
-                ["outputLanguageId"] = "language.en",
-                ["summary"] = Policy("required", 400),
-                ["remarks"] = Policy("forbidden", 400),
-                ["exceptions"] = Policy("forbidden", 400),
-                ["componentPolicies"] = new JsonArray(components.Select(item =>
-                    (JsonNode?)new JsonObject
-                    {
-                        ["componentIdentity"] = item.Identity,
-                        ["disposition"] = "required",
-                        ["maximumScalars"] = 300,
+                        return (JsonNode?)component;
                     }).ToArray()),
-                ["inheritDocDisposition"] = "forbidden",
-                ["allowedLiterals"] = new JsonArray(),
-                ["forbiddenLiterals"] = new JsonArray(),
-                ["claimPolicies"] = new JsonArray
+                },
+                ["auditOutcome"] = auditOutcome,
+                ["styleProfile"] = executable ? new JsonObject
+                {
+                    ["styleProfileId"] = "style.evaluation.public-api.v1",
+                    ["outputLanguageId"] = "language.en",
+                    ["summary"] = Policy("required", 400),
+                    ["remarks"] = Policy("forbidden", 400),
+                    ["exceptions"] = Policy("forbidden", 400),
+                    ["componentPolicies"] = new JsonArray(components.Select(item =>
+                        (JsonNode?)new JsonObject
+                        {
+                            ["componentIdentity"] = item.Identity,
+                            ["disposition"] = "required",
+                            ["maximumScalars"] = 300,
+                        }).ToArray()),
+                    ["inheritDocDisposition"] = "forbidden",
+                    ["allowedLiterals"] = new JsonArray(),
+                    ["forbiddenLiterals"] = new JsonArray(),
+                    ["claimPolicies"] = new JsonArray
                 {
                     new JsonObject
                     {
@@ -403,12 +411,29 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
                         ["allowedAuthorities"] = allowedAuthorities,
                     },
                 },
-                ["maximumContentUnits"] = 8,
-                ["maximumEvidenceRefsPerUnit"] = 4,
-            },
-            ["contextReferences"] = contextReferences,
-            ["evidenceReferences"] = evidenceReferences,
-            ["evidenceConflicts"] = conflicts,
+                    ["maximumContentUnits"] = 8,
+                    ["maximumEvidenceRefsPerUnit"] = 4,
+                } : null,
+                ["contextReferenceIds"] = new JsonArray(context.Facts.Instructions.OrderBy(item => item.Depth)
+                    .ThenBy(item => item.Commitment.RepositoryPath, StringComparer.Ordinal)
+                    .Select(item => (JsonNode?)JsonValue.Create(item.InstructionId)).ToArray()),
+                ["evidenceReferenceIds"] = new JsonArray(manifestEvidenceReferences
+                    .Select(item => (JsonNode?)JsonValue.Create(item!["evidenceReferenceId"]!.GetValue<string>())).ToArray()),
+                ["grouping"] = grouping is null ? null : new JsonObject
+                {
+                    ["projectIdentity"] = grouping.ProjectIdentity,
+                    ["containingTypeSymbolRef"] = new JsonObject
+                    {
+                        ["compilationContextRef"] = target.SymbolRef.CompilationContextRef,
+                        ["documentationCommentId"] = grouping.ContainingTypeDocumentationCommentId,
+                    },
+                    ["memberFamilySha256"] = grouping.MemberFamilySha256,
+                },
+            }),
+            ["executableTargetIds"] = executable ? new JsonArray("target.selected") : new JsonArray(),
+            ["contextReferences"] = manifestContextReferences,
+            ["evidenceReferences"] = manifestEvidenceReferences,
+            ["evidenceConflicts"] = executable ? conflicts : new JsonArray(),
             ["toolPolicyId"] = "tool-policy.read-only.v1",
             ["limits"] = new JsonObject
             {
@@ -425,7 +450,7 @@ internal sealed class EvaluationRepositorySession : IAsyncDisposable
                 ["maximumOutputTokens"] = selectedLimits.MaximumOutputTokens,
                 ["maximumCostMicrounits"] = selectedLimits.MaximumCostMicrounits,
                 ["maximumElapsedMilliseconds"] = maximumElapsedMillisecondsOverride
-                    ?? selectedLimits.MaximumElapsedMilliseconds,
+                ?? selectedLimits.MaximumElapsedMilliseconds,
             },
         };
         return JsonSerializer.SerializeToUtf8Bytes(root);

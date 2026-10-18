@@ -20,7 +20,7 @@ public sealed partial class DocumentationScribeCompositionTests
         var owners = fixture.Classified.Classification.ClassificationSet!.Targets
             .Where(target => target.SupportStatus == SupportStatus.Supported)
             .Select(target => projector.Project(fixture.Observed, target,
-                target.PrimaryKind == PrimarySymbolKind.Method ? fixture.Request.StyleProfile : null))
+                target.PrimaryKind == PrimarySymbolKind.Method ? fixture.Request.ExecutionStyleProfile : null))
             .Where(projection => projection.IsSuccess)
             .Select(projection => projection.Authority! with
             {
@@ -73,6 +73,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.NotEqual(root.GroupingAuthority.ContainingTypeDocumentationCommentId, nested.GroupingAuthority.ContainingTypeDocumentationCommentId);
         var stop = methods.Single(authority => authority.Target.SymbolRef.DocumentationCommentId == "M:EndToEnd.Fixture.Stop");
         Assert.Equal(root.GroupingAuthority.ContainingTypeDocumentationCommentId, stop.GroupingAuthority!.ContainingTypeDocumentationCommentId);
+        Assert.NotEqual(root.GroupingAuthority.MemberFamilySha256, stop.GroupingAuthority.MemberFamilySha256);
         var partialType = fixture.Classified.Classification.ClassificationSet!.Targets.Single(target =>
             target.SymbolRef.DocumentationCommentId == "T:EndToEnd.Fixture");
         Assert.False(projector.Project(fixture.Observed, partialType, null).IsSuccess);

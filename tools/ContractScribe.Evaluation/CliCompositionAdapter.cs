@@ -24,6 +24,7 @@ internal sealed class ProductionCompositionAdapter
     private readonly Type authorityType;
     private readonly MethodInfo createAuthority;
     private readonly MethodInfo selectAudit;
+    private readonly MethodInfo createManifestSelection;
     private readonly MethodInfo execute;
     private readonly MethodInfo assembleAuditInputs;
     private readonly PropertyInfo loadedProjectCompilation;
@@ -33,6 +34,9 @@ internal sealed class ProductionCompositionAdapter
         var assembly = Assembly.Load("ContractScribe.Cli");
         authorityType = RequireType(assembly, "ContractScribe.Cli.DocumentationScribeAuditAuthority");
         var selectionType = RequireType(assembly, "ContractScribe.Cli.DocumentationScribeSelectedAudit");
+        var manifestSelectionType = RequireType(assembly, "ContractScribe.Cli.DocumentationScribeManifestSelection");
+        createManifestSelection = RequireMethod(manifestSelectionType, "CreateSingleton", StaticInternal,
+            [selectionType, typeof(DocumentationScribeStyleProfile)]);
         var compositionType = RequireType(assembly, "ContractScribe.Cli.DocumentationScribeComposition");
         createAuthority = RequireMethod(authorityType, "Create", StaticInternal,
         [
@@ -55,7 +59,7 @@ internal sealed class ProductionCompositionAdapter
 
         execute = RequireMethod(compositionType, "ExecuteAsync", StaticInternal,
         [
-            selectionType,
+            manifestSelectionType,
             typeof(ReadOnlyMemory<byte>),
             typeof(DocumentationScribeAttemptId),
             typeof(string),
@@ -118,6 +122,10 @@ internal sealed class ProductionCompositionAdapter
         return selectAudit.Invoke(authority, [target])
             ?? throw new InvalidOperationException("evaluation.cli.selection-null");
     }
+
+    internal object CreateManifestSelection(object audit, DocumentationScribeStyleProfile? acceptedStyle) =>
+        createManifestSelection.Invoke(null, [audit, acceptedStyle])
+        ?? throw new InvalidOperationException("evaluation.cli.selection-null");
 
     internal IReadOnlyList<AuditRecordInput> AssembleAuditInputs(
         ClassificationSet classifications,

@@ -91,6 +91,9 @@ internal static class DocumentationScribePromptBuilder
         var maintained = promptInput.Context
             .Where(item => item.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction)
             .ToImmutableArray();
+        var content = new DocumentationScribePromptContent(request);
+        var evidenceContent = promptInput.Evidence.Select(content.Evidence).ToArray();
+        var visibleExchanges = content.History(completedToolExchanges);
         var messages = ImmutableArray.Create(
             Message(
                 DocumentationScribeMessageKind.SystemPolicy,
@@ -120,6 +123,12 @@ internal static class DocumentationScribePromptBuilder
                         "omit-both-read-line-bounds-unless-an-exact-valid-range-is-known",
                         "omit-subdirectory-to-query-the-selected-scope-root",
                         "tool-pageSize-never-exceeds-the-schema-maximum",
+                        "instruction-applicability-is-exactly-each-manifest-members-contextReferenceIds",
+                        "instruction-priority-follows-member-contextReferenceIds-root-to-leaf-nearest-last",
+                        "shared-source-content-never-shares-subject-or-claim-authority",
+                        "contentRef-reuses-only-bytes-from-the-visible-contentId-not-its-authority",
+                        "only-executionTargetId-may-have-this-runs-single-terminal",
+                        "one-terminal-does-not-complete-other-manifest-members",
                     },
                 }),
             Message(
@@ -127,6 +136,7 @@ internal static class DocumentationScribePromptBuilder
                 new
                 {
                     authority = "repository-instruction",
+                    applicability = "manifest[].contextReferenceIds",
                     references = request.ContextReferences
                         .Where(item => item.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
                         .Select(PrefixReference),
@@ -154,7 +164,7 @@ internal static class DocumentationScribePromptBuilder
                     attemptId = attemptId.Value,
                     attemptNumber,
                     request.Context,
-                    request.StyleProfile,
+                    styleProfile = request.ExecutionStyleProfile,
                     request.Limits,
                 }),
             Message(
@@ -162,17 +172,36 @@ internal static class DocumentationScribePromptBuilder
                 new
                 {
                     authority = "target-evidence",
+                    executionTargetId = request.ExecutionTarget.TargetId,
+                    request.ExecutableTargetIds,
+                    manifest = request.Manifest.Select(member => new
+                    {
+                        member.TargetId,
+                        member.Target.SymbolRef,
+                        sourceCommitment = new
+                        {
+                            locator = member.Target.SourceLocator,
+                            contentSha256 = member.Target.SourceSha256,
+                        },
+                        sourceScopeId = member.TargetId,
+                        member.Target.ApplicableComponents,
+                        member.AuditOutcome,
+                        member.StyleProfile,
+                        member.ContextReferenceIds,
+                        member.EvidenceReferenceIds,
+                        member.Grouping,
+                    }),
                     terminalTarget = new
                     {
                         request.Context.RepositoryContextRef,
-                        request.Target.SymbolRef,
+                        request.ExecutionTarget.Target.SymbolRef,
                         sourceCommitment = new
                         {
-                            locator = request.Target.SourceLocator,
-                            contentSha256 = request.Target.SourceSha256,
+                            locator = request.ExecutionTarget.Target.SourceLocator,
+                            contentSha256 = request.ExecutionTarget.Target.SourceSha256,
                         },
                     },
-                    applicableComponents = request.Target.ApplicableComponents,
+                    applicableComponents = request.ExecutionTarget.Target.ApplicableComponents,
                     terminalContract = new
                     {
                         proposalRootProperties = new[] { "kind", "target", "contentUnits" },
@@ -204,7 +233,7 @@ internal static class DocumentationScribePromptBuilder
                     },
                     request.EvidenceReferences,
                     request.EvidenceConflicts,
-                    content = promptInput.Evidence,
+                    content = evidenceContent,
                 }));
         var terminal = new DocumentationScribeTerminalDefinition(
             DocumentationScribeBoundary.TerminalOperationId,
@@ -228,7 +257,7 @@ internal static class DocumentationScribePromptBuilder
                 tool.InputSchemaJson,
             }),
             terminal = new { terminal.OperationId, terminal.SchemaJson },
-            completedToolExchanges = completedToolExchanges.Select(ProjectCompletedToolExchange),
+            completedToolExchanges = visibleExchanges.Select(ProjectCompletedToolExchange),
             outputLimits = new
             {
                 outputLimits.MaximumToolCalls,
@@ -249,7 +278,7 @@ internal static class DocumentationScribePromptBuilder
             messages,
             registry.Definitions,
             terminal,
-            completedToolExchanges,
+            visibleExchanges,
             outputLimits,
             deterministic);
     }

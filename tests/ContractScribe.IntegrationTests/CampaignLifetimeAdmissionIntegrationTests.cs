@@ -193,7 +193,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             var count = dimension == "elapsed-host" ? 2 : 1;
             for (var index = 0; index < count; index++)
                 calls.Add(new(index, "call.admission." + index, DocumentationScribeSemanticToolSelection.OperationId,
-                    JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })));
+                    JsonSerializer.SerializeToUtf8Bytes(new { targetId = request.ExecutionTarget.TargetId, pageSize = 1 })));
             return ValueTask.FromResult(new DocumentationScribeModelResponse(calls.ToImmutable(), [],
                 usage: new(0, dimension == "output" ? overrun ? 101 : 100 : 1, 0, 0),
                 cost: dimension == "cost" ? new("currency.synthetic", overrun ? 101 : 100) : null));

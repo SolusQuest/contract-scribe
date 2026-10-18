@@ -7,8 +7,8 @@
   "required": [
     "scribeRequestVersion",
     "context",
-    "target",
-    "styleProfile",
+    "manifest",
+    "executableTargetIds",
     "contextReferences",
     "evidenceReferences",
     "evidenceConflicts",
@@ -21,12 +21,6 @@
     },
     "context": {
       "$ref": "#/$defs/context"
-    },
-    "target": {
-      "$ref": "#/$defs/target"
-    },
-    "styleProfile": {
-      "$ref": "#/$defs/styleProfile"
     },
     "contextReferences": {
       "type": "array",
@@ -54,6 +48,22 @@
     },
     "limits": {
       "$ref": "#/$defs/limits"
+    },
+    "manifest": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/manifestTarget"
+      }
+    },
+    "executableTargetIds": {
+      "type": "array",
+      "maxItems": 4096,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/identifier"
+      }
     }
   },
   "$defs": {
@@ -289,8 +299,7 @@
       "required": [
         "repositoryContextRef",
         "inputIdentity",
-        "targetProfile",
-        "auditOutcome"
+        "targetProfile"
       ],
       "properties": {
         "repositoryContextRef": {
@@ -310,13 +319,6 @@
           "enum": [
             "profile.assembly-visible",
             "profile.external-api"
-          ]
-        },
-        "auditOutcome": {
-          "enum": [
-            "audit.outcome.compliant",
-            "audit.outcome.skipped",
-            "audit.outcome.violation"
           ]
         }
       }
@@ -895,6 +897,90 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 86399999
+        }
+      }
+    },
+    "manifestGrouping": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "projectIdentity",
+        "containingTypeSymbolRef",
+        "memberFamilySha256"
+      ],
+      "properties": {
+        "projectIdentity": {
+          "$ref": "#/$defs/repositoryPath"
+        },
+        "containingTypeSymbolRef": {
+          "$ref": "#/$defs/symbolRef"
+        },
+        "memberFamilySha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "manifestTarget": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetId",
+        "target",
+        "auditOutcome",
+        "styleProfile",
+        "contextReferenceIds",
+        "evidenceReferenceIds",
+        "grouping"
+      ],
+      "properties": {
+        "targetId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "target": {
+          "$ref": "#/$defs/target"
+        },
+        "auditOutcome": {
+          "enum": [
+            "audit.outcome.compliant",
+            "audit.outcome.skipped",
+            "audit.outcome.violation"
+          ]
+        },
+        "styleProfile": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/styleProfile"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "contextReferenceIds": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "evidenceReferenceIds": {
+          "type": "array",
+          "maxItems": 512,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "grouping": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/manifestGrouping"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       }
     }

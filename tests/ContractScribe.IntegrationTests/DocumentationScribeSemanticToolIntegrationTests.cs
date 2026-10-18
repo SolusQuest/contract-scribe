@@ -26,7 +26,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var port = new DocumentationScribeSemanticToolPort(loaded, request);
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
 
         Assert.Contains(
@@ -88,7 +88,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         do
         {
             var result = await port.InvokeAsync(
-                DocumentationScribeSemanticToolRequest.Create(2, cursor),
+                DocumentationScribeSemanticToolRequest.Create("target.selected", 2, cursor),
                 CancellationToken.None);
             var page = Assert.IsType<DocumentationScribeSemanticEvidencePage>(result.Page);
             Assert.True(page.NextCursor is null || page.Items.Length == 2);
@@ -101,7 +101,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.Equal(identities.Count, identities.Distinct(StringComparer.Ordinal).Count());
 
         var first = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2),
             CancellationToken.None);
         var valid = Assert.IsType<DocumentationScribeSemanticEvidencePage>(first.Page).NextCursor;
         var value = Assert.NotNull(valid).Value;
@@ -111,7 +111,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             value[..tamperIndex] + replacement + value[(tamperIndex + 1)..],
             out var tampered));
         var rejected = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2, tampered),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2, tampered),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.Failure, rejected.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidCursor, rejected.FailureReason);
@@ -125,14 +125,14 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var loaded = fixture.Bootstrap();
         var port = new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded));
         var first = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2),
             CancellationToken.None);
         var cursor = Assert.IsType<DocumentationScribeSemanticEvidencePage>(first.Page).NextCursor;
         Assert.NotNull(cursor);
 
         File.AppendAllText(fixture.ConsumerPath, "// drift\n", new UTF8Encoding(false));
         var second = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2, cursor),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2, cursor),
             CancellationToken.None);
 
         Assert.Same(DocumentationScribeToolOutcome.Failure, second.Outcome);
@@ -163,7 +163,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             null);
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
 
         Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
@@ -221,7 +221,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         try
         {
             var result = await port.InvokeAsync(
-                DocumentationScribeSemanticToolRequest.Create(20),
+                DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
                 CancellationToken.None);
 
             Assert.True(installed);
@@ -276,7 +276,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             null);
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2),
             cancellation.Token);
 
         Assert.Same(DocumentationScribeToolOutcome.Cancelled, result.Outcome);
@@ -292,7 +292,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var port = new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded));
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
 
         Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
@@ -313,7 +313,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var port = new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded));
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
 
         Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
@@ -334,7 +334,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             _ => new string('a', 64));
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
 
         Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
@@ -351,7 +351,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             loaded,
             fixture.CreateRequest(loaded));
         var first = await firstPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2),
             CancellationToken.None);
         var cursor = Assert.IsType<DocumentationScribeSemanticEvidencePage>(first.Page).NextCursor;
         Assert.NotNull(cursor);
@@ -360,7 +360,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             loaded,
             fixture.CreateRequest(loaded, artifactVariant: true));
         var changedArtifact = await changedArtifactPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2, cursor),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2, cursor),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.Failure, changedArtifact.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidCursor, changedArtifact.FailureReason);
@@ -382,7 +382,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             fixture.CreateRequest(loaded),
             changedPolicyLimits);
         var changedPolicy = await changedPolicyPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2, cursor),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2, cursor),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.Failure, changedPolicy.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidCursor, changedPolicy.FailureReason);
@@ -394,7 +394,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             secondLoaded,
             secondFixture.CreateRequest(secondLoaded));
         var freshSession = await secondPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(2, cursor),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 2, cursor),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.Failure, freshSession.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidCursor, freshSession.FailureReason);
@@ -419,7 +419,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             maximumElapsedMilliseconds: 10_000);
         var limitedPort = new DocumentationScribeSemanticToolPort(loaded, request, limited);
         var incomplete = await limitedPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, incomplete.Outcome);
         var page = Assert.IsType<DocumentationScribeSemanticEvidencePage>(incomplete.Page);
@@ -450,7 +450,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             },
             null);
         var timed = await timedPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.TimedOut, timed.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, timed.FailureReason);
@@ -469,7 +469,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             },
             null);
         var observationTimed = await observationTimedPort.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.TimedOut, observationTimed.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.TimedOut, observationTimed.FailureReason);
@@ -523,7 +523,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 null,
                 null,
                 elapsed: _ => TimeSpan.Zero).InvokeAsync(
-                    DocumentationScribeSemanticToolRequest.Create(2),
+                    DocumentationScribeSemanticToolRequest.Create("target.selected", 2),
                     CancellationToken.None);
             cursor = Assert.IsType<DocumentationScribeContextCursor>(seed.Page?.NextCursor);
         }
@@ -538,7 +538,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         armed = true;
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(1, cursor),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 1, cursor),
             CancellationToken.None);
 
         Assert.True(expired);
@@ -567,7 +567,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             fixture.CreateRequest(loaded),
             limits);
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(3),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 3),
             CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
         Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidRequest, result.FailureReason);
@@ -614,7 +614,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 loaded,
                 fixture.CreateRequest(loaded));
             var result = await port.InvokeAsync(
-                DocumentationScribeSemanticToolRequest.Create(20),
+                DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
                 CancellationToken.None);
             Assert.Contains(
                 result.Outcome,
@@ -652,7 +652,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var port = new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded));
 
         var result = await port.InvokeAsync(
-            DocumentationScribeSemanticToolRequest.Create(20),
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 20),
             CancellationToken.None);
 
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, result.Outcome);
@@ -674,11 +674,11 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var first = await new DocumentationScribeSemanticToolPort(
                 firstLoaded,
                 firstFixture.CreateRequest(firstLoaded))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var second = await new DocumentationScribeSemanticToolPort(
                 secondLoaded,
                 secondFixture.CreateRequest(secondLoaded))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var firstPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(first.Page);
         var secondPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(second.Page);
 
@@ -705,7 +705,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         Assert.IsAssignableFrom<INameOfOperation>(semanticModel.GetOperation(builtInSyntax));
         Assert.Single(semanticModel.GetMemberGroup(builtInSyntax.ArgumentList.Arguments[0].Expression));
         var result = await new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var page = Assert.IsType<DocumentationScribeSemanticEvidencePage>(result.Page);
         var consumer = File.ReadAllText(fixture.ConsumerPath);
         var builtInStart = consumer.IndexOf("nameof(RunnerAlias.Inherited)", StringComparison.Ordinal);
@@ -729,7 +729,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         using var fixture = SemanticFixture.Create(MethodId, includeSameNameDecoy: true);
         var loaded = fixture.Bootstrap();
         var result = await new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var page = Assert.IsType<DocumentationScribeSemanticEvidencePage>(result.Page);
 
         Assert.DoesNotContain(page.Items, item =>
@@ -749,7 +749,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var implementation = await new DocumentationScribeSemanticToolPort(
                 implementationContext,
                 implementationFixture.CreateRequest(implementationContext))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var implementationPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(implementation.Page);
         Assert.Contains(implementationPage.Items, item =>
             item.Kind == DocumentationScribeSemanticEvidenceKind.Relation
@@ -762,7 +762,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var interfaceResult = await new DocumentationScribeSemanticToolPort(
                 interfaceContext,
                 interfaceFixture.CreateRequest(interfaceContext))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var interfacePage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(interfaceResult.Page);
         Assert.Contains(interfacePage.Items, item =>
             item.Kind == DocumentationScribeSemanticEvidenceKind.Relation
@@ -774,7 +774,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var explicitInterfaceResult = await new DocumentationScribeSemanticToolPort(
                 explicitInterfaceContext,
                 explicitInterfaceFixture.CreateRequest(explicitInterfaceContext))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var explicitInterfacePage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(
             explicitInterfaceResult.Page);
         Assert.Contains(explicitInterfacePage.Items, item =>
@@ -793,7 +793,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         using var fixture = SemanticFixture.Create(transformId);
         var loaded = fixture.Bootstrap();
         var result = await new DocumentationScribeSemanticToolPort(loaded, fixture.CreateRequest(loaded))
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var type = Assert.IsType<DocumentationScribeSemanticEvidencePage>(result.Page).Core.Method.ReturnType;
 
         Assert.EndsWith("Outer`1+Inner`1", type.MetadataName, StringComparison.Ordinal);
@@ -811,14 +811,14 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         var baseline = fixture.CreateRequest(loaded);
         var zero = WithEvidenceLimits(baseline, 0, 0, []);
         var zeroResult = await new DocumentationScribeSemanticToolPort(loaded, zero)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, zeroResult.Outcome);
         Assert.Null(zeroResult.Page);
 
         var existing = CreateExistingEvidenceReference(baseline);
         var consumedReferences = WithEvidenceLimits(baseline, 1, 65_536, [existing]);
         var referenceResult = await new DocumentationScribeSemanticToolPort(loaded, consumedReferences)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, referenceResult.Outcome);
         Assert.Null(referenceResult.Page);
 
@@ -829,7 +829,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             existing.IncludedUtf8ByteCount + coreBytes - 1,
             [existing]);
         var byteResult = await new DocumentationScribeSemanticToolPort(loaded, consumedBytes)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, byteResult.Outcome);
         Assert.Null(byteResult.Page);
     }
@@ -859,7 +859,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 loaded,
                 fixture.CreateRequest(loaded),
                 limits)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var page = Assert.IsType<DocumentationScribeSemanticEvidencePage>(result.Page);
 
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, result.Outcome);
@@ -887,7 +887,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 loaded,
                 fixture.CreateRequest(loaded),
                 resultLimited)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, resultFailure.Outcome);
         Assert.Null(resultFailure.Page);
 
@@ -905,7 +905,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 loaded,
                 fixture.CreateRequest(loaded),
                 declarationLimited)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         Assert.Same(DocumentationScribeToolOutcome.BudgetExhausted, declarationFailure.Outcome);
         Assert.Null(declarationFailure.Page);
 
@@ -925,7 +925,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 paddedLoaded,
                 paddedFixture.CreateRequest(paddedLoaded),
                 sourceLimited)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var optionalPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(optional.Page);
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, optional.Outcome);
         Assert.Contains(optionalPage.Incomplete, item =>
@@ -947,7 +947,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 generatedLoaded,
                 generatedFixture.CreateRequest(generatedLoaded),
                 generatedLimited)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(20), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 20), CancellationToken.None);
         var generatedPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(generated.Page);
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, generated.Outcome);
         Assert.Contains(generatedPage.Incomplete, item =>
@@ -977,7 +977,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                     loaded,
                     fixture.CreateRequest(loaded),
                     tightLimits)
-                .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(2), CancellationToken.None);
+                .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 2), CancellationToken.None);
             if (candidateResult.Page is null)
             {
                 lower = candidate;
@@ -1002,7 +1002,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 loaded,
                 fixture.CreateRequest(loaded),
                 smallestSuccessfulLimits)
-            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create(2), CancellationToken.None);
+            .InvokeAsync(DocumentationScribeSemanticToolRequest.Create("target.selected", 2), CancellationToken.None);
         var tightPage = Assert.IsType<DocumentationScribeSemanticEvidencePage>(tight.Page);
         Assert.Same(DocumentationScribeToolOutcome.Incomplete, tight.Outcome);
         Assert.Contains(tightPage.Incomplete, item =>
@@ -1025,7 +1025,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             do
             {
                 var result = await port.InvokeAsync(
-                    DocumentationScribeSemanticToolRequest.Create(3, cursor),
+                    DocumentationScribeSemanticToolRequest.Create("target.selected", 3, cursor),
                     CancellationToken.None);
                 var page = Assert.IsType<DocumentationScribeSemanticEvidencePage>(result.Page);
                 core ??= page.Core;
@@ -1112,8 +1112,11 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             Sha(Encoding.UTF8.GetBytes(
                 request.ArtifactSha256 + "|" + maximumEvidenceReferences + "|" + maximumEvidenceUtf8Bytes)),
             request.Context,
-            request.Target,
-            request.StyleProfile,
+            request.Manifest.Select(member => new DocumentationScribeManifestTarget(member.TargetId, member.Target,
+                member.AuditOutcome, member.StyleProfile, member.ContextReferenceIds,
+                evidenceReferences.Where(reference => reference.Subject.ParentSymbolRef == member.Target.SymbolRef)
+                    .Select(reference => reference.EvidenceReferenceId).Order(StringComparer.Ordinal).ToImmutableArray(), member.Grouping)).ToImmutableArray(),
+            request.ExecutableTargetIds,
             request.ContextReferences,
             evidenceReferences,
             [],
@@ -1125,8 +1128,8 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
         DocumentationScribeRequest request)
     {
         var subject = EvidenceInput.TargetSubject(
-            request.Target.SymbolRef.CompilationContextRef,
-            request.Target.SymbolRef.DocumentationCommentId);
+            request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+            request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId);
         var input = new DocumentationScribeDynamicEvidenceInput(
             subject,
             EvidenceKind.SourceDeclaration,
@@ -1637,7 +1640,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
             context["repositoryContextRef"] = loaded.Facts.RepositoryContextRef.Value;
             context["inputIdentity"] = loaded.Facts.InputIdentity;
             context["targetProfile"] = ClassificationVocabulary.GetId(loaded.Facts.TargetProfile);
-            var target = root["target"]!.AsObject();
+            var target = root["manifest"]![0]!["target"]!.AsObject();
             var symbol = target["symbolRef"]!.AsObject();
             symbol["compilationContextRef"] = loaded.Facts.SymbolRef.CompilationContextRef;
             symbol["documentationCommentId"] = loaded.Facts.SymbolRef.DocumentationCommentId;
@@ -1699,7 +1702,7 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                 }
                 return node;
             }).ToArray<JsonNode?>());
-            root["styleProfile"]!["componentPolicies"] = new JsonArray(components.Select(item =>
+            root["manifest"]![0]!["styleProfile"]!["componentPolicies"] = new JsonArray(components.Select(item =>
                 (JsonNode?)new JsonObject
                 {
                     ["componentIdentity"] = item.Identity,
@@ -1718,11 +1721,14 @@ public sealed class DocumentationScribeSemanticToolIntegrationTests
                     ["includedUtf8ByteCount"] = item.Commitment.IncludedUtf8ByteCount,
                     ["isTruncated"] = item.Commitment.IsTruncated,
                 }).ToArray());
+            root["manifest"]![0]!["contextReferenceIds"] = new JsonArray(root["contextReferences"]!.AsArray()
+                .Select(item => (JsonNode?)JsonValue.Create(item!["contextReferenceId"]!.GetValue<string>())).ToArray());
+            root["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray();
             root["evidenceReferences"] = new JsonArray();
             root["evidenceConflicts"] = new JsonArray();
             if (artifactVariant)
             {
-                root["styleProfile"]!["allowedLiterals"]!.AsArray().Add("semantic-variant");
+                root["manifest"]![0]!["styleProfile"]!["allowedLiterals"]!.AsArray().Add("semantic-variant");
             }
             var parsed = DocumentationScribeValidation.ParseRequest(
                 Encoding.UTF8.GetBytes(root.ToJsonString()));

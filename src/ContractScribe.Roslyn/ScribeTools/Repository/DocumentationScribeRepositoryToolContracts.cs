@@ -421,6 +421,23 @@ public sealed class DocumentationScribeRepositoryToolBundle
     public static DocumentationScribeRepositoryToolBundle Create(
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
+        DocumentationScribeLoadedManifestContext manifest,
+        IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
+        DocumentationScribeRepositoryToolLimits? limits = null,
+        TimeProvider? clock = null)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        if (!ReferenceEquals(manifest.Request, request))
+            throw new ArgumentException("The manifest is not bound to the request.", nameof(manifest));
+        return new(new DocumentationScribeRepositoryToolSession(
+            request, attemptId, manifest.Contexts.First(), scopes,
+            limits ?? DocumentationScribeRepositoryToolLimits.Create(), null,
+            clock: clock, manifest: manifest));
+    }
+
+    public static DocumentationScribeRepositoryToolBundle Create(
+        DocumentationScribeRequest request,
+        DocumentationScribeAttemptId attemptId,
         DocumentationScribeLoadedContext loadedContext,
         IEnumerable<DocumentationScribeRepositoryToolScope> scopes,
         DocumentationScribeRepositoryToolLimits? limits = null,

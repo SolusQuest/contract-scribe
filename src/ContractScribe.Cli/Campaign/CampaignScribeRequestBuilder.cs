@@ -1,10 +1,18 @@
 using System.Collections.Immutable;
+using System.Globalization;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Agent.Prompting;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
 namespace ContractScribe.Cli;
+
+internal sealed record BuiltDocumentationScribeManifest(
+    ReadOnlyMemory<byte> RequestUtf8Json,
+    DocumentationScribeManifestSelection Selection);
 
 internal static class CampaignScribeRequestBuilder
 {
@@ -15,111 +23,126 @@ internal static class CampaignScribeRequestBuilder
         CampaignConfigurationDocument configuration,
         CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(bundle);
         ArgumentNullException.ThrowIfNull(work);
-        ArgumentNullException.ThrowIfNull(policy);
-        cancellationToken.ThrowIfCancellationRequested();
-        if (work.Targets.Length != 1
-            || work.Targets[0] is not { M3Eligible: true, StyleProfile: { } style } target
-            || target.Source is not CampaignPlanningRepositorySourceAuthority source)
-        {
+        if (work.Targets.Length != 1 || work.Targets[0] is not { M3Eligible: true, StyleProfile: not null } target)
             throw new InvalidOperationException("campaign.request.target-invalid");
-        }
+        return BuildManifest(bundle, work.Targets, [target.SymbolRef], policy, configuration, cancellationToken).RequestUtf8Json;
+    }
 
-        var classification = bundle.Classifications.Targets.Single(item =>
-            item.SymbolRef == target.SymbolRef);
-        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
-            bundle.Session.RepositoryContextRef,
-            bundle.Session.InputIdentity,
-            bundle.Classifications.TargetProfile,
-            classification.SymbolRef,
-            source.Path,
-            source.RequestedDeclarationSpan.Start,
-            source.RequestedDeclarationSpan.End,
-            source.ContentSha256);
-        var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(
-            bundle.Classified, selection, cancellationToken);
-        if (bootstrap.Status is not (DocumentationScribeContextBootstrapStatus.Succeeded
-                or DocumentationScribeContextBootstrapStatus.Incomplete)
-            || bootstrap.Context is not { } context)
-        {
-            throw new InvalidOperationException("campaign.request.context-unavailable");
-        }
-
-        var sourceFact = context.Facts.Evidence.Single(item =>
-            item.KindId == "source.target-declaration"
-            && item.Commitment.RepositoryPath == source.Path
-            && item.Range == source.RequestedDeclarationSpan);
-        if (target.GroupingAuthority?.InstructionsSha256 != CampaignCommandRunner.InstructionCommitment(context.Facts))
-        {
-            throw new InvalidOperationException("campaign.request.instruction-authority-changed");
-        }
-        var sourceClaim = style.ClaimPolicies.FirstOrDefault(policyRow =>
-            policyRow.AllowedAuthorities.Contains(
-                DocumentationScribeEvidenceAuthority.SourceDeclaration));
-        if (sourceClaim is null)
-        {
-            throw new InvalidOperationException("campaign.request.source-authority-forbidden");
-        }
-
-        var applicable = new JsonArray(target.ApplicableComponents.Select(component =>
-        {
-            var row = new JsonObject
-            {
-                ["kind"] = ComponentKind(component.Kind),
-                ["identity"] = component.Identity,
-            };
-            if (component.Name is not null) row["name"] = component.Name;
-            return (JsonNode)row;
-        }).ToArray());
-        var componentPolicies = new JsonArray(style.ComponentPolicies.Select(component =>
-            (JsonNode)new JsonObject
-            {
-                ["componentIdentity"] = component.ComponentIdentity,
-                ["disposition"] = Disposition(component.Disposition),
-                ["maximumScalars"] = component.MaximumScalars,
-            }).ToArray());
-        var claimPolicies = new JsonArray(style.ClaimPolicies.Select(claim =>
-            (JsonNode)new JsonObject
-            {
-                ["claimCategoryId"] = claim.ClaimCategoryId,
-                ["completeEvidenceRequired"] = claim.CompleteEvidenceRequired,
-                ["allowedAuthorities"] = new JsonArray(claim.AllowedAuthorities
-                    .Select(authority => (JsonNode)JsonValue.Create(EvidenceAuthority(authority))!).ToArray()),
-            }).ToArray());
-        var contextReferences = new JsonArray(context.Facts.Instructions.Select(instruction =>
-            (JsonNode)new JsonObject
-            {
-                ["contextReferenceId"] = instruction.InstructionId,
-                ["kind"] = "context.project-instruction",
-                ["repositoryContextRef"] = bundle.Session.RepositoryContextRef.Value,
-                ["path"] = instruction.Commitment.RepositoryPath,
-                ["contentSha256"] = instruction.Commitment.ContentSha256,
-                ["originalUtf8ByteCount"] = instruction.Commitment.OriginalUtf8ByteCount,
-                ["includedUtf8ByteCount"] = instruction.Commitment.IncludedUtf8ByteCount,
-                ["isTruncated"] = instruction.Commitment.IsTruncated,
-            }).ToArray());
-        var symbol = Symbol(target.SymbolRef);
-        var locator = RepositoryLocator(source.Path, source.RequestedDeclarationSpan);
-        var evidence = new JsonArray
-        {
-            new JsonObject
-            {
-                ["evidenceReferenceId"] = sourceFact.EvidenceId,
-                ["repositoryContextRef"] = bundle.Session.RepositoryContextRef.Value,
-                ["subject"] = new JsonObject { ["symbolRef"] = symbol.DeepClone() },
-                ["kind"] = "evidence.source.declaration",
-                ["relation"] = "evidence.declares",
-                ["authority"] = "authority.source-declaration",
-                ["locator"] = locator.DeepClone(),
-                ["contentSha256"] = sourceFact.Commitment.ContentSha256,
-                ["originalUtf8ByteCount"] = sourceFact.Commitment.OriginalUtf8ByteCount,
-                ["includedUtf8ByteCount"] = sourceFact.Commitment.IncludedUtf8ByteCount,
-                ["isTruncated"] = sourceFact.Commitment.IsTruncated,
-                ["claimCategoryIds"] = new JsonArray(sourceClaim.ClaimCategoryId),
-            },
-        };
+    internal static BuiltDocumentationScribeManifest BuildManifest(
+        ProductionRepositorySessionBundle bundle,
+        ImmutableArray<CampaignPlanningTargetFact> selected,
+        ImmutableArray<SymbolRef> executableSymbols,
+        CampaignPlanningExecutionPolicy policy,
+        CampaignConfigurationDocument configuration,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(bundle);
+        ArgumentNullException.ThrowIfNull(policy);
+        if (selected.IsDefaultOrEmpty) throw new ArgumentException("campaign.request.target-invalid", nameof(selected));
+        var audit = DocumentationScribeAuditAuthority.Create(bundle.Classified, bundle.Observed,
+            bundle.Policy, bundle.AuditInputs, bundle.Audit);
+        var selection = DocumentationScribeManifestSelection.Create(selected.Select(target => (
+            audit.Select(bundle.Classifications.Targets.Single(item => item.SymbolRef == target.SymbolRef)),
+            target.StyleProfile)), executableSymbols, cancellationToken);
+        var bootstrapSelections = selection.BootstrapSelections(null);
+        var instructions = new Dictionary<string, JsonObject>(StringComparer.Ordinal);
+        var evidence = new JsonArray();
+        var manifest = new JsonArray();
+        var executableIds = new Dictionary<SymbolRef, string>();
         var limits = policy.ScribeRunLimits;
+        for (var index = 0; index < selected.Length; index++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var target = selected[index];
+            var accepted = bootstrapSelections[index];
+            var source = target.Source as CampaignPlanningRepositorySourceAuthority
+                ?? throw new InvalidOperationException("campaign.request.target-invalid");
+            var seed = !executableSymbols.IsEmpty && target.SymbolRef == executableSymbols[0];
+            var l = accepted.Limits;
+            var bootstrapLimits = DocumentationScribeContextValidation.CreateLimits(l.MaximumInstructionFiles,
+                l.MaximumInstructionDepth, l.MaximumInstructionFileUtf8Bytes, l.MaximumDeclarationReferences,
+                l.MaximumDeclarationFiles, l.MaximumInspectedSourceUtf8Bytes, l.MaximumSourceFileUtf8Bytes,
+                seed ? l.MaximumIncludedSourceUtf8Bytes : 1, l.MaximumTotalContextUtf8Bytes, l.MaximumElapsedMilliseconds);
+            var bootstrapSelection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+                accepted.RepositoryContextRef, accepted.InputIdentity, accepted.TargetProfile, accepted.SymbolRef,
+                accepted.SourceLocator, accepted.SourceSha256, accepted.ConfiguredAgentEntrypoint, bootstrapLimits);
+            var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(bundle.Classified, bootstrapSelection, cancellationToken);
+            if (bootstrap.Context is not { } context)
+                throw new InvalidOperationException("campaign.request.context-unavailable");
+            if (target.GroupingAuthority?.InstructionsSha256 is { } commitment
+                && commitment != CampaignCommandRunner.InstructionCommitment(context.Facts))
+                throw new InvalidOperationException("campaign.request.instruction-authority-changed");
+            foreach (var instruction in context.Facts.Instructions)
+            {
+                var row = new JsonObject
+                {
+                    ["contextReferenceId"] = instruction.InstructionId,
+                    ["kind"] = "context.project-instruction",
+                    ["repositoryContextRef"] = bundle.Session.RepositoryContextRef.Value,
+                    ["path"] = instruction.Commitment.RepositoryPath,
+                    ["contentSha256"] = instruction.Commitment.ContentSha256,
+                    ["originalUtf8ByteCount"] = instruction.Commitment.OriginalUtf8ByteCount,
+                    ["includedUtf8ByteCount"] = instruction.Commitment.IncludedUtf8ByteCount,
+                    ["isTruncated"] = instruction.Commitment.IsTruncated,
+                };
+                if (instructions.TryGetValue(instruction.InstructionId, out var previous) && !JsonNode.DeepEquals(previous, row))
+                    throw new InvalidOperationException("campaign.request.instruction-authority-changed");
+                instructions[instruction.InstructionId] = row;
+            }
+            var id = TargetId(target);
+            executableIds.Add(target.SymbolRef, id);
+            var evidenceIds = new JsonArray();
+            var sourceFact = context.Facts.Evidence.Single(item => item.KindId == "source.target-declaration");
+            var claim = target.StyleProfile?.ClaimPolicies.FirstOrDefault(row =>
+                row.AllowedAuthorities.Contains(DocumentationScribeEvidenceAuthority.SourceDeclaration));
+            if (seed && claim is not null && limits.MaximumEvidenceReferences > 0
+                && sourceFact.Commitment.IncludedUtf8ByteCount <= limits.MaximumEvidenceUtf8Bytes
+                && (!claim.CompleteEvidenceRequired || !sourceFact.Commitment.IsTruncated))
+            {
+                evidenceIds.Add(sourceFact.EvidenceId);
+                evidence.Add(new JsonObject
+                {
+                    ["evidenceReferenceId"] = sourceFact.EvidenceId,
+                    ["repositoryContextRef"] = bundle.Session.RepositoryContextRef.Value,
+                    ["subject"] = new JsonObject { ["symbolRef"] = Symbol(target.SymbolRef) },
+                    ["kind"] = "evidence.source.declaration",
+                    ["relation"] = "evidence.declares",
+                    ["authority"] = "authority.source-declaration",
+                    ["locator"] = RepositoryLocator(source.Path, source.RequestedDeclarationSpan),
+                    ["contentSha256"] = sourceFact.Commitment.ContentSha256,
+                    ["originalUtf8ByteCount"] = sourceFact.Commitment.OriginalUtf8ByteCount,
+                    ["includedUtf8ByteCount"] = sourceFact.Commitment.IncludedUtf8ByteCount,
+                    ["isTruncated"] = sourceFact.Commitment.IsTruncated,
+                    ["claimCategoryIds"] = new JsonArray(claim.ClaimCategoryId),
+                });
+            }
+            manifest.Add(new JsonObject
+            {
+                ["targetId"] = id,
+                ["target"] = new JsonObject
+                {
+                    ["symbolRef"] = Symbol(target.SymbolRef),
+                    ["sourceCommitment"] = new JsonObject
+                    {
+                        ["locator"] = RepositoryLocator(source.Path, source.RequestedDeclarationSpan),
+                        ["contentSha256"] = source.ContentSha256,
+                    },
+                    ["applicableComponents"] = new JsonArray(target.ApplicableComponents.Select(component =>
+                    {
+                        var row = new JsonObject { ["kind"] = ComponentKind(component.Kind), ["identity"] = component.Identity };
+                        if (component.Name is not null) row["name"] = component.Name;
+                        return (JsonNode)row;
+                    }).ToArray()),
+                },
+                ["auditOutcome"] = AuditOutcome(target.AuditOutcome),
+                ["styleProfile"] = target.StyleProfile is null ? null : Node(target.StyleProfile),
+                ["contextReferenceIds"] = Strings(context.Facts.Instructions.OrderBy(item => item.Depth)
+                    .ThenBy(item => item.Commitment.RepositoryPath, StringComparer.Ordinal).Select(item => item.InstructionId)),
+                ["evidenceReferenceIds"] = evidenceIds,
+                ["grouping"] = Grouping(selection.Members[index].Declaration.GroupingAuthority, target.SymbolRef.CompilationContextRef),
+            });
+        }
         var root = new JsonObject
         {
             ["scribeRequestVersion"] = 1,
@@ -128,64 +151,45 @@ internal static class CampaignScribeRequestBuilder
                 ["repositoryContextRef"] = bundle.Session.RepositoryContextRef.Value,
                 ["inputIdentity"] = bundle.Session.InputIdentity,
                 ["targetProfile"] = TargetProfile(bundle.Classifications.TargetProfile),
-                ["auditOutcome"] = AuditOutcome(target.AuditOutcome),
             },
-            ["target"] = new JsonObject
-            {
-                ["symbolRef"] = symbol,
-                ["sourceCommitment"] = new JsonObject
-                {
-                    ["locator"] = locator,
-                    ["contentSha256"] = source.ContentSha256,
-                },
-                ["applicableComponents"] = applicable,
-            },
-            ["styleProfile"] = new JsonObject
-            {
-                ["styleProfileId"] = style.StyleProfileId,
-                ["outputLanguageId"] = style.OutputLanguageId,
-                ["summary"] = TextPolicy(style.Summary),
-                ["remarks"] = TextPolicy(style.Remarks),
-                ["exceptions"] = TextPolicy(style.Exceptions),
-                ["componentPolicies"] = componentPolicies,
-                ["inheritDocDisposition"] = InheritDoc(style.InheritDocDisposition),
-                ["allowedLiterals"] = new JsonArray(style.AllowedLiterals
-                    .Select(item => (JsonNode)JsonValue.Create(item)!).ToArray()),
-                ["forbiddenLiterals"] = new JsonArray(style.ForbiddenLiterals
-                    .Select(item => (JsonNode)JsonValue.Create(item)!).ToArray()),
-                ["claimPolicies"] = claimPolicies,
-                ["maximumContentUnits"] = style.MaximumContentUnits,
-                ["maximumEvidenceRefsPerUnit"] = style.MaximumEvidenceRefsPerUnit,
-            },
-            ["contextReferences"] = contextReferences,
+            ["manifest"] = manifest,
+            ["executableTargetIds"] = Strings(executableSymbols.Select(symbol => executableIds[symbol])),
+            ["contextReferences"] = new JsonArray(instructions.OrderBy(pair => pair.Key, StringComparer.Ordinal)
+                .Select(pair => (JsonNode)pair.Value).ToArray()),
             ["evidenceReferences"] = evidence,
             ["evidenceConflicts"] = new JsonArray(),
             ["toolPolicyId"] = configuration.ScribeRequest.ToolPolicyId,
-            ["limits"] = new JsonObject
-            {
-                ["maximumAttempts"] = limits.MaximumAttempts,
-                ["maximumContextReferences"] = limits.MaximumContextReferences,
-                ["maximumContextUtf8Bytes"] = limits.MaximumContextUtf8Bytes,
-                ["maximumEvidenceReferences"] = limits.MaximumEvidenceReferences,
-                ["maximumEvidenceUtf8Bytes"] = limits.MaximumEvidenceUtf8Bytes,
-                ["maximumProviderRequests"] = limits.MaximumProviderRequests,
-                ["maximumToolRounds"] = limits.MaximumToolRounds,
-                ["maximumToolCalls"] = limits.MaximumToolCalls,
-                ["maximumInputTokens"] = limits.MaximumInputTokens,
-                ["maximumUncachedInputTokens"] = limits.MaximumUncachedInputTokens,
-                ["maximumOutputTokens"] = limits.MaximumOutputTokens,
-                ["maximumCostMicrounits"] = limits.MaximumCostMicrounits,
-                ["maximumElapsedMilliseconds"] = limits.MaximumElapsedMilliseconds,
-            },
+            ["limits"] = Node(limits),
         };
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
-        if (!parsed.IsValid)
-        {
+        if (parsed.Request is not { } request || !selection.Matches(request))
             throw new InvalidOperationException("campaign.request.invalid");
-        }
-        return bytes;
+        return new(bytes, selection);
     }
+
+    internal static JsonNode? Grouping(CampaignPlanningGroupingAuthority? grouping, string compilation) => grouping is null
+        ? null : Node(new
+        {
+            grouping.ProjectIdentity,
+            containingTypeSymbolRef = new
+            {
+                compilationContextRef = compilation,
+                documentationCommentId = grouping.ContainingTypeDocumentationCommentId
+            },
+            grouping.MemberFamilySha256
+        });
+
+    private static JsonNode Node<T>(T value) => JsonNode.Parse(CanonicalJson.Serialize(value).AsSpan())!;
+
+    private static JsonArray Strings(IEnumerable<string> values) =>
+        new(values.Select(value => (JsonNode?)JsonValue.Create(value)).ToArray());
+
+    private static string TargetId(CampaignPlanningTargetFact target) => "target." + Convert.ToHexString(SHA256.HashData(
+        Encoding.UTF8.GetBytes(target.SymbolRef.CompilationContextRef + "\0" + target.SymbolRef.DocumentationCommentId
+            + "\0" + ((CampaignPlanningRepositorySourceAuthority)target.Source).Path
+            + "\0" + target.Source.RequestedDeclarationSpan.Start.ToString(CultureInfo.InvariantCulture) + ":" + target.Source.RequestedDeclarationSpan.End.ToString(CultureInfo.InvariantCulture)
+            + "\0" + target.Source.ContentSha256))).ToLowerInvariant();
 
     private static JsonObject Symbol(SymbolRef symbol) => new()
     {
@@ -202,45 +206,12 @@ internal static class CampaignScribeRequestBuilder
         },
     };
 
-    private static JsonObject TextPolicy(DocumentationScribeTextPolicy policy) => new()
-    {
-        ["disposition"] = Disposition(policy.Disposition),
-        ["maximumScalars"] = policy.MaximumScalars,
-    };
-
     private static string ComponentKind(ComponentKind kind) => kind switch
     {
         ContractScribe.Core.ComponentKind.TypeParameter => "typeParameter",
         ContractScribe.Core.ComponentKind.Parameter => "parameter",
         ContractScribe.Core.ComponentKind.Return => "return",
         ContractScribe.Core.ComponentKind.Value => "value",
-        _ => throw new InvalidOperationException(),
-    };
-
-    private static string Disposition(DocumentationScribePolicyDisposition value) => value switch
-    {
-        DocumentationScribePolicyDisposition.Required => "required",
-        DocumentationScribePolicyDisposition.Optional => "optional",
-        DocumentationScribePolicyDisposition.Forbidden => "forbidden",
-        _ => throw new InvalidOperationException(),
-    };
-
-    private static string InheritDoc(DocumentationScribeInheritDocDisposition value) => value switch
-    {
-        DocumentationScribeInheritDocDisposition.Allowed => "allowed",
-        DocumentationScribeInheritDocDisposition.Required => "required",
-        DocumentationScribeInheritDocDisposition.Forbidden => "forbidden",
-        _ => throw new InvalidOperationException(),
-    };
-
-    private static string EvidenceAuthority(DocumentationScribeEvidenceAuthority value) => value switch
-    {
-        DocumentationScribeEvidenceAuthority.SourceDeclaration => "authority.source-declaration",
-        DocumentationScribeEvidenceAuthority.SourceImplementation => "authority.source-implementation",
-        DocumentationScribeEvidenceAuthority.ExistingDocumentation => "authority.existing-documentation",
-        DocumentationScribeEvidenceAuthority.PublicContract => "authority.public-contract",
-        DocumentationScribeEvidenceAuthority.RepositoryDocumentation => "authority.repository-documentation",
-        DocumentationScribeEvidenceAuthority.Test => "authority.test",
         _ => throw new InvalidOperationException(),
     };
 

@@ -3,92 +3,7 @@
   "context": {
     "repositoryContextRef": "repoctx-11111111111111111111111111111111",
     "inputIdentity": "samples/Synthetic.csproj",
-    "targetProfile": "profile.external-api",
-    "auditOutcome": "audit.outcome.violation"
-  },
-  "target": {
-    "symbolRef": {
-      "compilationContextRef": "synthetic.v1",
-      "documentationCommentId": "M:Synthetic.Widget.Run(System.String)"
-    },
-    "sourceCommitment": {
-      "locator": {
-        "repository": {
-          "path": "src/Synthetic/Widget.cs",
-          "span": {
-            "start": 100,
-            "end": 200
-          }
-        }
-      },
-      "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-    },
-    "applicableComponents": [
-      {
-        "kind": "parameter",
-        "identity": "parameter/0",
-        "name": "value"
-      },
-      {
-        "kind": "return",
-        "identity": "return"
-      }
-    ]
-  },
-  "styleProfile": {
-    "styleProfileId": "style.public-api.v1",
-    "outputLanguageId": "language.en",
-    "summary": {
-      "disposition": "required",
-      "maximumScalars": 400
-    },
-    "remarks": {
-      "disposition": "optional",
-      "maximumScalars": 800
-    },
-    "exceptions": {
-      "disposition": "optional",
-      "maximumScalars": 400
-    },
-    "componentPolicies": [
-      {
-        "componentIdentity": "parameter/0",
-        "disposition": "required",
-        "maximumScalars": 300
-      },
-      {
-        "componentIdentity": "return",
-        "disposition": "required",
-        "maximumScalars": 300
-      }
-    ],
-    "inheritDocDisposition": "forbidden",
-    "allowedLiterals": [
-      "ContractScribe"
-    ],
-    "forbiddenLiterals": [
-      "guaranteed"
-    ],
-    "claimPolicies": [
-      {
-        "claimCategoryId": "claim.behavior",
-        "completeEvidenceRequired": true,
-        "allowedAuthorities": [
-          "authority.source-declaration",
-          "authority.public-contract"
-        ]
-      },
-      {
-        "claimCategoryId": "claim.purpose",
-        "completeEvidenceRequired": false,
-        "allowedAuthorities": [
-          "authority.source-declaration",
-          "authority.repository-documentation"
-        ]
-      }
-    ],
-    "maximumContentUnits": 16,
-    "maximumEvidenceRefsPerUnit": 8
+    "targetProfile": "profile.external-api"
   },
   "contextReferences": [
     {
@@ -203,5 +118,107 @@
     "maximumOutputTokens": 8192,
     "maximumCostMicrounits": 5000000,
     "maximumElapsedMilliseconds": 120000
-  }
+  },
+  "manifest": [
+    {
+      "targetId": "target.selected",
+      "target": {
+        "symbolRef": {
+          "compilationContextRef": "synthetic.v1",
+          "documentationCommentId": "M:Synthetic.Widget.Run(System.String)"
+        },
+        "sourceCommitment": {
+          "locator": {
+            "repository": {
+              "path": "src/Synthetic/Widget.cs",
+              "span": {
+                "start": 100,
+                "end": 200
+              }
+            }
+          },
+          "contentSha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "applicableComponents": [
+          {
+            "kind": "parameter",
+            "identity": "parameter/0",
+            "name": "value"
+          },
+          {
+            "kind": "return",
+            "identity": "return"
+          }
+        ]
+      },
+      "auditOutcome": "audit.outcome.violation",
+      "styleProfile": {
+        "styleProfileId": "style.public-api.v1",
+        "outputLanguageId": "language.en",
+        "summary": {
+          "disposition": "required",
+          "maximumScalars": 400
+        },
+        "remarks": {
+          "disposition": "optional",
+          "maximumScalars": 800
+        },
+        "exceptions": {
+          "disposition": "optional",
+          "maximumScalars": 400
+        },
+        "componentPolicies": [
+          {
+            "componentIdentity": "parameter/0",
+            "disposition": "required",
+            "maximumScalars": 300
+          },
+          {
+            "componentIdentity": "return",
+            "disposition": "required",
+            "maximumScalars": 300
+          }
+        ],
+        "inheritDocDisposition": "forbidden",
+        "allowedLiterals": [
+          "ContractScribe"
+        ],
+        "forbiddenLiterals": [
+          "guaranteed"
+        ],
+        "claimPolicies": [
+          {
+            "claimCategoryId": "claim.behavior",
+            "completeEvidenceRequired": true,
+            "allowedAuthorities": [
+              "authority.source-declaration",
+              "authority.public-contract"
+            ]
+          },
+          {
+            "claimCategoryId": "claim.purpose",
+            "completeEvidenceRequired": false,
+            "allowedAuthorities": [
+              "authority.source-declaration",
+              "authority.repository-documentation"
+            ]
+          }
+        ],
+        "maximumContentUnits": 16,
+        "maximumEvidenceRefsPerUnit": 8
+      },
+      "contextReferenceIds": [
+        "context.instructions"
+      ],
+      "evidenceReferenceIds": [
+        "evidence.parameter",
+        "evidence.return",
+        "evidence.summary"
+      ],
+      "grouping": null
+    }
+  ],
+  "executableTargetIds": [
+    "target.selected"
+  ]
 }

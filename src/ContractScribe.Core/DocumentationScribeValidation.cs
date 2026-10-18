@@ -39,8 +39,8 @@ public static class DocumentationScribeValidation
                     [
                         "scribeRequestVersion",
                         "context",
-                        "target",
-                        "styleProfile",
+                        "manifest",
+                        "executableTargetIds",
                         "contextReferences",
                         "evidenceReferences",
                         "evidenceConflicts",
@@ -49,11 +49,17 @@ public static class DocumentationScribeValidation
                     ]);
 
                 var context = ParseContext(root.GetProperty("context"), "/context");
-                var target = ParseTarget(root.GetProperty("target"), "/target");
-                var style = ParseStyleProfile(
-                    root.GetProperty("styleProfile"),
-                    "/styleProfile",
-                    target.ApplicableComponents);
+                var manifest = ParseManifest(root.GetProperty("manifest"), "/manifest");
+                var executableTargetIds = ParseUniqueIdentifiers(
+                    root.GetProperty("executableTargetIds"), "/executableTargetIds",
+                    DocumentationScribeContract.MaximumManifestTargets);
+                foreach (var id in executableTargetIds)
+                {
+                    if (manifest.SingleOrDefault(item => item.TargetId == id) is not { StyleProfile: not null })
+                    {
+                        throw Fail("invalid-reference", "/executableTargetIds");
+                    }
+                }
                 var contextReferences = ParseContextReferences(
                     root.GetProperty("contextReferences"),
                     "/contextReferences",
@@ -62,8 +68,8 @@ public static class DocumentationScribeValidation
                     root.GetProperty("evidenceReferences"),
                     "/evidenceReferences",
                     context.RepositoryContextRef,
-                    target,
-                    style);
+                    manifest);
+                ValidateManifestReferences(manifest, contextReferences, evidenceReferences);
                 var evidenceConflicts = ParseEvidenceConflicts(
                     root.GetProperty("evidenceConflicts"),
                     "/evidenceConflicts",
@@ -101,8 +107,8 @@ public static class DocumentationScribeValidation
                     new DocumentationScribeRequest(
                         Convert.ToHexString(SHA256.HashData(utf8Json.Span)).ToLowerInvariant(),
                         context,
-                        target,
-                        style,
+                        manifest,
+                        executableTargetIds,
                         contextReferences,
                         evidenceReferences,
                         evidenceConflicts,
@@ -155,8 +161,14 @@ public static class DocumentationScribeValidation
                 return false;
             }
 
-            EnsureSubjectBelongsToTarget(input.Subject, request.Target, "/subject");
-            var claimPolicies = request.StyleProfile.ClaimPolicies
+            var member = request.FindTarget(input.Subject.ParentSymbolRef);
+            if (member?.StyleProfile is not { } style)
+            {
+                return false;
+            }
+
+            EnsureSubjectBelongsToTarget(input.Subject, member.Target, "/subject");
+            var claimPolicies = style.ClaimPolicies
                 .ToDictionary(policy => policy.ClaimCategoryId, StringComparer.Ordinal);
             if (input.ClaimCategoryIds.Any(category =>
                     !claimPolicies.TryGetValue(category, out var policy)
@@ -270,6 +282,12 @@ public static class DocumentationScribeValidation
         ReadOnlyMemory<byte> utf8Json)
     {
         ArgumentNullException.ThrowIfNull(request);
+        if (!request.HasExecutableTargets)
+        {
+            return new DocumentationScribeResultParseResult(
+                null, new DocumentationScribeResultValidationFailure("scribe.result.invalid-correlation", "/terminal"));
+        }
+
         if (expectedDynamicEvidenceReferences.IsDefault)
         {
             throw new ArgumentException(
@@ -327,8 +345,7 @@ public static class DocumentationScribeValidation
                     root.GetProperty("dynamicEvidenceReferences"),
                     "/dynamicEvidenceReferences",
                     request.Context.RepositoryContextRef,
-                    request.Target,
-                    request.StyleProfile);
+                    request.Manifest);
                 ValidateDynamicEvidenceOverlay(
                     request,
                     dynamicEvidenceReferences,
@@ -390,7 +407,7 @@ public static class DocumentationScribeValidation
             || !string.Equals(envelope.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
             || envelope.AttemptId != expectedAttemptId
             || !string.Equals(envelope.ToolPolicyId, request.ToolPolicyId, StringComparison.Ordinal)
-            || !string.Equals(envelope.StyleProfileId, request.StyleProfile.StyleProfileId, StringComparison.Ordinal))
+            || !string.Equals(envelope.StyleProfileId, request.ExecutionStyleProfile.StyleProfileId, StringComparison.Ordinal))
         {
             throw new ArgumentException("The run result is not correlated to the parsed request and attempt.", nameof(runResult));
         }
@@ -405,9 +422,9 @@ public static class DocumentationScribeValidation
 
         if (runResult.Terminal is DocumentationScribeProposalTerminal proposal
             && (proposal.Target.RepositoryContextRef != request.Context.RepositoryContextRef
-                || proposal.Target.SymbolRef != request.Target.SymbolRef
-                || proposal.Target.SourceLocator != request.Target.SourceLocator
-                || !string.Equals(proposal.Target.SourceSha256, request.Target.SourceSha256, StringComparison.Ordinal)))
+                || proposal.Target.SymbolRef != request.ExecutionTarget.Target.SymbolRef
+                || proposal.Target.SourceLocator != request.ExecutionTarget.Target.SourceLocator
+                || !string.Equals(proposal.Target.SourceSha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal)))
         {
             throw new ArgumentException("The proposal target is not correlated to the parsed request.", nameof(runResult));
         }
@@ -513,10 +530,11 @@ public static class DocumentationScribeValidation
         }
 
         var ids = evidenceReferenceIds.ToImmutableArray();
-        if (ids.Length > request.StyleProfile.MaximumEvidenceRefsPerUnit
+        if (ids.Length > request.ExecutionStyleProfile.MaximumEvidenceRefsPerUnit
             || !IsStrictlyIncreasing(ids)
             || ids.Any(id => !request.EvidenceReferences.Any(reference =>
-                string.Equals(reference.EvidenceReferenceId, id, StringComparison.Ordinal))))
+                string.Equals(reference.EvidenceReferenceId, id, StringComparison.Ordinal)
+                && reference.Subject.ParentSymbolRef == request.ExecutionTarget.Target.SymbolRef)))
         {
             throw new ArgumentException("Evidence references are not valid for the parsed request.", nameof(evidenceReferenceIds));
         }
@@ -725,7 +743,7 @@ public static class DocumentationScribeValidation
             input.ModelConfigurationId,
             input.ScribeProtocolId,
             request.ToolPolicyId,
-            request.StyleProfile.StyleProfileId,
+            request.ExecutionStyleProfile.StyleProfileId,
             input.AttemptNumber,
             input.RestoredRetryableProviderFailures,
             input.ProviderRequestCount,
@@ -813,7 +831,7 @@ public static class DocumentationScribeValidation
         ExpectProperties(
             element,
             pointer,
-            ["repositoryContextRef", "inputIdentity", "targetProfile", "auditOutcome"]);
+            ["repositoryContextRef", "inputIdentity", "targetProfile"]);
         var rawContextRef = ReadString(element, "repositoryContextRef", pointer, 64);
         if (!RepositoryContextRef.TryParse(rawContextRef, out var contextRef))
         {
@@ -831,15 +849,127 @@ public static class DocumentationScribeValidation
             "profile.assembly-visible" => TargetProfile.AssemblyVisible,
             _ => throw Fail("invalid-vocabulary", pointer + "/targetProfile"),
         };
-        var auditOutcome = ReadString(element, "auditOutcome", pointer, 64) switch
-        {
-            "audit.outcome.compliant" => AuditOutcome.Compliant,
-            "audit.outcome.violation" => AuditOutcome.Violation,
-            "audit.outcome.skipped" => AuditOutcome.Skipped,
-            _ => throw Fail("invalid-vocabulary", pointer + "/auditOutcome"),
-        };
+        return new DocumentationScribeRequestContext(contextRef, inputIdentity, targetProfile);
+    }
 
-        return new DocumentationScribeRequestContext(contextRef, inputIdentity, targetProfile, auditOutcome);
+    private static ImmutableArray<DocumentationScribeManifestTarget> ParseManifest(
+        JsonElement element,
+        string pointer)
+    {
+        ExpectArray(element, pointer, 1, DocumentationScribeContract.MaximumManifestTargets);
+        var members = ImmutableArray.CreateBuilder<DocumentationScribeManifestTarget>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        var symbols = new HashSet<SymbolRef>();
+        foreach (var item in element.EnumerateArray())
+        {
+            var itemPointer = $"{pointer}/{members.Count}";
+            ExpectProperties(item, itemPointer,
+                ["targetId", "target", "auditOutcome", "styleProfile", "contextReferenceIds", "evidenceReferenceIds", "grouping"]);
+            var id = ReadIdentifier(item, "targetId", itemPointer);
+            var target = ParseTarget(item.GetProperty("target"), itemPointer + "/target");
+            if (!ids.Add(id) || !symbols.Add(target.SymbolRef))
+            {
+                throw Fail("invalid-reference", itemPointer);
+            }
+
+            var outcome = ReadString(item, "auditOutcome", itemPointer, 64) switch
+            {
+                "audit.outcome.compliant" => AuditOutcome.Compliant,
+                "audit.outcome.violation" => AuditOutcome.Violation,
+                "audit.outcome.skipped" => AuditOutcome.Skipped,
+                _ => throw Fail("invalid-vocabulary", itemPointer + "/auditOutcome"),
+            };
+            var style = item.GetProperty("styleProfile").ValueKind == JsonValueKind.Null
+                ? null
+                : ParseStyleProfile(item.GetProperty("styleProfile"), itemPointer + "/styleProfile", target.ApplicableComponents);
+            DocumentationScribeManifestGrouping? grouping = null;
+            var groupingElement = item.GetProperty("grouping");
+            if (groupingElement.ValueKind != JsonValueKind.Null)
+            {
+                var groupingPointer = itemPointer + "/grouping";
+                ExpectProperties(groupingElement, groupingPointer,
+                    ["projectIdentity", "containingTypeSymbolRef", "memberFamilySha256"]);
+                var containingType = ParseSymbolRef(
+                    groupingElement.GetProperty("containingTypeSymbolRef"), groupingPointer + "/containingTypeSymbolRef");
+                if (containingType.CompilationContextRef != target.SymbolRef.CompilationContextRef
+                    || !containingType.DocumentationCommentId.StartsWith("T:", StringComparison.Ordinal)
+                    || target.SymbolRef.DocumentationCommentId.StartsWith("T:", StringComparison.Ordinal)
+                        && containingType != target.SymbolRef)
+                {
+                    throw Fail("invalid-reference", groupingPointer + "/containingTypeSymbolRef");
+                }
+
+                grouping = new DocumentationScribeManifestGrouping(
+                    ReadRepositoryRelativePath(groupingElement, "projectIdentity", groupingPointer),
+                    containingType,
+                    ReadSha256(groupingElement, "memberFamilySha256", groupingPointer));
+            }
+
+            members.Add(new DocumentationScribeManifestTarget(
+                id, target, outcome, style,
+                ParseUniqueIdentifiers(item.GetProperty("contextReferenceIds"), itemPointer + "/contextReferenceIds",
+                    DocumentationScribeContract.MaximumReferences),
+                ParseOrderedIdentifiers(item.GetProperty("evidenceReferenceIds"), itemPointer + "/evidenceReferenceIds",
+                    0, DocumentationScribeContract.MaximumReferences),
+                grouping));
+        }
+
+        return members.ToImmutable();
+    }
+
+    private static ImmutableArray<string> ParseUniqueIdentifiers(JsonElement element, string pointer, int maximum)
+    {
+        ExpectArray(element, pointer, 0, maximum);
+        var result = ImmutableArray.CreateBuilder<string>();
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var item in element.EnumerateArray())
+        {
+            var itemPointer = $"{pointer}/{result.Count}";
+            var id = ReadStringValue(item, itemPointer, DocumentationScribeContract.MaximumIdentifierScalars);
+            if (!IsIdentifier(id, allowSlash: false)) throw Fail("invalid-vocabulary", itemPointer);
+            if (!ids.Add(id)) throw Fail("invalid-reference", itemPointer);
+            result.Add(id);
+        }
+
+        return result.ToImmutable();
+    }
+
+    private static void ValidateManifestReferences(
+        ImmutableArray<DocumentationScribeManifestTarget> manifest,
+        ImmutableArray<DocumentationScribeContextReference> context,
+        ImmutableArray<DocumentationScribeEvidenceReference> evidence)
+    {
+        var contextById = context.ToDictionary(item => item.ContextReferenceId, StringComparer.Ordinal);
+        var evidenceById = evidence.ToDictionary(item => item.EvidenceReferenceId, StringComparer.Ordinal);
+        var usedContext = new HashSet<string>(StringComparer.Ordinal);
+        var usedEvidence = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < manifest.Length; index++)
+        {
+            var member = manifest[index];
+            if (contextById.ContainsKey(member.TargetId) || evidenceById.ContainsKey(member.TargetId))
+            {
+                throw Fail("invalid-reference", $"/manifest/{index}/targetId");
+            }
+
+            foreach (var id in member.ContextReferenceIds)
+            {
+                if (!contextById.ContainsKey(id)) throw Fail("invalid-reference", $"/manifest/{index}/contextReferenceIds");
+                usedContext.Add(id);
+            }
+
+            foreach (var id in member.EvidenceReferenceIds)
+            {
+                if (!evidenceById.TryGetValue(id, out var reference)
+                    || reference.Subject.ParentSymbolRef != member.Target.SymbolRef
+                    || !usedEvidence.Add(id))
+                {
+                    throw Fail("invalid-reference", $"/manifest/{index}/evidenceReferenceIds");
+                }
+            }
+        }
+
+        if (usedContext.Count != context.Length) throw Fail("invalid-reference", "/contextReferences");
+        if (usedEvidence.Count != evidence.Length) throw Fail("invalid-reference", "/evidenceReferences");
     }
 
     private static DocumentationScribeTarget ParseTarget(JsonElement element, string pointer)
@@ -1185,11 +1315,9 @@ public static class DocumentationScribeValidation
         JsonElement element,
         string pointer,
         RepositoryContextRef expectedContextRef,
-        DocumentationScribeTarget target,
-        DocumentationScribeStyleProfile style)
+        ImmutableArray<DocumentationScribeManifestTarget> manifest)
     {
         ExpectArray(element, pointer, 0, DocumentationScribeContract.MaximumReferences);
-        var claimIds = style.ClaimPolicies.Select(policy => policy.ClaimCategoryId).ToHashSet(StringComparer.Ordinal);
         var builder = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceReference>();
         string? priorId = null;
         var index = 0;
@@ -1222,7 +1350,14 @@ public static class DocumentationScribeValidation
             }
 
             var subject = ParseEvidenceSubject(item.GetProperty("subject"), itemPointer + "/subject");
-            EnsureSubjectBelongsToTarget(subject, target, itemPointer + "/subject");
+            var member = manifest.SingleOrDefault(item => item.Target.SymbolRef == subject.ParentSymbolRef);
+            if (member?.StyleProfile is not { } style)
+            {
+                throw Fail("wrong-subject", itemPointer + "/subject");
+            }
+
+            EnsureSubjectBelongsToTarget(subject, member.Target, itemPointer + "/subject");
+            var claimIds = style.ClaimPolicies.Select(policy => policy.ClaimCategoryId).ToHashSet(StringComparer.Ordinal);
             var kind = ParseEvidenceKind(ReadString(item, "kind", itemPointer, 64), itemPointer + "/kind");
             var relation = ParseEvidenceRelation(
                 ReadString(item, "relation", itemPointer, 64),
@@ -1343,8 +1478,8 @@ public static class DocumentationScribeValidation
         new(
             request.ArtifactSha256,
             request.Context,
-            request.Target,
-            request.StyleProfile,
+            request.Manifest,
+            request.ExecutableTargetIds,
             request.ContextReferences,
             evidenceReferences,
             request.EvidenceConflicts,
@@ -1498,9 +1633,9 @@ public static class DocumentationScribeValidation
         ExpectProperties(element, pointer, ["kind", "target", "contentUnits"]);
         var target = ParseResultTarget(element.GetProperty("target"), pointer + "/target");
         if (target.RepositoryContextRef != request.Context.RepositoryContextRef
-            || target.SymbolRef != request.Target.SymbolRef
-            || target.SourceLocator != request.Target.SourceLocator
-            || !string.Equals(target.SourceSha256, request.Target.SourceSha256, StringComparison.Ordinal))
+            || target.SymbolRef != request.ExecutionTarget.Target.SymbolRef
+            || target.SourceLocator != request.ExecutionTarget.Target.SourceLocator
+            || !string.Equals(target.SourceSha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal))
         {
             throw Fail("invalid-correlation", pointer + "/target");
         }
@@ -1526,8 +1661,10 @@ public static class DocumentationScribeValidation
             element.GetProperty("evidenceReferenceIds"),
             pointer + "/evidenceReferenceIds",
             0,
-            request.StyleProfile.MaximumEvidenceRefsPerUnit);
-        var requestIds = request.EvidenceReferences.Select(reference => reference.EvidenceReferenceId).ToHashSet(StringComparer.Ordinal);
+            request.ExecutionStyleProfile.MaximumEvidenceRefsPerUnit);
+        var requestIds = request.EvidenceReferences
+            .Where(reference => reference.Subject.ParentSymbolRef == request.ExecutionTarget.Target.SymbolRef)
+            .Select(reference => reference.EvidenceReferenceId).ToHashSet(StringComparer.Ordinal);
         if (evidenceIds.Any(id => !requestIds.Contains(id)))
         {
             throw Fail("invalid-reference", pointer + "/evidenceReferenceIds");
@@ -1661,14 +1798,14 @@ public static class DocumentationScribeValidation
         string pointer,
         DocumentationScribeRequest request)
     {
-        ExpectArray(element, pointer, 1, request.StyleProfile.MaximumContentUnits);
+        ExpectArray(element, pointer, 1, request.ExecutionStyleProfile.MaximumContentUnits);
         var requestEvidence = request.EvidenceReferences.ToDictionary(
             reference => reference.EvidenceReferenceId,
             StringComparer.Ordinal);
-        var claimPolicies = request.StyleProfile.ClaimPolicies.ToDictionary(
+        var claimPolicies = request.ExecutionStyleProfile.ClaimPolicies.ToDictionary(
             policy => policy.ClaimCategoryId,
             StringComparer.Ordinal);
-        var componentPolicies = request.StyleProfile.ComponentPolicies.ToDictionary(
+        var componentPolicies = request.ExecutionStyleProfile.ComponentPolicies.ToDictionary(
             policy => policy.ComponentIdentity,
             StringComparer.Ordinal);
         var lowerConflicts = request.EvidenceConflicts
@@ -1717,7 +1854,7 @@ public static class DocumentationScribeValidation
                 item.GetProperty("evidenceReferenceIds"),
                 itemPointer + "/evidenceReferenceIds",
                 1,
-                request.StyleProfile.MaximumEvidenceRefsPerUnit);
+                request.ExecutionStyleProfile.MaximumEvidenceRefsPerUnit);
             ValidateUnitShape(kind, componentIdentity, name, typeDocumentationId, itemPointer);
             var sortKey = GetUnitSortKey(kind, componentIdentity, typeDocumentationId);
             EnsureIncreasing(ref priorSortKey, sortKey, itemPointer);
@@ -1742,7 +1879,7 @@ public static class DocumentationScribeValidation
                 }
 
                 if (!UnitMatchesApplicableComponent(
-                    request.Target.ApplicableComponents,
+                    request.ExecutionTarget.Target.ApplicableComponents,
                     kind,
                     componentIdentity,
                     name))
@@ -1764,10 +1901,10 @@ public static class DocumentationScribeValidation
             }
             else
             {
-                ValidateNonComponentStyle(kind, lines, request.StyleProfile, itemPointer);
+                ValidateNonComponentStyle(kind, lines, request.ExecutionStyleProfile, itemPointer);
             }
 
-            foreach (var literal in request.StyleProfile.ForbiddenLiterals)
+            foreach (var literal in request.ExecutionStyleProfile.ForbiddenLiterals)
             {
                 if (lines.Any(line => line.Contains(literal, StringComparison.Ordinal)))
                 {
@@ -1782,7 +1919,7 @@ public static class DocumentationScribeValidation
                     throw Fail("invalid-reference", itemPointer + "/evidenceReferenceIds");
                 }
 
-                if (!EvidenceSubjectMatchesUnit(evidence.Subject, request.Target, kind, componentIdentity)
+                if (!EvidenceSubjectMatchesUnit(evidence.Subject, request.ExecutionTarget.Target, kind, componentIdentity)
                     || !evidence.ClaimCategoryIds.Contains(claimCategoryId, StringComparer.Ordinal)
                     || !claimPolicy.AllowedAuthorities.Contains(evidence.Authority)
                     || (claimPolicy.CompleteEvidenceRequired && evidence.IsTruncated)
@@ -1805,31 +1942,31 @@ public static class DocumentationScribeValidation
 
         if (observedKinds.Contains(DocumentationScribeContentUnitKind.InheritDoc))
         {
-            if (builder.Count != 1 || request.StyleProfile.InheritDocDisposition == DocumentationScribeInheritDocDisposition.Forbidden)
+            if (builder.Count != 1 || request.ExecutionStyleProfile.InheritDocDisposition == DocumentationScribeInheritDocDisposition.Forbidden)
             {
                 throw Fail("invalid-style", pointer);
             }
         }
         else
         {
-            if (request.StyleProfile.InheritDocDisposition == DocumentationScribeInheritDocDisposition.Required)
+            if (request.ExecutionStyleProfile.InheritDocDisposition == DocumentationScribeInheritDocDisposition.Required)
             {
                 throw Fail("invalid-style", pointer);
             }
 
             EnsureRequiredPolicy(
-                request.StyleProfile.Summary,
+                request.ExecutionStyleProfile.Summary,
                 observedKinds.Contains(DocumentationScribeContentUnitKind.Summary),
                 pointer);
             EnsureRequiredPolicy(
-                request.StyleProfile.Remarks,
+                request.ExecutionStyleProfile.Remarks,
                 observedKinds.Contains(DocumentationScribeContentUnitKind.Remarks),
                 pointer);
             EnsureRequiredPolicy(
-                request.StyleProfile.Exceptions,
+                request.ExecutionStyleProfile.Exceptions,
                 builder.Any(unit => unit.Kind == DocumentationScribeContentUnitKind.Exception),
                 pointer);
-            foreach (var policy in request.StyleProfile.ComponentPolicies)
+            foreach (var policy in request.ExecutionStyleProfile.ComponentPolicies)
             {
                 if (policy.Disposition == DocumentationScribePolicyDisposition.Required
                     && !observedComponentIds.Contains(policy.ComponentIdentity))
@@ -1839,8 +1976,8 @@ public static class DocumentationScribeValidation
             }
 
             if (!observedKinds.Contains(DocumentationScribeContentUnitKind.Summary)
-                || observedComponentIds.Count != request.Target.ApplicableComponents.Length
-                || request.Target.ApplicableComponents.Any(component =>
+                || observedComponentIds.Count != request.ExecutionTarget.Target.ApplicableComponents.Length
+                || request.ExecutionTarget.Target.ApplicableComponents.Any(component =>
                     !observedComponentIds.Contains(component.Identity)))
             {
                 throw Fail("invalid-content", pointer);
@@ -1936,7 +2073,7 @@ public static class DocumentationScribeValidation
             throw Fail("invalid-correlation", pointer + "/toolPolicyId");
         }
 
-        if (!string.Equals(styleProfileId, request.StyleProfile.StyleProfileId, StringComparison.Ordinal))
+        if (!string.Equals(styleProfileId, request.ExecutionStyleProfile.StyleProfileId, StringComparison.Ordinal))
         {
             throw Fail("invalid-correlation", pointer + "/styleProfileId");
         }

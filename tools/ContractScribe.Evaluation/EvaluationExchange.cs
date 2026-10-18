@@ -144,7 +144,7 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
     private ReadOnlyMemory<byte> ProposalTerminal()
     {
         var request = prepared.Request;
-        var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
+        var locator = (RepositoryEvidenceLocator)request.ExecutionTarget.Target.SourceLocator;
         return JsonSerializer.SerializeToUtf8Bytes(new JsonObject
         {
             ["kind"] = "proposal",
@@ -153,8 +153,8 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
                 ["repositoryContextRef"] = request.Context.RepositoryContextRef.Value,
                 ["symbolRef"] = new JsonObject
                 {
-                    ["compilationContextRef"] = request.Target.SymbolRef.CompilationContextRef,
-                    ["documentationCommentId"] = request.Target.SymbolRef.DocumentationCommentId,
+                    ["compilationContextRef"] = request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId,
                 },
                 ["sourceCommitment"] = new JsonObject
                 {
@@ -170,7 +170,7 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
                             },
                         },
                     },
-                    ["contentSha256"] = request.Target.SourceSha256,
+                    ["contentSha256"] = request.ExecutionTarget.Target.SourceSha256,
                 },
             },
             ["contentUnits"] = new JsonArray

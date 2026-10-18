@@ -533,9 +533,9 @@ public sealed class DocumentationScribeContractTests
             "scribe.request.stale-reference",
             "/contextReferences/0/repositoryContextRef");
         AssertRequestMutationFails(
-            root => Reverse(root["target"]!["applicableComponents"]!.AsArray()),
+            root => Reverse(root["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray()),
             "scribe.request.invalid-order",
-            "/target/applicableComponents/1/identity");
+            "/manifest/0/target/applicableComponents/1/identity");
         AssertRequestMutationFails(
             root => root["limits"]!["maximumContextReferences"] = 0,
             "scribe.request.over-budget",
@@ -556,7 +556,7 @@ public sealed class DocumentationScribeContractTests
         var compatible = ParseObject(ReadFixture("valid", "request.json"));
         compatible["context"]!["inputIdentity"] = "samples/Synthetic.SLNX";
         compatible["contextReferences"]![0]!["path"] = "docs/contracts:v1.md";
-        compatible["target"]!["symbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
+        compatible["manifest"]![0]!["target"]!["symbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
         compatible["evidenceReferences"]![0]!["subject"]!["parentSymbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
         compatible["evidenceReferences"]![1]!["subject"]!["parentSymbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
         compatible["evidenceReferences"]![2]!["subject"]!["symbolRef"]!["compilationContextRef"] = "0_synthetic.v1";
@@ -571,7 +571,7 @@ public sealed class DocumentationScribeContractTests
         };
 
         var syntheticRequestNode = ParseObject(ReadFixture("valid", "request.json"));
-        syntheticRequestNode["target"]!["sourceCommitment"]!["locator"] = CreateSyntheticLocator();
+        syntheticRequestNode["manifest"]![0]!["target"]!["sourceCommitment"]!["locator"] = CreateSyntheticLocator();
         var syntheticRequestBytes = Serialize(syntheticRequestNode);
         AssertSchemaValid(RequestSchema.Value, syntheticRequestBytes, "m1-synthetic-locator");
         var syntheticRequest = ParseValidRequest(syntheticRequestBytes);
@@ -590,7 +590,7 @@ public sealed class DocumentationScribeContractTests
         var supplementaryDocumentationId = "T:" + string.Concat(
             Enumerable.Repeat(char.ConvertFromUtf32(0x10400), 600));
         var supplementaryRequestNode = ParseObject(ReadFixture("valid", "request.json"));
-        supplementaryRequestNode["target"]!["symbolRef"]!["documentationCommentId"] = supplementaryDocumentationId;
+        supplementaryRequestNode["manifest"]![0]!["target"]!["symbolRef"]!["documentationCommentId"] = supplementaryDocumentationId;
         foreach (var evidence in supplementaryRequestNode["evidenceReferences"]!.AsArray())
         {
             var subject = evidence!["subject"]!;
@@ -617,37 +617,37 @@ public sealed class DocumentationScribeContractTests
             "scribe.request.invalid-vocabulary",
             "/context/inputIdentity");
         AssertRequestMutationFails(
-            root => root["target"]!["symbolRef"]!["compilationContextRef"] = "_synthetic",
+            root => root["manifest"]![0]!["target"]!["symbolRef"]!["compilationContextRef"] = "_synthetic",
             "scribe.request.invalid-vocabulary",
-            "/target/symbolRef/compilationContextRef");
+            "/manifest/0/target/symbolRef/compilationContextRef");
         AssertRequestMutationFails(
-            root => root["target"]!["symbolRef"]!["documentationCommentId"] = "X:Synthetic.Widget",
+            root => root["manifest"]![0]!["target"]!["symbolRef"]!["documentationCommentId"] = "X:Synthetic.Widget",
             "scribe.request.invalid-vocabulary",
-            "/target/symbolRef/documentationCommentId");
+            "/manifest/0/target/symbolRef/documentationCommentId");
         AssertRequestMutationFails(
-            root => root["target"]!["applicableComponents"]![0]!["identity"] = "parameter/00",
+            root => root["manifest"]![0]!["target"]!["applicableComponents"]![0]!["identity"] = "parameter/00",
             "scribe.request.invalid-vocabulary",
-            "/target/applicableComponents/0/identity");
+            "/manifest/0/target/applicableComponents/0/identity");
         AssertRequestMutationFails(
-            root => root["target"]!["applicableComponents"]!.AsArray().Insert(1, new JsonObject
+            root => root["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray().Insert(1, new JsonObject
             {
                 ["kind"] = "parameter",
                 ["identity"] = "parameter/1",
                 ["name"] = "value",
             }),
             "scribe.request.invalid-order",
-            "/target/applicableComponents/1/identity");
+            "/manifest/0/target/applicableComponents/1/identity");
         AssertRequestMutationFails(
-            root => root["target"]!["applicableComponents"]!.AsArray().Add(new JsonObject
+            root => root["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray().Add(new JsonObject
             {
                 ["kind"] = "value",
                 ["identity"] = "value",
             }),
             "scribe.request.invalid-component",
-            "/target/applicableComponents/2");
+            "/manifest/0/target/applicableComponents/2");
 
         var generated = ParseObject(ReadFixture("valid", "request.json"));
-        generated["target"]!["sourceCommitment"]!["locator"] = new JsonObject
+        generated["manifest"]![0]!["target"]!["sourceCommitment"]!["locator"] = new JsonObject
         {
             ["generatedOutput"] = new JsonObject
             {
@@ -665,23 +665,23 @@ public sealed class DocumentationScribeContractTests
         var generatedBytes = Serialize(generated);
         AssertSchemaValid(RequestSchema.Value, generatedBytes, "generated-locator");
         Assert.NotNull(ParseValidRequest(generatedBytes));
-        generated["target"]!["sourceCommitment"]!["locator"]!["generatedOutput"]!["producerId"] =
+        generated["manifest"]![0]!["target"]!["sourceCommitment"]!["locator"]!["generatedOutput"]!["producerId"] =
             "tgp." + new string('a', 64);
         Assert.False(Evaluate(RequestSchema.Value, Serialize(generated)));
         var generatedFailure = DocumentationScribeValidation.ParseRequest(Serialize(generated)).Failure;
         Assert.Equal("scribe.request.invalid-vocabulary", generatedFailure?.Code);
-        Assert.Equal("/target/sourceCommitment/locator/generatedOutput/producerId", generatedFailure?.Pointer);
+        Assert.Equal("/manifest/0/target/sourceCommitment/locator/generatedOutput/producerId", generatedFailure?.Pointer);
     }
 
     [Fact]
     public void Structured_proposals_are_complete_m2_safe_blocks()
     {
         AssertResultMutationFails(
-            request => request["styleProfile"]!["summary"]!["disposition"] = "optional",
+            request => request["manifest"]![0]!["styleProfile"]!["summary"]!["disposition"] = "optional",
             result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(0),
             "scribe.result.invalid-content");
         AssertResultMutationFails(
-            request => request["styleProfile"]!["componentPolicies"]![1]!["disposition"] = "optional",
+            request => request["manifest"]![0]!["styleProfile"]!["componentPolicies"]![1]!["disposition"] = "optional",
             result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(2),
             "scribe.result.invalid-content");
         AssertResultMutationFails(
@@ -735,7 +735,7 @@ public sealed class DocumentationScribeContractTests
         var proposal = Assert.IsType<DocumentationScribeProposalTerminal>(parsed.Result?.Terminal);
         var patch = ParseObject(ReadRepositoryFixture("documentation-patch", "v1", "valid", "repository-request.json"));
         var block = patch["blocks"]![0]!;
-        block["applicableComponents"] = new JsonArray(request.Target.ApplicableComponents
+        block["applicableComponents"] = new JsonArray(request.ExecutionTarget.Target.ApplicableComponents
             .Select(component =>
             {
                 var node = new JsonObject
@@ -805,7 +805,7 @@ public sealed class DocumentationScribeContractTests
     public void Evidence_authority_truncation_and_explicit_conflict_fail_closed()
     {
         AssertResultMutationFails(
-            request => request["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"] =
+            request => request["manifest"]![0]!["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"] =
                 new JsonArray("authority.public-contract"),
             null,
             "scribe.result.invalid-evidence");
@@ -831,6 +831,7 @@ public sealed class DocumentationScribeContractTests
                 higher["relation"] = "evidence.constrains";
                 higher["authority"] = "authority.public-contract";
                 references.Insert(1, higher);
+                request["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().Insert(1, "evidence.parameter-high");
                 request["evidenceConflicts"] = new JsonArray(new JsonObject
                 {
                     ["relation"] = "evidence-conflict.higher-authority-contradicts",
@@ -846,9 +847,9 @@ public sealed class DocumentationScribeContractTests
     public void Style_profile_checks_only_machine_visible_rules()
     {
         AssertRequestMutationFails(
-            root => root["styleProfile"]!["forbiddenLiterals"] = new JsonArray("ContractScribe"),
+            root => root["manifest"]![0]!["styleProfile"]!["forbiddenLiterals"] = new JsonArray("ContractScribe"),
             "scribe.request.invalid-style",
-            "/styleProfile/forbiddenLiterals");
+            "/manifest/0/styleProfile/forbiddenLiterals");
         AssertResultMutationFails(
             null,
             result => result["terminal"]!["contentUnits"]![0]!["lines"]![0] = "A guaranteed outcome.",
@@ -885,7 +886,7 @@ public sealed class DocumentationScribeContractTests
     public void Inherit_doc_proposal_projects_to_current_m2_union()
     {
         var requestNode = ParseObject(ReadFixture("valid", "request.json"));
-        var style = requestNode["styleProfile"]!;
+        var style = requestNode["manifest"]![0]!["styleProfile"]!;
         foreach (var policyName in new[] { "summary", "remarks", "exceptions" })
         {
             style[policyName]!["disposition"] = "forbidden";
@@ -975,13 +976,13 @@ public sealed class DocumentationScribeContractTests
     public void Inherit_doc_zero_ceilings_and_authority_strength_order_are_enforced()
     {
         AssertRequestMutationFails(
-            request => Reverse(request["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"]!.AsArray()),
+            request => Reverse(request["manifest"]![0]!["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"]!.AsArray()),
             "scribe.request.invalid-order",
-            "/styleProfile/claimPolicies/0/allowedAuthorities/1");
+            "/manifest/0/styleProfile/claimPolicies/0/allowedAuthorities/1");
         AssertRequestMutationFails(
             request =>
             {
-                var style = request["styleProfile"]!;
+                var style = request["manifest"]![0]!["styleProfile"]!;
                 foreach (var policyName in new[] { "summary", "remarks", "exceptions" })
                 {
                     style[policyName]!["disposition"] = "forbidden";
@@ -997,7 +998,7 @@ public sealed class DocumentationScribeContractTests
                 style["inheritDocDisposition"] = "required";
             },
             "scribe.request.invalid-style",
-            "/styleProfile/inheritDocDisposition");
+            "/manifest/0/styleProfile/inheritDocDisposition");
     }
 
     [Fact]
@@ -1283,12 +1284,12 @@ public sealed class DocumentationScribeContractTests
     public void Schema_and_core_reject_unknown_fields_without_publishing_untrusted_names()
     {
         var request = ParseObject(ReadFixture("valid", "request.json"));
-        request["target"]!["sourceText"] = "private source";
+        request["manifest"]![0]!["target"]!["sourceText"] = "private source";
         var requestBytes = Serialize(request);
         Assert.False(Evaluate(RequestSchema.Value, requestBytes));
         var requestFailure = DocumentationScribeValidation.ParseRequest(requestBytes).Failure;
         Assert.Equal("scribe.request.unknown-field", requestFailure?.Code);
-        Assert.Equal("/target/sourceText", requestFailure?.Pointer);
+        Assert.Equal("/manifest/0/target/sourceText", requestFailure?.Pointer);
 
         var result = ParseObject(ReadFixture("valid", "failure-result.json"));
         result["terminal"]!["reason"] = "scribe.skip.insufficient-evidence";
@@ -1296,12 +1297,12 @@ public sealed class DocumentationScribeContractTests
 
         var untrustedPropertyName = "private provider content " + new string('x', 900_000);
         var boundedRequest = ParseObject(ReadFixture("valid", "request.json"));
-        boundedRequest["target"]![untrustedPropertyName] = true;
+        boundedRequest["manifest"]![0]!["target"]![untrustedPropertyName] = true;
         var boundedRequestBytes = Serialize(boundedRequest);
         Assert.True(boundedRequestBytes.Length < DocumentationScribeContract.MaximumArtifactUtf8Bytes);
         var boundedRequestFailure = DocumentationScribeValidation.ParseRequest(boundedRequestBytes).Failure;
         Assert.Equal("scribe.request.unknown-field", boundedRequestFailure?.Code);
-        Assert.Equal("/target", boundedRequestFailure?.Pointer);
+        Assert.Equal("/manifest/0/target", boundedRequestFailure?.Pointer);
         Assert.DoesNotContain("private provider content", boundedRequestFailure?.Pointer, StringComparison.Ordinal);
 
         var parsedRequest = ParseValidRequest(ReadFixture("valid", "request.json"));

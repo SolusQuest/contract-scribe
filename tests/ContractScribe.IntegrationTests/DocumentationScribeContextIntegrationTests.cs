@@ -21,6 +21,84 @@ public sealed class DocumentationScribeContextIntegrationTests
     private const string ChildOutputVariable = "CONTRACTSCRIBE_CONTEXT_PROBE_OUTPUT";
 
     [Fact]
+    public async Task Manifest_context_keeps_distinct_instruction_maps_and_every_selected_source_fresh()
+    {
+        using var fixture = ContextFixture.Create(
+            new SourceInput("a/Widget.cs", "namespace Fixture; public class Widget { }"),
+            new SourceInput("b/Other.cs", "namespace Fixture; public class Other { }"));
+        fixture.WriteText("AGENTS.md", "Shared root instruction.\n");
+        fixture.WriteText("a/AGENTS.md", "Only scope A.\n");
+        fixture.WriteText("b/AGENTS.md", "Only scope B.\n");
+        var first = fixture.CreateSelection(sourcePath: "a/Widget.cs");
+        var project = Assert.Single(fixture.ClassifiedSession.RepositorySession.Projects);
+        var otherSymbol = Assert.Single(DocumentationCommentId.GetSymbolsForDeclarationId("T:Fixture.Other", project.Compilation));
+        var otherDeclaration = Assert.Single(otherSymbol.DeclaringSyntaxReferences);
+        var second = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            fixture.RepositoryContextRef, ProjectIdentity, TargetProfile.ExternalApi,
+            new SymbolRef(CompilationContext, "T:Fixture.Other"), "b/Other.cs",
+            otherDeclaration.Span.Start, otherDeclaration.Span.End,
+            Sha256(File.ReadAllBytes(fixture.FullPath("b/Other.cs"))));
+        var bootstrapper = new DocumentationScribeContextBootstrapper();
+        var firstContext = Assert.IsType<DocumentationScribeLoadedContext>(bootstrapper.Bootstrap(fixture.ClassifiedSession, first).Context);
+        var secondContext = Assert.IsType<DocumentationScribeLoadedContext>(bootstrapper.Bootstrap(fixture.ClassifiedSession, second).Context);
+        JsonObject? otherRoot = null;
+        ParseBoundRequest(secondContext, second, secondContext.Facts.Instructions, customize: root =>
+        {
+            NormalizeReferences(root);
+            otherRoot = root.DeepClone().AsObject();
+        });
+        JsonObject? manifestRoot = null;
+        var request = ParseBoundRequest(firstContext, first, firstContext.Facts.Instructions, customize: root =>
+        {
+            NormalizeReferences(root);
+            var member = otherRoot!["manifest"]![0]!.DeepClone();
+            member["targetId"] = "target.other";
+            root["manifest"]!.AsArray().Add(member);
+            root["contextReferences"] = new JsonArray(root["contextReferences"]!.AsArray()
+                .Concat(otherRoot["contextReferences"]!.AsArray())
+                .GroupBy(item => item!["contextReferenceId"]!.GetValue<string>(), StringComparer.Ordinal)
+                .OrderBy(group => group.Key, StringComparer.Ordinal).Select(group => group.First()!.DeepClone()).ToArray());
+            manifestRoot = root.DeepClone().AsObject();
+        });
+        var loaded = Assert.IsType<DocumentationScribeLoadedManifestContext>(
+            DocumentationScribeLoadedManifestContext.Bootstrap(fixture.ClassifiedSession, request, [first, second]).Context);
+        Assert.Equal(["AGENTS.md", "a/AGENTS.md"], loaded.GetContext("target.selected").Facts.Instructions.Select(item => item.Commitment.RepositoryPath));
+        Assert.Equal(["AGENTS.md", "b/AGENTS.md"], loaded.GetContext("target.other").Facts.Instructions.Select(item => item.Commitment.RepositoryPath));
+        Assert.Equal(3, request.ContextReferences.Length);
+        var swapped = manifestRoot!.DeepClone().AsObject();
+        var firstMap = swapped["manifest"]![0]!["contextReferenceIds"]!.DeepClone();
+        swapped["manifest"]![0]!["contextReferenceIds"] = swapped["manifest"]![1]!["contextReferenceIds"]!.DeepClone();
+        swapped["manifest"]![1]!["contextReferenceIds"] = firstMap;
+        var swappedRequest = DocumentationScribeValidation.ParseRequest(Encoding.UTF8.GetBytes(swapped.ToJsonString())).Request!;
+        Assert.NotNull(swappedRequest);
+        Assert.Null(DocumentationScribeLoadedManifestContext.Bootstrap(fixture.ClassifiedSession, swappedRequest, [first, second]).Context);
+        Assert.Null(DocumentationScribeLoadedManifestContext.Bootstrap(fixture.ClassifiedSession, request, [first]).Context);
+        var semantic = new DocumentationScribeManifestSemanticToolPort(loaded);
+        Assert.Empty(semantic.TargetIds);
+        var foreign = await semantic.InvokeAsync(
+            DocumentationScribeSemanticToolRequest.Create("target.foreign", 1), default);
+        Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidRequest, foreign.FailureReason);
+        fixture.WriteText("b/Other.cs", "namespace Fixture; public class Other { public int Changed; }");
+        Assert.True(loaded.GetContext("target.selected").VerifyFreshness());
+        Assert.False(loaded.VerifyFreshness());
+
+        static void NormalizeReferences(JsonObject root)
+        {
+            var references = root["contextReferences"]!.AsArray();
+            var ids = references.ToDictionary(item => item!["contextReferenceId"]!.GetValue<string>(),
+                item => "context." + Sha256(Encoding.UTF8.GetBytes(item!["path"]!.GetValue<string>())), StringComparer.Ordinal);
+            var member = root["manifest"]![0]!;
+            member["contextReferenceIds"] = new JsonArray(member["contextReferenceIds"]!.AsArray()
+                .Select(id => (JsonNode?)JsonValue.Create(ids[id!.GetValue<string>()])).ToArray());
+            foreach (var reference in references) reference!["contextReferenceId"] = ids[reference["contextReferenceId"]!.GetValue<string>()];
+            root["contextReferences"] = new JsonArray(references.OrderBy(item => item!["contextReferenceId"]!.GetValue<string>(), StringComparer.Ordinal)
+                .Select(item => item!.DeepClone()).ToArray());
+            member["styleProfile"] = null;
+            root["executableTargetIds"] = new JsonArray();
+        }
+    }
+
+    [Fact]
     public void ConfiguredEntrypointExcludesRootDefaultAndLoadsNestedInstructionsInOrder()
     {
         using var fixture = ContextFixture.Create(BasicSource());
@@ -2146,7 +2224,8 @@ public sealed class DocumentationScribeContextIntegrationTests
         DocumentationScribeLoadedContext loaded,
         DocumentationScribeContextBootstrapSelection selection,
         ImmutableArray<DocumentationScribeInstructionContextFact> instructions,
-        bool includeNonInstructionContext = false)
+        bool includeNonInstructionContext = false,
+        Action<JsonObject>? customize = null)
     {
         var fixturePath = Path.Join(
             FindRepositoryRoot(),
@@ -2161,7 +2240,7 @@ public sealed class DocumentationScribeContextIntegrationTests
         context["repositoryContextRef"] = loaded.Facts.RepositoryContextRef.ToString();
         context["inputIdentity"] = loaded.Facts.InputIdentity;
         context["targetProfile"] = ClassificationVocabulary.GetId(loaded.Facts.TargetProfile);
-        var target = root["target"]!.AsObject();
+        var target = root["manifest"]![0]!["target"]!.AsObject();
         var symbol = target["symbolRef"]!.AsObject();
         symbol["compilationContextRef"] = loaded.Facts.SymbolRef.CompilationContextRef;
         symbol["documentationCommentId"] = loaded.Facts.SymbolRef.DocumentationCommentId;
@@ -2176,7 +2255,7 @@ public sealed class DocumentationScribeContextIntegrationTests
             ["end"] = locator.Span.Value.End,
         };
         target["applicableComponents"] = new JsonArray();
-        root["styleProfile"]!["componentPolicies"] = new JsonArray();
+        root["manifest"]![0]!["styleProfile"]!["componentPolicies"] = new JsonArray();
         var contextReferences = new JsonArray();
         foreach (var pair in instructions.Select((instruction, index) => (instruction, index)))
         {
@@ -2210,7 +2289,11 @@ public sealed class DocumentationScribeContextIntegrationTests
         }
 
         root["contextReferences"] = contextReferences;
+        root["manifest"]![0]!["contextReferenceIds"] = new JsonArray(root["contextReferences"]!.AsArray()
+            .Select(item => (JsonNode?)JsonValue.Create(item!["contextReferenceId"]!.GetValue<string>())).ToArray());
+        root["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray();
         root["evidenceReferences"] = new JsonArray();
+        customize?.Invoke(root);
         var parsed = DocumentationScribeValidation.ParseRequest(
             Encoding.UTF8.GetBytes(root.ToJsonString()));
         Assert.True(parsed.IsValid, parsed.Failure?.Code + "|" + parsed.Failure?.Pointer);

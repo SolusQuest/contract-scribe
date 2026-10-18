@@ -59,6 +59,8 @@ internal sealed class DocumentationScribeSession : ICandidateHost, IRuntimeExpos
         ArgumentNullException.ThrowIfNull(exchange);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(clock);
+        if (!request.HasExecutableTargets)
+            throw new ArgumentException("The manifest has no executable target.", nameof(request));
         if (string.IsNullOrEmpty(attempt.Value))
             throw new ArgumentException("A validated attempt identity is required.", nameof(attempt));
         this.registry = registry;

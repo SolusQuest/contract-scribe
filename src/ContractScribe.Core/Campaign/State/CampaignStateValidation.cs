@@ -438,6 +438,8 @@ public static partial class CampaignStateFactory
             || stateWork.Status != CampaignWorkStatus.Planned
             || planWork.Disposition.Kind != CampaignPlanningDispositionKind.Executable
             || planWork.Targets.Length != 1
+            || request.Manifest.Length != 1
+            || request.ExecutableTargetIds.Length != 1
             || result.Terminal is not DocumentationScribeProposalTerminal terminal
             || !string.Equals(
                 result.ScribeRequestSha256,
@@ -461,28 +463,28 @@ public static partial class CampaignStateFactory
                 StringComparison.Ordinal)
             || !string.Equals(
                 result.RunEnvelope.StyleProfileId,
-                request.StyleProfile.StyleProfileId,
+                request.ExecutionStyleProfile.StyleProfileId,
                 StringComparison.Ordinal)
             || !string.Equals(
                 result.RunEnvelope.ScribeRequestSha256,
                 request.ArtifactSha256,
                 StringComparison.Ordinal)
-            || request.Target.SymbolRef != planWork.Targets[0].SymbolRef
-            || request.Target.SourceLocator != expectedScribeSource
+            || request.ExecutionTarget.Target.SymbolRef != planWork.Targets[0].SymbolRef
+            || request.ExecutionTarget.Target.SourceLocator != expectedScribeSource
             || request.Context.TargetProfile != state.Snapshot.TargetProfile
-            || request.Context.AuditOutcome != planWork.Targets[0].AuditOutcome
+            || request.ExecutionTarget.AuditOutcome != planWork.Targets[0].AuditOutcome
             || !string.Equals(
-                request.Target.SourceSha256,
+                request.ExecutionTarget.Target.SourceSha256,
                 planWork.Targets[0].Source.ContentSha256,
                 StringComparison.Ordinal)
-            || terminal.Target.SymbolRef != request.Target.SymbolRef
+            || terminal.Target.SymbolRef != request.ExecutionTarget.Target.SymbolRef
             || terminal.Target.RepositoryContextRef != request.Context.RepositoryContextRef
-            || terminal.Target.SourceLocator != request.Target.SourceLocator
+            || terminal.Target.SourceLocator != request.ExecutionTarget.Target.SourceLocator
             || !string.Equals(
                 terminal.Target.SourceSha256,
-                request.Target.SourceSha256,
+                request.ExecutionTarget.Target.SourceSha256,
                 StringComparison.Ordinal)
-            || !request.Target.ApplicableComponents.SequenceEqual(
+            || !request.ExecutionTarget.Target.ApplicableComponents.SequenceEqual(
                 planWork.Targets[0].ApplicableComponents.Select(component =>
                     new DocumentationPatchApplicableComponent(
                         MapComponentKind(component.Kind),
@@ -490,7 +492,7 @@ public static partial class CampaignStateFactory
                         component.Name)))
             || planWork.Targets[0].StyleProfile is null
             || !string.Equals(
-                CreateStyleProfileCommitment(request.StyleProfile),
+                CreateStyleProfileCommitment(request.ExecutionStyleProfile),
                 CreateStyleProfileCommitment(planWork.Targets[0].StyleProfile!),
                 StringComparison.Ordinal))
         {
@@ -537,13 +539,13 @@ public static partial class CampaignStateFactory
 
         var block = new DocumentationPatchBlockRequest(
             workItemKey,
-            request.Target.SymbolRef,
+            request.ExecutionTarget.Target.SymbolRef,
             source,
             editKind,
-            request.Target.ApplicableComponents,
+            request.ExecutionTarget.Target.ApplicableComponents,
             terminal.PatchContent,
             referencedIds);
-        var styleCommitment = CreateStyleProfileCommitment(request.StyleProfile);
+        var styleCommitment = CreateStyleProfileCommitment(request.ExecutionStyleProfile);
         var proposalCommitment = CreateProposalCommitment(
             state,
             request,
@@ -784,7 +786,9 @@ public static partial class CampaignStateFactory
                 MapComponentKind(component.Kind),
                 component.Identity,
                 component.Name));
-        Require(stateWork is not null
+        Require(request.Manifest.Length == 1
+            && request.ExecutableTargetIds.Length == 1
+            && stateWork is not null
             && planWork is not null
             && planWork.Disposition.Kind == CampaignPlanningDispositionKind.Executable
             && target is not null
@@ -796,14 +800,14 @@ public static partial class CampaignStateFactory
             && target.GroupingAuthority?.InstructionsSha256
                 == CampaignPlanner.CreateInstructionStackCommitment(request.ContextReferences)
             && request.Context.TargetProfile == state.Snapshot.TargetProfile
-            && request.Context.AuditOutcome == target.AuditOutcome
-            && request.Target.SymbolRef == target.SymbolRef
-            && request.Target.SourceLocator == expectedSource
-            && string.Equals(request.Target.SourceSha256, target.Source.ContentSha256, StringComparison.Ordinal)
+            && request.ExecutionTarget.AuditOutcome == target.AuditOutcome
+            && request.ExecutionTarget.Target.SymbolRef == target.SymbolRef
+            && request.ExecutionTarget.Target.SourceLocator == expectedSource
+            && string.Equals(request.ExecutionTarget.Target.SourceSha256, target.Source.ContentSha256, StringComparison.Ordinal)
             && expectedComponents is not null
-            && request.Target.ApplicableComponents.SequenceEqual(expectedComponents)
+            && request.ExecutionTarget.Target.ApplicableComponents.SequenceEqual(expectedComponents)
             && string.Equals(
-                CreateStyleProfileCommitment(request.StyleProfile),
+                CreateStyleProfileCommitment(request.ExecutionStyleProfile),
                 CreateStyleProfileCommitment(target.StyleProfile),
                 StringComparison.Ordinal)
             && request.Limits == planningInput.ExecutionPolicy.ScribeRunLimits

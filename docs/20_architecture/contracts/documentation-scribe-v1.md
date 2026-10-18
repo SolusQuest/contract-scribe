@@ -4,7 +4,7 @@ Status: current pre-release draft
 
 This contract defines the minimum producer-consumer boundary for one bounded Documentation Scribe run. Version `1` identifies the compatibility family; the repository revision identifies the exact current draft semantics. Before the first release, a coherent change may replace this draft in place. Consumers must reject unsupported versions rather than add aliases, migration readers, or dual formats.
 
-The Scribe receives one caller-selected audit target and returns one terminal run result. It is a read-only structured-documentation role. It does not select work, render XML, edit source, produce a patch or diff, persist a conversation, or publish anything.
+The Scribe receives one complete caller-selected manifest and an independently authorized executable subset. The current runtime returns one terminal for the first executable target; other selected members remain uncompleted. It is a read-only structured-documentation role. It does not select work, render XML, edit source, produce a patch or diff, persist a conversation, or publish anything.
 
 ## Contract artifacts
 
@@ -39,16 +39,23 @@ Model-produced proposal/skip payloads enter through that raw validated parse bou
 
 - `repositoryContextRef`: the current `repoctx-` identity;
 - `inputIdentity`: one normalized repository-relative `.sln`, `.slnx`, or `.csproj` input identity prepared by the caller;
-- `targetProfile`: the current M1 `profile.external-api` or `profile.assembly-visible` value;
-- `auditOutcome`: the current M1 audit outcome copied for the selected target.
+- `targetProfile`: the current M1 `profile.external-api` or `profile.assembly-visible` value.
 
 `inputIdentity` follows the current CLI input domain exactly: its final extension is `.sln`, `.slnx`, or `.csproj`, compared ASCII case-insensitively. Repository-relative paths follow the current M1/M2 rules: at most 512 Unicode scalars, forward slash separators, no root, backslash, NUL, empty, `.` or `..` segment, and no drive-like `A:` prefix. Other colon characters are not rejected merely for being colons.
 
 The request deliberately omits `AuditReason`. M1 owns the outcome/reason matrix, and the later composition path revalidates the copied outcome against the exact current Audit Result row and loaded session before invoking the Scribe. The Scribe cannot reinterpret classification.
 
-### One selected target
+### Selected manifest and executable subset
 
-`target` is one object, never an array. It contains:
+`manifest` is a nonempty ordered list of at most 4,096 entries, also bounded by the 1 MiB artifact limit. Entries have unique `targetId` values and unique complete SymbolRefs. Each entry contains `target`, its own `auditOutcome`, nullable `styleProfile`, ordered `contextReferenceIds`, ID-sorted `evidenceReferenceIds`, and nullable `grouping`. Entry order is the deterministic caller's declared order, not an ID sort.
+
+`executableTargetIds` is an ordered unique subset of manifest IDs. Every executable member has a nonnull style. Unsupported/nonexecutable members, including current class/property metadata, need no execution-only style. An empty executable subset is valid metadata and starts no runtime conversation. The current single-terminal rule attributes every terminal and envelope style to the first executable ID; it grants no completion to other entries. Campaign durable proposal admission still requires one manifest member and one executable member until M7-S5.
+
+The CLI receives a separate Host-owned selected collection from accepted audit/declaration/planning authority. It verifies exact member order, context, symbol, source, components, outcome, style, grouping and executable selection before publishing context/tools or sending a provider request. A valid same-snapshot symbol added only by request JSON is unauthorized. Nested instruction stacks are independently rediscovered and checked against each member's map.
+
+`grouping`, when available from the trusted declaration owner, contains `projectIdentity`, `containingTypeSymbolRef` and `memberFamilySha256`. Direct members share a containing root; overloads additionally share a family. A named type is its own root, nested types have independent roots, and compilation identities remain distinct. These hints grant no additional read or result authority.
+
+Each entry's `target` object contains:
 
 - the current Core `SymbolRef` (`compilationContextRef` and `documentationCommentId`);
 - one source commitment containing a current evidence-locator shape and exact `contentSha256`;
@@ -60,7 +67,7 @@ The reused M1/M2 identity domains are exact rather than Scribe-local aliases. Co
 
 ### Style Profile
 
-`styleProfile` contains only machine-visible input needed by the current producer-consumer path:
+Each nonnull manifest `styleProfile` contains only machine-visible input needed by the current producer-consumer path:
 
 - a closed `styleProfileId` and `outputLanguageId`;
 - summary, remarks, and exception dispositions (`required`, `optional`, or `forbidden`) plus scalar ceilings;
@@ -92,7 +99,7 @@ When `<inheritdoc/>` is required, every structured-content policy is forbidden a
 - a repository-relative path and content SHA-256;
 - original/included UTF-8 byte counts and an exact truncation flag.
 
-Context references are prompt/context inputs, not claim evidence, and proposal units cannot cite their IDs.
+Context references are prompt/context inputs, not claim evidence, and proposal units cannot cite their IDs. Every pool row must be mapped by at least one manifest entry. A member's unique `contextReferenceIds` retain root-to-leaf instruction priority (nearest last), independently of global pool ID order. Reusing content never applies an unmapped instruction to another member.
 
 `evidenceReferences` is a strictly ID-ordered bounded list. Each row carries:
 
@@ -105,7 +112,7 @@ Context references are prompt/context inputs, not claim evidence, and proposal u
 
 No source excerpt is part of the request artifact. The run-time read ports may return bounded typed content, but complete tool arguments/results and excerpts do not enter the canonical or publishable result.
 
-Every evidence authority must agree with its existing evidence kind: implementation, declaration/attribute, existing XML documentation, test, repository documentation, and public contract map to their corresponding authority. Every evidence subject must be the selected target or one exact selected applicable component. Every evidence/context row must carry the current request repository context. `includedUtf8ByteCount` cannot exceed `originalUtf8ByteCount`, and `isTruncated` is true exactly when included bytes are fewer.
+Every evidence authority must agree with its existing evidence kind: implementation, declaration/attribute, existing XML documentation, test, repository documentation, and public contract map to their corresponding authority. Every evidence subject must be one manifest target or one of its exact applicable components. Each evidence row has exactly one owning manifest entry and is listed in that member's `evidenceReferenceIds`; cross-subject, dangling or unmapped rows fail closed. Claims are checked against that owner's style. Every evidence/context row must carry the current request repository context. `includedUtf8ByteCount` cannot exceed `originalUtf8ByteCount`, and `isTruncated` is true exactly when included bytes are fewer.
 
 `evidenceConflicts` contains only the relation `evidence-conflict.higher-authority-contradicts`. A row names two request-visible evidence IDs with the same exact subject, and the declared higher row must have strictly greater registered authority. Conflict rows are unique and strictly ordered by `(higher ID, lower ID)`. This explicit input is the only deterministic lower-authority conflict rule; the validator does not infer contradictions from prose.
 
@@ -114,6 +121,8 @@ Every evidence authority must agree with its existing evidence kind: implementat
 `toolPolicyId` identifies the closed tool policy selected by the caller. It does not grant an operation or carry a provider tool schema.
 
 `limits` contains independent ceilings for attempts, context references and included bytes, evidence references and included bytes, provider requests, tool rounds, tool calls, input tokens, uncached input tokens, output tokens, cost microunits, and elapsed milliseconds. Values fit the published numeric bounds. Attempt numbers are positive and cannot exceed `maximumAttempts`. Campaign callers inject the single checked invocation allowance shared by all targets; the stable outer request safety profile does not create a fresh per-target spending allowance. Standalone Runtime constructs an allowance from its validated standalone limits through the same accounting implementation. Caller cancellation remains first. A checked campaign Action or lifetime resource stop keeps its budget terminal when a request-safety clock also expires; standalone elapsed exhaustion keeps its timeout terminal even when the accounting clock started before Runtime. Price/rate authority remains with the campaign owner. The tool-call counter includes each actual registered tool invocation and each structured terminal submission; rejection before invocation increments neither.
+
+Semantic queries require an explicit selected `targetId`; their enum and codec admit only targets successfully bound by the current method-only semantic port. Class/property metadata and source scopes remain in the complete manifest without advertising unsupported semantic calls. Repository operations use exact bound `scopeId` enums, including mapped context/evidence references and selected source scopes. A cursor remains bound to its target, scope, operation, query and snapshot. Lazy full-source reads can satisfy a complete-evidence claim; partial reads retain only policies that permit truncated evidence. Shared source bytes never widen the executable subset.
 
 The request contains no M4 work-plan, campaign, branch, issue, pull-request, provider conversation, fallback, cursor, checkpoint, or publication identity.
 
@@ -125,7 +134,7 @@ The request contains no M4 work-plan, campaign, branch, issue, pull-request, pro
 
 `dynamicEvidenceReferences` uses the same closed row, identifier, subject, locator, authority, claim-category, ordering, and repository-context namespace as request `evidenceReferences`. It is empty when no successful tool result added evidence. For a proposal or skip, it contains the full active trusted overlay even when a row is not cited by the terminal. It must be empty for failure and cancellation.
 
-Raw result JSON cannot authorize an overlay. `ParseRunResult` receives the exact parsed request, expected attempt, and a separately supplied trusted overlay; the embedded rows must equal that overlay exactly. Terminal evidence lookup uses the ordered union of request rows and the accepted overlay, so a model-provided ID without a trusted typed producer row is dangling evidence and fails closed.
+Raw result JSON cannot authorize an overlay. `ParseRunResult` receives the exact parsed request, expected attempt, and a separately supplied trusted overlay; the embedded rows must equal that overlay exactly. Terminal evidence lookup uses the ordered union of request rows and the accepted overlay scoped to the first executable member, so a model-provided ID without a trusted typed producer row is dangling evidence and fails closed.
 
 The Agent passes a successful tool result to Core as bounded typed evidence inputs without a caller-selected evidence ID, repository-context identity, request identity, attempt identity, session identity, or content bytes. Core validates the subject, kind/relation/authority, locator, committed content SHA-256, exact original/included byte counts, truncation fact, and ordered claim categories against the request, supplies the current repository context, and derives the ID. A truncated repository or generated-output row is valid only with an exact span over its fully committed source.
 

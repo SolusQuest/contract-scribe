@@ -14,6 +14,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private readonly DocumentationScribeRequest request;
     private readonly DocumentationScribeAttemptId attemptId;
     private readonly DocumentationScribeLoadedContext loadedContext;
+    private readonly DocumentationScribeLoadedManifestContext? manifest;
     private readonly DocumentationScribeRepositoryToolLimits limits;
     private readonly Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint;
     private readonly Func<TimeSpan> elapsed;
@@ -47,11 +48,13 @@ internal sealed class DocumentationScribeRepositoryToolSession
         DocumentationScribeRepositoryToolLimits limits,
         Action<DocumentationScribeRepositoryToolCheckpoint>? checkpoint,
         Func<TimeSpan>? elapsed = null,
-        TimeProvider? clock = null)
+        TimeProvider? clock = null,
+        DocumentationScribeLoadedManifestContext? manifest = null)
     {
         this.request = request;
         this.attemptId = attemptId;
         this.loadedContext = loadedContext;
+        this.manifest = manifest;
         this.limits = limits;
         this.checkpoint = checkpoint;
         var timer = clock ?? TimeProvider.System;
@@ -253,18 +256,36 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private BoundScope BindScope(DocumentationScribeRepositoryToolScope scope)
     {
         var path = NormalizeRepositoryPath(scope.RepositoryPath, allowEmpty: scope.IsDirectory);
+        var eligible = manifest is null
+            ? request.Manifest.Where(member => member.Target.SymbolRef == loadedContext.Facts.SymbolRef)
+            : request.Manifest;
+        var owner = eligible.FirstOrDefault(member =>
+            (member.TargetId == scope.ScopeId
+                || member.ContextReferenceIds.Contains(scope.ScopeId, StringComparer.Ordinal)
+                || member.EvidenceReferenceIds.Contains(scope.ScopeId, StringComparer.Ordinal))
+            && (scope.Subject is null || scope.Subject.ParentSymbolRef == member.Target.SymbolRef));
+        if (owner is null)
+            throw new ArgumentException("The scope has no selected context owner.", nameof(scope));
+        var context = manifest?.GetContext(owner.TargetId) ?? loadedContext;
         var contextMatches = request.ContextReferences.Where(item =>
             string.Equals(item.ContextReferenceId, scope.ScopeId, StringComparison.Ordinal)).ToArray();
         var evidenceMatches = request.EvidenceReferences.Where(item =>
             string.Equals(item.EvidenceReferenceId, scope.ScopeId, StringComparison.Ordinal)).ToArray();
-        if (contextMatches.Length + evidenceMatches.Length != 1)
+        var isSourceScope = owner.TargetId == scope.ScopeId;
+        if (contextMatches.Length + evidenceMatches.Length + (isSourceScope ? 1 : 0) != 1)
         {
             throw new ArgumentException("Every repository scope must bind one request-visible reference.", nameof(scope));
         }
 
         DocumentationScribeInstructionContextFact? origin = null;
         string anchorPath;
-        if (contextMatches.Length == 1)
+        if (isSourceScope)
+        {
+            if (owner.Target.SourceLocator is not RepositoryEvidenceLocator source)
+                throw new ArgumentException("The source scope is not repository-bound.", nameof(scope));
+            anchorPath = NormalizeRepositoryPath(source.Path, allowEmpty: false);
+        }
+        else if (contextMatches.Length == 1)
         {
             var reference = contextMatches[0];
             anchorPath = NormalizeRepositoryPath(reference.Path, allowEmpty: false);
@@ -275,7 +296,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
             if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
             {
-                var matches = loadedContext.Facts.Instructions.Where(item =>
+                var matches = context.Facts.Instructions.Where(item =>
                     item.Commitment.RepositoryPath == reference.Path
                     && item.Commitment.ContentSha256 == reference.ContentSha256
                     && item.Commitment.OriginalUtf8ByteCount == reference.OriginalUtf8ByteCount
@@ -315,7 +336,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
         ValidateEvidenceScope(scope, anchorPath);
 
-        return new(scope with { RepositoryPath = path }, origin);
+        return new(scope with { RepositoryPath = path }, origin, context);
     }
 
     private void ValidateEvidenceScope(DocumentationScribeRepositoryToolScope scope, string anchorPath)
@@ -891,7 +912,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
             }
 
             current = parsed;
-            if (!loadedContext.TryValidateCursor(
+            if (!scope.Context.TryValidateCursor(
                     parsed,
                     chain.CursorScope,
                     out position,
@@ -940,7 +961,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
             }
 
             VerifyFresh(call, cancellationToken);
-            var next = loadedContext.IssueCursor(
+            var next = scope.Context.IssueCursor(
                 chain.CursorScope,
                 current,
                 count,
@@ -997,13 +1018,13 @@ internal sealed class DocumentationScribeRepositoryToolSession
             query.PageSize.ToString(System.Globalization.CultureInfo.InvariantCulture),
             fingerprint)));
         var commitments = DocumentationScribeContextValidation.ComputeCommitmentsSha256(
-            loadedContext.Facts.Instructions.Select(item => item.Commitment)
-                .Concat(loadedContext.Facts.Evidence.Select(item => item.Commitment)));
+            scope.Context.Facts.Instructions.Select(item => item.Commitment)
+                .Concat(scope.Context.Facts.Evidence.Select(item => item.Commitment)));
         var cursorScope = DocumentationScribeContextValidation.CreateCursorScope(
             operationId,
             normalizedSha,
             request.Context.RepositoryContextRef,
-            request.Target.SymbolRef,
+            scope.Context.Facts.SymbolRef,
             "repository.ordinal-v1",
             query.PageSize,
             commitments);
@@ -1056,6 +1077,11 @@ internal sealed class DocumentationScribeRepositoryToolSession
         var locator = complete
             ? EvidenceInput.RepositoryLocator(file.RepositoryPath)
             : EvidenceInput.RepositoryLocator(file.RepositoryPath, start, end);
+        var style = request.FindTarget(scope.Scope.Subject.ParentSymbolRef)?.StyleProfile;
+        var claimIds = scope.Scope.ClaimCategoryIds.Where(id => complete
+            || style?.ClaimPolicies.SingleOrDefault(policy => policy.ClaimCategoryId == id)?.CompleteEvidenceRequired == false)
+            .ToImmutableArray();
+        if (claimIds.IsEmpty) return null;
         var input = new DocumentationScribeDynamicEvidenceInput(
             scope.Scope.Subject,
             scope.Scope.Kind,
@@ -1066,7 +1092,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
             original,
             included,
             !complete,
-            scope.Scope.ClaimCategoryIds);
+            claimIds);
         if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out _))
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
@@ -1111,6 +1137,11 @@ internal sealed class DocumentationScribeRepositoryToolSession
             commitment);
     }
 
+    private bool VerifyContextFreshness(CancellationToken cancellationToken) =>
+        manifest is null
+            ? loadedContext.VerifyFreshness(cancellationToken, () => Check(cancellationToken))
+            : manifest.VerifyFreshness(cancellationToken, () => Check(cancellationToken));
+
     private void CommitPublication(
         int utf8Bytes,
         int items,
@@ -1134,7 +1165,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private void VerifyFresh(CallBudget call, CancellationToken cancellationToken)
     {
         Check(cancellationToken);
-        if (!loadedContext.VerifyFreshness(cancellationToken, () => Check(cancellationToken)))
+        if (!VerifyContextFreshness(cancellationToken))
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
         }
@@ -1178,7 +1209,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
 
-            if (!loadedContext.VerifyFreshness(cancellationToken, () => Check(cancellationToken)))
+            if (!VerifyContextFreshness(cancellationToken))
             {
                 throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
             }
@@ -1720,7 +1751,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
     private sealed record BoundScope(
         DocumentationScribeRepositoryToolScope Scope,
-        DocumentationScribeInstructionContextFact? Origin);
+        DocumentationScribeInstructionContextFact? Origin,
+        DocumentationScribeLoadedContext Context);
 
     private sealed record StableTextFile(
         string RepositoryPath,

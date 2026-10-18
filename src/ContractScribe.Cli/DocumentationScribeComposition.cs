@@ -397,7 +397,8 @@ internal static class DocumentationScribeComposition
     }
 
     private sealed record PatchAuthorization(
-        DocumentationScribeSelectedAudit Selection,
+        DocumentationScribeManifestSelection Selection,
+        DocumentationScribeLoadedManifestContext Context,
         DocumentationPatchResolvedDeclaration Declaration,
         DocumentationPatchEditKind EditKind);
 
@@ -419,7 +420,8 @@ internal static class DocumentationScribeComposition
     }
 
     private static PreparedOutcome CreateProposalReady(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection selection,
+        DocumentationScribeLoadedManifestContext context,
         DocumentationScribeValidatedRunOutcome m3Outcome,
         DocumentationPatchResolvedDeclaration declaration,
         DocumentationPatchEditKind editKind) =>
@@ -427,7 +429,7 @@ internal static class DocumentationScribeComposition
             DocumentationScribeCompositionStatus.ProposalReady,
             "scribe.proposal.ready",
             m3Outcome,
-            new PatchAuthorization(selection, declaration, editKind));
+            new PatchAuthorization(selection, context, declaration, editKind));
 
     private static readonly JsonSerializerOptions ToolJson = new()
     {
@@ -436,11 +438,12 @@ internal static class DocumentationScribeComposition
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    private static readonly ReadOnlyMemory<byte> SemanticInputSchema = Encoding.UTF8.GetBytes(
-        "{\"type\":\"object\",\"additionalProperties\":false,\"properties\":{\"pageSize\":{\"type\":\"integer\",\"minimum\":1,\"maximum\":100,\"description\":\"Preserve this exact value when continuing with a cursor.\"},\"cursor\":{\"type\":\"string\",\"description\":\"Omit on the first call. Use a returned semantic cursor once only with the same operation and page size; never use a repository cursor.\"}}}");
+    private static readonly ReadOnlyMemory<byte> SemanticInputSchema = """
+        {"type":"object","additionalProperties":false,"required":["targetId"],"properties":{"targetId":{"type":"string","minLength":1,"maxLength":128,"description":"Copy one selected manifest targetId exactly."},"pageSize":{"type":"integer","minimum":1,"maximum":100,"description":"Preserve this exact value when continuing with a cursor."},"cursor":{"type":"string","description":"Omit on the first call. Use a returned semantic cursor once only for the same target, operation and page size; never use a repository cursor."}}}
+        """u8.ToArray();
 
     internal static async Task<DocumentationScribeCompositionOutcome> ExecuteAsync(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection selection,
         ReadOnlyMemory<byte> requestUtf8Json,
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
@@ -460,7 +463,7 @@ internal static class DocumentationScribeComposition
     }
 
     internal static async Task<IDocumentationScribePreparedOutcome> PrepareAsync(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection manifestSelection,
         ReadOnlyMemory<byte> requestUtf8Json,
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
@@ -469,7 +472,7 @@ internal static class DocumentationScribeComposition
         CancellationToken cancellationToken = default,
         DocumentationScribeExecutionScope? executionScope = null, CampaignScribeExecutionCoordinator? coordinator = null)
     {
-        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(manifestSelection);
         ArgumentNullException.ThrowIfNull(runtimeOptions);
         ArgumentNullException.ThrowIfNull(exchange);
         var preflightOwner = DocumentationScribeDeadlineOwner.HostOperation;
@@ -481,6 +484,12 @@ internal static class DocumentationScribeComposition
             {
                 return RejectPrepared("scribe.preflight.request-invalid");
             }
+
+            if (!manifestSelection.Matches(request))
+                return RejectPrepared("scribe.preflight.authority-mismatch");
+            if (!request.HasExecutableTargets)
+                return RejectPrepared("scribe.preflight.no-executable-target");
+            var selection = manifestSelection.PrimaryAudit;
 
             preflightOwner = coordinator?.CurrentDeadlineOwner
                 ?? (executionScope?.Allowance.RemainingMilliseconds <= executionScope?.Allowance.Limits.MaximumRequestElapsedMilliseconds
@@ -495,7 +504,7 @@ internal static class DocumentationScribeComposition
                 request,
                 attemptId,
                 configuredAgentEntrypoint,
-                preflightCancellation?.Token ?? cancellationToken, executionScope).ConfigureAwait(false);
+                preflightCancellation?.Token ?? cancellationToken, executionScope, manifestSelection).ConfigureAwait(false);
             if (preflight.Failure is { } failure)
             {
                 if (failure.Kind == PreflightFailureKind.Cancelled && !cancellationToken.IsCancellationRequested
@@ -505,11 +514,11 @@ internal static class DocumentationScribeComposition
                 return CreatePrepared(mapped.Status, mapped.Code);
             }
 
-            var loaded = preflight.Context!;
+            var loaded = preflight.ManifestContext!;
             var prompt = BuildPrompt(
-                selection,
+                manifestSelection,
                 request,
-                loaded,
+                preflight.ManifestContext!,
                 preflight.ContextContent);
             if (prompt is null)
             {
@@ -518,8 +527,7 @@ internal static class DocumentationScribeComposition
 
             var registry = BuildRegistry(
                 request,
-                loaded,
-                preflight.SourceReference!,
+                preflight.ManifestContext!,
                 preflight.Repository!,
                 preflight.RepositoryScopes);
             var run = await DocumentationScribeExecution.RunAsync(request, attemptId, prompt, registry, exchange,
@@ -542,7 +550,7 @@ internal static class DocumentationScribeComposition
                 configuredAgentEntrypoint,
                 loaded,
                 bound,
-                cancellationToken, executionScope, coordinator).ConfigureAwait(false);
+                cancellationToken, executionScope, coordinator, manifestSelection).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (executionScope is not null && !cancellationToken.IsCancellationRequested)
         {
@@ -566,7 +574,7 @@ internal static class DocumentationScribeComposition
     }
 
     internal static async Task<DocumentationCampaignPreparation> PrepareCampaignAsync(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection selection,
         ReadOnlyMemory<byte> requestUtf8Json,
         CampaignProviderInvocationAuthority invocation,
         string? configuredAgentEntrypoint,
@@ -706,10 +714,11 @@ internal static class DocumentationScribeComposition
         DocumentationScribeSelectedAudit selection,
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
-        DocumentationScribeLoadedContext loaded,
+        DocumentationScribeLoadedManifestContext loaded,
         DocumentationScribeValidatedRunOutcome bound,
-        CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope = null,
-        CampaignScribeExecutionCoordinator? coordinator = null)
+        CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope,
+        CampaignScribeExecutionCoordinator? coordinator,
+        DocumentationScribeManifestSelection manifestSelection)
     {
         var postflightOwner = DocumentationScribeDeadlineOwner.HostOperation;
         try
@@ -769,7 +778,7 @@ internal static class DocumentationScribeComposition
                 bound.Request,
                 attemptId,
                 configuredAgentEntrypoint,
-                postflightCancellation?.Token ?? cancellationToken, executionScope).ConfigureAwait(false);
+                postflightCancellation?.Token ?? cancellationToken, executionScope, manifestSelection).ConfigureAwait(false);
             if (postflight.Failure is { } postflightFailure)
             {
                 if (postflightFailure.Kind == PreflightFailureKind.Cancelled && !cancellationToken.IsCancellationRequested
@@ -793,7 +802,8 @@ internal static class DocumentationScribeComposition
             }
 
             return CreateProposalReady(
-                selection,
+                manifestSelection,
+                loaded,
                 bound,
                 postflight.Declaration!,
                 postflight.EditKind);
@@ -819,11 +829,12 @@ internal static class DocumentationScribeComposition
     }
 
     internal static DocumentationScribeCompositionOutcome ConsumePreparedOutcome(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection manifestSelection,
         IDocumentationScribePreparedOutcome prepared,
         CancellationToken cancellationToken = default)
     {
-        ArgumentNullException.ThrowIfNull(selection);
+        ArgumentNullException.ThrowIfNull(manifestSelection);
+        var selection = manifestSelection.PrimaryAudit;
         ArgumentNullException.ThrowIfNull(prepared);
         if (prepared is not PreparedOutcome owned)
         {
@@ -852,8 +863,8 @@ internal static class DocumentationScribeComposition
 
         try
         {
-            if (!ReferenceEquals(selection, authorization.Selection)
-                || !IsPreparedAuthorizationCurrent(selection, owned.M3Outcome.Request, authorization, cancellationToken))
+            if (!ReferenceEquals(manifestSelection, authorization.Selection)
+                || !IsPreparedAuthorizationCurrent(manifestSelection, owned.M3Outcome.Request, authorization, cancellationToken))
             {
                 return DocumentationScribeCompositionOutcome.Create(
                     DocumentationScribeCompositionStatus.PatchStale,
@@ -925,12 +936,14 @@ internal static class DocumentationScribeComposition
     }
 
     private static bool IsPreparedAuthorizationCurrent(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection manifestSelection,
         DocumentationScribeRequest request,
         PatchAuthorization authorization,
         CancellationToken cancellationToken)
     {
-        if (!selection.IsCurrent
+        var selection = manifestSelection.PrimaryAudit;
+        if (!manifestSelection.Matches(request)
+            || !selection.IsCurrent
             || request.Context.RepositoryContextRef
                 != selection.Session.RepositorySession.RepositoryContextRef
             || !string.Equals(
@@ -939,17 +952,17 @@ internal static class DocumentationScribeComposition
                 StringComparison.Ordinal)
             || request.Context.TargetProfile
                 != selection.Session.Classification.ClassificationSet!.TargetProfile
-            || request.Context.AuditOutcome != selection.Outcome
-            || request.Target.SymbolRef != selection.Target.SymbolRef
+            || request.ExecutionTarget.AuditOutcome != selection.Outcome
+            || request.ExecutionTarget.Target.SymbolRef != selection.Target.SymbolRef
             || authorization.Declaration.RepositoryPath
                 is not { } repositoryPath
-            || authorization.Declaration.SourceSha256 != request.Target.SourceSha256
-            || request.Target.SourceLocator is not RepositoryEvidenceLocator locator
+            || authorization.Declaration.SourceSha256 != request.ExecutionTarget.Target.SourceSha256
+            || request.ExecutionTarget.Target.SourceLocator is not RepositoryEvidenceLocator locator
             || locator.Path != repositoryPath
             || locator.Span is null
             || authorization.Declaration.RequestedDeclarationSpan != locator.Span.Value
             || !ComponentsEqual(
-                request.Target.ApplicableComponents,
+                request.ExecutionTarget.Target.ApplicableComponents,
                 authorization.Declaration.ApplicableComponents))
         {
             return false;
@@ -959,7 +972,8 @@ internal static class DocumentationScribeComposition
             .CaptureDocumentationPatchResolutionBaseline(cancellationToken);
         return capture.Baseline is { } baseline
             && baseline.TryGetEntry(repositoryPath, out var entry)
-            && string.Equals(entry.Sha256, request.Target.SourceSha256, StringComparison.Ordinal);
+            && string.Equals(entry.Sha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal)
+            && authorization.Context.VerifyFreshness(cancellationToken);
     }
 
     private static async Task<PreflightResult> PreflightAsync(
@@ -967,7 +981,8 @@ internal static class DocumentationScribeComposition
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
-        CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope = null)
+        CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope,
+        DocumentationScribeManifestSelection manifestSelection)
     {
         if (!selection.IsCurrent
             || request.Context.RepositoryContextRef
@@ -978,37 +993,21 @@ internal static class DocumentationScribeComposition
                 StringComparison.Ordinal)
             || request.Context.TargetProfile
                 != selection.Session.Classification.ClassificationSet!.TargetProfile
-            || request.Context.AuditOutcome != selection.Outcome
-            || request.Target.SymbolRef != selection.Target.SymbolRef
+            || request.ExecutionTarget.AuditOutcome != selection.Outcome
+            || request.ExecutionTarget.Target.SymbolRef != selection.Target.SymbolRef
             || selection.Target.PrimaryKind != PrimarySymbolKind.Method
             || selection.Target.SupportStatus != SupportStatus.Supported
-            || request.Target.SourceLocator is not RepositoryEvidenceLocator locator
+            || request.ExecutionTarget.Target.SourceLocator is not RepositoryEvidenceLocator locator
             || locator.Span is null)
         {
             return PreflightResult.Rejected("scribe.preflight.authority-mismatch");
         }
 
-        var sourceReference = FindSourceReference(request, locator);
-        if (sourceReference is null)
-        {
-            return PreflightResult.Rejected("scribe.preflight.source-evidence-mismatch");
-        }
-
-        var bootstrapSelection = DocumentationScribeContextValidation.CreateBootstrapSelection(
-            request.Context.RepositoryContextRef,
-            request.Context.InputIdentity,
-            request.Context.TargetProfile,
-            request.Target.SymbolRef,
-            request.Target.SourceLocator,
-            request.Target.SourceSha256,
-            configuredAgentEntrypoint);
-        var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(
-            selection.Session,
-            bootstrapSelection,
-            cancellationToken);
+        var bootstrap = DocumentationScribeLoadedManifestContext.Bootstrap(
+            selection.Session, request, manifestSelection.BootstrapSelections(configuredAgentEntrypoint), cancellationToken);
         if (bootstrap.Status is not (DocumentationScribeContextBootstrapStatus.Succeeded
                 or DocumentationScribeContextBootstrapStatus.Incomplete)
-            || bootstrap.Context is not { } context)
+            || bootstrap.Context is not { } manifestContext)
         {
             var failureKind = bootstrap.Status switch
             {
@@ -1029,6 +1028,7 @@ internal static class DocumentationScribeComposition
             return PreflightResult.Failed(failureKind, code);
         }
 
+        var context = manifestContext.GetContext(request.ExecutionTarget.TargetId);
         if (!context.ValidateRequestBinding(request).IsValid
             || !context.VerifyFreshness(cancellationToken))
         {
@@ -1039,7 +1039,7 @@ internal static class DocumentationScribeComposition
             .CaptureDocumentationPatchResolutionBaseline(cancellationToken);
         if (capture.Baseline is not { } baseline
             || !baseline.TryGetEntry(locator.Path, out var entry)
-            || !string.Equals(entry.Sha256, request.Target.SourceSha256, StringComparison.Ordinal))
+            || !string.Equals(entry.Sha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal))
         {
             return PreflightResult.Rejected(
                 capture.FailureCode ?? "scribe.preflight.source-stale");
@@ -1083,16 +1083,16 @@ internal static class DocumentationScribeComposition
         };
         if (editKind is null
             || declaration.RepositoryPath != locator.Path
-            || declaration.SourceSha256 != request.Target.SourceSha256
+            || declaration.SourceSha256 != request.ExecutionTarget.Target.SourceSha256
             || declaration.RequestedDeclarationSpan != locator.Span.Value
-            || !ComponentsEqual(request.Target.ApplicableComponents, declaration.ApplicableComponents))
+            || !ComponentsEqual(request.ExecutionTarget.Target.ApplicableComponents, declaration.ApplicableComponents))
         {
             return PreflightResult.Rejected("scribe.preflight.edit-authorization-unavailable");
         }
 
         // Start the shared repository-tool session only after patch authorization so
         // unrelated baseline capture and declaration resolution cannot consume its timer.
-        var scopes = BuildRepositoryScopes(request, context, sourceReference);
+        var scopes = BuildRepositoryScopes(request, manifestContext);
         var nonInstructionContextCount = request.ContextReferences.Count(reference =>
             reference.Kind != DocumentationScribeContextReferenceKind.ProjectInstruction);
         var repositoryLimits = DocumentationScribeRepositoryToolLimits.Create(
@@ -1103,12 +1103,12 @@ internal static class DocumentationScribeComposition
         var repository = DocumentationScribeRepositoryToolBundle.Create(
             request,
             attemptId,
-            context,
+            manifestContext,
             scopes,
             repositoryLimits, executionScope?.Allowance.Clock);
         var contextMaterialization = await MaterializeContextContentAsync(
             request,
-            context,
+            manifestContext,
             repository,
             cancellationToken, executionScope).ConfigureAwait(false);
         if (contextMaterialization.Failure is { } contextFailure)
@@ -1122,7 +1122,7 @@ internal static class DocumentationScribeComposition
             context,
             declaration,
             editKind.Value,
-            sourceReference,
+            manifestContext,
             contextContent,
             repository,
             scopes,
@@ -1130,9 +1130,9 @@ internal static class DocumentationScribeComposition
     }
 
     private static DocumentationScribePromptInput? BuildPrompt(
-        DocumentationScribeSelectedAudit selection,
+        DocumentationScribeManifestSelection selection,
         DocumentationScribeRequest request,
-        DocumentationScribeLoadedContext context,
+        DocumentationScribeLoadedManifestContext context,
         ImmutableArray<BoundContextContent> contextContentSources)
     {
         var contextContent = ImmutableArray.CreateBuilder<DocumentationScribeContextContent>();
@@ -1159,7 +1159,7 @@ internal static class DocumentationScribeComposition
         var evidenceContent = ImmutableArray.CreateBuilder<DocumentationScribeEvidenceContent>();
         foreach (var reference in request.EvidenceReferences)
         {
-            var loadedFacts = context.Facts.Evidence
+            var loadedFacts = context.Contexts.SelectMany(member => member.Facts.Evidence)
                 .Where(candidate => ContextEvidenceMatches(candidate, reference))
                 .ToArray();
             if (loadedFacts.Length > 1)
@@ -1169,7 +1169,7 @@ internal static class DocumentationScribeComposition
 
             var content = loadedFacts.Length == 1
                 ? loadedFacts[0].Content
-                : AuditEvidenceContent(selection.CanonicalRows, reference);
+                : AuditEvidenceContent(selection.PrimaryAudit.CanonicalRows, reference);
             if (content is null)
             {
                 return null;
@@ -1191,7 +1191,7 @@ internal static class DocumentationScribeComposition
 
     private static async ValueTask<ContextMaterializationResult> MaterializeContextContentAsync(
         DocumentationScribeRequest request,
-        DocumentationScribeLoadedContext context,
+        DocumentationScribeLoadedManifestContext context,
         DocumentationScribeRepositoryToolBundle repository,
         CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope = null)
     {
@@ -1200,7 +1200,8 @@ internal static class DocumentationScribeComposition
         {
             if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
             {
-                var instructions = context.Facts.Instructions.Where(candidate =>
+                var instructions = context.Contexts.SelectMany(member => member.Facts.Instructions)
+                    .DistinctBy(candidate => candidate.InstructionId).Where(candidate =>
                     candidate.InstructionId == reference.ContextReferenceId
                     && ContextCommitmentMatches(candidate.Commitment, reference)).ToArray();
                 if (instructions.Length != 1)
@@ -1212,9 +1213,9 @@ internal static class DocumentationScribeComposition
                 continue;
             }
 
-            if (context.Facts.Instructions.Any(candidate =>
+            if (context.Contexts.SelectMany(member => member.Facts.Instructions).Any(candidate =>
                     candidate.Commitment.RepositoryPath == reference.Path)
-                || context.Facts.Evidence.Any(candidate =>
+                || context.Contexts.SelectMany(member => member.Facts.Evidence).Any(candidate =>
                     candidate.Commitment.RepositoryPath == reference.Path))
             {
                 return ContextMaterializationResult.Rejected();
@@ -1442,75 +1443,60 @@ internal static class DocumentationScribeComposition
             _ => false,
         };
 
-    private static DocumentationScribeEvidenceReference? FindSourceReference(
-        DocumentationScribeRequest request,
-        RepositoryEvidenceLocator locator)
-    {
-        var matching = request.EvidenceReferences.Where(reference =>
-            reference.Subject is TargetEvidenceSubject subject
-            && subject.ParentSymbolRef == request.Target.SymbolRef
-            && reference.Locator is RepositoryEvidenceLocator evidenceLocator
-            && evidenceLocator == locator
-            && reference.Kind == EvidenceKind.SourceDeclaration
-            && reference.Relation == EvidenceRelation.Declares
-            && reference.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration)
-            .ToArray();
-        return matching.Length == 1 ? matching[0] : null;
-    }
-
     private static ImmutableArray<DocumentationScribeRepositoryToolScope> BuildRepositoryScopes(
         DocumentationScribeRequest request,
-        DocumentationScribeLoadedContext context,
-        DocumentationScribeEvidenceReference sourceReference)
+        DocumentationScribeLoadedManifestContext context)
     {
-        var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
-        var requiresCompleteEvidence = sourceReference.ClaimCategoryIds.Any(category =>
-            request.StyleProfile.ClaimPolicies.Single(policy =>
-                policy.ClaimCategoryId == category).CompleteEvidenceRequired);
         var sourceOperations = DocumentationScribeRepositoryToolOperations.ReadExcerpt
             | DocumentationScribeRepositoryToolOperations.SearchText;
         var scopes = ImmutableArray.CreateBuilder<DocumentationScribeRepositoryToolScope>();
-        scopes.Add(requiresCompleteEvidence
-            ? DocumentationScribeRepositoryToolScope.File(
-                sourceReference.EvidenceReferenceId,
-                locator.Path,
-                sourceOperations,
-                DocumentationScribeContextRole.SourceDeclaration)
-            : DocumentationScribeRepositoryToolScope.File(
-                sourceReference.EvidenceReferenceId,
-                locator.Path,
-                sourceOperations,
-                DocumentationScribeContextRole.SourceDeclaration,
-                subject: sourceReference.Subject,
-                kind: sourceReference.Kind,
-                relation: sourceReference.Relation,
-                authority: sourceReference.Authority,
-                claimCategoryIds: sourceReference.ClaimCategoryIds));
+        foreach (var member in request.Manifest)
+        {
+            var locator = (RepositoryEvidenceLocator)member.Target.SourceLocator;
+            var claims = member.StyleProfile?.ClaimPolicies
+                .Where(policy => policy.AllowedAuthorities.Contains(DocumentationScribeEvidenceAuthority.SourceDeclaration))
+                .Select(policy => policy.ClaimCategoryId).ToImmutableArray() ?? [];
+            scopes.Add(DocumentationScribeRepositoryToolScope.File(
+                member.TargetId, locator.Path, sourceOperations, DocumentationScribeContextRole.SourceDeclaration,
+                subject: claims.IsEmpty ? null : EvidenceInput.TargetSubject(member.Target.SymbolRef.CompilationContextRef,
+                    member.Target.SymbolRef.DocumentationCommentId),
+                kind: EvidenceKind.SourceDeclaration, relation: EvidenceRelation.Declares,
+                authority: DocumentationScribeEvidenceAuthority.SourceDeclaration, claimCategoryIds: claims));
+
+            foreach (var reference in request.EvidenceReferences.Where(reference =>
+                member.EvidenceReferenceIds.Contains(reference.EvidenceReferenceId, StringComparer.Ordinal)
+                && reference.Subject is TargetEvidenceSubject && reference.Kind == EvidenceKind.SourceDeclaration
+                && reference.Relation == EvidenceRelation.Declares
+                && reference.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration
+                && reference.Locator == member.Target.SourceLocator))
+            {
+                var completeRequired = reference.ClaimCategoryIds.Any(category => member.StyleProfile!.ClaimPolicies
+                    .Single(policy => policy.ClaimCategoryId == category).CompleteEvidenceRequired);
+                scopes.Add(DocumentationScribeRepositoryToolScope.File(reference.EvidenceReferenceId, locator.Path,
+                    sourceOperations, DocumentationScribeContextRole.SourceDeclaration,
+                    subject: completeRequired ? null : reference.Subject,
+                    kind: reference.Kind, relation: reference.Relation, authority: reference.Authority,
+                    claimCategoryIds: completeRequired ? [] : reference.ClaimCategoryIds));
+            }
+        }
+
         foreach (var reference in request.ContextReferences)
         {
             if (reference.Kind == DocumentationScribeContextReferenceKind.ProjectInstruction)
             {
                 var separator = reference.Path.LastIndexOf('/');
                 var directory = separator < 0 ? string.Empty : reference.Path[..separator];
-                scopes.Add(DocumentationScribeRepositoryToolScope.Directory(
-                    reference.ContextReferenceId,
-                    directory,
-                    DocumentationScribeRepositoryToolOperations.ReadExcerpt
-                        | (context.Facts.Routes.Length > 0
-                            ? DocumentationScribeRepositoryToolOperations.ListFiles
-                            : DocumentationScribeRepositoryToolOperations.None)
-                        | DocumentationScribeRepositoryToolOperations.SearchText,
-                    DocumentationScribeContextRole.MaintainedDocumentation,
-                    extensions: [".md"]));
+                var routed = request.Manifest.Where(member => member.ContextReferenceIds.Contains(reference.ContextReferenceId,
+                    StringComparer.Ordinal)).Any(member => context.GetContext(member.TargetId).Facts.Routes.Length > 0);
+                scopes.Add(DocumentationScribeRepositoryToolScope.Directory(reference.ContextReferenceId, directory,
+                    sourceOperations | (routed ? DocumentationScribeRepositoryToolOperations.ListFiles
+                        : DocumentationScribeRepositoryToolOperations.None),
+                    DocumentationScribeContextRole.MaintainedDocumentation, extensions: [".md"]));
             }
             else
             {
-                scopes.Add(DocumentationScribeRepositoryToolScope.File(
-                    reference.ContextReferenceId,
-                    reference.Path,
-                    DocumentationScribeRepositoryToolOperations.ReadExcerpt
-                        | DocumentationScribeRepositoryToolOperations.SearchText,
-                    DocumentationScribeContextRole.MaintainedDocumentation));
+                scopes.Add(DocumentationScribeRepositoryToolScope.File(reference.ContextReferenceId, reference.Path,
+                    sourceOperations, DocumentationScribeContextRole.MaintainedDocumentation));
             }
         }
 
@@ -1519,8 +1505,7 @@ internal static class DocumentationScribeComposition
 
     private static DocumentationScribeToolRegistry BuildRegistry(
         DocumentationScribeRequest request,
-        DocumentationScribeLoadedContext context,
-        DocumentationScribeEvidenceReference sourceReference,
+        DocumentationScribeLoadedManifestContext context,
         DocumentationScribeRepositoryToolBundle repository,
         ImmutableArray<DocumentationScribeRepositoryToolScope> scopes)
     {
@@ -1529,14 +1514,14 @@ internal static class DocumentationScribeComposition
             .Add(
                 DocumentationScribeRepositoryToolBundle.ReadExcerptDescriptor,
                 repository.ReadExcerpt,
-                new ReadCodec(sourceReference),
+                new ReadCodec(request),
                 DocumentationScribeRepositoryToolSchemas.ReadExcerptDescription,
                 BindRepositoryToolScopes(
                     DocumentationScribeRepositoryToolSchemas.ReadExcerptInputUtf8Json,
                     scopes,
                     DocumentationScribeRepositoryToolOperations.ReadExcerpt),
                 maximumCallsPerRun: maximumCallsPerOperation);
-        if (context.Facts.Routes.Length > 0)
+        if (context.Contexts.Any(member => member.Facts.Routes.Length > 0))
         {
             builder.Add(
                 DocumentationScribeRepositoryToolBundle.ListFilesDescriptor,
@@ -1553,21 +1538,33 @@ internal static class DocumentationScribeComposition
         builder.Add(
                 DocumentationScribeRepositoryToolBundle.SearchTextDescriptor,
                 repository.SearchText,
-                new SearchCodec(sourceReference),
+                new SearchCodec(request),
                 DocumentationScribeRepositoryToolSchemas.SearchTextDescription,
                 BindRepositoryToolScopes(
                     DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
                     scopes,
                     DocumentationScribeRepositoryToolOperations.SearchText),
-                maximumCallsPerRun: maximumCallsPerOperation)
-            .Add(
-                new DocumentationScribeSemanticToolDescriptor(),
-                new DocumentationScribeSemanticToolPort(context, request),
-                new SemanticCodec(),
-                "Read one bounded semantic evidence page for the exact selected method.",
-                SemanticInputSchema,
                 maximumCallsPerRun: maximumCallsPerOperation);
+        var semantic = new DocumentationScribeManifestSemanticToolPort(context);
+        if (!semantic.TargetIds.IsEmpty)
+        {
+            builder.Add(
+                new DocumentationScribeSemanticToolDescriptor(),
+                semantic,
+                new SemanticCodec(semantic.TargetIds),
+                "Read one bounded semantic evidence page for an exact selected supported method target.",
+                BindSemanticTargets(semantic.TargetIds),
+                maximumCallsPerRun: maximumCallsPerOperation);
+        }
         return builder.Build();
+    }
+
+    private static ReadOnlyMemory<byte> BindSemanticTargets(ImmutableArray<string> targetIds)
+    {
+        var schema = JsonNode.Parse(SemanticInputSchema.Span)!.AsObject();
+        schema["properties"]!["targetId"]!["enum"] = new JsonArray(targetIds
+            .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());
+        return JsonSerializer.SerializeToUtf8Bytes(schema);
     }
 
     internal static ReadOnlyMemory<byte> BindRepositoryToolScopes(
@@ -1625,7 +1622,7 @@ internal static class DocumentationScribeComposition
         ImmutableArray<DocumentationScribeContentUnit> units) =>
         BuildPatchRequest(
             request,
-            (RepositoryEvidenceLocator)request.Target.SourceLocator,
+            (RepositoryEvidenceLocator)request.ExecutionTarget.Target.SourceLocator,
             default,
             editKind,
             content,
@@ -1660,17 +1657,17 @@ internal static class DocumentationScribeComposition
             {
                 new JsonObject
                 {
-                    ["blockId"] = BlockId(request.Target.SymbolRef),
+                    ["blockId"] = BlockId(request.ExecutionTarget.Target.SymbolRef),
                     ["symbolRef"] = new JsonObject
                     {
-                        ["compilationContextRef"] = request.Target.SymbolRef.CompilationContextRef,
-                        ["documentationCommentId"] = request.Target.SymbolRef.DocumentationCommentId,
+                        ["compilationContextRef"] = request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+                        ["documentationCommentId"] = request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId,
                     },
                     ["locator"] = new JsonObject
                     {
                         ["kind"] = "repository",
                         ["path"] = locator.Path,
-                        ["originalFileSha256"] = request.Target.SourceSha256,
+                        ["originalFileSha256"] = request.ExecutionTarget.Target.SourceSha256,
                         ["encoding"] = EncodingId(encoding),
                         ["declarationSpan"] = new JsonObject
                         {
@@ -1681,7 +1678,7 @@ internal static class DocumentationScribeComposition
                     ["editKind"] = editKind == DocumentationPatchEditKind.Insert
                         ? "insert"
                         : "replace",
-                    ["applicableComponents"] = Components(request.Target.ApplicableComponents),
+                    ["applicableComponents"] = Components(request.ExecutionTarget.Target.ApplicableComponents),
                     ["content"] = content is null
                         ? new JsonObject { ["kind"] = "inheritDoc" }
                         : PatchContent(content),
@@ -1899,7 +1896,7 @@ internal static class DocumentationScribeComposition
         DocumentationScribeLoadedContext? Context,
         DocumentationPatchResolvedDeclaration? Declaration,
         DocumentationPatchEditKind EditKind,
-        DocumentationScribeEvidenceReference? SourceReference,
+        DocumentationScribeLoadedManifestContext? ManifestContext,
         ImmutableArray<BoundContextContent> ContextContent,
         DocumentationScribeRepositoryToolBundle? Repository,
         ImmutableArray<DocumentationScribeRepositoryToolScope> RepositoryScopes,
@@ -1918,9 +1915,12 @@ internal static class DocumentationScribeComposition
         where TResult : IDocumentationScribeToolResult
     {
         private readonly DocumentationScribeEvidenceReference? authorizedSource;
+        private readonly DocumentationScribeRequest? manifestRequest;
 
         protected RepositoryCodec(DocumentationScribeEvidenceReference? authorizedSource = null) =>
             this.authorizedSource = authorizedSource;
+
+        protected RepositoryCodec(DocumentationScribeRequest request) => manifestRequest = request;
 
         public abstract DocumentationScribeToolDecodeResult<TRequest> DecodeArguments(
             ReadOnlyMemory<byte> argumentsUtf8Json);
@@ -1936,6 +1936,10 @@ internal static class DocumentationScribeComposition
             if (authorizedSource is { } source)
             {
                 evidence = evidence.Where(item => IsAuthorizedSourceRange(item, source)).ToImmutableArray();
+            }
+            else if (manifestRequest is { } scribeRequest)
+            {
+                evidence = evidence.Where(item => IsAuthorizedManifestSource(item, scribeRequest)).ToImmutableArray();
             }
             object projection = result switch
             {
@@ -1976,19 +1980,41 @@ internal static class DocumentationScribeComposition
             && item.Kind == source.Kind
             && item.Relation == source.Relation
             && item.Authority == source.Authority
-            && item.ClaimCategoryIds.SequenceEqual(source.ClaimCategoryIds, StringComparer.Ordinal)
+            && item.ContentSha256 == source.ContentSha256
+            && item.ClaimCategoryIds.All(id => source.ClaimCategoryIds.Contains(id, StringComparer.Ordinal))
             && item.Locator is RepositoryEvidenceLocator itemLocator
             && source.Locator is RepositoryEvidenceLocator sourceLocator
             && itemLocator.Path == sourceLocator.Path
-            && itemLocator.Span is { } itemSpan
-            && sourceLocator.Span is { } sourceSpan
-            && itemSpan.Start >= sourceSpan.Start
-            && itemSpan.End <= sourceSpan.End;
+            && AuthorizedRange(itemLocator.Span, sourceLocator.Span, item.IsTruncated);
+
+        private static bool IsAuthorizedManifestSource(
+            DocumentationScribeDynamicEvidenceInput item, DocumentationScribeRequest request)
+        {
+            var member = request.FindTarget(item.Subject.ParentSymbolRef);
+            return member?.StyleProfile is not null
+                && item.Subject is TargetEvidenceSubject
+                && item.Kind == EvidenceKind.SourceDeclaration && item.Relation == EvidenceRelation.Declares
+                && item.Authority == DocumentationScribeEvidenceAuthority.SourceDeclaration
+                && item.ContentSha256 == member.Target.SourceSha256
+                && item.Locator is RepositoryEvidenceLocator locator
+                && member.Target.SourceLocator is RepositoryEvidenceLocator source
+                && locator.Path == source.Path && AuthorizedRange(locator.Span, source.Span, item.IsTruncated)
+                && DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, item, out _);
+        }
+
+        private static bool AuthorizedRange(Utf16Span? actual, Utf16Span? selected, bool truncated) =>
+            actual is null ? !truncated : selected is { } span
+                && (actual.Value.Start >= span.Start && actual.Value.End <= span.End
+                    || !truncated && actual.Value.Start <= span.Start && actual.Value.End >= span.End);
     }
 
     internal sealed class ReadCodec
         : RepositoryCodec<DocumentationScribeRepositoryReadExcerptRequest, DocumentationScribeRepositoryReadExcerptResult>
     {
+        internal ReadCodec(DocumentationScribeRequest request) : base(request)
+        {
+        }
+
         internal ReadCodec(DocumentationScribeEvidenceReference authorizedSource)
             : base(authorizedSource)
         {
@@ -2053,6 +2079,10 @@ internal static class DocumentationScribeComposition
     private sealed class SearchCodec
         : RepositoryCodec<DocumentationScribeRepositorySearchTextRequest, DocumentationScribeRepositorySearchTextResult>
     {
+        internal SearchCodec(DocumentationScribeRequest request) : base(request)
+        {
+        }
+
         internal SearchCodec(DocumentationScribeEvidenceReference authorizedSource)
             : base(authorizedSource)
         {
@@ -2087,11 +2117,17 @@ internal static class DocumentationScribeComposition
     private sealed class SemanticCodec
         : IDocumentationScribeToolCodec<DocumentationScribeSemanticToolRequest, DocumentationScribeSemanticToolResult>
     {
+        private readonly ImmutableHashSet<string> targets;
+
+        internal SemanticCodec(IEnumerable<string> targets) => this.targets = targets.ToImmutableHashSet(StringComparer.Ordinal);
+
         public DocumentationScribeToolDecodeResult<DocumentationScribeSemanticToolRequest> DecodeArguments(
             ReadOnlyMemory<byte> json)
         {
-            var root = StrictObject(json, "pageSize", "cursor");
+            var root = StrictObject(json, "targetId", "pageSize", "cursor");
             if (root is not { } value
+                || !RequiredString(value, "targetId", out var targetId)
+                || !targets.Contains(targetId!)
                 || !OptionalInt(value, "pageSize", out var pageSize)
                 || !OptionalString(value, "cursor", out var cursorValue))
             {
@@ -2112,7 +2148,7 @@ internal static class DocumentationScribeComposition
             try
             {
                 return DocumentationScribeToolDecodeResult<DocumentationScribeSemanticToolRequest>.Accepted(
-                    DocumentationScribeSemanticToolRequest.Create(pageSize ?? 20, cursor));
+                    DocumentationScribeSemanticToolRequest.Create(targetId!, pageSize ?? 20, cursor));
             }
             catch (ArgumentException)
             {

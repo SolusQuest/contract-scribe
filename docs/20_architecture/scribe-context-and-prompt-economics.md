@@ -1,6 +1,6 @@
 # Scribe context and prompt economics
 
-> **Status:** Current single-target Runtime with M7 fixed selection and C4 shared invocation budgets/per-dispatch settlement. [M7 plan](../90_roadmap/m7-plan.md) owns the remaining shared-conversation direction; S1–S3 are not implemented by C4. Campaign targets share one checked allowance and monotonic Action clock while their model conversations remain independent. Historical M3–M6 evidence stays bound to its original revision.
+> **Status:** M7-S1 manifest request/context/tool boundary is implemented over the SolusAgent runtime. Complete selected metadata and scoped lazy reads share one conversation; the current terminal completes only the first executable member. Campaign durable execution remains singleton until S5; incremental acknowledgement and coverage belong to S4/S5. C4 invocation accounting and exact continuation remain unchanged. Historical M3–M6 evidence stays bound to its original revision.
 
 ## Decision
 
@@ -80,7 +80,7 @@ This context is not a provider conversation and is not durable GitHub ledger con
 
 ### Documentation Scribe
 
-The Documentation Scribe is the only model-assisted agent role. The current single-target loop may:
+The Documentation Scribe is the only model-assisted agent role. The current manifest-aware runtime may:
 
 1. receive bootstrapped repository and scope context;
 2. use read-only tools to complete semantic context routing;
@@ -247,7 +247,17 @@ RepositoryContextSnapshot
 
 Shared reads never promote ordinary evidence into instructions or make one target's style/claims applicable to another target. Structured acceptance is separate from patch/publication/merge; foreign, duplicate or omitted targets cannot claim completed coverage. Bounded assistant continuation remains private provider-wire state, never evidence, ledger content or recovery authority.
 
-M7 does not fork agents or share a hidden parent conversation. A later Action reconstructs validated accepted results and starts a new bounded conversation for unresolved members of the original unpublished batch. It restores neither complete model history nor reasoning, and stops at resource/context limits without automatic compaction. After partial publication, the sealed subset waits for review and remaining work requires a later allowed fresh Audit. The current runtime remains single-target until its owning implementation issue updates it.
+M7 does not fork agents or share a hidden parent conversation. A later Action reconstructs validated accepted results and starts a new bounded conversation for unresolved members of the original unpublished batch. It restores neither complete model history nor reasoning, and stops at resource/context limits without automatic compaction. After partial publication, the sealed subset waits for review and remaining work requires a later allowed fresh Audit. S1 supplies the complete manifest boundary and scoped tools. The current terminal applies only to the first executable member; S4/S5 own incremental continuation and durable aggregate coverage.
+
+### Current S1 materialization and confinement
+
+`DocumentationScribeLoadedManifestContext` binds every selected member to its independently accepted bootstrap selection. It keeps every member's freshness guard, with one 30-second/request-deadline bootstrap bound and a 64 MiB distinct captured-source bound. Source bodies are lazy except for an optional bounded first-executable seed; 100 selected members do not require 100 initial evidence rows under the default 64-reference ceiling. Mandatory no-follow and freshness verification still reads the sources needed to validate commitments.
+
+One repository tool session shares call/read/output/deadline budgets across exact mapped scopes. Each manifest target ID is a source scope for that target's committed path/version. Semantic calls require a selected `targetId` supported by the current method-only binding; the schema, codec and dispatcher share that callable subset. Class/property metadata retain their repository source scopes. Scope-bound cursors cannot move between targets or operations. Related unselected symbols remain read-only evidence and acquire no executable permission.
+
+Prompt construction emits stable system/repository blocks before attempt and manifest state. Instructions are pooled once but apply only through each member's ordered map. Source byte reuse uses `contentId/contentRef` for equal snapshot/path/version/actual range/content; subject, authority, evidence ID and source commitments remain separate. Content IDs exclude volatile repository-session and attempt correlation; reuse is confined to the current request's visible content. The projection is rebuilt from the currently visible seed and completed history for each provider request, so retries cannot refer to discarded history. It does not alter trusted raw tool results, opaque continuation or physical/logical accounting.
+
+Complete reusable-prefix equality requires equal actual registry definitions, schemas (including bound scope/target enums), terminal schema, provider/model configuration and instruction overlays as well as common repository message bytes. Different scopes can invalidate the full prefix even when root instructions are unchanged. Cache observations grant no authority.
 
 ## Candidate cacheable prompt layout
 
