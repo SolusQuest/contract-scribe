@@ -114,27 +114,38 @@ public sealed record DocumentationScribeSemanticToolRequest
     : IDocumentationScribeToolRequest<DocumentationScribeSemanticToolResult>
 {
     internal DocumentationScribeSemanticToolRequest(
+        string targetId,
         int pageSize,
         DocumentationScribeContextCursor? cursor)
     {
+        TargetId = targetId;
         PageSize = pageSize;
         Cursor = cursor;
     }
+
+    public string TargetId { get; }
 
     public int PageSize { get; }
 
     public DocumentationScribeContextCursor? Cursor { get; }
 
     public static DocumentationScribeSemanticToolRequest Create(
+        string targetId,
         int pageSize,
         DocumentationScribeContextCursor? cursor = null)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(targetId);
+        if (targetId.Length > DocumentationScribeContract.MaximumIdentifierScalars
+            || targetId[0] is not (>= 'a' and <= 'z') || targetId[^1] is '.' or '-'
+            || targetId.Any(character => character is not (>= 'a' and <= 'z')
+                && character is not (>= '0' and <= '9') && character is not ('.' or '-')))
+            throw new ArgumentException("A manifest target identifier is required.", nameof(targetId));
         if (pageSize is < 1 or > 100)
         {
             throw new ArgumentOutOfRangeException(nameof(pageSize));
         }
 
-        return new(pageSize, cursor);
+        return new(targetId, pageSize, cursor);
     }
 
     public override string ToString() =>

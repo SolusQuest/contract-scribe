@@ -40,6 +40,7 @@ public sealed class DocumentationScribeSemanticToolPort
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private readonly DocumentationScribeLoadedContext loadedContext;
     private readonly DocumentationScribeRequest scribeRequest;
+    private readonly DocumentationScribeManifestTarget manifestTarget;
     private readonly DocumentationScribeSemanticToolLimits limits;
     private readonly int remainingEvidenceReferences;
     private readonly int remainingEvidenceUtf8Bytes;
@@ -68,6 +69,8 @@ public sealed class DocumentationScribeSemanticToolPort
     {
         this.loadedContext = loadedContext ?? throw new ArgumentNullException(nameof(loadedContext));
         this.scribeRequest = scribeRequest ?? throw new ArgumentNullException(nameof(scribeRequest));
+        manifestTarget = scribeRequest.FindTarget(loadedContext.Facts.SymbolRef)
+            ?? throw new ArgumentException("semantic.binding.request-mismatch", nameof(scribeRequest));
         this.limits = Intersect(
             limits ?? DocumentationScribeSemanticToolLimits.Production,
             scribeRequest,
@@ -91,7 +94,7 @@ public sealed class DocumentationScribeSemanticToolPort
             && binding.Method is not null
             && !ApplicableComponentsEqual(
                 binding.ApplicableComponents,
-                scribeRequest.Target.ApplicableComponents))
+                manifestTarget.Target.ApplicableComponents))
         {
             throw new ArgumentException(
                 "semantic.binding.applicable-components-mismatch",
@@ -108,7 +111,8 @@ public sealed class DocumentationScribeSemanticToolPort
         try
         {
             Check(DocumentationScribeSemanticStage.Binding, started, cancellationToken);
-            if (request.PageSize < 1 || request.PageSize > limits.MaximumPageSize)
+            if (request.TargetId != manifestTarget.TargetId
+                || request.PageSize < 1 || request.PageSize > limits.MaximumPageSize)
             {
                 return ValueTask.FromResult(Terminal(
                     DocumentationScribeToolOutcome.Failure,
@@ -174,6 +178,7 @@ public sealed class DocumentationScribeSemanticToolPort
             var normalizedRequestIdentity = Identity(
                 "semantic.normalized-request.v1",
                 scribeRequest.ArtifactSha256,
+                request.TargetId,
                 limits.MaximumOptionalItems.ToString(CultureInfo.InvariantCulture),
                 limits.MaximumResultUtf8Bytes.ToString(CultureInfo.InvariantCulture),
                 limits.MaximumPageSize.ToString(CultureInfo.InvariantCulture),

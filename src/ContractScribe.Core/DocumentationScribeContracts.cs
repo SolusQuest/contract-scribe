@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Text.Json.Serialization;
 
 namespace ContractScribe.Core;
 
@@ -98,6 +99,7 @@ public static class DocumentationScribeContract
     public const int MaximumTextScalars = 16_384;
     public const int MaximumContentUnits = 256;
     public const int MaximumReferences = 512;
+    public const int MaximumManifestTargets = 4_096;
     public const int MaximumDiagnostics = 64;
     public const int MaximumAttempts = 1_000_000;
     public const int MaximumObservedInputTokens = 134_217_728;
@@ -247,13 +249,11 @@ public sealed record DocumentationScribeRequestContext
     internal DocumentationScribeRequestContext(
         RepositoryContextRef repositoryContextRef,
         string inputIdentity,
-        TargetProfile targetProfile,
-        AuditOutcome auditOutcome)
+        TargetProfile targetProfile)
     {
         RepositoryContextRef = repositoryContextRef;
         InputIdentity = inputIdentity;
         TargetProfile = targetProfile;
-        AuditOutcome = auditOutcome;
     }
 
     public RepositoryContextRef RepositoryContextRef { get; }
@@ -262,7 +262,6 @@ public sealed record DocumentationScribeRequestContext
 
     public TargetProfile TargetProfile { get; }
 
-    public AuditOutcome AuditOutcome { get; }
 }
 
 public sealed record DocumentationScribeTarget
@@ -621,13 +620,67 @@ public sealed record DocumentationScribeRunLimits
     public int MaximumElapsedMilliseconds { get; }
 }
 
+public sealed record DocumentationScribeManifestGrouping
+{
+    internal DocumentationScribeManifestGrouping(
+        string projectIdentity,
+        SymbolRef containingTypeSymbolRef,
+        string memberFamilySha256)
+    {
+        ProjectIdentity = projectIdentity;
+        ContainingTypeSymbolRef = containingTypeSymbolRef;
+        MemberFamilySha256 = memberFamilySha256;
+    }
+
+    public string ProjectIdentity { get; }
+
+    public SymbolRef ContainingTypeSymbolRef { get; }
+
+    public string MemberFamilySha256 { get; }
+}
+
+public sealed record DocumentationScribeManifestTarget
+{
+    internal DocumentationScribeManifestTarget(
+        string targetId,
+        DocumentationScribeTarget target,
+        AuditOutcome auditOutcome,
+        DocumentationScribeStyleProfile? styleProfile,
+        ImmutableArray<string> contextReferenceIds,
+        ImmutableArray<string> evidenceReferenceIds,
+        DocumentationScribeManifestGrouping? grouping)
+    {
+        TargetId = targetId;
+        Target = target;
+        AuditOutcome = auditOutcome;
+        StyleProfile = styleProfile;
+        ContextReferenceIds = contextReferenceIds;
+        EvidenceReferenceIds = evidenceReferenceIds;
+        Grouping = grouping;
+    }
+
+    public string TargetId { get; }
+
+    public DocumentationScribeTarget Target { get; }
+
+    public AuditOutcome AuditOutcome { get; }
+
+    public DocumentationScribeStyleProfile? StyleProfile { get; }
+
+    public ImmutableArray<string> ContextReferenceIds { get; }
+
+    public ImmutableArray<string> EvidenceReferenceIds { get; }
+
+    public DocumentationScribeManifestGrouping? Grouping { get; }
+}
+
 public sealed record DocumentationScribeRequest
 {
     internal DocumentationScribeRequest(
         string artifactSha256,
         DocumentationScribeRequestContext context,
-        DocumentationScribeTarget target,
-        DocumentationScribeStyleProfile styleProfile,
+        ImmutableArray<DocumentationScribeManifestTarget> manifest,
+        ImmutableArray<string> executableTargetIds,
         ImmutableArray<DocumentationScribeContextReference> contextReferences,
         ImmutableArray<DocumentationScribeEvidenceReference> evidenceReferences,
         ImmutableArray<DocumentationScribeEvidenceConflict> evidenceConflicts,
@@ -636,8 +689,8 @@ public sealed record DocumentationScribeRequest
     {
         ArtifactSha256 = artifactSha256;
         Context = context;
-        Target = target;
-        StyleProfile = styleProfile;
+        Manifest = manifest;
+        ExecutableTargetIds = executableTargetIds;
         ContextReferences = contextReferences;
         EvidenceReferences = evidenceReferences;
         EvidenceConflicts = evidenceConflicts;
@@ -651,9 +704,25 @@ public sealed record DocumentationScribeRequest
 
     public DocumentationScribeRequestContext Context { get; }
 
-    public DocumentationScribeTarget Target { get; }
+    public ImmutableArray<DocumentationScribeManifestTarget> Manifest { get; }
 
-    public DocumentationScribeStyleProfile StyleProfile { get; }
+    public ImmutableArray<string> ExecutableTargetIds { get; }
+
+    public bool HasExecutableTargets => !ExecutableTargetIds.IsEmpty;
+
+    // S1 validates one terminal for this member. S4 owns incremental selection.
+    [JsonIgnore]
+    public DocumentationScribeManifestTarget ExecutionTarget => HasExecutableTargets
+        ? Manifest.Single(item => item.TargetId == ExecutableTargetIds[0])
+        : throw new InvalidOperationException("The manifest has no executable target.");
+
+    [JsonIgnore]
+    public DocumentationScribeStyleProfile ExecutionStyleProfile =>
+        ExecutionTarget.StyleProfile
+        ?? throw new InvalidOperationException("The execution target has no style profile.");
+
+    public DocumentationScribeManifestTarget? FindTarget(SymbolRef symbolRef) =>
+        Manifest.SingleOrDefault(item => item.Target.SymbolRef == symbolRef);
 
     public ImmutableArray<DocumentationScribeContextReference> ContextReferences { get; }
 
@@ -664,6 +733,9 @@ public sealed record DocumentationScribeRequest
     public string ToolPolicyId { get; }
 
     public DocumentationScribeRunLimits Limits { get; }
+
+    public override string ToString() =>
+        $"{nameof(DocumentationScribeRequest)} {{ Manifest = {Manifest.Length}, Executable = {ExecutableTargetIds.Length} }}";
 }
 
 public sealed record DocumentationScribeResultTarget

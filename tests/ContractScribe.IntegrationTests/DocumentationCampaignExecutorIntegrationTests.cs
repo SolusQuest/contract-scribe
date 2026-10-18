@@ -655,7 +655,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 && item.Subject.ComponentKind is null);
             var declaration = Assert.Single(targetObservation.Declarations);
             var repository = Assert.IsType<RepositoryDocumentationSourceIdentity>(declaration.Source);
-            var requestLocator = Assert.IsType<RepositoryEvidenceLocator>(request.Request.Target.SourceLocator);
+            var requestLocator = Assert.IsType<RepositoryEvidenceLocator>(request.Request.ExecutionTarget.Target.SourceLocator);
             var sourcePath = Path.Join(fixture.Root, repository.Path);
             targetAuthorities.Add(new CampaignPlanningTargetAuthority(
                 target,
@@ -673,7 +673,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     declaration.DeclarationSpan,
                     declaration.DocumentationSpan,
                     declaration.BlockState),
-                request.Request.Target.ApplicableComponents.Select(component =>
+                request.Request.ExecutionTarget.Target.ApplicableComponents.Select(component =>
                     new CampaignPlanningApplicableComponent(
                         PatchComponentKind(component.Kind),
                         component.Identity,
@@ -682,7 +682,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 multiDeclarator: false,
                 primaryConstructor: false,
                 primaryConstructorAlias: false,
-                request.Request.StyleProfile)
+                request.Request.ExecutionStyleProfile)
             {
                 GroupingAuthority = new DocumentationDeclarationAuthorityProjector()
                     .Project(fixture.Observations, target, null).Authority!.GroupingAuthority! with
@@ -836,12 +836,14 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             targetSpan,
             sourceSha256,
             context,
-            auditOutcome);
+            auditOutcome,
+            new DocumentationDeclarationAuthorityProjector().Project(fixture.Observations, target, null).Authority?.GroupingAuthority);
         var requestJson = JsonNode.Parse(bytes.ToArray())!.AsObject();
         var evidenceId = "evidence.source." + CampaignSha(
             Encoding.UTF8.GetBytes(target.SymbolRef.DocumentationCommentId))[..16];
         Assert.Single(requestJson["evidenceReferences"]!.AsArray())!
             .AsObject()["evidenceReferenceId"] = evidenceId;
+        requestJson["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray(evidenceId);
         bytes = JsonSerializer.SerializeToUtf8Bytes(requestJson);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
         Assert.True(parsed.IsValid, parsed.Failure?.Code + ":" + parsed.Failure?.Pointer);
@@ -912,7 +914,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     private static ReadOnlyMemory<byte> CampaignProposalTerminal(DocumentationScribeRequest request)
     {
-        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.Target.SourceLocator);
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.ExecutionTarget.Target.SourceLocator);
         var evidenceId = Assert.Single(request.EvidenceReferences).EvidenceReferenceId;
         return JsonSerializer.SerializeToUtf8Bytes(new JsonObject
         {
@@ -922,8 +924,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 ["repositoryContextRef"] = request.Context.RepositoryContextRef.Value,
                 ["symbolRef"] = new JsonObject
                 {
-                    ["compilationContextRef"] = request.Target.SymbolRef.CompilationContextRef,
-                    ["documentationCommentId"] = request.Target.SymbolRef.DocumentationCommentId,
+                    ["compilationContextRef"] = request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId,
                 },
                 ["sourceCommitment"] = new JsonObject
                 {
@@ -939,7 +941,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                             },
                         },
                     },
-                    ["contentSha256"] = request.Target.SourceSha256,
+                    ["contentSha256"] = request.ExecutionTarget.Target.SourceSha256,
                 },
             },
             ["contentUnits"] = new JsonArray

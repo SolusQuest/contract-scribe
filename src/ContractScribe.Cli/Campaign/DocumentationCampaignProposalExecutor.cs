@@ -176,6 +176,9 @@ internal static class DocumentationCampaignProposalExecutor
         {
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.request.invalid");
         }
+        var manifestSelection = DocumentationScribeManifestSelection.FromAcceptedWork(selectedAudit!, selectedPlan);
+        if (!manifestSelection.Matches(request))
+            return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.invalid");
         var projection = input.ExecutionCapability.PersistedProjection;
         if (input.RuntimeOptions.ProviderConfigurationId != projection.ProviderConfigurationId
             || input.RuntimeOptions.ModelConfigurationId != projection.ModelConfigurationId
@@ -282,7 +285,7 @@ internal static class DocumentationCampaignProposalExecutor
         var coordinator = new CampaignScribeExecutionCoordinator(invocation, input.InvocationAllowance,
             input.Store, input.SettlementToken, GuardDispatch, executionStartedAt);
         var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
-            selectedAudit!, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
+            manifestSelection, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
             input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken,
             GuardDispatch, coordinator).ConfigureAwait(false);
         if (dispatchGuardRejected || coordinator.Conflict)

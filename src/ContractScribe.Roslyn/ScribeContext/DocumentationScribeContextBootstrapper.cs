@@ -100,6 +100,9 @@ public sealed class DocumentationScribeLoadedContext
     internal DocumentationScribeContextPhysicalIdentity RepositoryRootIdentity =>
         freshnessGuard.RootIdentity;
 
+    internal ImmutableArray<DocumentationScribeContextAcceptedFileObservation> CapturedFiles =>
+        freshnessGuard.ObservedFiles;
+
     internal bool IsCurrent =>
         classifiedSession.IsBoundToClassificationSession
         && !classifiedSession.RepositorySession.IsDisposed
@@ -131,17 +134,20 @@ public sealed class DocumentationScribeLoadedContext
             return InvalidBinding("context.binding.stale-session");
         }
 
-        if (request.Context.RepositoryContextRef != Facts.RepositoryContextRef
+        var member = request.FindTarget(Facts.SymbolRef);
+        if (member is null
+            || request.Context.RepositoryContextRef != Facts.RepositoryContextRef
             || !string.Equals(request.Context.InputIdentity, Facts.InputIdentity, StringComparison.Ordinal)
             || request.Context.TargetProfile != Facts.TargetProfile
-            || request.Target.SymbolRef != Facts.SymbolRef
-            || request.Target.SourceLocator != selection.SourceLocator
-            || !string.Equals(request.Target.SourceSha256, selection.SourceSha256, StringComparison.Ordinal))
+            || member.Target.SourceLocator != selection.SourceLocator
+            || !string.Equals(member.Target.SourceSha256, selection.SourceSha256, StringComparison.Ordinal))
         {
             return InvalidBinding("context.binding.request-mismatch");
         }
 
         var expectedInstructions = Facts.Instructions
+            .OrderBy(instruction => instruction.Depth)
+            .ThenBy(instruction => instruction.Commitment.RepositoryPath, StringComparer.Ordinal)
             .Select(instruction => new InstructionBinding(
                 Facts.RepositoryContextRef,
                 instruction.Commitment.RepositoryPath!,
@@ -149,10 +155,9 @@ public sealed class DocumentationScribeLoadedContext
                 instruction.Commitment.OriginalUtf8ByteCount,
                 instruction.Commitment.IncludedUtf8ByteCount,
                 instruction.Commitment.IsTruncated))
-            .OrderBy(item => item.Path, StringComparer.Ordinal)
-            .ThenBy(item => item.ContentSha256, StringComparer.Ordinal)
             .ToArray();
-        var requestInstructions = request.ContextReferences
+        var requestInstructions = member.ContextReferenceIds.Select(id => request.ContextReferences.Single(reference =>
+                reference.ContextReferenceId == id))
             .Where(reference => reference.Kind
                 == DocumentationScribeContextReferenceKind.ProjectInstruction)
             .Select(reference => new InstructionBinding(
@@ -162,8 +167,6 @@ public sealed class DocumentationScribeLoadedContext
                 reference.OriginalUtf8ByteCount,
                 reference.IncludedUtf8ByteCount,
                 reference.IsTruncated))
-            .OrderBy(item => item.Path, StringComparer.Ordinal)
-            .ThenBy(item => item.ContentSha256, StringComparer.Ordinal)
             .ToArray();
         if (!expectedInstructions.SequenceEqual(requestInstructions))
         {
@@ -336,6 +339,8 @@ internal sealed class DocumentationScribeContextFreshnessGuard
     internal bool HasNotFailed => Volatile.Read(ref failed) == 0;
 
     internal DocumentationScribeContextPhysicalIdentity RootIdentity => rootIdentity;
+
+    internal ImmutableArray<DocumentationScribeContextAcceptedFileObservation> ObservedFiles => observations;
 
     internal void VerifyOrThrow(
         CancellationToken cancellationToken = default,

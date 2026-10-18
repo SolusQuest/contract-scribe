@@ -44,15 +44,15 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(bound.Request.Context.InputIdentity, patchRequest.Context.InputIdentity);
         Assert.Equal(bound.Request.Context.TargetProfile, patchRequest.Context.TargetProfile);
         var block = Assert.Single(patchRequest.Blocks);
-        Assert.Equal(bound.Request.Target.SymbolRef, block.SymbolRef);
-        var boundLocator = Assert.IsType<RepositoryEvidenceLocator>(bound.Request.Target.SourceLocator);
+        Assert.Equal(bound.Request.ExecutionTarget.Target.SymbolRef, block.SymbolRef);
+        var boundLocator = Assert.IsType<RepositoryEvidenceLocator>(bound.Request.ExecutionTarget.Target.SourceLocator);
         var patchLocator = Assert.IsType<DocumentationPatchRepositoryLocator>(block.Locator);
         Assert.Equal(boundLocator.Path, patchLocator.Path);
         Assert.Equal(boundLocator.Span, patchLocator.DeclarationSpan);
-        Assert.Equal(bound.Request.Target.SourceSha256, patchLocator.OriginalFileSha256);
+        Assert.Equal(bound.Request.ExecutionTarget.Target.SourceSha256, patchLocator.OriginalFileSha256);
         Assert.Equal(DocumentationPatchEditKind.Insert, block.EditKind);
         Assert.Equal(
-            bound.Request.Target.ApplicableComponents.Select(component => component.Identity),
+            bound.Request.ExecutionTarget.Target.ApplicableComponents.Select(component => component.Identity),
             block.ApplicableComponents.Select(component => component.Identity));
         Assert.Equal(new[] { "evidence.source" }, patchRequest.ProvenanceCatalog.ToArray());
         var content = Assert.IsType<DocumentationPatchStructuredContent>(block.Content);
@@ -213,14 +213,14 @@ public sealed partial class DocumentationScribeCompositionTests
             item => item.WorkItemKey == planned.WorkItemKey);
         var planTarget = Assert.Single(planWork.Targets);
         var planSource = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(planTarget.Source);
-        var requestSource = Assert.IsType<RepositoryEvidenceLocator>(fixture.Request.Target.SourceLocator);
-        Assert.Equal(planTarget.SymbolRef, fixture.Request.Target.SymbolRef);
-        Assert.Equal(planTarget.AuditOutcome, fixture.Request.Context.AuditOutcome);
+        var requestSource = Assert.IsType<RepositoryEvidenceLocator>(fixture.Request.ExecutionTarget.Target.SourceLocator);
+        Assert.Equal(planTarget.SymbolRef, fixture.Request.ExecutionTarget.Target.SymbolRef);
+        Assert.Equal(planTarget.AuditOutcome, fixture.Request.ExecutionTarget.AuditOutcome);
         Assert.Equal(planSource.Path, requestSource.Path);
         Assert.Equal(planSource.RequestedDeclarationSpan, requestSource.Span);
-        Assert.Equal(planSource.ContentSha256, fixture.Request.Target.SourceSha256);
+        Assert.Equal(planSource.ContentSha256, fixture.Request.ExecutionTarget.Target.SourceSha256);
         Assert.Equal(campaign.PlanningInput.ExecutionPolicy.ScribeRunLimits, fixture.Request.Limits);
-        Assert.Equal(planTarget.ApplicableComponents.Length, fixture.Request.Target.ApplicableComponents.Length);
+        Assert.Equal(planTarget.ApplicableComponents.Length, fixture.Request.ExecutionTarget.Target.ApplicableComponents.Length);
         CampaignStateFactory.ValidateCurrentContext(
             campaign.InitialState,
             campaign.ExecutionCapability,
@@ -1042,7 +1042,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
     private static ReadOnlyMemory<byte> ProposalTerminal(DocumentationScribeRequest request)
     {
-        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.Target.SourceLocator);
+        var locator = Assert.IsType<RepositoryEvidenceLocator>(request.ExecutionTarget.Target.SourceLocator);
         var contentUnits = new JsonArray
         {
             new JsonObject
@@ -1053,7 +1053,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 ["evidenceReferenceIds"] = new JsonArray("evidence.source"),
             },
         };
-        foreach (var component in request.Target.ApplicableComponents)
+        foreach (var component in request.ExecutionTarget.Target.ApplicableComponents)
         {
             var evidenceReferenceId = Assert.Single(request.EvidenceReferences,
                 reference => reference.Subject is ComponentEvidenceSubject subject
@@ -1082,11 +1082,11 @@ public sealed partial class DocumentationScribeCompositionTests
             ["target"] = new JsonObject
             {
                 ["repositoryContextRef"] = request.Context.RepositoryContextRef.Value,
-                ["symbolRef"] = Symbol(request.Target.SymbolRef),
+                ["symbolRef"] = Symbol(request.ExecutionTarget.Target.SymbolRef),
                 ["sourceCommitment"] = new JsonObject
                 {
                     ["locator"] = RepositoryLocator(locator.Path, locator.Span!.Value),
-                    ["contentSha256"] = request.Target.SourceSha256,
+                    ["contentSha256"] = request.ExecutionTarget.Target.SourceSha256,
                 },
             },
             ["contentUnits"] = contentUnits,
@@ -1261,8 +1261,11 @@ public sealed partial class DocumentationScribeCompositionTests
             AuditDocument = auditDocument;
             Extraction = extraction;
             Target = target;
-            SelectedAudit = selectedAudit;
-            NonMethodSelectedAudit = nonMethodSelectedAudit;
+            AuditSelection = selectedAudit;
+            SelectedAudit = DocumentationScribeManifestSelection.CreateSingleton(selectedAudit,
+                request.HasExecutableTargets ? request.ExecutionStyleProfile : null);
+            NonMethodSelectedAudit = nonMethodSelectedAudit is null ? null
+                : DocumentationScribeManifestSelection.CreateSingleton(nonMethodSelectedAudit, null);
             RequestBytes = requestBytes;
             Request = request;
             AttemptId = attemptId;
@@ -1278,8 +1281,9 @@ public sealed partial class DocumentationScribeCompositionTests
         internal AuditDocument AuditDocument { get; }
         internal PolicyEvidenceExtractionOutcome Extraction { get; }
         internal TargetClassification Target { get; }
-        internal DocumentationScribeSelectedAudit SelectedAudit { get; }
-        internal DocumentationScribeSelectedAudit? NonMethodSelectedAudit { get; }
+        internal DocumentationScribeSelectedAudit AuditSelection { get; }
+        internal DocumentationScribeManifestSelection SelectedAudit { get; }
+        internal DocumentationScribeManifestSelection? NonMethodSelectedAudit { get; }
         internal ReadOnlyMemory<byte> RequestBytes { get; }
         internal DocumentationScribeRequest Request { get; }
         internal DocumentationScribeAttemptId AttemptId { get; }
@@ -1323,7 +1327,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     if (includeAllOwners)
                     {
                         var projected = new DocumentationDeclarationAuthorityProjector().Project(Observed, target,
-                            target.PrimaryKind == PrimarySymbolKind.Method ? Request.StyleProfile : null);
+                            target.PrimaryKind == PrimarySymbolKind.Method ? Request.ExecutionStyleProfile : null);
                         Assert.True(projected.IsSuccess, projected.FailureCode);
                         return projected.Authority! with
                         {
@@ -1343,7 +1347,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     var sourcePath = Descendant(Root, repository.Path);
                     var requestedSpan = target.SymbolRef == Target.SymbolRef
                         ? Assert.IsType<Utf16Span>(
-                            Assert.IsType<RepositoryEvidenceLocator>(Request.Target.SourceLocator).Span)
+                            Assert.IsType<RepositoryEvidenceLocator>(Request.ExecutionTarget.Target.SourceLocator).Span)
                         : declaration.DeclarationSpan;
                     var source = new CampaignPlanningRepositorySourceAuthority(
                         repository.Path,
@@ -1360,7 +1364,7 @@ public sealed partial class DocumentationScribeCompositionTests
                         declaration.DocumentationSpan,
                         declaration.BlockState);
                     var components = target.SymbolRef == Target.SymbolRef
-                        ? Request.Target.ApplicableComponents.Select(component =>
+                        ? Request.ExecutionTarget.Target.ApplicableComponents.Select(component =>
                             new CampaignPlanningApplicableComponent(
                                 CampaignComponentKind(component.Kind),
                                 component.Identity,
@@ -1374,7 +1378,7 @@ public sealed partial class DocumentationScribeCompositionTests
                         multiDeclarator: false,
                         primaryConstructor: false,
                         primaryConstructorAlias: false,
-                        target.SymbolRef == Target.SymbolRef ? Request.StyleProfile : null)
+                        target.SymbolRef == Target.SymbolRef ? Request.ExecutionStyleProfile : null)
                     {
                         GroupingAuthority = new DocumentationDeclarationAuthorityProjector()
                             .Project(Observed, target, null).Authority!.GroupingAuthority! with
@@ -1604,7 +1608,8 @@ public sealed partial class DocumentationScribeCompositionTests
                     context,
                     evidence,
                     extracted,
-                    auditOutcome);
+                    auditOutcome,
+                    new DocumentationDeclarationAuthorityProjector().Project(observed, target, null).Authority?.GroupingAuthority);
                 var requestParse = DocumentationScribeValidation.ParseRequest(requestBytes);
                 Assert.True(requestParse.IsValid,
                     requestParse.Failure?.Code + " " + requestParse.Failure?.Pointer);
@@ -1650,7 +1655,8 @@ public sealed partial class DocumentationScribeCompositionTests
             DocumentationScribeLoadedContext context,
             DocumentationScribeEvidenceContextFact evidence,
             PolicyEvidenceExtractionOutcome extraction,
-            string auditOutcome)
+            string auditOutcome,
+            CampaignPlanningGroupingAuthority? grouping)
         {
             var components = classifications.Components
                 .Where(component => component.ParentSymbolRef == target.SymbolRef
@@ -1682,7 +1688,7 @@ public sealed partial class DocumentationScribeCompositionTests
             }
 
             var contextReferences = new JsonArray();
-            foreach (var instruction in context.Facts.Instructions)
+            foreach (var instruction in context.Facts.Instructions.OrderBy(item => item.InstructionId, StringComparer.Ordinal))
             {
                 contextReferences.Add(new JsonObject
                 {
@@ -1743,6 +1749,10 @@ public sealed partial class DocumentationScribeCompositionTests
                 .Select(item => (JsonNode)item)
                 .ToArray());
 
+            var executable = target.PrimaryKind == PrimarySymbolKind.Method;
+            var manifestContextReferences = contextReferences;
+            var manifestEvidenceReferences = evidenceReferences;
+            if (!executable) manifestEvidenceReferences.Clear();
             var root = new JsonObject
             {
                 ["scribeRequestVersion"] = 1,
@@ -1751,30 +1761,33 @@ public sealed partial class DocumentationScribeCompositionTests
                     ["repositoryContextRef"] = session.RepositoryContextRef.Value,
                     ["inputIdentity"] = session.InputIdentity,
                     ["targetProfile"] = "profile.external-api",
-                    ["auditOutcome"] = auditOutcome,
                 },
-                ["target"] = new JsonObject
+                ["manifest"] = new JsonArray(new JsonObject
                 {
-                    ["symbolRef"] = Symbol(target.SymbolRef),
-                    ["sourceCommitment"] = new JsonObject
+                    ["targetId"] = "target.selected",
+                    ["target"] = new JsonObject
                     {
-                        ["locator"] = RepositoryLocator(sourcePath, targetSpan),
-                        ["contentSha256"] = sourceSha256,
+                        ["symbolRef"] = Symbol(target.SymbolRef),
+                        ["sourceCommitment"] = new JsonObject
+                        {
+                            ["locator"] = RepositoryLocator(sourcePath, targetSpan),
+                            ["contentSha256"] = sourceSha256,
+                        },
+                        ["applicableComponents"] = applicableComponents,
                     },
-                    ["applicableComponents"] = applicableComponents,
-                },
-                ["styleProfile"] = new JsonObject
-                {
-                    ["styleProfileId"] = "style.public-api.v1",
-                    ["outputLanguageId"] = "language.en",
-                    ["summary"] = Policy("required", 400),
-                    ["remarks"] = Policy("forbidden", 400),
-                    ["exceptions"] = Policy("forbidden", 400),
-                    ["componentPolicies"] = componentPolicies,
-                    ["inheritDocDisposition"] = "forbidden",
-                    ["allowedLiterals"] = new JsonArray(),
-                    ["forbiddenLiterals"] = new JsonArray(),
-                    ["claimPolicies"] = new JsonArray
+                    ["auditOutcome"] = auditOutcome,
+                    ["styleProfile"] = executable ? new JsonObject
+                    {
+                        ["styleProfileId"] = "style.public-api.v1",
+                        ["outputLanguageId"] = "language.en",
+                        ["summary"] = Policy("required", 400),
+                        ["remarks"] = Policy("forbidden", 400),
+                        ["exceptions"] = Policy("forbidden", 400),
+                        ["componentPolicies"] = componentPolicies,
+                        ["inheritDocDisposition"] = "forbidden",
+                        ["allowedLiterals"] = new JsonArray(),
+                        ["forbiddenLiterals"] = new JsonArray(),
+                        ["claimPolicies"] = new JsonArray
                     {
                         new JsonObject
                         {
@@ -1789,12 +1802,20 @@ public sealed partial class DocumentationScribeCompositionTests
                             ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
                         },
                     },
-                    ["maximumContentUnits"] = 8,
-                    ["maximumEvidenceRefsPerUnit"] = 4,
-                },
-                ["contextReferences"] = contextReferences,
-                ["evidenceReferences"] = evidenceReferences,
-                ["evidenceConflicts"] = new JsonArray(),
+                        ["maximumContentUnits"] = 8,
+                        ["maximumEvidenceRefsPerUnit"] = 4,
+                    } : null,
+                    ["contextReferenceIds"] = new JsonArray(context.Facts.Instructions.OrderBy(item => item.Depth)
+                        .ThenBy(item => item.Commitment.RepositoryPath, StringComparer.Ordinal)
+                        .Select(item => (JsonNode?)JsonValue.Create(item.InstructionId)).ToArray()),
+                    ["evidenceReferenceIds"] = new JsonArray(manifestEvidenceReferences
+                        .Select(item => (JsonNode?)JsonValue.Create(item!["evidenceReferenceId"]!.GetValue<string>())).ToArray()),
+                    ["grouping"] = CampaignScribeRequestBuilder.Grouping(grouping, target.SymbolRef.CompilationContextRef),
+                }),
+                ["executableTargetIds"] = executable ? new JsonArray("target.selected") : new JsonArray(),
+                ["contextReferences"] = manifestContextReferences,
+                ["evidenceReferences"] = manifestEvidenceReferences,
+                ["evidenceConflicts"] = executable ? new JsonArray() : new JsonArray(),
                 ["toolPolicyId"] = "tool-policy.read-only.v1",
                 ["limits"] = new JsonObject
                 {

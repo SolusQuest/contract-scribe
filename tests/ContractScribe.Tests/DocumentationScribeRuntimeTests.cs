@@ -799,7 +799,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal("repoctx-11111111111111111111111111111111", context
             .GetProperty("repositoryContextRef").GetString());
         Assert.Equal("profile.external-api", context.GetProperty("targetProfile").GetString());
-        Assert.Equal("audit.outcome.violation", context.GetProperty("auditOutcome").GetString());
+        Assert.False(context.TryGetProperty("auditOutcome", out _));
         Assert.Equal("required", runPolicy.RootElement.GetProperty("styleProfile")
             .GetProperty("summary").GetProperty("disposition").GetString());
         Assert.Equal("authority.source-declaration", runPolicy.RootElement.GetProperty("styleProfile")
@@ -808,6 +808,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         using var targetEvidence = JsonDocument.Parse(modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
         Assert.False(targetEvidence.RootElement.TryGetProperty("target", out _));
+        Assert.Equal("audit.outcome.violation", targetEvidence.RootElement.GetProperty("manifest")[0].GetProperty("auditOutcome").GetString());
         var target = targetEvidence.RootElement.GetProperty("terminalTarget");
         Assert.Equal("repoctx-11111111111111111111111111111111", target
             .GetProperty("repositoryContextRef").GetString());
@@ -878,9 +879,9 @@ public sealed partial class DocumentationScribeRuntimeTests
         var compatibleTarget = Request(root =>
         {
             const string DocumentationId = "M:Synthetic.Widget.Other(System.String)";
-            root["context"]!["auditOutcome"] = "audit.outcome.compliant";
-            root["target"]!["symbolRef"]!["documentationCommentId"] = DocumentationId;
-            root["target"]!["applicableComponents"]![0]!["name"] = "other";
+            root["manifest"]![0]!["auditOutcome"] = "audit.outcome.compliant";
+            root["manifest"]![0]!["target"]!["symbolRef"]!["documentationCommentId"] = DocumentationId;
+            root["manifest"]![0]!["target"]!["applicableComponents"]![0]!["name"] = "other";
             foreach (var symbol in root["evidenceReferences"]!.AsArray().Select(evidence =>
             {
                 var subject = evidence!["subject"]!;
@@ -1627,9 +1628,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             Assert.Equal(5, exchange.Requests[2].Messages.Length);
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            Assert.Equal(
-                "650c6041b2401f3b87603969125b88f2c043b3987bf02733c25940e1e14fba44",
-                digest);
+            Assert.Equal("4c88b12172fbdb1a326405e8c2929e171561a5b8e7dc5245fe50c30fb54de4b9", digest);
         }
         finally
         {
@@ -2071,6 +2070,8 @@ public sealed partial class DocumentationScribeRuntimeTests
         }
 
         references.Insert(0, summary);
+        root["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray(references
+            .Select(item => (JsonNode?)JsonValue.Create(item!["evidenceReferenceId"]!.GetValue<string>())).ToArray());
     }
 
     private static string FindRepositoryRoot()

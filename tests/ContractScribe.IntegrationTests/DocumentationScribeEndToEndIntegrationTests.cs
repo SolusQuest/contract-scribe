@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
+using ContractScribe.Cli;
 using ContractScribe.Patching;
 using ContractScribe.Roslyn;
 
@@ -336,7 +337,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var original = File.ReadAllBytes(fixture.SourcePath);
 
         var outcome = await CliHarness.ExecuteAsync(
-            fixture.SelectedAudit,
+            CliHarness.CreateManifestSelection(fixture.AuditSelection, request.Request.ExecutionStyleProfile),
             request.Bytes,
             fixture.AttemptId,
             exchange);
@@ -358,6 +359,27 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     }
 
     [Fact]
+    public async Task LazyManifestSourceScopeCanSatisfyACompleteEvidencePolicy()
+    {
+        await using var fixture = await EndToEndFixture.CreateAsync();
+        var revised = WithCompleteEvidenceRequirement(fixture.RequestBytes);
+        var root = JsonNode.Parse(revised.Bytes.Span)!.AsObject();
+        root["evidenceReferences"] = new JsonArray();
+        root["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray();
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
+        var request = DocumentationScribeValidation.ParseRequest(bytes).Request!;
+        var exchange = new ReadThenSkipExchange("target.selected", fullSource: true);
+        var outcome = await CliHarness.ExecuteAsync(
+            CliHarness.CreateManifestSelection(fixture.AuditSelection, revised.Request.ExecutionStyleProfile),
+            bytes, fixture.AttemptId, exchange);
+        Assert.Equal("ProposalSkipped", outcome.Status);
+        var evidence = Assert.Single(Assert.Single(exchange.Completed).EvidenceReferences);
+        Assert.False(evidence.IsTruncated);
+        Assert.Equal(request.ExecutionTarget.Target.SymbolRef, evidence.Subject.ParentSymbolRef);
+        Assert.Contains("claim.purpose", evidence.ClaimCategoryIds);
+    }
+
+    [Fact]
     public async Task CompleteEvidenceRequirementKeepsSourceSearchInformational()
     {
         await using var fixture = await EndToEndFixture.CreateAsync();
@@ -366,7 +388,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var original = File.ReadAllBytes(fixture.SourcePath);
 
         var outcome = await CliHarness.ExecuteAsync(
-            fixture.SelectedAudit,
+            CliHarness.CreateManifestSelection(fixture.AuditSelection, request.Request.ExecutionStyleProfile),
             request.Bytes,
             fixture.AttemptId,
             exchange);
@@ -817,9 +839,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             new SkipExchange(fixture.Request));
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Contains(fixture.Request.Target.ApplicableComponents, item =>
+        Assert.Contains(fixture.Request.ExecutionTarget.Target.ApplicableComponents, item =>
             item.Kind == DocumentationPatchComponentKind.Parameter && item.Name == "value");
-        Assert.Contains(fixture.Request.Target.ApplicableComponents, item =>
+        Assert.Contains(fixture.Request.ExecutionTarget.Target.ApplicableComponents, item =>
             item.Kind == DocumentationPatchComponentKind.Return && item.Name is null);
         Assert.Null(outcome.PatchOutcome);
     }
@@ -858,6 +880,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         alias["contextReferenceId"] = "zzzz.context.style-alias";
         alias["kind"] = "context.style-example";
         root["contextReferences"]!.AsArray().Add(alias);
+        root["manifest"]![0]!["contextReferenceIds"]!.AsArray().Add("zzzz.context.style-alias");
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         Assert.NotNull(DocumentationScribeValidation.ParseRequest(bytes).Request);
         var exchange = new CountingExchange();
@@ -1221,14 +1244,15 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         alias["relation"] = "evidence.constrains";
         alias["authority"] = "authority.public-contract";
         root["evidenceReferences"]!.AsArray().Add(alias);
-        root["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"]!
+        root["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().Add("zzzz.evidence.public-contract-alias");
+        root["manifest"]![0]!["styleProfile"]!["claimPolicies"]![0]!["allowedAuthorities"]!
             .AsArray().Add("authority.public-contract");
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         Assert.NotNull(DocumentationScribeValidation.ParseRequest(bytes).Request);
         var exchange = new CountingExchange();
 
         var outcome = await CliHarness.ExecuteAsync(
-            fixture.SelectedAudit,
+            CliHarness.CreateManifestSelection(fixture.AuditSelection, DocumentationScribeValidation.ParseRequest(bytes).Request!.ExecutionStyleProfile),
             bytes,
             fixture.AttemptId,
             exchange);
@@ -1293,7 +1317,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
             var stable = new
             {
-                Target = fixture.Request.Target.SymbolRef,
+                Target = fixture.Request.ExecutionTarget.Target.SymbolRef,
                 Tools = exchange.Completed.Select(item => new
                 {
                     item.OperationId,
@@ -1558,7 +1582,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         WithCompleteEvidenceRequirement(ReadOnlyMemory<byte> requestBytes)
     {
         var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
-        root["styleProfile"]!["claimPolicies"]![0]!["completeEvidenceRequired"] = true;
+        root["manifest"]![0]!["styleProfile"]!["claimPolicies"]![0]!["completeEvidenceRequired"] = true;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
         return (bytes, Assert.IsType<DocumentationScribeRequest>(parsed.Request));
@@ -1584,6 +1608,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             ["includedUtf8ByteCount"] = fileBytes.Length,
             ["isTruncated"] = false,
         });
+        root["manifest"]![0]!["contextReferenceIds"]!.AsArray().Add("zzzz.context.confined-file");
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
         Assert.True(parsed.IsValid, parsed.Failure?.Code + "|" + parsed.Failure?.Pointer);
@@ -1607,6 +1632,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             ["includedUtf8ByteCount"] = source["includedUtf8ByteCount"]!.DeepClone(),
             ["isTruncated"] = source["isTruncated"]!.DeepClone(),
         });
+        root["manifest"]![0]!["contextReferenceIds"]!.AsArray().Add("zzzz.context.source-relabel");
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
         Assert.True(parsed.IsValid, parsed.Failure?.Code + "|" + parsed.Failure?.Pointer);
@@ -1628,7 +1654,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         string outcome)
     {
         var root = JsonNode.Parse(requestBytes.Span)!.AsObject();
-        root["context"]!["auditOutcome"] = outcome;
+        root["manifest"]![0]!["auditOutcome"] = outcome;
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         return (
             bytes,
@@ -1657,8 +1683,10 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Classified = classified;
             Observations = observations;
             Target = target;
-            SelectedAudit = selectedAudit;
-            NonMethodSelectedAudit = nonMethodSelectedAudit;
+            AuditSelection = selectedAudit;
+            SelectedAudit = CliHarness.CreateManifestSelection(selectedAudit,
+                request.HasExecutableTargets ? request.ExecutionStyleProfile : null);
+            NonMethodSelectedAudit = CliHarness.CreateManifestSelection(nonMethodSelectedAudit, null);
             RequestBytes = requestBytes;
             Request = request;
             AttemptId = attemptId;
@@ -1675,6 +1703,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         internal ObservedRepositorySession Observations { get; }
 
         internal TargetClassification Target { get; }
+
+        internal object AuditSelection { get; }
 
         internal object SelectedAudit { get; }
 
@@ -1704,14 +1734,14 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 Classified.Classification.ClassificationSet!,
                 policy,
                 inputs);
-            return CliHarness.SelectAudit(
+            return CliHarness.CreateManifestSelection(CliHarness.SelectAudit(
                 CliHarness.CreateAuditAuthority(
                     Classified,
                     Observations,
                     policy,
                     inputs,
                     audit),
-                Target);
+                Target), Request.ExecutionStyleProfile);
         }
 
         public async ValueTask DisposeAsync()
@@ -1883,7 +1913,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     targetSpan,
                     sourceSha256,
                     context,
-                    selectedAuditOutcome);
+                    selectedAuditOutcome,
+                    new DocumentationDeclarationAuthorityProjector().Project(observed, target, null).Authority?.GroupingAuthority);
                 var parsed = DocumentationScribeValidation.ParseRequest(requestBytes);
                 var request = Assert.IsType<DocumentationScribeRequest>(parsed.Request);
                 Assert.True(DocumentationScribeAttemptId.TryParse(
@@ -1923,7 +1954,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Utf16Span targetSpan,
             string sourceSha256,
             DocumentationScribeLoadedContext context,
-            string auditOutcome)
+            string auditOutcome,
+            CampaignPlanningGroupingAuthority? grouping)
         {
             var evidence = Assert.Single(context.Facts.Evidence, item =>
                 item.KindId == "source.target-declaration");
@@ -1958,7 +1990,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 })
                 .ToArray();
             var contextReferences = new JsonArray();
-            foreach (var instruction in context.Facts.Instructions)
+            foreach (var instruction in context.Facts.Instructions.OrderBy(item => item.InstructionId, StringComparer.Ordinal))
             {
                 contextReferences.Add(new JsonObject
                 {
@@ -1973,72 +2005,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 });
             }
 
-            var root = new JsonObject
-            {
-                ["scribeRequestVersion"] = 1,
-                ["context"] = new JsonObject
-                {
-                    ["repositoryContextRef"] = session.RepositoryContextRef.Value,
-                    ["inputIdentity"] = session.InputIdentity,
-                    ["targetProfile"] = "profile.external-api",
-                    ["auditOutcome"] = auditOutcome,
-                },
-                ["target"] = new JsonObject
-                {
-                    ["symbolRef"] = Symbol(target.SymbolRef),
-                    ["sourceCommitment"] = new JsonObject
-                    {
-                        ["locator"] = RepositoryLocator(
-                            sourcePath,
-                            targetSpan),
-                        ["contentSha256"] = sourceSha256,
-                    },
-                    ["applicableComponents"] = new JsonArray(components.Select(item =>
-                    {
-                        var component = new JsonObject
-                        {
-                            ["kind"] = item.Kind,
-                            ["identity"] = item.Identity,
-                        };
-                        if (item.Name is { } name)
-                        {
-                            component["name"] = name;
-                        }
-
-                        return component;
-                    }).ToArray<JsonNode?>()),
-                },
-                ["styleProfile"] = new JsonObject
-                {
-                    ["styleProfileId"] = "style.public-api.v1",
-                    ["outputLanguageId"] = "language.en",
-                    ["summary"] = Policy("required", 400),
-                    ["remarks"] = Policy("forbidden", 400),
-                    ["exceptions"] = Policy("forbidden", 400),
-                    ["componentPolicies"] = new JsonArray(components.Select(item =>
-                        (JsonNode?)new JsonObject
-                        {
-                            ["componentIdentity"] = item.Identity,
-                            ["disposition"] = "required",
-                            ["maximumScalars"] = 300,
-                        }).ToArray()),
-                    ["inheritDocDisposition"] = "forbidden",
-                    ["allowedLiterals"] = new JsonArray(),
-                    ["forbiddenLiterals"] = new JsonArray(),
-                    ["claimPolicies"] = new JsonArray
-                    {
-                        new JsonObject
-                        {
-                            ["claimCategoryId"] = "claim.purpose",
-                            ["completeEvidenceRequired"] = false,
-                            ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
-                        },
-                    },
-                    ["maximumContentUnits"] = 8,
-                    ["maximumEvidenceRefsPerUnit"] = 4,
-                },
-                ["contextReferences"] = contextReferences,
-                ["evidenceReferences"] = new JsonArray
+            var executable = target.PrimaryKind == PrimarySymbolKind.Method;
+            var manifestContextReferences = contextReferences;
+            var manifestEvidenceReferences = new JsonArray
                 {
                     new JsonObject
                     {
@@ -2057,8 +2026,86 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         ["isTruncated"] = evidence.Commitment.IsTruncated,
                         ["claimCategoryIds"] = new JsonArray("claim.purpose"),
                     },
+                };
+            if (!executable) manifestEvidenceReferences.Clear();
+            var root = new JsonObject
+            {
+                ["scribeRequestVersion"] = 1,
+                ["context"] = new JsonObject
+                {
+                    ["repositoryContextRef"] = session.RepositoryContextRef.Value,
+                    ["inputIdentity"] = session.InputIdentity,
+                    ["targetProfile"] = "profile.external-api",
                 },
-                ["evidenceConflicts"] = new JsonArray(),
+                ["manifest"] = new JsonArray(new JsonObject
+                {
+                    ["targetId"] = "target.selected",
+                    ["target"] = new JsonObject
+                    {
+                        ["symbolRef"] = Symbol(target.SymbolRef),
+                        ["sourceCommitment"] = new JsonObject
+                        {
+                            ["locator"] = RepositoryLocator(
+                            sourcePath,
+                            targetSpan),
+                            ["contentSha256"] = sourceSha256,
+                        },
+                        ["applicableComponents"] = new JsonArray(components.Select(item =>
+                        {
+                            var component = new JsonObject
+                            {
+                                ["kind"] = item.Kind,
+                                ["identity"] = item.Identity,
+                            };
+                            if (item.Name is { } name)
+                            {
+                                component["name"] = name;
+                            }
+
+                            return component;
+                        }).ToArray<JsonNode?>()),
+                    },
+                    ["auditOutcome"] = auditOutcome,
+                    ["styleProfile"] = executable ? new JsonObject
+                    {
+                        ["styleProfileId"] = "style.public-api.v1",
+                        ["outputLanguageId"] = "language.en",
+                        ["summary"] = Policy("required", 400),
+                        ["remarks"] = Policy("forbidden", 400),
+                        ["exceptions"] = Policy("forbidden", 400),
+                        ["componentPolicies"] = new JsonArray(components.Select(item =>
+                            (JsonNode?)new JsonObject
+                            {
+                                ["componentIdentity"] = item.Identity,
+                                ["disposition"] = "required",
+                                ["maximumScalars"] = 300,
+                            }).ToArray()),
+                        ["inheritDocDisposition"] = "forbidden",
+                        ["allowedLiterals"] = new JsonArray(),
+                        ["forbiddenLiterals"] = new JsonArray(),
+                        ["claimPolicies"] = new JsonArray
+                    {
+                        new JsonObject
+                        {
+                            ["claimCategoryId"] = "claim.purpose",
+                            ["completeEvidenceRequired"] = false,
+                            ["allowedAuthorities"] = new JsonArray("authority.source-declaration"),
+                        },
+                    },
+                        ["maximumContentUnits"] = 8,
+                        ["maximumEvidenceRefsPerUnit"] = 4,
+                    } : null,
+                    ["contextReferenceIds"] = new JsonArray(context.Facts.Instructions.OrderBy(item => item.Depth)
+                        .ThenBy(item => item.Commitment.RepositoryPath, StringComparer.Ordinal)
+                        .Select(item => (JsonNode?)JsonValue.Create(item.InstructionId)).ToArray()),
+                    ["evidenceReferenceIds"] = new JsonArray(manifestEvidenceReferences
+                        .Select(item => (JsonNode?)JsonValue.Create(item!["evidenceReferenceId"]!.GetValue<string>())).ToArray()),
+                    ["grouping"] = CampaignScribeRequestBuilder.Grouping(grouping, target.SymbolRef.CompilationContextRef),
+                }),
+                ["executableTargetIds"] = executable ? new JsonArray("target.selected") : new JsonArray(),
+                ["contextReferences"] = manifestContextReferences,
+                ["evidenceReferences"] = manifestEvidenceReferences,
+                ["evidenceConflicts"] = executable ? new JsonArray() : new JsonArray(),
                 ["toolPolicyId"] = "tool-policy.read-only.v1",
                 ["limits"] = new JsonObject
                 {
@@ -2208,7 +2255,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                             1,
                             "call.semantic",
                             DocumentationScribeSemanticToolSelection.OperationId,
-                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                            JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected", pageSize = 1 })),
                     ],
                     []));
             }
@@ -2229,10 +2276,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         private readonly string scopeId;
         private readonly string? repositoryPath;
 
-        internal ReadThenSkipExchange(string scopeId, string? repositoryPath = null)
+        private readonly bool fullSource;
+
+        internal ReadThenSkipExchange(string scopeId, string? repositoryPath = null, bool fullSource = false)
         {
             this.scopeId = scopeId;
             this.repositoryPath = repositoryPath;
+            this.fullSource = fullSource;
         }
 
         internal ImmutableArray<DocumentationScribeCompletedToolExchange> Completed { get; private set; } = [];
@@ -2255,6 +2305,11 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 if (repositoryPath is not null)
                 {
                     arguments["repositoryPath"] = repositoryPath;
+                }
+                if (fullSource)
+                {
+                    arguments.Remove("startLine");
+                    arguments.Remove("endLine");
                 }
 
                 return ValueTask.FromResult(SyntheticResponse(
@@ -2447,7 +2502,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                             0,
                             "call.semantic",
                             DocumentationScribeSemanticToolSelection.OperationId,
-                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                            JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected", pageSize = 1 })),
                     ],
                     []);
             }
@@ -2509,7 +2564,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         0,
                         "call.semantic",
                         DocumentationScribeSemanticToolSelection.OperationId,
-                        JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                        JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected", pageSize = 1 })),
                 ],
                 []));
         }
@@ -2531,7 +2586,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                             0,
                             "call.semantic",
                             DocumentationScribeSemanticToolSelection.OperationId,
-                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                            JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected", pageSize = 1 })),
                     ],
                     []));
             }
@@ -2570,7 +2625,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                             1,
                             "call.semantic-cursor",
                             DocumentationScribeSemanticToolSelection.OperationId,
-                            JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1 })),
+                            JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected", pageSize = 1 })),
                     ],
                     []));
             }
@@ -2608,7 +2663,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         pageSize = 1,
                         cursor,
                     })
-                    : JsonSerializer.SerializeToUtf8Bytes(new { pageSize = 1, cursor });
+                    : JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected", pageSize = 1, cursor });
                 return ValueTask.FromResult(SyntheticResponse(
                     [
                         new DocumentationScribeModelToolCall(
@@ -2666,7 +2721,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     private static ReadOnlyMemory<byte> ProposalTerminal(DocumentationScribeRequest request)
     {
-        var locator = (RepositoryEvidenceLocator)request.Target.SourceLocator;
+        var locator = (RepositoryEvidenceLocator)request.ExecutionTarget.Target.SourceLocator;
         return JsonSerializer.SerializeToUtf8Bytes(new JsonObject
         {
             ["kind"] = "proposal",
@@ -2675,8 +2730,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 ["repositoryContextRef"] = request.Context.RepositoryContextRef.Value,
                 ["symbolRef"] = new JsonObject
                 {
-                    ["compilationContextRef"] = request.Target.SymbolRef.CompilationContextRef,
-                    ["documentationCommentId"] = request.Target.SymbolRef.DocumentationCommentId,
+                    ["compilationContextRef"] = request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId,
                 },
                 ["sourceCommitment"] = new JsonObject
                 {
@@ -2692,7 +2747,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                             },
                         },
                     },
-                    ["contentSha256"] = request.Target.SourceSha256,
+                    ["contentSha256"] = request.ExecutionTarget.Target.SourceSha256,
                 },
             },
             ["contentUnits"] = new JsonArray
@@ -2748,6 +2803,14 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 BindingFlags.Instance | BindingFlags.NonPublic);
             return method.Invoke(authority, [target])
                 ?? throw new InvalidOperationException("CLI selected audit returned null.");
+        }
+
+        internal static object CreateManifestSelection(object audit, DocumentationScribeStyleProfile? acceptedStyle)
+        {
+            var type = RequireType("ContractScribe.Cli.DocumentationScribeManifestSelection");
+            return RequireMethod(type, "CreateSingleton", BindingFlags.Static | BindingFlags.NonPublic)
+                .Invoke(null, [audit, acceptedStyle])
+                ?? throw new InvalidOperationException("CLI manifest selection returned null.");
         }
 
         internal static async Task<CliOutcome> ExecuteAsync(

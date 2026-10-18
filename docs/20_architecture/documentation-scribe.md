@@ -1,6 +1,6 @@
 # Documentation Scribe
 
-> **Status:** Current single-target Runtime with M7 fixed selection and C4 shared invocation budgets/per-dispatch settlement. [M7 plan](../90_roadmap/m7-plan.md) owns the remaining shared-conversation direction; S1–S3 are not implemented by C4. Campaign targets share one checked allowance and monotonic Action clock while their model conversations remain independent. Historical M3–M6 evidence stays bound to its original revision.
+> **Status:** M7-S1 manifest request/context/tool boundary is implemented over the SolusAgent runtime. Complete selected metadata and scoped lazy reads share one conversation; the current terminal completes only the first executable member. Campaign durable execution remains singleton until S5; incremental acknowledgement and coverage belong to S4/S5. C4 invocation accounting and exact continuation remain unchanged. Historical M3–M6 evidence stays bound to its original revision.
 
 ## Goal
 
@@ -31,10 +31,10 @@ The initial Scribe Runtime does not provide:
 ## Current runtime shape and M7 direction
 
 ```text
-audit target
-  -> deterministic project-context bootstrap
+independently authorized selected manifest and executable subset
+  -> deterministic scoped project-context bootstrap
   -> repository context snapshot + scope overlay
-  -> target context-pack builder
+  -> complete manifest + shared content + target-specific mappings
   -> bounded Scribe loop
        -> optional semantic context routing
        -> semantic/read tool call
@@ -44,7 +44,7 @@ audit target
   -> documentation proposal or structured skip
 ```
 
-The current production request builder selects exactly one eligible documentation target, and the current loop terminates on its structured proposal/skip. Independent current runs may reuse immutable context inputs and read-only indexes, but do not share mutable conversations. Bounded opaque assistant continuation is private to the current attempt and discarded at attempt/run boundaries; it is not durable recovery state.
+The current production builder accepts the complete independently selected manifest, with optional bounded initial evidence and lazy source scopes. Ordinary campaign callers supply singleton manifests. The runtime terminates on the first executable member's structured proposal/skip; this is a partial result for a multi-target manifest. Independent current runs may reuse immutable context inputs and read-only indexes, but do not share mutable conversations. Bounded opaque assistant continuation is private to the current attempt and discarded at attempt/run boundaries; it is not durable recovery state.
 
 M7 replaces the per-target session direction with one bounded conversation for the complete fixed selected manifest in a normal Action. Necessary target identities, relationships, instruction/style constraints and validated prior progress are visible at the start; detailed evidence is read lazily through bounded tools and reused by content identity/revision/range. Grouping chooses the manifest and provides relationship hints, rather than feeding groups sequentially. Incremental per-target/small-batch proposals and skips receive host validation/acknowledgement while the conversation continues. Foreign/duplicate targets cannot advance state, and the host independently verifies final coverage. Submission, accepted proposal, patch validation, publication and merge remain distinct.
 
@@ -52,7 +52,7 @@ Compatible unpublished recovery reconstructs accepted results without regenerati
 
 ## Relationship to audit evidence
 
-The canonical Audit Result and deterministic work plan select documentation targets before Scribe runs. The current request admits one; M7 admits the complete fixed batch. Scribe may submit a proposal or structured insufficient-evidence skip only for an admitted target; it cannot add targets, change classification or policy semantics, or reinterpret an audit outcome.
+The canonical Audit Result and deterministic work plan select documentation targets before Scribe runs. The request admits the complete independently selected set, while the current durable campaign host still admits singleton results. Scribe may submit a proposal or structured insufficient-evidence skip only for an admitted target; it cannot add targets, change classification or policy semantics, or reinterpret an audit outcome.
 
 Audit evidence proves that a bounded audit judgment is justified. Scribe target evidence supports writing useful documentation and may require additional signature, relation, implementation, test, usage, maintained-documentation, or style context. The two evidence sets share identity, repository-relative locator, source-revision, hash, authority, and truncation principles, but they are not the same artifact and need not contain the same material.
 
@@ -217,7 +217,7 @@ system and safety protocol
 + subsequent tool calls and results
 ```
 
-Message, tool, schema, document, and evidence-label ordering before the boundary is deterministic. Timestamps, run IDs, temporary paths, random identifiers, target symbols, cursors, remaining budgets, and prior target conversations are forbidden from that prefix.
+Message, tool, schema, document, and evidence-label ordering before the boundary is deterministic. Full prefix compatibility includes the actual bound scope/target enums and instruction overlays; common repository message bytes alone do not establish full-prefix equality. Timestamps, run IDs, temporary paths, random identifiers, target symbols, cursors, remaining budgets, and prior target conversations are forbidden from that prefix.
 
 The runtime computes a local cacheable-prefix identity from the Scribe protocol, tool registry, repository context, scope context, every other prefix-resident input including a style profile when present, and compatible provider/model configuration. The identity covers the exact normalized logical prefix rather than only a subset of its named inputs. Provider cache hits are observed but never trusted as the sole proof that two requests had the same prefix. A cache miss does not change correctness; it consumes uncached-input and cost budgets and remains visible in evaluation.
 

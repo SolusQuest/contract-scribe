@@ -84,9 +84,9 @@ public sealed class DocumentationScribeSemanticToolTests
     public void LimitsAndRequestsRejectUnboundedInputs()
     {
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            DocumentationScribeSemanticToolRequest.Create(0));
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 0));
         Assert.Throws<ArgumentOutOfRangeException>(() =>
-            DocumentationScribeSemanticToolRequest.Create(101));
+            DocumentationScribeSemanticToolRequest.Create("target.selected", 101));
         Assert.Throws<ArgumentOutOfRangeException>(() => new DocumentationScribeSemanticToolLimits(
             0,
             1,

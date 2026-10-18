@@ -39,7 +39,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             hostElapsed: completion == "timeout" ? 500 : null);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
-        var source = Path.Join(fixture.Root, ((RepositoryEvidenceLocator)request.Request.Target.SourceLocator).Path);
+        var source = Path.Join(fixture.Root, ((RepositoryEvidenceLocator)request.Request.ExecutionTarget.Target.SourceLocator).Path);
         var original = await File.ReadAllBytesAsync(source);
         using var caller = new CancellationTokenSource();
         clock.OnPostflight = () =>

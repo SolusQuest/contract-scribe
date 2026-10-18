@@ -268,7 +268,7 @@ public sealed partial class CampaignStateContractTests
             (request =>
             {
                 const string alternate = "M:Synthetic.Widget.Alternate(System.String)";
-                SetSymbol(request["target"]!["symbolRef"]!, "synthetic.v1", alternate);
+                SetSymbol(request["manifest"]![0]!["target"]!["symbolRef"]!, "synthetic.v1", alternate);
                 foreach (var subject in request["evidenceReferences"]!
                     .AsArray()
                     .Select(evidence => evidence!["subject"]!))
@@ -279,16 +279,17 @@ public sealed partial class CampaignStateContractTests
                 result["terminal"]!["target"]!["symbolRef"]!,
                 "synthetic.v1",
                 "M:Synthetic.Widget.Alternate(System.String)")),
-            (request => request["target"]!["sourceCommitment"]!["contentSha256"] = Hash('a'),
+            (request => request["manifest"]![0]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('a'),
                 result => result["terminal"]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('a')),
             (request =>
             {
-                request["target"]!["applicableComponents"]!.AsArray().RemoveAt(1);
-                request["styleProfile"]!["componentPolicies"]!.AsArray().RemoveAt(1);
+                request["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray().RemoveAt(1);
+                request["manifest"]![0]!["styleProfile"]!["componentPolicies"]!.AsArray().RemoveAt(1);
                 request["evidenceReferences"]!.AsArray().RemoveAt(1);
+                request["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().RemoveAt(1);
             }, result => result["terminal"]!["contentUnits"]!.AsArray().RemoveAt(2)),
             (request => request["evidenceReferences"]![0]!["contentSha256"] = Hash('a'), null),
-            (request => request["styleProfile"]!["allowedLiterals"]!.AsArray().Add("Zeta"), null),
+            (request => request["manifest"]![0]!["styleProfile"]!["allowedLiterals"]!.AsArray().Add("Zeta"), null),
             (request => request["toolPolicyId"] = "tool-policy.alternate.v1",
                 result => result["runEnvelope"]!["toolPolicyId"] = "tool-policy.alternate.v1"),
         };
@@ -349,11 +350,11 @@ public sealed partial class CampaignStateContractTests
         {
             ("input-identity", root => root["context"]!["inputIdentity"] = "samples/Alternate.csproj", null),
             ("target-profile", root => root["context"]!["targetProfile"] = "profile.assembly-visible", null),
-            ("audit-outcome", root => root["context"]!["auditOutcome"] = "audit.outcome.compliant", null),
+            ("audit-outcome", root => root["manifest"]![0]!["auditOutcome"] = "audit.outcome.compliant", null),
             ("symbol", root =>
             {
                 const string alternate = "M:Synthetic.Widget.Alternate(System.String)";
-                SetSymbol(root["target"]!["symbolRef"]!, "synthetic.v1", alternate);
+                SetSymbol(root["manifest"]![0]!["target"]!["symbolRef"]!, "synthetic.v1", alternate);
                 foreach (var subject in root["evidenceReferences"]!
                     .AsArray()
                     .Select(evidence => evidence!["subject"]!))
@@ -368,16 +369,16 @@ public sealed partial class CampaignStateContractTests
                 "synthetic.v1",
                 "M:Synthetic.Widget.Alternate(System.String)")),
             ("source-locator", root =>
-                root["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
+                root["manifest"]![0]!["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
                     "src/Synthetic/Alternate.cs",
                 root => root["terminal"]!["target"]!["sourceCommitment"]!["locator"]!["repository"]!["path"] =
                     "src/Synthetic/Alternate.cs"),
-            ("source-sha", root => root["target"]!["sourceCommitment"]!["contentSha256"] = Hash('f'),
+            ("source-sha", root => root["manifest"]![0]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('f'),
                 root => root["terminal"]!["target"]!["sourceCommitment"]!["contentSha256"] = Hash('f')),
             ("component-name", root =>
-                root["target"]!["applicableComponents"]![0]!["name"] = "alternate",
+                root["manifest"]![0]!["target"]!["applicableComponents"]![0]!["name"] = "alternate",
                 root => root["terminal"]!["contentUnits"]![1]!["name"] = "alternate"),
-            ("style-profile", root => root["styleProfile"]!["allowedLiterals"]!.AsArray().Add("Zeta"), null),
+            ("style-profile", root => root["manifest"]![0]!["styleProfile"]!["allowedLiterals"]!.AsArray().Add("Zeta"), null),
             ("limits", root => root["limits"]!["maximumOutputTokens"] = 4_096, null),
             ("tool-policy", root => root["toolPolicyId"] = "tool-policy.alternate.v1",
                 root => root["runEnvelope"]!["toolPolicyId"] = "tool-policy.alternate.v1"),
@@ -2366,6 +2367,9 @@ public sealed partial class CampaignStateContractTests
             var evidence = root["evidenceReferences"]![0]!;
             replacedId = evidence["evidenceReferenceId"]!.GetValue<string>();
             evidence["evidenceReferenceId"] = collisionId;
+            root["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray(root["evidenceReferences"]!.AsArray()
+                .Select(item => item!["evidenceReferenceId"]!.GetValue<string>()).Order(StringComparer.Ordinal)
+                .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());
             evidence["contentSha256"] = Hash('f');
         }
 
@@ -4812,7 +4816,7 @@ public sealed partial class CampaignStateContractTests
             classifications,
             policy,
             auditInputs);
-        var styleProfile = requestTemplate.StyleProfile;
+        var styleProfile = requestTemplate.ExecutionStyleProfile;
         var targetAuthorities = specifications.Select(specification =>
         {
             var target = classifications.Targets.Single(value =>
@@ -4950,8 +4954,8 @@ public sealed partial class CampaignStateContractTests
         var source = Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source);
         var requestNode = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         requestNode["context"]!["inputIdentity"] = inputIdentity;
-        SetSymbol(requestNode["target"]!["symbolRef"]!, target.SymbolRef);
-        SetSource(requestNode["target"]!["sourceCommitment"]!, source);
+        SetSymbol(requestNode["manifest"]![0]!["target"]!["symbolRef"]!, target.SymbolRef);
+        SetSource(requestNode["manifest"]![0]!["target"]!["sourceCommitment"]!, source);
         var evidenceIdSuffix = work.WorkItemKey[^8..];
         var evidenceIdMap = requestNode["evidenceReferences"]!
             .AsArray()
@@ -4959,6 +4963,8 @@ public sealed partial class CampaignStateContractTests
                 evidence => evidence!["evidenceReferenceId"]!.GetValue<string>(),
                 evidence => evidence!["evidenceReferenceId"]!.GetValue<string>() + "." + evidenceIdSuffix,
                 StringComparer.Ordinal);
+        requestNode["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray(
+            evidenceIdMap.Values.Order(StringComparer.Ordinal).Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());
         foreach (var evidence in requestNode["evidenceReferences"]!.AsArray())
         {
             var originalId = evidence!["evidenceReferenceId"]!.GetValue<string>();
@@ -5106,7 +5112,7 @@ public sealed partial class CampaignStateContractTests
 
     private static void ConfigureLargeContentStyle(JsonObject root)
     {
-        var style = root["styleProfile"]!;
+        var style = root["manifest"]![0]!["styleProfile"]!;
         style["summary"]!["maximumScalars"] = DocumentationScribeContract.MaximumTextScalars;
         style["remarks"]!["maximumScalars"] = DocumentationScribeContract.MaximumTextScalars;
         style["exceptions"]!["maximumScalars"] = DocumentationScribeContract.MaximumTextScalars;
@@ -5139,6 +5145,7 @@ public sealed partial class CampaignStateContractTests
                 exception["contentSha256"] = Hash('e');
                 exception["claimCategoryIds"] = new JsonArray { "claim.behavior" };
                 evidence.Add(exception);
+                root["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().Add(exceptionEvidenceId);
             },
             resultMutation: root =>
             {

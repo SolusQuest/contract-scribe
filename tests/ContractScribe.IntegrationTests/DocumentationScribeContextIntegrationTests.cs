@@ -2161,7 +2161,7 @@ public sealed class DocumentationScribeContextIntegrationTests
         context["repositoryContextRef"] = loaded.Facts.RepositoryContextRef.ToString();
         context["inputIdentity"] = loaded.Facts.InputIdentity;
         context["targetProfile"] = ClassificationVocabulary.GetId(loaded.Facts.TargetProfile);
-        var target = root["target"]!.AsObject();
+        var target = root["manifest"]![0]!["target"]!.AsObject();
         var symbol = target["symbolRef"]!.AsObject();
         symbol["compilationContextRef"] = loaded.Facts.SymbolRef.CompilationContextRef;
         symbol["documentationCommentId"] = loaded.Facts.SymbolRef.DocumentationCommentId;
@@ -2176,7 +2176,7 @@ public sealed class DocumentationScribeContextIntegrationTests
             ["end"] = locator.Span.Value.End,
         };
         target["applicableComponents"] = new JsonArray();
-        root["styleProfile"]!["componentPolicies"] = new JsonArray();
+        root["manifest"]![0]!["styleProfile"]!["componentPolicies"] = new JsonArray();
         var contextReferences = new JsonArray();
         foreach (var pair in instructions.Select((instruction, index) => (instruction, index)))
         {
@@ -2210,6 +2210,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         }
 
         root["contextReferences"] = contextReferences;
+        root["manifest"]![0]!["contextReferenceIds"] = new JsonArray(root["contextReferences"]!.AsArray()
+            .Select(item => (JsonNode?)JsonValue.Create(item!["contextReferenceId"]!.GetValue<string>())).ToArray());
+        root["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray();
         root["evidenceReferences"] = new JsonArray();
         var parsed = DocumentationScribeValidation.ParseRequest(
             Encoding.UTF8.GetBytes(root.ToJsonString()));

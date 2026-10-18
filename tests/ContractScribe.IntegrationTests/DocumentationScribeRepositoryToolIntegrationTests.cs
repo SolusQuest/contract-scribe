@@ -291,9 +291,9 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
                 request.Context.RepositoryContextRef,
                 request.Context.InputIdentity,
                 request.Context.TargetProfile,
-                request.Target.SymbolRef,
-                request.Target.SourceLocator,
-                request.Target.SourceSha256);
+                request.ExecutionTarget.Target.SymbolRef,
+                request.ExecutionTarget.Target.SourceLocator,
+                request.ExecutionTarget.Target.SourceSha256);
             var visible = Assert.Single(request.ContextReferences);
             var commitment = DocumentationScribeContextValidation.CreateSourceCommitment(
                 visible.Path,
@@ -337,8 +337,8 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
                 "scribe-attempt.11111111111111111111111111111111",
                 out var attempt));
             var subject = EvidenceInput.TargetSubject(
-                request.Target.SymbolRef.CompilationContextRef,
-                request.Target.SymbolRef.DocumentationCommentId);
+                request.ExecutionTarget.Target.SymbolRef.CompilationContextRef,
+                request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId);
             var scope = exactFilePath is null
                 ? DocumentationScribeRepositoryToolScope.Directory(
                     "context.instructions",

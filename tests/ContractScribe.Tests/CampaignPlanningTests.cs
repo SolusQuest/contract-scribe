@@ -383,8 +383,8 @@ public sealed class CampaignPlanningTests
     {
         var baseline = CreateScenario();
         var requestJson = ReadScribeRequestJson();
-        requestJson["styleProfile"]!["summary"]!["maximumScalars"] = 401;
-        var changedProfile = ParseScribeRequest(requestJson).StyleProfile;
+        requestJson["manifest"]![0]!["styleProfile"]!["summary"]!["maximumScalars"] = 401;
+        var changedProfile = ParseScribeRequest(requestJson).ExecutionStyleProfile;
         var changed = ReplaceStyle(baseline, changedProfile);
 
         Assert.NotEqual(
@@ -432,13 +432,14 @@ public sealed class CampaignPlanningTests
     {
         var scenario = CreateScenario();
         var requestJson = ReadScribeRequestJson();
-        var targetComponents = requestJson["target"]!["applicableComponents"]!.AsArray();
-        var styleComponents = requestJson["styleProfile"]!["componentPolicies"]!.AsArray();
+        var targetComponents = requestJson["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray();
+        var styleComponents = requestJson["manifest"]![0]!["styleProfile"]!["componentPolicies"]!.AsArray();
         var evidenceReferences = requestJson["evidenceReferences"]!.AsArray();
         targetComponents.RemoveAt(0);
         styleComponents.RemoveAt(0);
         evidenceReferences.RemoveAt(0);
-        var incomplete = ParseScribeRequest(requestJson).StyleProfile;
+        requestJson["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().RemoveAt(0);
+        var incomplete = ParseScribeRequest(requestJson).ExecutionStyleProfile;
 
         var failure = Assert.Throws<CampaignPlanningValidationException>(() =>
             CampaignPlanner.Plan(ReplaceStyle(scenario, incomplete).Input));
@@ -1031,7 +1032,7 @@ public sealed class CampaignPlanningTests
             {
                 Targets = [styleTarget with
                 {
-                    ExecutableStyleProfile = ReadScribeRequest().StyleProfile,
+                    ExecutableStyleProfile = ReadScribeRequest().ExecutionStyleProfile,
                 }],
             },
         };
@@ -1960,7 +1961,7 @@ public sealed class CampaignPlanningTests
             multiDeclarator: false,
             primaryConstructor: false,
             primaryConstructorAlias: false,
-            request.StyleProfile)
+            request.ExecutionStyleProfile)
         {
             GroupingAuthority = new("project.synthetic", "T:Synthetic.Widget", Sha256("member.Run"),
                 CampaignPlanner.CreateInstructionStackCommitment(request.ContextReferences), Sha256("style.synthetic")),
@@ -2346,10 +2347,11 @@ public sealed class CampaignPlanningTests
     private static DocumentationScribeStyleProfile ReadZeroComponentStyleProfile()
     {
         var request = ReadScribeRequestJson();
-        request["target"]!["applicableComponents"]!.AsArray().Clear();
-        request["styleProfile"]!["componentPolicies"]!.AsArray().Clear();
+        request["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray().Clear();
+        request["manifest"]![0]!["styleProfile"]!["componentPolicies"]!.AsArray().Clear();
         request["evidenceReferences"]!.AsArray().Clear();
-        return ParseScribeRequest(request).StyleProfile;
+        request["manifest"]![0]!["evidenceReferenceIds"]!.AsArray().Clear();
+        return ParseScribeRequest(request).ExecutionStyleProfile;
     }
 
     private static BoundObservationEvidence BindEvidence(
