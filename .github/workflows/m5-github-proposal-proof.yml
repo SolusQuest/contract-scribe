@@ -32,6 +32,7 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: read
+      packages: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
         with:
@@ -48,10 +49,15 @@ jobs:
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
           dotnet-version: '10.0.x'
+      - name: Restore the normal CLI
+        shell: bash
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic
+        run: dotnet restore src/ContractScribe.Cli/ContractScribe.Cli.csproj
       - name: Build the normal CLI and pure checkpoint helper
         shell: bash
         run: |
-          dotnet build src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release
+          dotnet build src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-restore
           dotnet build tests/fixtures/github/live-proof/CheckpointCheck/CheckpointCheck.csproj --configuration Release -p:ProductCorePath="$GITHUB_WORKSPACE/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Core.dll" -p:ImportDirectoryBuildProps=false -p:ImportDirectoryBuildTargets=false
       - name: Test the workflow and real credential-absent reconstruction
         shell: bash
