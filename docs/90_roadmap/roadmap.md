@@ -11,11 +11,11 @@ M1 deterministic audit
   -> M4 resumable campaign orchestration
   -> M5 GitHub proposal workflow
   -> M6 Action engineering and internal qualification
-  -> M7 caller-owned scheduling and automatic bounded continuation (plan adopted; implementation pending)
+  -> M7 caller-owned scheduling and automatic bounded continuation (implementation in progress)
   -> governance disposition and first public publication
 ```
 
-[CR1](cr1-plan.md) is the adopted change-request track for replacing the current general Scribe execution machinery with published SolusAgent packages. It runs alongside M7 and supplies the runtime foundation for its remaining Scribe work; M7 does not first need to complete against the old loop. Qualification and production migration remain pending.
+[CR1](cr1-plan.md) is the adopted change-request track for replacing the current general Scribe execution machinery with published SolusAgent packages. It runs alongside M7 and supplies the runtime foundation for its remaining Scribe work; M7 does not first need to complete against the old loop. Qualification and production migration are complete through #246 and #247. The remaining M7 scope is reconciled against that production baseline in the [post-CR1 audit](m7-post-cr1-audit.md).
 
 Release governance, payload distribution, and deferred topology research are separate tracks. They must not block source-based product work that does not depend on them, but their explicit gates apply before the first consumable release.
 
@@ -46,8 +46,8 @@ The product is not complete when it can only report missing documentation. Its u
 | M4 — Resumable campaign orchestration | Done | Deterministic budgeting, resume, and lineage |
 | M5 — GitHub proposal workflow | Done | Idempotent ledger, branch, commit, and draft PR workflow |
 | M6 — Action engineering and internal qualification | Engineering complete; closeout under revised scope | Verified payload/Action, release controls, and exact unpublished internal-candidate evidence |
-| M7 — Caller-owned scheduling and automatic bounded continuation | Plan adopted; implementation and exit evidence pending | Fixed batches, one shared Scribe conversation per Action, complete-ref recovery and practical caller-triggered progress |
-| CR1 — Adopt SolusAgent for the Documentation Scribe | Plan adopted; qualification and implementation pending | Supported package/API selection and one coherent production-runtime cutover, preserving product authority |
+| M7 — Caller-owned scheduling and automatic bounded continuation | C1–C4 and G1 complete; shared-session delivery and exit evidence pending | Fixed batches, one shared Scribe conversation per Action, complete-ref recovery and practical caller-triggered progress |
+| CR1 — Adopt SolusAgent for the Documentation Scribe | Complete through #246/#247 | Supported package/API selection and one coherent production-runtime cutover, preserving product authority |
 | Release Gate — Governance | Deferred until after M7 | License and contribution disposition before publication or external contribution intake |
 | Release Gate — First Publication | Deferred until after M7; #189 remains open | Newly prepared, qualified, explicitly approved public candidate |
 | Release Gate — Payload Distribution | Payload/host selection implemented through M6; separate tracker retained | D2/composite decisions and exact-candidate publication obligations |
