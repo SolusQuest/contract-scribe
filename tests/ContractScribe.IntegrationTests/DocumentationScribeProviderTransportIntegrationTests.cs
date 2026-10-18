@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Diagnostics.Tracing;
 using System.Net;
 using System.Net.Security;
@@ -18,6 +19,80 @@ namespace ContractScribe.IntegrationTests;
 
 public sealed class DocumentationScribeProviderTransportIntegrationTests
 {
+    [Theory]
+    [InlineData("action", false)]
+    [InlineData("action", true)]
+    [InlineData("live-proof", false)]
+    [InlineData("live-proof", true)]
+    public async Task Current_Python_provider_fixtures_submit_and_finish_through_real_HTTP(string fixture, bool proposal)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        var root = JsonNode.Parse(ReadFixture("request.json"))!.AsObject();
+        if (proposal)
+        {
+            var member = root["manifest"]![0]!;
+            member["target"]!["applicableComponents"] = new JsonArray();
+            member["styleProfile"]!["componentPolicies"] = new JsonArray();
+            var reference = root["evidenceReferences"]!.AsArray().Single(item => item!["subject"]!["symbolRef"] is not null)!;
+            root["evidenceReferences"] = new JsonArray(reference.DeepClone());
+            member["evidenceReferenceIds"] = new JsonArray(reference["evidenceReferenceId"]!.GetValue<string>());
+        }
+        var request = Assert.IsType<DocumentationScribeRequest>(DocumentationScribeValidation.ParseRequest(
+            Encoding.UTF8.GetBytes(root.ToJsonString())).Request);
+        var directory = Path.Join(Path.GetTempPath(), "contract-scribe-python-provider-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        var ready = Path.Join(directory, "ready.json");
+        var start = new ProcessStartInfo("python3") { UseShellExecute = false, RedirectStandardOutput = true, RedirectStandardError = true };
+        if (fixture == "action")
+        {
+            start.ArgumentList.Add(Path.Join(FindRepositoryRoot(), "tests", "action", "fake_provider.py"));
+            start.ArgumentList.Add("proposal"); start.ArgumentList.Add(ready); start.ArgumentList.Add(Path.Join(directory, "requests.log"));
+        }
+        else
+        {
+            // Use the actual proof handler on an ephemeral loopback port; no live proof or GitHub operation runs.
+            start.ArgumentList.Add("-c");
+            start.ArgumentList.Add("""
+                import http.server, importlib.util, json, sys
+                spec = importlib.util.spec_from_file_location('proof_provider', sys.argv[1])
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), module.Provider)
+                with open(sys.argv[2], 'w') as ready:
+                    json.dump({'endpoint': 'http://127.0.0.1:%d/v1/chat/completions' % server.server_port}, ready)
+                server.serve_forever()
+                """);
+            start.ArgumentList.Add(Path.Join(FindRepositoryRoot(), "tests", "fixtures", "github", "live-proof", "provider.py"));
+            start.ArgumentList.Add(ready);
+        }
+        using var process = Process.Start(start)!;
+        var stderr = process.StandardError.ReadToEndAsync(); var stdout = process.StandardOutput.ReadToEndAsync();
+        try
+        {
+            for (var attempt = 0; attempt < 200 && !File.Exists(ready) && !process.HasExited; attempt++) await Task.Delay(50);
+            Assert.True(File.Exists(ready), process.HasExited ? await stderr : "Python provider did not become ready.");
+            using var endpoint = JsonDocument.Parse(await File.ReadAllTextAsync(ready));
+            using var exchange = new OpenAiCompatibleHttpModelExchange(new(new Uri(endpoint.RootElement.GetProperty("endpoint").GetString()!),
+                "synthetic-model", new(OpenAiCompatibleThinkingMode.Enabled, OpenAiCompatibleReasoningEffort.High,
+                    OpenAiCompatibleToolChoice.Omitted, OpenAiCompatibleContinuationPolicy.RequiredForToolCalls,
+                    OpenAiCompatibleOutputTokenField.MaxTokens), networkEnabled: true));
+            var runtime = new TestScribeExecution(exchange, new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
+                new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
+            var result = await runtime.RunAsync(request, Attempt(), Prompt(request));
+            Assert.Equal(proposal ? DocumentationScribeFinishReason.Completed : DocumentationScribeFinishReason.Unresolved,
+                Assert.IsType<DocumentationScribeFinishedTerminal>(result.Stop).Reason);
+            Assert.Equal(proposal ? DocumentationScribeTerminalKind.Proposal : DocumentationScribeTerminalKind.Skip,
+                Assert.Single(result.Submissions).Result.Kind);
+            Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        }
+        finally
+        {
+            if (!process.HasExited) process.Kill(entireProcessTree: true);
+            await process.WaitForExitAsync(); await Task.WhenAll(stderr, stdout);
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
