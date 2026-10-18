@@ -28,7 +28,7 @@ internal sealed class DocumentationScribePromptContent(DocumentationScribeReques
         ImmutableArray<DocumentationScribeCompletedToolExchange> exchanges) => exchanges.Select(exchange =>
         {
             if (!exchange.OperationId.StartsWith("repository.", StringComparison.Ordinal)
-                && !exchange.OperationId.StartsWith("semantic.", StringComparison.Ordinal))
+                && exchange.OperationId != "get-target-evidence")
                 return exchange;
             var node = JsonNode.Parse(exchange.ResultUtf8Json.Span)!;
             Project(node);

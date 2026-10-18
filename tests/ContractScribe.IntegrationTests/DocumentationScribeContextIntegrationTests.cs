@@ -73,7 +73,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.NotNull(swappedRequest);
         Assert.Null(DocumentationScribeLoadedManifestContext.Bootstrap(fixture.ClassifiedSession, swappedRequest, [first, second]).Context);
         Assert.Null(DocumentationScribeLoadedManifestContext.Bootstrap(fixture.ClassifiedSession, request, [first]).Context);
-        var foreign = await new DocumentationScribeManifestSemanticToolPort(loaded).InvokeAsync(
+        var semantic = new DocumentationScribeManifestSemanticToolPort(loaded);
+        Assert.Empty(semantic.TargetIds);
+        var foreign = await semantic.InvokeAsync(
             DocumentationScribeSemanticToolRequest.Create("target.foreign", 1), default);
         Assert.Equal(DocumentationScribeSemanticFailureReason.InvalidRequest, foreign.FailureReason);
         fixture.WriteText("b/Other.cs", "namespace Fixture; public class Other { public int Changed; }");

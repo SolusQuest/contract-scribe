@@ -1544,22 +1544,25 @@ internal static class DocumentationScribeComposition
                     DocumentationScribeRepositoryToolSchemas.SearchTextInputUtf8Json,
                     scopes,
                     DocumentationScribeRepositoryToolOperations.SearchText),
-                maximumCallsPerRun: maximumCallsPerOperation)
-            .Add(
-                new DocumentationScribeSemanticToolDescriptor(),
-                new DocumentationScribeManifestSemanticToolPort(context),
-                new SemanticCodec(request.Manifest.Select(member => member.TargetId)),
-                "Read one bounded semantic evidence page for the exact selected manifest target.",
-                BindSemanticTargets(request),
                 maximumCallsPerRun: maximumCallsPerOperation);
+        var semantic = new DocumentationScribeManifestSemanticToolPort(context);
+        if (!semantic.TargetIds.IsEmpty)
+        {
+            builder.Add(
+                new DocumentationScribeSemanticToolDescriptor(),
+                semantic,
+                new SemanticCodec(semantic.TargetIds),
+                "Read one bounded semantic evidence page for an exact selected supported method target.",
+                BindSemanticTargets(semantic.TargetIds),
+                maximumCallsPerRun: maximumCallsPerOperation);
+        }
         return builder.Build();
     }
 
-    private static ReadOnlyMemory<byte> BindSemanticTargets(DocumentationScribeRequest request)
+    private static ReadOnlyMemory<byte> BindSemanticTargets(ImmutableArray<string> targetIds)
     {
         var schema = JsonNode.Parse(SemanticInputSchema.Span)!.AsObject();
-        schema["properties"]!["targetId"]!["enum"] = new JsonArray(request.Manifest
-            .Select(member => member.TargetId).Order(StringComparer.Ordinal)
+        schema["properties"]!["targetId"]!["enum"] = new JsonArray(targetIds
             .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());
         return JsonSerializer.SerializeToUtf8Bytes(schema);
     }

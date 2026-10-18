@@ -102,6 +102,8 @@ public sealed class DocumentationScribeSemanticToolPort
         }
     }
 
+    internal bool SupportsTarget => binding.FailureReason is null;
+
     public ValueTask<DocumentationScribeSemanticToolResult> InvokeAsync(
         DocumentationScribeSemanticToolRequest request,
         CancellationToken cancellationToken)

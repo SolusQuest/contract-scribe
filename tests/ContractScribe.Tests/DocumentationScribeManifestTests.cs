@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Agent.Prompting;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Cli;
 using ContractScribe.Core;
@@ -174,6 +175,80 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal("exact opaque reasoning", visible[0].AssistantContinuation!.ReasoningContent);
         Assert.Null(visible[1].AssistantContinuation);
         if (retry) Assert.Empty(exchange.Requests[2].CompletedToolExchanges);
+    }
+
+    [Fact]
+    public void Actual_semantic_history_shares_committed_ranges_without_mutating_trusted_results_or_continuation()
+    {
+        const string source = "shared semantic usage excerpt";
+        var request = Request();
+        var continuation = new DocumentationScribeAssistantContinuation("exact assistant", "opaque reasoning");
+        var raw = Enumerable.Range(0, 2).Select(index => new DocumentationScribeCompletedToolExchange(
+            index, "call.semantic." + index, DocumentationScribeSemanticToolSelection.OperationId,
+            ImmutableArray.CreateRange(JsonSerializer.SerializeToUtf8Bytes(new { targetId = "target.selected" })),
+            DocumentationScribeToolOutcome.Complete.Id,
+            ImmutableArray.CreateRange(JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                page = new
+                {
+                    items = Enumerable.Range(0, 2).Select(item => new
+                    {
+                        itemIdentity = $"item.{index}.{item}",
+                        source = new
+                        {
+                            compilationContextRef = "synthetic.v1",
+                            correlationIdentity = $"correlation.{index}.{item}",
+                            fact = new
+                            {
+                                subjectId = $"subject.{index}.{item}",
+                                commitment = new { repositoryPath = "src/Usage.cs", contentSha256 = Sha256(source), isTruncated = true },
+                                includedRange = new { start = 20, end = 20 + source.Length },
+                                content = source,
+                            },
+                        },
+                    }),
+                },
+            })), request.EvidenceReferences, index == 0 ? continuation : null)).ToImmutableArray();
+        var original = raw.Select(exchange => exchange.ResultUtf8Json.ToArray()).ToArray();
+        string? contentId = null;
+        // Every reconstruction starts from visible history, including after retry/restoration.
+        for (var reconstruction = 0; reconstruction < 2; reconstruction++)
+        {
+            var visible = new DocumentationScribePromptContent(request).History(raw);
+            var facts = visible.SelectMany(exchange => JsonNode.Parse(exchange.ResultUtf8Json.Span)!["page"]!["items"]!
+                .AsArray().Select(item => item!["source"]!["fact"]!)).ToArray();
+            Assert.Equal(source, facts[0]["content"]!.GetValue<string>());
+            Assert.NotNull(facts[0]["contentId"]);
+            contentId ??= facts[0]["contentId"]!.GetValue<string>();
+            Assert.Equal(contentId, facts[0]["contentId"]!.GetValue<string>());
+            Assert.All(facts.Skip(1), fact =>
+            {
+                Assert.Null(fact["content"]);
+                Assert.Equal(contentId, fact["contentRef"]!.GetValue<string>());
+            });
+            Assert.Equal(["subject.0.0", "subject.0.1", "subject.1.0", "subject.1.1"],
+                facts.Select(fact => fact["subjectId"]!.GetValue<string>()));
+            Assert.Same(continuation, visible[0].AssistantContinuation);
+            Assert.Null(visible[1].AssistantContinuation);
+            Assert.All(visible, exchange => Assert.Equal(request.EvidenceReferences, exchange.EvidenceReferences));
+            for (var index = 0; index < raw.Length; index++)
+            {
+                var before = JsonNode.Parse(original[index])!;
+                var after = JsonNode.Parse(visible[index].ResultUtf8Json.Span)!;
+                foreach (var item in before["page"]!["items"]!.AsArray())
+                    item!["source"]!["fact"]!.AsObject().Remove("content");
+                foreach (var item in after["page"]!["items"]!.AsArray())
+                {
+                    var fact = item!["source"]!["fact"]!.AsObject();
+                    fact.Remove("content");
+                    fact.Remove("contentId");
+                    fact.Remove("contentRef");
+                }
+                Assert.True(JsonNode.DeepEquals(before, after));
+            }
+        }
+        for (var index = 0; index < raw.Length; index++)
+            Assert.Equal(original[index], raw[index].ResultUtf8Json.ToArray());
     }
 
     [Theory]

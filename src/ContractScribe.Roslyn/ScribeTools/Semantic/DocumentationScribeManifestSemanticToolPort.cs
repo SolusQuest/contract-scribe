@@ -12,10 +12,14 @@ public sealed class DocumentationScribeManifestSemanticToolPort
     public DocumentationScribeManifestSemanticToolPort(DocumentationScribeLoadedManifestContext manifest)
     {
         this.manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
-        ports = manifest.Request.Manifest.ToImmutableDictionary(member => member.TargetId,
-            member => new DocumentationScribeSemanticToolPort(manifest.GetContext(member.TargetId), manifest.Request),
-            StringComparer.Ordinal);
+        ports = manifest.Request.Manifest.Select(member => (member.TargetId,
+                Port: new DocumentationScribeSemanticToolPort(manifest.GetContext(member.TargetId), manifest.Request)))
+            .Where(member => member.Port.SupportsTarget)
+            .ToImmutableDictionary(member => member.TargetId, member => member.Port, StringComparer.Ordinal);
+        TargetIds = ports.Keys.Order(StringComparer.Ordinal).ToImmutableArray();
     }
+
+    public ImmutableArray<string> TargetIds { get; }
 
     public async ValueTask<DocumentationScribeSemanticToolResult> InvokeAsync(
         DocumentationScribeSemanticToolRequest request, CancellationToken cancellationToken)

@@ -93,10 +93,47 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(request.Manifest.Length, targetData.RootElement.GetProperty("manifest").GetArrayLength());
         Assert.True(startup.DeterministicUtf8.Length < 1_048_576);
         Assert.Equal(1, outcome.RunResult.RunEnvelope.ProviderRequestCount);
+        using var semanticSchema = JsonDocument.Parse(startup.Tools.Single(tool =>
+            tool.OperationId == DocumentationScribeSemanticToolSelection.OperationId).InputSchemaJson);
+        Assert.Equal(request.Manifest.Where(member => all[member.Target.SymbolRef].M3Eligible)
+                .Select(member => member.TargetId).Order(StringComparer.Ordinal),
+            semanticSchema.RootElement.GetProperty("properties").GetProperty("targetId").GetProperty("enum")
+                .EnumerateArray().Select(id => id.GetString()));
+        using var sourceSchema = JsonDocument.Parse(startup.Tools.Single(tool =>
+            tool.OperationId == DocumentationScribeRepositoryToolOperationIds.ReadExcerpt).InputSchemaJson);
+        var sourceScopes = sourceSchema.RootElement.GetProperty("properties").GetProperty("scopeId")
+            .GetProperty("enum").EnumerateArray().Select(id => id.GetString()).ToArray();
+        Assert.All(request.Manifest, member => Assert.Contains(member.TargetId, sourceScopes));
         var repeated = CampaignScribeRequestBuilder.BuildManifest(bundle, selected, [method.SymbolRef], policy, config, default);
         Assert.Equal(built.RequestUtf8Json.ToArray(), repeated.RequestUtf8Json.ToArray());
         if (additionalMemberCount == 10)
         {
+            var semanticExchange = new ScriptedDocumentationScribeModelExchange([
+                ScriptedDocumentationScribeStep.Return(SemanticCall(request.ExecutionTarget.TargetId)),
+                ScriptedDocumentationScribeStep.Return(new([], [new(
+                    """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0))),
+            ]);
+            var semanticOutcome = await DocumentationScribeComposition.ExecuteAsync(built.Selection, built.RequestUtf8Json,
+                fixture.AttemptId, null, RuntimeOptions(), semanticExchange);
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, semanticOutcome.RunResult!.Terminal.Kind);
+            Assert.Equal(2, semanticExchange.Requests.Length);
+            using var semanticResult = JsonDocument.Parse(Assert.Single(semanticExchange.Requests[1].CompletedToolExchanges).ResultUtf8Json);
+            var declaration = semanticResult.RootElement.GetProperty("page").GetProperty("core")
+                .GetProperty("declaration").GetProperty("fact");
+            Assert.True(declaration.TryGetProperty("contentId", out _) || declaration.TryGetProperty("contentRef", out _));
+            // Class/property source remains readable, but neither kind is a semantic capability.
+            foreach (var unsupported in request.Manifest.Where(member => !all[member.Target.SymbolRef].M3Eligible)
+                .GroupBy(member => all[member.Target.SymbolRef].PrimaryKind).Select(group => group.First()))
+            {
+                var forged = new ScriptedDocumentationScribeModelExchange([
+                    ScriptedDocumentationScribeStep.Return(SemanticCall(unsupported.TargetId)),
+                ]);
+                var rejected = await DocumentationScribeComposition.ExecuteAsync(built.Selection, built.RequestUtf8Json,
+                    fixture.AttemptId, null, RuntimeOptions(), forged);
+                Assert.Equal(DocumentationScribeFailureCode.ToolProtocol,
+                    Assert.IsType<DocumentationScribeFailureTerminal>(rejected.RunResult!.Terminal).Code);
+                Assert.Single(forged.Requests);
+            }
             var singleton = CampaignScribeRequestBuilder.BuildManifest(bundle, [method], [method.SymbolRef], policy, config, default);
             var singleExchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(
                 """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0)))]);
@@ -165,5 +202,9 @@ public sealed partial class DocumentationScribeCompositionTests
             Assert.Null(rejected.RunResult);
             Assert.Equal(0, deniedExchange.RequestCount);
         }
+
+        static DocumentationScribeModelResponse SemanticCall(string targetId) => new(
+            [new DocumentationScribeModelToolCall(0, "call.semantic", DocumentationScribeSemanticToolSelection.OperationId,
+                JsonSerializer.SerializeToUtf8Bytes(new { targetId, pageSize = 1 }))], [], usage: new(0, 0, 0, 0));
     }
 }
