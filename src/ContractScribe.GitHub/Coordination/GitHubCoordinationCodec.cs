@@ -22,7 +22,7 @@ internal static class GitHubCoordinationCodec
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
     private static readonly string[] PropertyNames =
     [
-        "version", "stage", "repositoryId", "targetRef", "targetCommitOid",
+        "version", "campaignLineage", "stage", "repositoryId", "targetRef", "targetCommitOid",
         "snapshotCommitmentSha256", "authorityCommitmentSha256", "policyCommitmentSha256",
         "operationId", "operationCommitmentSha256", "currentCandidateCommitmentSha256",
         "precedingOperationId", "precedingAuthorityCommitmentSha256",
@@ -56,7 +56,7 @@ internal static class GitHubCoordinationCodec
         authority.CumulativeDocumentationBlocks,
         authority.CumulativePatchBytes,
         authority.ChangedFiles.Select(file =>
-            new GitHubCoordinationChangedFile(file.Path, file.CandidateFileSha256)).ToImmutableArray());
+            new GitHubCoordinationChangedFile(file.Path, file.CandidateFileSha256)).ToImmutableArray(), authority.CampaignLineage);
 
     internal static GitHubCoordinationState WithStage(
         GitHubCoordinationState current,
@@ -81,7 +81,7 @@ internal static class GitHubCoordinationCodec
         proposalCommitOid, proposalTreeOid, pullRequestCreationOperationCommitmentSha256,
         pullRequestNumber, expectedBaseOid, observedBaseOid, ownershipMarkerSha256,
         current.CumulativeDocumentationBlocks, current.CumulativePatchBytes,
-        current.CumulativeChangedFiles);
+        current.CumulativeChangedFiles, current.CampaignLineage);
 
     internal static byte[] Encode(GitHubCoordinationState state)
     {
@@ -98,6 +98,7 @@ internal static class GitHubCoordinationCodec
         {
             writer.WriteStartObject();
             writer.WriteNumber("version", GitHubPublicationContract.Version);
+            writer.WriteString("campaignLineage", state.CampaignLineage);
             writer.WriteString("stage", Stage(state.Stage));
             writer.WriteString("repositoryId", state.RepositoryId);
             writer.WriteString("targetRef", state.TargetRef);
@@ -225,7 +226,7 @@ internal static class GitHubCoordinationCodec
             OptionalString(root, "ownershipMarkerSha256"),
             root.GetProperty("cumulativeDocumentationBlocks").GetInt32(),
             root.GetProperty("cumulativePatchBytes").GetInt64(),
-            files.MoveToImmutable());
+            files.MoveToImmutable(), RequiredString(root, "campaignLineage"));
         Validate(state);
         Require(bytes.Span.SequenceEqual(Encode(state)));
         return state;
@@ -233,6 +234,7 @@ internal static class GitHubCoordinationCodec
 
     internal static void Validate(GitHubCoordinationState state)
     {
+        Require(!string.IsNullOrWhiteSpace(state.CampaignLineage) && state.CampaignLineage.Length <= 512);
         ArgumentNullException.ThrowIfNull(state);
         Require(RepositoryId(state.RepositoryId)
             && RefName(state.TargetRef) && IsOid(state.TargetCommitOid)
@@ -511,8 +513,10 @@ internal static class GitHubCoordinationCodec
 
 internal sealed class GitHubCoordinationException : Exception
 {
-    internal GitHubCoordinationException(bool incompatible = false)
-        : base("The GitHub coordination boundary rejected the operation.") => Incompatible = incompatible;
+    internal GitHubCoordinationException(bool incompatible = false, ContractScribe.GitHub.Transport.GitHubFailure? transportFailure = null)
+        : base("The GitHub coordination boundary rejected the operation.")
+    { Incompatible = incompatible; TransportFailure = transportFailure; }
+    internal ContractScribe.GitHub.Transport.GitHubFailure? TransportFailure { get; }
     internal bool Incompatible { get; }
     public override string ToString() => Message;
 }

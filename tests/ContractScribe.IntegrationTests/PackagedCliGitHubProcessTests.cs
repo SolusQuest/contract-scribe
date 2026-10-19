@@ -44,7 +44,8 @@ public sealed class PackagedCliGitHubProcessTests
         var resume = await RunGitHubStepAsync(
             "resume", fixture, state, request, layer, github, provider, observations,
             environment, 0, "github-proposal.replayed");
-        Assert.Equal(mutationsAfterStart, github.Mutations);
+        Assert.True(github.Mutations > mutationsAfterStart);
+        Assert.False(File.Exists(state));
         Assert.Single(github.PullRequests);
         Assert.Equal(1, github.PrAttempts);
 
@@ -98,7 +99,7 @@ public sealed class PackagedCliGitHubProcessTests
             ["githubProposalRequestVersion"] = 1,
             ["campaignLineage"] = Lineage,
             ["snapshot"] = Snapshot,
-            ["state"] = statePath,
+            ["checkpointStore"] = "coordination-ref",
             ["github"] = new JsonObject
             {
                 ["repositoryOwner"] = "Owner",
@@ -166,9 +167,9 @@ public sealed class PackagedCliGitHubProcessTests
             ["pullRequestUrlPath"] = pullRequestUrl.ValueKind == JsonValueKind.String
                 ? JsonValue.Create(new Uri(pullRequestUrl.GetString()!).AbsolutePath)
                 : null,
-            ["checkpointValid"] = File.Exists(statePath)
-                && ContractScribe.Core.CampaignStateJson.Parse(
-                    File.ReadAllBytes(statePath)).IsValid,
+            ["checkpointValid"] = github.Refs.Keys.Any(reference => reference.Contains("/coordination/", StringComparison.Ordinal))
+                && github.CoordinationDocument()["checkpoint"] is not null
+                && ContractScribe.Core.CampaignStateJson.Parse(github.CheckpointBytes()).IsValid,
             ["githubMutations"] = github.Mutations,
             ["githubRequests"] = github.Requests.Count,
             ["providerRequests"] = provider.RequestCount,

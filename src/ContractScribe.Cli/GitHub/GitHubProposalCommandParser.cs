@@ -19,7 +19,7 @@ internal sealed record GitHubProposalCommandArguments(
         Input,
         Policy,
         request.Request.Snapshot,
-        request.Request.State,
+        string.Empty,
         Configuration,
         ConfigurationOverride,
         request.Request.CampaignLineage);

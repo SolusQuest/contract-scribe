@@ -43,7 +43,21 @@ public static partial class CampaignStateFactory
     {
         Require(!state.DispatchObservations.IsDefault, CampaignStateValidationCode.InvalidShape);
         var ordinals = new Dictionary<(string Execution, string Work, DocumentationScribeAttemptId Attempt), long>();
-        var reconstructed = EmptyCharges();
+        var reconstructed = state.ArchivedDispatchPrefix?.Charges ?? EmptyCharges();
+        if (state.ArchivedDispatchPrefix is { } prefix)
+        {
+            RequireSha(prefix.WitnessSha256);
+            Require(prefix.Charges is not null && prefix.Charges.OuterInvocations == 0
+                && prefix.Charges.PatchValidationInvocations == 0, CampaignStateValidationCode.InvalidCorrelation);
+            ValidateCharge(reconstructed.ProviderRequests);
+            ValidateCharge(reconstructed.InputTokens);
+            ValidateCharge(reconstructed.CachedInputTokens);
+            ValidateCharge(reconstructed.UncachedInputTokens);
+            ValidateCharge(reconstructed.OutputTokens);
+            ValidateCharge(reconstructed.ReasoningTokens);
+            ValidateCharge(reconstructed.CostMicrounits);
+            ValidateCharge(reconstructed.ActiveElapsedMilliseconds);
+        }
         var budget = state.ConfiguredCeilings.CampaignBudget;
         for (var index = 0; index < state.DispatchObservations.Length; index++)
         {

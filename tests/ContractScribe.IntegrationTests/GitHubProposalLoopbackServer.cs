@@ -33,8 +33,15 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
     internal int Mutations;
     internal int SuccessfulCas;
     internal int PrAttempts;
+    internal int PublicationWrites;
     internal int? LoseAt { get; set; }
     internal bool LoseAfter { get; set; }
+    private TimeSpan serverClockOffset;
+    internal DateTimeOffset ServerNow
+    {
+        get => DateTimeOffset.UtcNow + serverClockOffset;
+        set => serverClockOffset = value - DateTimeOffset.UtcNow;
+    }
     internal string? RejectPath { get; set; }
     internal int RejectionStatus = 403;
     internal bool DelayResponses { get; set; }
@@ -87,7 +94,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             foreach (var key in Commits.Keys.Except(baseCommits).ToArray()) Commits.Remove(key);
             Refs.Clear(); Refs["refs/heads/main"] = BaseOid;
             PullRequests.Clear(); Requests.Clear();
-            Mutations = SuccessfulCas = PrAttempts = 0;
+            Mutations = SuccessfulCas = PrAttempts = PublicationWrites = 0;
             LoseAt = null; RejectPath = null; Before = After = null;
         }
     }
@@ -153,6 +160,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             if (DelayResponses) await Task.Delay(Timeout.InfiniteTimeSpan, stop.Token);
             var bytes = JsonSerializer.SerializeToUtf8Bytes(response.Body);
             context.Response.StatusCode = response.Status;
+            context.Response.Headers["Date"] = ServerNow.ToString("R", CultureInfo.InvariantCulture);
             context.Response.ContentType = "application/json";
             if (IncompletePagination && path == "/repos/Owner/repo/pulls" && context.Request.QueryString["page"] != "2")
             {
@@ -194,20 +202,36 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             Assert.Equal("mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}", body["query"]!.GetValue<string>());
             var input = body["variables"]!["input"]!;
             Assert.Equal("REPO_node", input["repositoryId"]!.GetValue<string>());
-            var update = Assert.Single(input["refUpdates"]!.AsArray())!;
-            var name = update["name"]!.GetValue<string>();
-            Assert.StartsWith("refs/heads/contract-scribe/", name);
-            Assert.False(update["force"]!.GetValue<bool>());
-            var after = update["afterOid"]!.GetValue<string>();
-            Assert.NotEqual(new string('0', 40), after);
-            Assert.True(Commits.ContainsKey(after));
-            if (Refs.GetValueOrDefault(name, new string('0', 40)) != update["beforeOid"]!.GetValue<string>())
-                return (200, new { data = (object?)null, errors = new[] { new { message = "conflict", type = "CONFLICT" } } });
-            Refs[name] = after;
+            var updates = input["refUpdates"]!.AsArray();
+            Assert.InRange(updates.Count, 1, 2);
+            Assert.Equal(updates.Count, updates.Select(update => update!["name"]!.GetValue<string>()).Distinct().Count());
+            foreach (var update in updates)
+            {
+                var name = update!["name"]!.GetValue<string>();
+                Assert.StartsWith("refs/heads/contract-scribe/", name);
+                Assert.False(update["force"]!.GetValue<bool>());
+                var after = update["afterOid"]!.GetValue<string>();
+                Assert.NotEqual(new string('0', 40), after);
+                Assert.True(Commits.ContainsKey(after));
+                if (Refs.GetValueOrDefault(name, new string('0', 40)) != update["beforeOid"]!.GetValue<string>())
+                    return (200, new { data = (object?)null, errors = new[] { new { message = "conflict", type = "CONFLICT" } } });
+            }
+            var publicationChanged = updates.Any(update =>
+            {
+                var name = update!["name"]!.GetValue<string>();
+                if (name.Contains("/proposals/", StringComparison.Ordinal)) return true;
+                var after = DocumentAt(update["afterOid"]!.GetValue<string>())["publication"]?["oid"]?.GetValue<string>();
+                var before = Refs.TryGetValue(name, out var head) ? DocumentAt(head)["publication"]?["oid"]?.GetValue<string>() : null;
+                return before != after;
+            });
+            foreach (var update in updates)
+                Refs[update!["name"]!.GetValue<string>()] = update["afterOid"]!.GetValue<string>();
+            if (publicationChanged) PublicationWrites++;
             SuccessfulCas++;
             return (200, new { data = new { updateRefs = new { clientMutationId = input["clientMutationId"]!.GetValue<string>() } } });
         }
         Assert.Equal("/repos/Owner/repo/pulls", path);
+        PublicationWrites++;
         Assert.True(body["draft"]!.GetValue<bool>());
         Assert.False(body["maintainer_can_modify"]!.GetValue<bool>());
         if (PullRequests.Any(pr => pr["state"]!.GetValue<string>() == "open"))
@@ -287,12 +311,20 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         }
     }
 
-    internal JsonObject Coordination()
+    internal JsonObject CoordinationDocument() => DocumentAt(
+        Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal)).Value);
+
+    private JsonObject DocumentAt(string head)
     {
-        var head = Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal)).Value;
         var root = Trees[Commits[head]["tree"]!["sha"]!.GetValue<string>()];
-        return JsonNode.Parse(Blobs[Trees[root[0].Oid][0].Oid])!.AsObject();
+        var leaf = Trees[root.Single(entry => entry.Path == ".contract-scribe").Oid];
+        return JsonNode.Parse(Blobs[leaf.Single(entry => entry.Path == "coordination-state-v1.json").Oid])!.AsObject();
     }
+
+    internal JsonObject Coordination() => JsonNode.Parse(Blobs[
+        CoordinationDocument()["publication"]!["oid"]!.GetValue<string>()])!["state"]!.DeepClone().AsObject();
+
+    internal byte[] CheckpointBytes() => Blobs[CoordinationDocument()["checkpoint"]!["oid"]!.GetValue<string>()].ToArray();
 
     private static object Repository() => new
     {

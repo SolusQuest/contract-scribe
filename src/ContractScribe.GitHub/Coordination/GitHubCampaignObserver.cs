@@ -54,7 +54,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
             {
                 var read = await coordination.ReadObservedStateAsync(repository, target, ledgerRef.Oid, cancellation).ConfigureAwait(false);
                 state = read.State;
-                if (state is null)
+                if (state is null && read.Failure is not null)
                 {
                     var kind = read.Failure?.Kind;
                     ledgerKind = kind == GitHubCoordinationFailureKind.Incompatible ? GitHubCampaignLedgerKind.Incompatible
@@ -64,16 +64,19 @@ internal sealed class GitHubCampaignObserver : IDisposable
                         : ledgerKind == GitHubCampaignLedgerKind.Corrupt ? GitHubCampaignFailureKind.Corrupt
                         : GitHubCampaignFailureKind.Transport, read.Failure?.TransportFailure, coordinationRef));
                 }
-                ledger = new(state.HeadOid, state.Stage, state.TargetCommitOid, state.GenerationId,
-                    state.SnapshotCommitmentSha256, state.PolicyCommitmentSha256, state.OperationId,
-                    state.OperationCommitmentSha256, state.CurrentCandidateCommitmentSha256,
-                    coordination.ProposalRefFor(state), state.PullRequestNumber);
-                generations.AddRange(coordination.ObservedGenerations(state));
-                if (coordination.ObservedCurrentGeneration(state) is { } current)
+                if (state is not null)
                 {
-                    var index = generations.FindIndex(item => item.Ref == current.Ref);
-                    if (index < 0) generations.Add(current);
-                    else generations[index] = current;
+                    ledger = new(state.HeadOid, state.Stage, state.TargetCommitOid, state.GenerationId,
+                        state.SnapshotCommitmentSha256, state.PolicyCommitmentSha256, state.OperationId,
+                        state.OperationCommitmentSha256, state.CurrentCandidateCommitmentSha256,
+                        coordination.ProposalRefFor(state), state.PullRequestNumber);
+                    generations.AddRange(coordination.ObservedGenerations(state));
+                    if (coordination.ObservedCurrentGeneration(state) is { } current)
+                    {
+                        var index = generations.FindIndex(item => item.Ref == current.Ref);
+                        if (index < 0) generations.Add(current);
+                        else generations[index] = current;
+                    }
                 }
             }
             var collection = await client.ListPullRequestsAsync(cancellation).ConfigureAwait(false);

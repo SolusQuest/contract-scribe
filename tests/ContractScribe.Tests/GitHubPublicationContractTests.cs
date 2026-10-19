@@ -449,7 +449,8 @@ public sealed class GitHubPublicationContractTests
         using var fixture = ReadFixture("selected-protocol-vectors-v1.json");
         var root = fixture.RootElement;
         Assert.Equal("GraphQL.updateRefs", root.GetProperty("mutation").GetString());
-        Assert.Equal(1, root.GetProperty("refUpdatesPerMutation").GetInt32());
+        Assert.Equal(1, root.GetProperty("coordinationRefUpdatesPerMutation").GetInt32());
+        Assert.Equal(2, root.GetProperty("publicationRefUpdatesPerMutation").GetInt32());
         Assert.False(root.GetProperty("force").GetBoolean());
         Assert.False(root.GetProperty("afterOidMayBeZero").GetBoolean());
         Assert.Equal(4, root.GetProperty("resources").GetArrayLength());
@@ -782,6 +783,8 @@ public sealed class GitHubPublicationContractTests
         ];
     }
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> CoordinationEventOids = new();
+
     private static CoordinationKnownAnswer CreateCoordinationKnownAnswer(
         CoordinationVector vector)
     {
@@ -797,6 +800,7 @@ public sealed class GitHubPublicationContractTests
             {
                 writer.WriteStartObject();
                 writer.WriteNumber("version", 1);
+                writer.WriteString("campaignLineage", "campaign-1");
                 writer.WriteString("stage", vector.Stage);
                 writer.WriteString("repositoryId", "SolusQuest/contract-scribe");
                 writer.WriteString("targetRef", "refs/heads/main");
@@ -847,8 +851,32 @@ public sealed class GitHubPublicationContractTests
             stateBytes = stream.ToArray();
         }
 
-        var blobOid = GitObjectOid("blob", stateBytes);
-        var leafTreeBytes = GitTreeEntry("100644", "coordination-state-v1.json", blobOid);
+        object? previous = CoordinationEventOids.TryGetValue(vector.CoordinationPredecessorOid, out var previousOid)
+            ? new { oid = previousOid, anchor = vector.CoordinationPredecessorOid } : null;
+        var eventBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "publication-event-v1",
+            state = JsonSerializer.Deserialize<JsonElement>(stateBytes),
+            previous,
+        });
+        var eventOid = GitObjectOid("blob", eventBytes);
+        var documentBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            format = "campaign-coordination-v1",
+            repositoryId = "SolusQuest/contract-scribe",
+            targetRef = "refs/heads/main",
+            targetCommitOid = GitOid('1'),
+            campaignLineage = "campaign-1",
+            predecessorOid = vector.CoordinationPredecessorOid,
+            checkpoint = (object?)null,
+            plan = (object?)null,
+            archive = (object?)null,
+            publication = new { oid = eventOid, anchor = "current" },
+            claim = (object?)null,
+        });
+        var blobOid = GitObjectOid("blob", documentBytes);
+        byte[] leafTreeBytes = [.. GitTreeEntry("100644", "coordination-state-v1.json", blobOid),
+            .. GitTreeEntry("100644", "publication-event.json", eventOid)];
         var leafTreeOid = GitObjectOid("tree", leafTreeBytes);
         var rootTreeBytes = GitTreeEntry("40000", ".contract-scribe", leafTreeOid);
         var rootTreeOid = GitObjectOid("tree", rootTreeBytes);
@@ -859,10 +887,9 @@ public sealed class GitHubPublicationContractTests
             $"parent {commitParentOid}\n" +
             "author ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n" +
             "committer ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n\n" +
-            "ContractScribe coordination v1\n" +
-            $"operation={vector.OperationCommitmentSha256}\n" +
-            $"stage={vector.Stage}\n";
+            "ContractScribe campaign coordination v1\n";
         var commitBytes = Encoding.UTF8.GetBytes(commitText);
+        CoordinationEventOids[GitObjectOid("commit", commitBytes)] = eventOid;
         return new(stateBytes, blobOid, leafTreeOid, rootTreeOid, commitParentOid, commitBytes,
             GitObjectOid("commit", commitBytes));
     }

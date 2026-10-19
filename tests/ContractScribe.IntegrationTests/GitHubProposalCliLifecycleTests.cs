@@ -29,12 +29,12 @@ public sealed partial class GitHubProposalCliProcessTests
             ["disposition"] = "closed-unmerged",
         };
         var reads = fixture.TokenReads();
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         // A real fresh M4 candidate can be accepted locally, but absence of the explicit
-        // authorization still stops H1 before any credential read or GitHub request.
+        // authorization still stops H1 before any publication mutation. The checkpoint claim requires credentials.
         AssertResult(await fixture.Run("resume"), 4, "local-invalid");
-        Assert.Equal(reads, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(reads + 1, fixture.TokenReads());
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         var fresh = fixture.Checkpoint();
         fixture.Publication["closedUnmergedSuccessorAuthorization"] = new JsonObject
         {
@@ -52,9 +52,9 @@ public sealed partial class GitHubProposalCliProcessTests
         AssertResult(await fixture.Run("resume"), 0, "published");
         Assert.Equal(2, fixture.GitHub.PullRequests.Count);
         Assert.Single(fixture.GitHub.PullRequests, pr => pr["state"]!.GetValue<string>() == "open");
-        writes = fixture.GitHub.Mutations;
+        writes = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), 0, "replayed");
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         await fixture.AssertSourceUnchanged();
     }
 
@@ -68,10 +68,10 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.Publication["policy"]!["maximumDocumentationBlocks"] = 127;
         fixture.Publication["appendPredecessor"]!["policyCommitmentSha256"] = GitHubPublicationCommitments.CreatePolicy(
             new(128, 128, 4194304), new(127, 128, 4194304));
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         var result = await fixture.Run("resume");
         AssertResult(result, 0, "awaiting-review");
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("publicationOperationId").ValueKind);
         Assert.Equal("generation.initial", json.RootElement.GetProperty("generationId").GetString());
@@ -107,12 +107,12 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("generation.initial", json.RootElement.GetProperty("generationId").GetString());
         fixture.GitHub.Before = null;
         fixture.GitHub.Refs["refs/heads/main"] = fixture.GitHub.BaseOid;
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         var restored = await fixture.Run("resume");
         AssertResult(restored, 3, "conflict");
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         AssertResult(await fixture.Run("resume"), 3, "conflict");
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
     }
 }

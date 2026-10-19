@@ -35,6 +35,7 @@ public sealed class CampaignCheckpointReadResult
     public long? CheckpointRevision { get; }
     public string? Sha256 { get; }
     public CampaignStateValidationCode? FailureCode { get; }
+    public CampaignVerifiedArchive? VerifiedArchive { get; private init; }
 
     public static CampaignCheckpointReadResult NotFound() =>
         new(CampaignCheckpointReadKind.NotFound, default, null, null, null);
@@ -42,7 +43,8 @@ public sealed class CampaignCheckpointReadResult
     public static CampaignCheckpointReadResult Found(
         ReadOnlySpan<byte> exactUtf8Json,
         long checkpointRevision,
-        string sha256)
+        string sha256,
+        CampaignVerifiedArchive? verifiedArchive = null)
     {
         if (exactUtf8Json.Length > CampaignStateContract.MaximumArtifactUtf8Bytes
             || checkpointRevision < 0
@@ -59,7 +61,8 @@ public sealed class CampaignCheckpointReadResult
             ImmutableArray.CreateRange(exactUtf8Json.ToArray()),
             checkpointRevision,
             sha256,
-            null);
+            null)
+        { VerifiedArchive = verifiedArchive };
     }
 
     public static CampaignCheckpointReadResult Unsafe() =>
@@ -257,6 +260,7 @@ public static class CampaignCheckpointAcceptance
                 || !parsed.IsValid
                 || parsed.Artifact is null
                 || parsed.Artifact.CheckpointRevision != read.CheckpointRevision
+                || !ArchiveMatches(read, parsed.Artifact)
                 || !bytes.SequenceEqual(parsed.Artifact.ExactUtf8Json.AsSpan()))
             {
                 return new CampaignCheckpointAcceptanceResult(
@@ -518,6 +522,7 @@ public static class CampaignCheckpointAcceptance
         {
             return MatchKind.Invalid;
         }
+        if (!ArchiveMatches(read, parsed.Artifact)) return MatchKind.Invalid;
 
         return read.CheckpointRevision == artifact.CheckpointRevision
             && string.Equals(read.Sha256, artifact.Sha256, StringComparison.Ordinal)
@@ -533,6 +538,12 @@ public static class CampaignCheckpointAcceptance
         Different,
         Invalid,
     }
+
+    private static bool ArchiveMatches(CampaignCheckpointReadResult read, CampaignCheckpointArtifact artifact) =>
+        artifact.State.ArchivedDispatchPrefix is not { } prefix
+            ? read.VerifiedArchive is null
+            : read.VerifiedArchive is { } proof && proof.CheckpointSha256 == artifact.Sha256
+                && proof.WitnessSha256 == prefix.WitnessSha256;
 
     private static bool ArtifactsEqual(CampaignCheckpointArtifact left, CampaignCheckpointArtifact right) =>
         left.CheckpointRevision == right.CheckpointRevision

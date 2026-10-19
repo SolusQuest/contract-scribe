@@ -14,7 +14,7 @@ internal sealed record GitHubProposalRequest(
     [property: JsonPropertyName("githubProposalRequestVersion")] int Version,
     string CampaignLineage,
     string Snapshot,
-    string State,
+    string CheckpointStore,
     [property: JsonPropertyName("github")] GitHubPublicationConfiguration GitHub);
 
 internal sealed record GitHubProposalRequestSnapshot(
@@ -129,7 +129,7 @@ internal static class GitHubProposalRequestReader
 
     private static void ValidateShape(GitHubProposalRequest request)
     {
-        if (request.Version != 1
+        if (request.Version != 1 || request.CheckpointStore != "coordination-ref"
             || !GitHubPublicationFactory.IsCampaignLineage(request.CampaignLineage)
             || !CampaignStateFactory.IsOpaqueId(request.Snapshot, MaximumSnapshotScalars))
             throw new JsonException();

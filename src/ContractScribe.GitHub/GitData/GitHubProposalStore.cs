@@ -35,7 +35,7 @@ internal sealed record GitHubProposalObservation(GitHubRepositoryIdentity Reposi
 internal sealed record GitHubProposalResult(GitHubProposalOutcome Outcome,
     IGitHubPreparedProposal? Prepared = null, IGitHubProposalContent? Content = null,
     GitHubProposalFailure? Failure = null, GitHubProposalObservation? Observation = null,
-    IGitHubInspectedProposal? Inspection = null) : GitHubValue;
+    IGitHubInspectedProposal? Inspection = null, GitHubCoordinationResult? Coordination = null) : GitHubValue;
 
 internal sealed class GitHubProposalStore
 {
@@ -357,18 +357,19 @@ internal sealed class GitHubProposalStore
         if (!mayWrite) throw new FailureException(new(GitHubProposalFailureKind.Unresolved));
         Require(state.Stage == GitHubCoordinationStage.ContentCreated);
         cancellationToken.ThrowIfCancellationRequested();
-        var mutation = await client.UpdateRefAsync(new(proposalRef, plan.BeforeOid,
-            plan.Commit.ExpectedOid, plan.BeforeOid == Zero), cancellationToken);
-        await Readback(mutation, token => client.GetRefAsync(proposalRef, token),
-            value => value.Oid == plan.Commit.ExpectedOid && value.Name == proposalRef);
-        IGitHubProposalContent? verified = null;
-        await FinalVerification(mutation, async token =>
+        var coordinated = await coordination.AdvanceProposalRefsAsync(state, entitlement!, plan.Commit.ExpectedOid,
+            plan.Commit.TreeOid, plan.BeforeOid, cancellationToken).ConfigureAwait(false);
+        if (coordinated.State is null)
+            throw new FailureException(new(coordinated.Failure?.Kind == GitHubCoordinationFailureKind.ObjectMismatch
+                ? GitHubProposalFailureKind.Integrity : GitHubProposalFailureKind.Unresolved, coordinated.Failure?.TransportFailure,
+                coordinated.Failure?.Delivery ?? GitHubDelivery.NotDispatched, coordinated.Failure?.Context,
+                coordinated.Failure?.Permissions, coordinated.Failure?.ReadbackFailure, coordinated.Failure?.Kind));
+        await FinalVerification(coordinated.PublicationMutation!, async token =>
         {
             await VerifyContent(plan, Value(await client.GetCommitAsync(plan.Commit.ExpectedOid, token)), token);
-            verified = new ContentCapability(plan);
-            Require(await CheckGate(plan, state, allowSuccessor: true, token) == plan.Commit.ExpectedOid);
-        }, () => verified);
-        return new(GitHubProposalOutcome.RefVerified, Content: content);
+            Require(await CheckGate(plan, coordinated.State, allowSuccessor: true, token) == plan.Commit.ExpectedOid);
+        }, () => content);
+        return new(GitHubProposalOutcome.RefVerified, Content: content, Coordination: coordinated);
     });
 
     private async ValueTask<IGitHubCoordinationStateCapability> Guard(IGitHubCoordinationStateCapability state,

@@ -28,7 +28,7 @@ internal static class CampaignPreflight
     internal static CampaignPreflightResult Run(
         CampaignCommandArguments arguments,
         string currentDirectory,
-        CliBuildIdentity identity)
+        CliBuildIdentity identity, bool remoteCheckpoint = false)
     {
         ArgumentNullException.ThrowIfNull(arguments);
         ArgumentException.ThrowIfNullOrEmpty(currentDirectory);
@@ -39,7 +39,7 @@ internal static class CampaignPreflight
                 arguments.Input,
                 arguments.Policy,
                 currentDirectory);
-            var state = ResolveState(arguments.State, currentDirectory, inputs.RepositoryRoot);
+            var state = remoteCheckpoint ? string.Empty : ResolveState(arguments.State, currentDirectory, inputs.RepositoryRoot);
             var configuration = LayeredCampaignConfigurationResolver.Resolve(
                 arguments,
                 currentDirectory,

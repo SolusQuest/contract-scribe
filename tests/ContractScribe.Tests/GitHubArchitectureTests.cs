@@ -18,9 +18,9 @@ public sealed class GitHubArchitectureTests
         Assert.Equal("../ContractScribe.Core/ContractScribe.Core.csproj",
             Assert.Single(project.Descendants("ProjectReference")).Attribute("Include")!.Value);
         Assert.Empty(project.Descendants("PackageReference"));
-        Assert.Equal(new[] { "ContractScribe.Cli", "ContractScribe.Tests" }, project.Descendants("InternalsVisibleTo").Select(item => item.Attribute("Include")!.Value).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "ContractScribe.Cli", "ContractScribe.IntegrationTests", "ContractScribe.Tests" }, project.Descendants("InternalsVisibleTo").Select(item => item.Attribute("Include")!.Value).Order(StringComparer.Ordinal));
         var assembly = typeof(GitHubApiClient).Assembly;
-        Assert.Equal(new[] { "ContractScribe.Cli", "ContractScribe.Tests" }, assembly.GetCustomAttributes<InternalsVisibleToAttribute>().Select(item => item.AssemblyName).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "ContractScribe.Cli", "ContractScribe.IntegrationTests", "ContractScribe.Tests" }, assembly.GetCustomAttributes<InternalsVisibleToAttribute>().Select(item => item.AssemblyName).Order(StringComparer.Ordinal));
         Assert.Empty(assembly.GetExportedTypes());
         var referenced = assembly.GetReferencedAssemblies().Select(item => item.Name!).ToArray();
         Assert.Contains("ContractScribe.Core", referenced);
@@ -45,12 +45,12 @@ public sealed class GitHubArchitectureTests
         Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
-        Assert.Equal(new[] { "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateTreeAsync",
+        Assert.Equal(new[] { "BindCheckpointWrite", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateTreeAsync",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
-            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
         var properties = client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "HasMutationAuthority", "ReadAuthority" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "CheckpointAuthority", "HasMutationAuthority", "ObjectOperation", "ReadAuthority", "ServerTime" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
         var authority = Assert.Single(properties, p => p.Name == "Authority");
         Assert.Equal("Authority", authority.Name);
         Assert.Equal(typeof(ValidatedGitHubPublicationAuthority), authority.PropertyType);

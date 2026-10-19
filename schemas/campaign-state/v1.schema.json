@@ -4,7 +4,7 @@
   "title": "ContractScribe Campaign State v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "dispatchObservations", "scribeProgress", "workItems", "batch", "targetProgress", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "archivedDispatchPrefix", "dispatchObservations", "scribeProgress", "workItems", "batch", "targetProgress", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
   "properties": {
     "campaignStateVersion": { "const": 1 },
     "productRevision": { "$ref": "#/$defs/revision" },
@@ -13,6 +13,7 @@
     "checkpointRevision": { "$ref": "#/$defs/nonNegativeInt64" },
     "configuredCeilings": { "$ref": "#/$defs/ceilings" },
     "lineageCharges": { "$ref": "#/$defs/charges" },
+    "archivedDispatchPrefix": { "oneOf": [{ "type": "null" }, { "type": "object", "additionalProperties": false, "required": ["witnessSha256", "lineageCharges"], "properties": { "witnessSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "lineageCharges": { "$ref": "#/$defs/charges" } } }] },
     "dispatchObservations": { "$comment": "Ordered per-dispatch history, with settlement headroom reserved before effects under the existing 4 MiB checkpoint ceiling.", "type": "array", "items": { "$ref": "#/$defs/dispatchObservation" } },
     "scribeProgress": { "oneOf": [{"type":"null"}, {"$ref":"#/$defs/scribeProgress"}] },
     "workItems": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/work" } },

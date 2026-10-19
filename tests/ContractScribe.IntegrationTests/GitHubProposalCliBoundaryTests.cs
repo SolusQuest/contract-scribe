@@ -98,14 +98,15 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Pre_emission_failure_has_one_sanitized_fallback_without_secret_access()
+    public async Task Pre_emission_failure_has_one_sanitized_fallback_after_checkpoint_claim()
     {
         await using var fixture = await Fixture.CreateAsync(required: false);
         var result = await fixture.Run("start", fault: "before-presentation");
         AssertResult(result, 5, "host-failure");
         Assert.Equal("github proposal stopped before publication: github-proposal.campaign-contract-error\n", result.Stderr);
-        Assert.Equal(0, fixture.TokenReads());
-        Assert.Empty(fixture.GitHub.Requests);
+        Assert.Equal(1, fixture.TokenReads());
+        Assert.NotEmpty(fixture.GitHub.Requests);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
 
     [Theory]
@@ -135,7 +136,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 var reference = server.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal));
                 var tree = server.Commits[reference.Value]["tree"]!["sha"]!.GetValue<string>();
                 var leaf = Assert.Single(server.Trees[tree]).Oid;
-                var blob = Assert.Single(server.Trees[leaf]).Oid;
+                var blob = Assert.Single(server.Trees[leaf], entry => entry.Path == "coordination-state-v1.json").Oid;
                 Assert.True(server.Blobs.ContainsKey(blob));
                 server.Blobs[blob] = [123, 125, 10];
             }
@@ -161,9 +162,9 @@ public sealed partial class GitHubProposalCliProcessTests
                 server.RejectionStatus = kind == "permission" ? 403 : 429;
             }
         }
-        var writes = server.Mutations;
+        var writes = server.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(writes, server.Mutations);
+        Assert.Equal(writes, server.PublicationWrites);
         Assert.Equal(1, server.PrAttempts);
         await fixture.AssertSourceUnchanged();
     }

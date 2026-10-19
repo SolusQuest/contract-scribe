@@ -27,8 +27,7 @@ public sealed partial class GitHubCoordinationRefTests
             using var fixture = JsonDocument.Parse(File.ReadAllBytes(path));
             foreach (var vector in fixture.RootElement.GetProperty("vectors").EnumerateArray())
             {
-                var prepared = GitHubCoordinationObjects.Prepare(GitHubCoordinationCodec.Decode(
-                    Convert.FromBase64String(vector.GetProperty("canonicalStateUtf8Base64").GetString()!)));
+                var prepared = PrepareVector(vector);
                 var expected = GitHubCoordinationObjects.CommitRequest(prepared);
                 Assert.Equal(vector.GetProperty("commitOid").GetString(), RawCommitOid(expected));
                 var actual = CommitObservation(expected, response);
@@ -96,8 +95,8 @@ public sealed partial class GitHubCoordinationRefTests
             "trailing-space" => actual with { Message = actual.Message + " " },
             "trailing-tab" => actual with { Message = actual.Message + "\t" },
             "leading" => actual with { Message = " " + actual.Message },
-            "interior" => actual with { Message = actual.Message.Replace("v1\n", "v1\n\n", StringComparison.Ordinal) },
-            "operation" => actual with { Message = actual.Message.Replace("operation=", "operation=0", StringComparison.Ordinal) },
+            "interior" => actual with { Message = actual.Message.Replace(" v1", "  v1", StringComparison.Ordinal) },
+            "operation" => actual with { Message = actual.Message + "\noperation=0" },
             "stage-or-generation" => actual with { Message = actual.Message.Insert(actual.Message.LastIndexOf('=') + 1, "0") },
             _ => throw new ArgumentOutOfRangeException(nameof(response)),
         };

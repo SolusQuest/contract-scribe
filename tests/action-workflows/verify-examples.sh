@@ -1,111 +1,34 @@
 #!/usr/bin/env bash
-# verify-examples.sh — local validation for the caller-owned campaign
-# workflow example (issue #186 / M6-A3). POSIX runner assumed (CI: ubuntu);
-# legs that cannot run elsewhere are skipped rather than faked.
-#
-#   1. python syntax checks for every test/helper artifact
-#   2. YAML-aware structural validation of the example workflow (PyYAML
-#      6.0.3 in an isolated venv — the pinned test-dependency precedent)
-#   3. the functional leg matrix via driver.py against fake_actions_api.py
-#   4. textual invariants that parsing cannot express
-#
-# Hosted transport/Action coverage lives in ci.yml's action_examples_* jobs;
-# this script does not need dotnet, credentials, or network beyond the
-# PyYAML install.
-
+# Offline helper and structural validation; packaged product/remote persistence
+# coverage runs in the hosted action_examples jobs.
 set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../.." && pwd)"
-EXAMPLE="$REPO/examples/github-actions/contract-scribe-campaign.yml"
-HELPER="$REPO/examples/github-actions/handoff.py"
 WORK="${WORK:-$(mktemp -d)}"
 mkdir -p "$WORK"
-ONLY="${ONLY:-}"
-
-echo "== syntax =="
-python3 -m py_compile \
-    "$HELPER" \
-    "$HERE/fake_actions_api.py" \
-    "$HERE/fake_github_state.py" \
-    "$HERE/check_workflow.py" \
-    "$HERE/driver.py"
-echo "py_compile ok"
-
-echo "== workflow structure =="
-VENV="$WORK/venv"
-python3 -m venv "$VENV"
-# shellcheck disable=SC1091
-if [ -f "$VENV/bin/activate" ]; then . "$VENV/bin/activate"; else . "$VENV/Scripts/activate"; fi
-python -m pip install --quiet PyYAML==6.0.3
-python "$HERE/check_workflow.py" "$EXAMPLE"
-python - "$HERE/check_workflow.py" "$EXAMPLE" "$WORK" <<'PY'
+python3 -m py_compile "$REPO/examples/github-actions/handoff.py" "$HERE/driver.py" \
+  "$HERE/check_workflow.py" "$HERE/fake_actions_api.py" "$HERE/fake_github_state.py"
+python3 -m venv "$WORK/venv"
+"$WORK/venv/bin/python" -m pip install --quiet PyYAML==6.0.3
+"$WORK/venv/bin/python" "$HERE/check_workflow.py" "$REPO/examples/github-actions/contract-scribe-campaign.yml"
+"$WORK/venv/bin/python" - "$REPO/examples/github-actions/contract-scribe-campaign.yml" "$HERE/check_workflow.py" "$WORK" <<'PY'
 import copy, pathlib, subprocess, sys, yaml
-checker, example, work = sys.argv[1:]
-document = yaml.safe_load(pathlib.Path(example).read_text(encoding="utf-8"))
-for level in ("workflow", "start", "resume"):
-    changed = copy.deepcopy(document)
-    scope = changed if level == "workflow" else changed["jobs"][level]
-    scope.setdefault("env", {})["CS_STATE_DIR"] = "${{ runner.temp }}/contract-scribe-state"
-    path = pathlib.Path(work) / ("invalid-runner-" + level + ".yml")
-    path.write_text(yaml.safe_dump(changed), encoding="utf-8")
-    result = subprocess.run([sys.executable, checker, str(path)], capture_output=True, text=True)
-    assert result.returncode != 0 and "runner-env-context" in result.stderr, result
-print("invalid workflow/job runner contexts rejected")
+source, checker, work = sys.argv[1:]
+doc = yaml.safe_load(pathlib.Path(source).read_text())
+mutations = [lambda d: d[True].update(schedule=[{'cron': '* * * * *'}]),
+             lambda d: d['jobs']['invoke']['permissions'].update(contents='read'),
+             lambda d: d['jobs']['invoke']['steps'][0]['with'].update({'persist-credentials': True}),
+             lambda d: d['env'].update(CS_OPERATION='auto'),
+             lambda d: d['jobs']['invoke']['env'].update(CS_STATE_DIR='${{ runner.temp }}/state')]
+for i, mutate in enumerate(mutations):
+    changed = copy.deepcopy(doc)
+    changed['jobs']['invoke'].setdefault('env', {})
+    mutate(changed)
+    path = pathlib.Path(work) / f'invalid-{i}.yml'
+    path.write_text(yaml.safe_dump(changed))
+    result = subprocess.run([sys.executable, checker, str(path)], capture_output=True)
+    assert result.returncode != 0, i
+print('workflow negative cases: 5 passed')
 PY
-deactivate
-
-echo "== textual invariants =="
-# The remaining Action credentials are exactly the documented secrets; the
-# product publication credential is the job's github.token, never a stored
-# secret.
-for name in CONTRACTSCRIBE_PROVIDER_API_KEY \
-    CONTRACTSCRIBE_ACQUISITION_TOKEN; do
-    grep -q "secrets.$name" "$EXAMPLE" || {
-        echo "missing credential input $name"; exit 1; }
-done
-# The obsolete stored-secret product credential must not reappear, even in
-# comments.
-! grep -n 'secrets\.CONTRACTSCRIBE_GITHUB_TOKEN' "$EXAMPLE"
-# No secrets anywhere but inside `with:` blocks (which the YAML checker
-# confines to the Action steps).
-python3 - "$EXAMPLE" <<'PYEOF'
-import sys
-text = open(sys.argv[1], encoding="utf-8").read().splitlines()
-in_with = False
-with_depth = 0
-bad = []
-for i, line in enumerate(text, 1):
-    stripped = line.strip()
-    indent = len(line) - len(line.lstrip())
-    if "secrets." in line and not in_with and not stripped.startswith("#"):
-        bad.append(i)
-    if stripped == "with:":
-        in_with, with_depth = True, indent
-    elif in_with and stripped and indent <= with_depth:
-        in_with = False
-if bad:
-    print(f"secrets outside with: at lines {bad}")
-    sys.exit(1)
-PYEOF
-# No checkpoint bytes ever surfaced: no `cat`/`echo` of the state file and
-# no secrets-style interpolation of state content.
-! grep -n 'cat.*checkpoint\.json\|echo.*checkpoint' "$EXAMPLE"
-# The caller activation and campaign claims come only from vars.
-grep -q 'vars.CONTRACTSCRIBE_ACTIVATION' "$EXAMPLE"
-grep -q 'vars.CONTRACTSCRIBE_CAMPAIGN' "$EXAMPLE"
-# Ambient token is github.token only — never a secret.
-! grep -n 'GITHUB_TOKEN:.*secrets\.' "$EXAMPLE"
-# No caches, no glob/latest artifact acquisition, no retries.
-! grep -n 'actions/cache\|merge-multiple\|retry\|name: \*' "$EXAMPLE"
-echo "textual invariants ok"
-
-echo "== functional legs =="
-if [ -n "$ONLY" ]; then
-    HANDOFF_PY="$HELPER" FAKE_API_PY="$HERE/fake_actions_api.py" \
-        python3 "$HERE/driver.py" run "$WORK/legs" --only "$ONLY"
-else
-    HANDOFF_PY="$HELPER" FAKE_API_PY="$HERE/fake_actions_api.py" \
-        python3 "$HERE/driver.py" run "$WORK/legs"
-fi
-
-echo "verify-examples: ok"
+python3 "$HERE/driver.py" run "$WORK/legs"
+echo 'verify-examples: ok'

@@ -360,14 +360,14 @@ public sealed class GitHubPublicationReconcilerTests
     }
 
     [Fact]
-    public async Task Append_recovers_an_exact_unrecorded_ref_successor_after_restart()
+    public async Task Append_recovers_atomically_recorded_ref_successor_after_failed_readback()
     {
         var remote = new Remote();
         var first = Branch.Authority(remote.Git);
         using (var initial = new Session(remote, first)) { await initial.Publish(); await initial.Publish(); }
         byte[] bytes = [9, 8, 7];
         var next = Branch.Authority(remote.Git, "append-partial", first, bytes);
-        // Stop the first read after the real ref CAS, before the coordination result is prepared.
+        // Stop the first read after the paired CAS; both remote effects must remain recoverable.
         var failReads = false;
         remote.AfterMutation = (_, body) =>
         {
@@ -376,7 +376,7 @@ public sealed class GitHubPublicationReconcilerTests
         remote.RejectRead = _ => failReads ? HttpStatusCode.Forbidden : null;
         using (var append = new Session(remote, next, Branch.Payload(next, bytes)))
             Assert.Equal(GitHubPublicationResultKind.Permission, (await append.Publish()).Kind);
-        Assert.Equal(GitHubCoordinationStage.ContentCreated, remote.State(next).Stage);
+        Assert.Equal(GitHubCoordinationStage.ProposalRefAdvanced, remote.State(next).Stage);
         remote.RejectRead = null; remote.AfterMutation = null;
         var refWrites = remote.Git.ProposalWrites;
         using var restart = new Session(remote, next, Branch.Payload(next, bytes));
@@ -547,19 +547,22 @@ public sealed class GitHubPublicationReconcilerTests
         var injected = false;
         remote.BeforeMutation = (_, body) =>
         {
-            var update = JsonNode.Parse(body!)?["variables"]?["input"]?["refUpdates"]?[0];
-            if (update is null) return;
-            var reference = update["name"]!.GetValue<string>();
-            var after = update["afterOid"]!.GetValue<string>();
-            if (reference.Contains("/coordination/", StringComparison.Ordinal))
+            var updates = JsonNode.Parse(body!)?["variables"]?["input"]?["refUpdates"]?.AsArray();
+            if (updates is null) return;
+            foreach (var update in updates)
             {
-                var state = remote.Git.CoordinationState(after);
-                if (state.Stage == GitHubCoordinationStage.Claimed) claimOid = after;
-                if (coordination && state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
-                { remote.Git.Refs[reference] = claimOid!; injected = true; }
+                var reference = update!["name"]!.GetValue<string>();
+                var after = update["afterOid"]!.GetValue<string>();
+                if (reference.Contains("/coordination/", StringComparison.Ordinal))
+                {
+                    var state = remote.Git.CoordinationState(after);
+                    if (state.Stage == GitHubCoordinationStage.Claimed) claimOid = after;
+                    if (coordination && state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
+                    { remote.Git.Refs[reference] = claimOid!; injected = true; }
+                }
+                else if (!coordination && reference.Contains("/proposals/", StringComparison.Ordinal))
+                { remote.Git.Refs[reference] = remote.Git.BaseOid; injected = true; }
             }
-            else if (!coordination && reference.Contains("/proposals/", StringComparison.Ordinal))
-            { remote.Git.Refs[reference] = remote.Git.BaseOid; injected = true; }
         };
         using (var append = new Session(remote, next, Branch.Payload(next, bytes)))
             Assert.Contains((await append.Publish()).Kind, new[] { GitHubPublicationResultKind.Conflict, GitHubPublicationResultKind.HumanChange });
@@ -607,8 +610,8 @@ public sealed class GitHubPublicationReconcilerTests
         remote.AfterMutation = (_, body) =>
         {
             var node = JsonNode.Parse(body!);
-            var hit = afterRef ? node?["variables"]?["input"]?["refUpdates"]?[0]?["name"]?.GetValue<string>()
-                .Contains("/proposals/", StringComparison.Ordinal) == true
+            var hit = afterRef ? node?["variables"]?["input"]?["refUpdates"]?.AsArray()
+                .Any(update => update?["name"]?.GetValue<string>().Contains("/proposals/", StringComparison.Ordinal) == true) == true
                 : node?["message"]?.GetValue<string>().StartsWith("ContractScribe proposal", StringComparison.Ordinal) == true;
             if (hit) remote.Git.Refs["refs/heads/main"] = new string('9', 40);
         };
@@ -623,7 +626,7 @@ public sealed class GitHubPublicationReconcilerTests
             remote.RejectMutation = path => path == "/graphql" ? HttpStatusCode.Forbidden : null;
             var denied = await restart.Observe();
             Assert.Equal(GitHubPublicationResultKind.Permission, denied.Result.Kind);
-            Assert.Equal(afterRef ? GitHubPublicationBoundary.CoordinationAdvanceRef : GitHubPublicationBoundary.CoordinationAdvanceContent,
+            Assert.Equal(afterRef ? GitHubPublicationBoundary.CoordinationAdvanceStale : GitHubPublicationBoundary.CoordinationAdvanceContent,
                 denied.Diagnostic!.Boundary);
             Assert.Equal(predecessor, remote.Git.Refs[reference]);
             remote.RejectMutation = null;
@@ -1047,10 +1050,17 @@ public sealed class GitHubPublicationReconcilerTests
         Assert.NotNull(stage.ProposalRefEntitlement);
         var reference = GitHubPublicationFactory.CreateProposalRef(next);
         var before = remote.Git.Refs[reference];
+        var advancedHead = stage.State!.HeadOid;
+        var advanceWrites = 0;
         async Task Advance()
         {
-            Assert.Null((await git.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement)).Failure);
-            Assert.Equal(stage.State!.HeadOid, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
+            var beforeWrites = remote.Writes;
+            var advanced = await git.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement);
+            Assert.Null(advanced.Failure);
+            advancedHead = advanced.Coordination!.State!.HeadOid;
+            Assert.NotEqual(stage.State!.HeadOid, advancedHead);
+            advanceWrites = remote.Writes - beforeWrites;
+            Assert.Equal(advancedHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
             Assert.Equal(content.CommitOid, remote.Git.Refs[reference]);
         }
         if (change == "rewind") await Advance();
@@ -1094,13 +1104,13 @@ public sealed class GitHubPublicationReconcilerTests
 
         Assert.Null(remote.BeforeReadAsync);
         Assert.Null(result.Observation);
-        Assert.Equal(stage.State!.HeadOid, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
-        Assert.Equal(writes + (change == "rewind" ? 0 : 1), remote.Writes);
+        Assert.Equal(advancedHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
+        Assert.Equal(writes + (change == "rewind" ? 0 : advanceWrites), remote.Writes);
         Assert.Equal(1, remote.PrAttempts);
         Assert.Single(remote.Prs);
         Assert.Equal(change == "permission" ? ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Failed
             : ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Conflict, result.Outcome);
-        Assert.Equal(change == "forward" ? (GitHubCoordinationFailureKind?)null
+        Assert.Equal(change is "forward" or "foreign" ? (GitHubCoordinationFailureKind?)null
             : change == "permission" ? GitHubCoordinationFailureKind.Transport : GitHubCoordinationFailureKind.HumanChange, result.Cause);
         if (change == "permission") Assert.Equal(403, result.Failure!.HttpStatus);
     }

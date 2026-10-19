@@ -20,7 +20,8 @@ internal static class CampaignCommandRunner
         CancellationToken cancellationToken,
         Func<string, string?>? credentialAccessor = null,
         CampaignAcceptedCandidateContinuation? continuation = null,
-        CampaignInvocationTargetLimit? targetLimit = null)
+        CampaignInvocationTargetLimit? targetLimit = null,
+        ICampaignCheckpointStore? checkpointStore = null)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(preflight);
@@ -36,10 +37,10 @@ internal static class CampaignCommandRunner
                 "campaign.invalid-configuration", null);
         }
 
-        FileCampaignCheckpointStore store;
+        ICampaignCheckpointStore store;
         try
         {
-            store = new FileCampaignCheckpointStore(preflight.StatePath, preflight.RepositoryRoot);
+            store = checkpointStore ?? new FileCampaignCheckpointStore(preflight.StatePath, preflight.RepositoryRoot);
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -154,6 +155,9 @@ internal static class CampaignCommandRunner
                 planning = planning with { TargetLimit = new CampaignInvocationTargetLimit(existing.Artifact.State.Batch.CreationQuota) };
             }
             plan = CampaignPlanner.Plan(planning);
+            if (store is ICampaignRecoveryPlanStore recovery
+                && !await recovery.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(plan), cancellationToken).ConfigureAwait(false))
+                return Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", existing);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -311,6 +315,16 @@ internal static class CampaignCommandRunner
             if (resumed.Kind != CampaignCheckpointAcceptanceKind.Accepted || resumed.AcceptedCheckpoint is null)
                 return Terminal(preflight.Operation, "state", AcceptanceOutcome(resumed.Kind), current);
             current = resumed.AcceptedCheckpoint;
+        }
+        if (store is ICampaignRecoveryPlanStore && current.Artifact.State.DispatchObservations.Length >= 256
+            && current.Artifact.State.ActiveReservation is null
+            && current.Artifact.State.WorkItems.All(work => work.PausedProviderAttempt is null))
+        {
+            var archived = await CampaignCheckpointAcceptance.AcceptAsync(store,
+                CampaignStateReducer.ArchiveDispatchHistory(current), settlementCancellation.Token).ConfigureAwait(false);
+            if (archived.Kind != CampaignCheckpointAcceptanceKind.Accepted || archived.AcceptedCheckpoint is null)
+                return Terminal(preflight.Operation, "state", AcceptanceOutcome(archived.Kind), current);
+            current = archived.AcceptedCheckpoint;
         }
         var invocationAllowance = new DocumentationScribeInvocationAllowance(configuration.Budgets.Invocation);
         var targetAllowance = CampaignStateFactory.CreateInvocationTargetAllowance(current.Artifact.State, targetLimit);

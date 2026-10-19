@@ -1000,7 +1000,7 @@ EOF
     cat > "$w/request.json" <<EOF
 {"githubProposalRequestVersion":1,
  "campaignLineage":"campaign.action.test","snapshot":"snapshot.action.test",
- "state":"$w/checkpoint/state.bin",
+ "checkpointStore":"coordination-ref",
  "github":{"repositoryOwner":"Owner","repositoryName":"repo",
    "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
    "operationId":"operation.action","generationId":"generation.action",

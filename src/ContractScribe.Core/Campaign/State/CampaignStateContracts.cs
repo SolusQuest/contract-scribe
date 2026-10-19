@@ -651,6 +651,7 @@ public sealed record CampaignCheckpointState
     public ImmutableArray<CampaignKnownCompletedOperation> KnownCompletedOperations { get; }
     public CampaignScribeProgress? ScribeProgress { get; internal init; }
     public ImmutableArray<CampaignDispatchObservation> DispatchObservations { get; internal init; } = [];
+    public CampaignArchivedDispatchPrefix? ArchivedDispatchPrefix { get; internal init; }
     public CampaignTerminalOutcome? TerminalOutcome { get; }
     public CampaignPredecessorSummary? Predecessor { get; }
 }

@@ -24,7 +24,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("7e740fbb2a0f357d6fa79d63aa7d234512dd8597f88d5df555fe805806d82474", artifact.Sha256);
+        Assert.Equal("ddac5c385ede4eeac2ed906d13db1c8ccb0bd2141e864262537eda910b758b71", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }

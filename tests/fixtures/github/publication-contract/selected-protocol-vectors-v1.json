@@ -1,7 +1,8 @@
 {
   "version": 1,
   "mutation": "GraphQL.updateRefs",
-  "refUpdatesPerMutation": 1,
+  "coordinationRefUpdatesPerMutation": 1,
+  "publicationRefUpdatesPerMutation": 2,
   "force": false,
   "expectedAbsenceBeforeOid": "0000000000000000000000000000000000000000",
   "afterOidMayBeZero": false,

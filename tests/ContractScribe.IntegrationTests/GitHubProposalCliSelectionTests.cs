@@ -1,4 +1,7 @@
 using System.Collections.Immutable;
+using System.Reflection;
+using ContractScribe.GitHub.Coordination;
+using ContractScribe.GitHub.Transport;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.Cli;
@@ -34,7 +37,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (patchTimeout)
         {
             Assert.NotEqual(0, result.ExitCode);
-            Assert.Equal(0, fixture.GitHub.Mutations);
+            Assert.Equal(0, fixture.GitHub.PublicationWrites);
             Assert.Equal(CampaignCumulativeOutcomeKind.Timeout, checkpoint.State.CumulativeOutcome!.Kind);
             Assert.Null(checkpoint.State.CandidateObservation);
         }
@@ -44,10 +47,10 @@ public sealed partial class GitHubProposalCliProcessTests
             Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, checkpoint.State.CumulativeOutcome!.Kind);
             Assert.Single(checkpoint.State.CandidateObservation!.AcceptedWorkItemKeys);
             Assert.Single(checkpoint.State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
-            var writes = fixture.GitHub.Mutations;
+            var writes = fixture.GitHub.PublicationWrites;
             var sends = fixture.Provider.RequestCount;
             AssertResult(await fixture.Run("resume"), 0, "replayed");
-            Assert.Equal(writes, fixture.GitHub.Mutations);
+            Assert.Equal(writes, fixture.GitHub.PublicationWrites);
             Assert.Equal(sends, fixture.Provider.RequestCount);
             Assert.Equal(CampaignTerminalKind.Exhausted, fixture.Checkpoint().State.TerminalOutcome!.Kind);
         }
@@ -64,7 +67,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("App/App.cs", Assert.Single(accepted.State.CandidateObservation!.ChangedFiles).Path);
         await ConfigureAppend(fixture);
         var reads = fixture.TokenReads();
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         var rejected = await fixture.Run("resume");
         AssertResult(rejected, 5, "host-failure");
         Assert.Equal("github proposal stopped before publication: campaign.patch-rejected\n", rejected.Stderr);
@@ -76,12 +79,12 @@ public sealed partial class GitHubProposalCliProcessTests
             settled.State.AcceptedCandidateOrigin.CandidateObservation.PatchResultCommitmentSha256);
         Assert.Equal(accepted.State.LineageCharges.PatchValidationInvocations + 1,
             settled.State.LineageCharges.PatchValidationInvocations);
-        Assert.Equal(reads, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(reads + 1, fixture.TokenReads());
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         AssertResult(await fixture.Run("resume"), 5, "host-failure");
         Assert.Equal(settled.Sha256, fixture.Checkpoint().Sha256);
-        Assert.Equal(reads, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(reads + 2, fixture.TokenReads());
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         await fixture.AssertSourceUnchanged();
     }
 
@@ -92,7 +95,7 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task Persisted_failed_reconstruction_wins_over_append_no_work(
         string failure, int exit, string outcome, string diagnostic)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
@@ -102,15 +105,15 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(accepted.Sha256, failed.State.AcceptedCandidateOrigin!.CheckpointSha256);
         await ConfigureAppend(fixture);
         var reads = fixture.TokenReads();
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         var result = await fixture.Run("resume");
         AssertResult(result, exit, outcome);
         Assert.Equal("github proposal stopped before publication: " + diagnostic + "\n", result.Stderr);
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal(failed.CheckpointRevision, json.RootElement.GetProperty("checkpointRevision").GetInt64());
         Assert.Equal(failed.Sha256, fixture.Checkpoint().Sha256);
-        Assert.Equal(reads, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(reads + 1, fixture.TokenReads());
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         await fixture.AssertSourceUnchanged();
     }
 
@@ -133,7 +136,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [Fact]
     public async Task Genuine_predecessor_reconstruction_at_handoff_is_not_new_append_work()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
@@ -141,7 +144,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await ConfigureAppend(fixture);
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
         var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
-        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root);
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true);
         var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, request,
             _ => throw new InvalidOperationException("No credential is needed to classify append progress."));
         var current = fixture.Checkpoint();
@@ -150,11 +153,11 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.False(continuation.ReconstructAccepted(current.State));
         Assert.True(continuation.HasNoAppendWork(current.State));
         var reads = fixture.TokenReads();
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), 0, "no-op");
         Assert.Equal(current.Sha256, fixture.Checkpoint().Sha256);
-        Assert.Equal(reads, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.Mutations);
+        Assert.Equal(reads + 1, fixture.TokenReads());
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         await fixture.AssertSourceUnchanged();
     }
 
@@ -162,7 +165,16 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
         var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
-        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root);
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true);
+        var github = request.Request.GitHub;
+        using var registration = (IDisposable)typeof(GitHubTransportTestHook)
+            .GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!
+            .Invoke(null, [fixture.GitHub.Endpoint, null, 30_000])!;
+        using var client = GitHubApiClient.CreateCheckpoint(ValidatedGitHubCheckpointAuthority.Create(
+            github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Request.CampaignLineage,
+            github.ExpectedBaseCommitOid), GitHubTransportTestHook.Placeholder);
+        await using var checkpoint = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await checkpoint.AcquireCheckpointAsync(default));
         var configuration = preflight.Configuration.Document;
         var sourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
         string? staging = null;
@@ -189,6 +201,7 @@ public sealed partial class GitHubProposalCliProcessTests
                     var execution = configuration.CreateExecutionCapability(policy);
                     var planning = CampaignCommandRunner.CreatePlanningInput(preflight, configuration, policy, bundle, token);
                     var plan = CampaignPlanner.Plan(planning);
+                    Assert.True(await checkpoint.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(plan), token));
                     result = await DocumentationCampaignPatchExecutor.ExecuteAsync(new(bundle.Classified, bundle.Observed,
                         bundle.Policy, bundle.AuditInputs.ToImmutableArray(), bundle.Audit, planning, plan, execution,
                         configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId,
@@ -198,7 +211,7 @@ public sealed partial class GitHubProposalCliProcessTests
                             m2ProjectionVersion = 1,
                             maximumPatchElapsedMilliseconds = configuration.Planning.MaximumPatchElapsedMilliseconds,
                         }),
-                        new FileCampaignCheckpointStore(fixture.State, fixture.Repository.Root), token, token,
+                        checkpoint, token, token,
                         PatchEngine: engine, AcceptedOnly: true));
                 }), CancellationToken.None);
         }
