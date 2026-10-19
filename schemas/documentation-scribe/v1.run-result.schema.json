@@ -9,7 +9,12 @@
     "scribeRequestSha256",
     "attemptId",
     "dynamicEvidenceReferences",
-    "terminal",
+    "submissions",
+    "targetFailures",
+    "stop",
+    "repairCount",
+    "nextSequence",
+    "coverage",
     "runEnvelope"
   ],
   "properties": {
@@ -29,11 +34,43 @@
         "$ref": "#/$defs/evidenceReference"
       }
     },
-    "terminal": {
-      "$ref": "#/$defs/terminal"
-    },
     "runEnvelope": {
       "$ref": "#/$defs/runEnvelope"
+    },
+    "submissions": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/targetSubmission"
+      }
+    },
+    "targetFailures": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/targetFailure"
+      }
+    },
+    "stop": {
+      "$ref": "#/$defs/stop"
+    },
+    "repairCount": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 3
+    },
+    "nextSequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 2147483647
+    },
+    "coverage": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4096,
+      "items": {
+        "$ref": "#/$defs/coverage"
+      }
     }
   },
   "$defs": {
@@ -826,22 +863,6 @@
         }
       }
     },
-    "terminal": {
-      "oneOf": [
-        {
-          "$ref": "#/$defs/proposal"
-        },
-        {
-          "$ref": "#/$defs/skip"
-        },
-        {
-          "$ref": "#/$defs/failure"
-        },
-        {
-          "$ref": "#/$defs/cancelled"
-        }
-      ]
-    },
     "usage": {
       "type": "object",
       "additionalProperties": false,
@@ -978,7 +999,7 @@
         "modelConfigurationId",
         "scribeProtocolId",
         "toolPolicyId",
-        "styleProfileId",
+        "styleProfileIds",
         "attemptNumber",
         "restoredRetryableProviderFailures",
         "providerRequestCount",
@@ -1004,9 +1025,6 @@
           "$ref": "#/$defs/identifier"
         },
         "toolPolicyId": {
-          "$ref": "#/$defs/identifier"
-        },
-        "styleProfileId": {
           "$ref": "#/$defs/identifier"
         },
         "attemptNumber": {
@@ -1056,6 +1074,196 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 999999
+        },
+        "styleProfileIds": {
+          "type": "array",
+          "maxItems": 4096,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/identifier"
+          }
+        },
+        "usageCoverage": {
+          "$ref": "#/$defs/usageCoverage"
+        }
+      }
+    },
+    "targetResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/proposal"
+        },
+        {
+          "$ref": "#/$defs/skip"
+        }
+      ]
+    },
+    "finished": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "reason"
+      ],
+      "properties": {
+        "kind": {
+          "const": "finished"
+        },
+        "reason": {
+          "enum": [
+            "completed",
+            "unresolved",
+            "context"
+          ]
+        }
+      }
+    },
+    "stop": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/finished"
+        },
+        {
+          "$ref": "#/$defs/failure"
+        },
+        {
+          "$ref": "#/$defs/cancelled"
+        }
+      ]
+    },
+    "targetSubmission": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetId",
+        "contentSha256",
+        "stage",
+        "result"
+      ],
+      "properties": {
+        "targetId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "contentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "stage": {
+          "enum": [
+            "received",
+            "validated",
+            "durably-recorded",
+            "patch-accepted"
+          ]
+        },
+        "result": {
+          "$ref": "#/$defs/targetResult"
+        }
+      }
+    },
+    "targetFailure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetId",
+        "validationCode"
+      ],
+      "properties": {
+        "targetId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "validationCode": {
+          "$ref": "#/$defs/identifier"
+        }
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "targetId",
+        "auditOutcome",
+        "status"
+      ],
+      "properties": {
+        "targetId": {
+          "$ref": "#/$defs/identifier"
+        },
+        "auditOutcome": {
+          "enum": [
+            "audit.outcome.compliant",
+            "audit.outcome.violation",
+            "audit.outcome.skipped"
+          ]
+        },
+        "status": {
+          "enum": [
+            "compliant",
+            "remaining",
+            "received",
+            "validated",
+            "durably-recorded",
+            "patch-accepted",
+            "skipped",
+            "failed"
+          ]
+        },
+        "stage": {
+          "enum": [
+            "received",
+            "validated",
+            "durably-recorded",
+            "patch-accepted"
+          ]
+        }
+      }
+    },
+    "usageCoverage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "inputRequests",
+        "outputRequests",
+        "cachedInputRequests",
+        "uncachedInputRequests",
+        "reasoningRequests",
+        "costRequests",
+        "cacheRequests"
+      ],
+      "properties": {
+        "inputRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "outputRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "cachedInputRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "uncachedInputRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "reasoningRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "costRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
+        },
+        "cacheRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000
         }
       }
     }

@@ -60,7 +60,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             fixture.AttemptId,
             exchange);
 
-        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(3, exchange.RequestCount);
         Assert.Equal(2, exchange.CompletedToolCount);
         Assert.Equal(
             new[]
@@ -343,7 +343,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(3, exchange.RequestCount);
         var completed = Assert.Single(exchange.Completed);
         Assert.Contains(
             completed.OutcomeId,
@@ -394,7 +394,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(3, exchange.RequestCount);
         var completed = Assert.Single(exchange.Completed);
         Assert.Contains(
             completed.OutcomeId,
@@ -927,9 +927,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Equal(1, exchange.RequestCount);
+        Assert.Equal(2, exchange.RequestCount);
         var maintained = Assert.Single(
-            Assert.Single(exchange.Requests).Messages,
+            exchange.Requests[0].Messages,
             message => message.Kind == DocumentationScribeMessageKind.MaintainedContext);
         Assert.Contains("zzzz.context.confined-file", maintained.Content, StringComparison.Ordinal);
         Assert.Contains(kind, maintained.Content, StringComparison.Ordinal);
@@ -956,7 +956,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        var request = Assert.Single(exchange.Requests);
+        Assert.Equal(2, exchange.Requests.Count);
+        var request = exchange.Requests[0];
         var semantic = request.Tools.Single(tool =>
             tool.OperationId == DocumentationScribeSemanticToolSelection.OperationId);
         using (var schema = JsonDocument.Parse(semantic.InputSchemaJson))
@@ -1013,7 +1014,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Equal(1, exchange.RequestCount);
+        Assert.Equal(2, exchange.RequestCount);
     }
 
     [Fact]
@@ -1030,7 +1031,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Equal(1, exchange.RequestCount);
+        Assert.Equal(2, exchange.RequestCount);
     }
 
     [Fact]
@@ -1047,7 +1048,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             fixture.AttemptId,
             exchange);
 
-        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(3, exchange.RequestCount);
         Assert.NotNull(outcome.PatchRequest);
         Assert.Equal(original, await File.ReadAllBytesAsync(fixture.SourcePath));
         if (OperatingSystem.IsLinux())
@@ -1185,7 +1186,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange);
 
         Assert.Equal("ProposalSkipped", outcome.Status);
-        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(3, exchange.RequestCount);
         var completed = Assert.Single(exchange.Completed);
         Assert.Equal(DocumentationScribeToolOutcome.Complete.Id, completed.OutcomeId);
         using var result = JsonDocument.Parse(completed.ResultUtf8Json);
@@ -1329,7 +1330,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     Evidence = item.EvidenceReferences.Select(reference => Scrub(
                         JsonSerializer.SerializeToNode(reference))),
                 }),
-                Terminal = Scrub(JsonSerializer.SerializeToNode(outcome.RunResult!.Terminal)),
+                Terminal = Scrub(JsonSerializer.SerializeToNode(outcome.RunResult!.Stop)),
                 Patch = patchRequest.Blocks.Select(block => new
                 {
                     block.BlockId,
@@ -2239,6 +2240,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             RequestCount++;
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(modelRequest))]));
+
             if (modelRequest.ProviderRequestNumber == 1)
             {
                 return ValueTask.FromResult(SyntheticResponse(
@@ -2269,7 +2273,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 .ToImmutableArray();
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(modelRequest, ProposalTerminal(request)))]));
         }
     }
 
@@ -2296,6 +2300,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             RequestCount++;
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
+
             if (request.ProviderRequestNumber == 1)
             {
                 var arguments = new JsonObject
@@ -2328,7 +2335,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Completed = request.CompletedToolExchanges;
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2352,6 +2359,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             RequestCount++;
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
+
             if (request.ProviderRequestNumber == 1)
             {
                 return ValueTask.FromResult(SyntheticResponse(
@@ -2373,7 +2383,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Completed = request.CompletedToolExchanges;
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2403,6 +2413,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             RequestCount++;
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]);
+
             if (request.ProviderRequestNumber == 1)
             {
                 await File.WriteAllTextAsync(
@@ -2431,7 +2444,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             await File.WriteAllTextAsync(path, original, new UTF8Encoding(false), cancellationToken);
             return SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]);
         }
     }
 
@@ -2447,6 +2460,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
+
             if (request.ProviderRequestNumber == 1)
             {
                 return ValueTask.FromResult(SyntheticResponse(
@@ -2463,7 +2479,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Completed = request.CompletedToolExchanges;
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2475,10 +2491,15 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest modelRequest,
-            CancellationToken cancellationToken) =>
+            CancellationToken cancellationToken)
+        {
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(modelRequest))]));
+            return
             ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(modelRequest, SkipTerminal()))]));
+        }
     }
 
     private sealed class MutatingProposalExchange : IDocumentationScribeModelExchange
@@ -2496,6 +2517,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             DocumentationScribeModelRequest modelRequest,
             CancellationToken cancellationToken)
         {
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return SyntheticResponse([], [new(ScribeProtocolFixture.Finish(modelRequest))]);
+
             if (modelRequest.ProviderRequestNumber == 1)
             {
                 return SyntheticResponse(
@@ -2512,7 +2536,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             await File.AppendAllTextAsync(sourcePath, Environment.NewLine, cancellationToken);
             return SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]);
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(modelRequest, ProposalTerminal(request)))]);
         }
     }
 
@@ -2528,9 +2552,11 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         {
             RequestCount++;
             Requests.Add(request);
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2580,6 +2606,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
+
             if (request.ProviderRequestNumber == 1)
             {
                 return ValueTask.FromResult(SyntheticResponse(
@@ -2596,7 +2625,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Completed = request.CompletedToolExchanges;
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2609,6 +2638,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
+
             if (request.ProviderRequestNumber == 1)
             {
                 return ValueTask.FromResult(SyntheticResponse(
@@ -2635,7 +2667,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             Completed = request.CompletedToolExchanges;
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2655,6 +2687,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]));
+
             if (request.ProviderRequestNumber == 1)
             {
                 var arguments = operationId == DocumentationScribeRepositoryToolOperationIds.SearchText
@@ -2679,7 +2714,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]));
         }
     }
 
@@ -2689,10 +2724,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return SyntheticResponse([], [new(ScribeProtocolFixture.Finish(request))]);
+
             await Task.Delay(TimeSpan.FromSeconds(1), cancellationToken);
             return SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(request, SkipTerminal()))]);
         }
     }
 

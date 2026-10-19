@@ -54,7 +54,7 @@ public sealed class CampaignChangedBaseProcessTests
         var ambiguous = ReadArtifact(fixture.StatePath);
         var oldReservation = Assert.IsType<CampaignPatchReservation>(ambiguous.State.ActiveReservation);
         var providerCallsBeforeSupersession = fixture.Server.RequestCount;
-        var oldEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
+        var oldEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[0]);
 
         CopyRevision("revision-b", fixture.Repository.Root);
         await InterruptAtAsync(fixture, "resume", "snapshot.changed-base.b",
@@ -96,7 +96,7 @@ public sealed class CampaignChangedBaseProcessTests
         var completedArtifact = ReadArtifact(fixture.StatePath);
         CampaignCliProcessTests.AssertCampaign(
             completed, 0, "campaign.complete", completedArtifact.CheckpointRevision);
-        Assert.Equal(providerCallsBeforeSupersession + 1, fixture.Server.RequestCount);
+        Assert.Equal(providerCallsBeforeSupersession + 2, fixture.Server.RequestCount);
         var newEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[^1]);
         AssertCollisionCommitments(oldEvidence, newEvidence);
         Assert.DoesNotContain(completedArtifact.State.WorkItems,
@@ -215,7 +215,7 @@ public sealed class CampaignChangedBaseProcessTests
         fixture.Input = "TargetEvolution.slnx";
         await InterruptAtAsync(fixture, "start", "snapshot.target.a",
             CampaignProcessBoundaryHooks.ProposalAfterProposalReadback);
-        var baselineEvidence = ReadTargetEvidence(Assert.Single(fixture.Server.RequestBodies));
+        var baselineEvidence = ReadTargetEvidence(fixture.Server.RequestBodies[0]);
         var baselineSourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");
         var baselineSource = await File.ReadAllBytesAsync(baselineSourcePath);
         var baselineProject = await File.ReadAllBytesAsync(baselineProjectPath);
@@ -354,7 +354,7 @@ public sealed class CampaignChangedBaseProcessTests
         CampaignCliProcessTests.AssertCampaign(completed, 0, "campaign.complete", current.CheckpointRevision);
         Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
         Assert.Null(current.State.ActiveReservation);
-        Assert.Equal(1, fixture.Server.RequestCount);
+        Assert.Equal(2, fixture.Server.RequestCount);
     }
 
     private static async Task AssertExactSuccessorAdoptionAsync(ProcessFixture fixture)
@@ -385,14 +385,14 @@ public sealed class CampaignChangedBaseProcessTests
             CampaignCliProcessTests.AssertCampaign(adopted, 0, "campaign.complete", current.CheckpointRevision);
             Assert.Equal("snapshot.concurrent.b", current.State.Snapshot.OpaqueSnapshotBinding);
             Assert.Null(current.State.ActiveReservation);
-            Assert.Equal(1, fixture.Server.RequestCount);
+            Assert.Equal(2, fixture.Server.RequestCount);
         }
         finally
         {
             await CampaignCliProcessTests.StopAsync(staleWriter);
         }
 
-        Assert.Equal(1, fixture.Server.RequestCount);
+        Assert.Equal(2, fixture.Server.RequestCount);
     }
 
     [Fact]
@@ -503,14 +503,14 @@ public sealed class CampaignChangedBaseProcessTests
 
     private static void AssertCollisionCommitments(JsonElement oldEvidence, JsonElement newEvidence)
     {
-        var oldTarget = oldEvidence.GetProperty("terminalTarget");
-        var newTarget = newEvidence.GetProperty("terminalTarget");
+        var oldTarget = oldEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
+        var newTarget = newEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
         Assert.Equal(oldTarget.GetProperty("symbolRef").GetRawText(),
             newTarget.GetProperty("symbolRef").GetRawText());
         Assert.Equal(oldTarget.GetProperty("sourceCommitment").GetRawText(),
             newTarget.GetProperty("sourceCommitment").GetRawText());
-        Assert.Equal(oldEvidence.GetProperty("applicableComponents").GetRawText(),
-            newEvidence.GetProperty("applicableComponents").GetRawText());
+        Assert.Equal(oldEvidence.GetProperty("manifest")[0].GetProperty("applicableComponents").GetRawText(),
+            newEvidence.GetProperty("manifest")[0].GetProperty("applicableComponents").GetRawText());
         Assert.Equal(
             oldEvidence.GetProperty("evidenceReferences")[0].GetProperty("contentSha256").GetString(),
             newEvidence.GetProperty("evidenceReferences")[0].GetProperty("contentSha256").GetString());
@@ -527,7 +527,7 @@ public sealed class CampaignChangedBaseProcessTests
             return;
         }
 
-        var evidence = requestBodies.Select(ReadTargetEvidence).ToArray();
+        var evidence = requestBodies.Select(ReadTargetEvidence).Where(item => item.GetProperty("progress").GetArrayLength() == 0).ToArray();
         var expectedDocumentationIds = evolution switch
         {
             "changed-applicable-components" => new[] { "M:Fixture.App.Run(System.Int32)" },
@@ -536,15 +536,15 @@ public sealed class CampaignChangedBaseProcessTests
             _ => new[] { "M:Fixture.App.Run" },
         };
         Assert.Equal(expectedDocumentationIds, evidence.Select(item => item
-            .GetProperty("terminalTarget")
+            .GetProperty("manifest")[0].GetProperty("proposalTarget")
             .GetProperty("symbolRef")
             .GetProperty("documentationCommentId")
             .GetString()));
 
-        var baselineTarget = baselineEvidence.GetProperty("terminalTarget");
+        var baselineTarget = baselineEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
         foreach (var item in evidence)
         {
-            var target = item.GetProperty("terminalTarget");
+            var target = item.GetProperty("manifest")[0].GetProperty("proposalTarget");
             var source = target.GetProperty("sourceCommitment");
             var sourceLocator = source.GetProperty("locator").GetProperty("repository");
             var reference = item.GetProperty("evidenceReferences")[0];
@@ -560,7 +560,7 @@ public sealed class CampaignChangedBaseProcessTests
                 > sourceLocator.GetProperty("span").GetProperty("start").GetInt32());
         }
 
-        var firstTarget = evidence[0].GetProperty("terminalTarget");
+        var firstTarget = evidence[0].GetProperty("manifest")[0].GetProperty("proposalTarget");
         var firstSymbol = firstTarget.GetProperty("symbolRef");
         var baselineSymbol = baselineTarget.GetProperty("symbolRef");
         var firstPath = firstTarget.GetProperty("sourceCommitment")
@@ -590,7 +590,7 @@ public sealed class CampaignChangedBaseProcessTests
         {
             Assert.Equal(
                 new[] { "parameter:parameter/0", "return:return" },
-                evidence[0].GetProperty("applicableComponents").EnumerateArray().Select(component =>
+                evidence[0].GetProperty("manifest")[0].GetProperty("applicableComponents").EnumerateArray().Select(component =>
                     component.GetProperty("kind").GetString() + ":"
                     + component.GetProperty("identity").GetString()));
             Assert.NotEqual(baselineContent, firstContent);
@@ -693,7 +693,7 @@ public sealed class CampaignChangedBaseProcessTests
             bool executable,
             int? maximumCampaignElapsedMilliseconds = null,
             int? maximumCandidatesPerBlock = null,
-            bool includeUsage = false)
+            bool includeUsage = true)
         {
             var repository = await LoaderFixture.CreateAsync();
             if (executable)

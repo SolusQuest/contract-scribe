@@ -73,7 +73,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Null(valid.ActiveReservation);
             Assert.Equal(1, valid.LineageCharges.PatchValidationInvocations);
             Assert.DoesNotContain(valid.WorkItems, item => item.ClosedOutcome?.Code == CampaignWorkOutcomeCode.CompletedOverBound);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
             Assert.Equal(31, valid.LineageCharges.InputTokens.Observed);
             Assert.Equal(7, valid.LineageCharges.OutputTokens.Observed);
 
@@ -87,15 +87,15 @@ public sealed partial class CampaignCliProcessTests
             var parsed = CampaignStateJson.Parse(bytes);
             Assert.True(parsed.IsValid, parsed.FailureCode?.ToString());
             var state = parsed.Artifact!.State;
-            Assert.Equal(2, server.RequestCount);
+            Assert.Equal(4, server.RequestCount);
             Assert.Null(state.ActiveReservation);
             var closed = Assert.Single(state.WorkItems.Where(item => item.ClosedOutcome?.Code == CampaignWorkOutcomeCode.CompletedOverBound));
             Assert.Equal(1, closed.OuterAttemptCount);
             Assert.NotNull(closed.ClosedOutcome!.ScribeResultCommitmentSha256);
             Assert.Equal(64, closed.ClosedOutcome.ScribeResultCommitmentSha256!.Length);
             Assert.Equal(1, state.LineageCharges.OuterInvocations);
-            Assert.Equal(1, state.LineageCharges.ProviderRequests.Observed);
-            Assert.Equal(1, state.LineageCharges.ProviderRequests.TotalCharged);
+            Assert.Equal(2, state.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(2, state.LineageCharges.ProviderRequests.TotalCharged);
             Assert.Equal(31, state.LineageCharges.InputTokens.Observed);
             Assert.Equal(7, state.LineageCharges.OutputTokens.Observed);
             Assert.Equal(0, state.LineageCharges.PatchValidationInvocations);

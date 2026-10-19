@@ -19,6 +19,7 @@ internal sealed class RunState
     private string? currencyId;
     private DocumentationScribeCacheObservation? cache;
     private bool arithmeticOverflow;
+    private int inputReports, outputReports, cachedReports, uncachedReports, reasoningReports, costReports, cacheReports;
 
     internal RunState(
         DocumentationScribeRequest request,
@@ -47,6 +48,25 @@ internal sealed class RunState
             arithmeticOverflow = true;
         }
     }
+
+    internal ImmutableDictionary<string, DocumentationScribeTargetSubmission> Submissions { get; set; } =
+        ImmutableDictionary.Create<string, DocumentationScribeTargetSubmission>(StringComparer.Ordinal);
+    internal ImmutableDictionary<string, DocumentationScribeTargetFailure> TargetFailures { get; set; } =
+        ImmutableDictionary.Create<string, DocumentationScribeTargetFailure>(StringComparer.Ordinal);
+    internal ImmutableHashSet<string> RestoredClosedTargets { get; set; } = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+    internal CancellationToken CallerCancellation { get; set; }
+    internal ImmutableHashSet<string> AttemptedTargets { get; set; } = ImmutableHashSet.Create<string>(StringComparer.Ordinal);
+    internal int RepairCount { get; set; }
+    internal int NextSequence { get; set; } = 1;
+
+    internal DocumentationScribeRunResult CompleteResult(DocumentationScribeRunResult result) =>
+        DocumentationScribeValidation.WithProgress(Request, result, Submissions.Values.ToImmutableArray(),
+            TargetFailures.Values.ToImmutableArray(), RepairCount, NextSequence);
+
+    internal DocumentationScribeRunResult CreateFinished(bool contextStop = false) =>
+        DocumentationScribeValidation.CreateFinishedResult(Request, AttemptId,
+            CreateEnvelope([], ElapsedMilliseconds), Submissions.Values.ToImmutableArray(),
+            TargetFailures.Values.ToImmutableArray(), RepairCount, NextSequence, contextStop);
 
     internal DocumentationScribeExecutionScope Scope { get; }
 
@@ -145,7 +165,8 @@ internal sealed class RunState
         || reasoningTokens > Request.Limits.MaximumOutputTokens
         || costMicrounits > Request.Limits.MaximumCostMicrounits;
 
-    internal bool CanStartAdditionalModelWork => Scope.Allowance.CanBeginProviderWork() && !arithmeticOverflow
+    internal bool CanStartAdditionalModelWork => Scope.Allowance.CanBeginProviderWork()
+        && ToolCallCount < Request.Limits.MaximumToolCalls && Scope.Allowance.RemainingToolCalls > 0 && !arithmeticOverflow
         && !HasUnrepresentableObservation
         && (inputTokens is null || inputTokens < Request.Limits.MaximumInputTokens)
         && (outputTokens is null || outputTokens < Request.Limits.MaximumOutputTokens)
@@ -171,6 +192,11 @@ internal sealed class RunState
         {
             if (response.Usage is { } usage)
             {
+                if (usage.InputTokens is not null) inputReports++;
+                if (usage.OutputTokens is not null) outputReports++;
+                if (usage.CachedInputTokens is not null) cachedReports++;
+                if (usage.UncachedInputTokens is not null) uncachedReports++;
+                if (usage.ReasoningTokens is not null) reasoningReports++;
                 Add(ref inputTokens, usage.InputTokens);
                 Add(ref outputTokens, usage.OutputTokens);
                 Add(ref cachedInputTokens, usage.CachedInputTokens);
@@ -186,12 +212,14 @@ internal sealed class RunState
                     return false;
                 }
 
+                costReports++;
                 currencyId ??= cost.CurrencyId;
                 Add(ref costMicrounits, cost.AmountMicrounits);
             }
 
             if (response.Cache is { } reported)
             {
+                if (reported != DocumentationScribeCacheObservation.NotReported) cacheReports++;
                 cache = cache is null || cache == reported
                     ? reported
                     : DocumentationScribeCacheObservation.Mixed;
@@ -206,19 +234,18 @@ internal sealed class RunState
         }
     }
 
-    internal DocumentationScribeRunResult CreateCancelled(int elapsedMilliseconds) => DocumentationScribeValidation.CreateCancelledResult(
+    internal DocumentationScribeRunResult CreateCancelled(int elapsedMilliseconds) => CompleteResult(DocumentationScribeValidation.CreateCancelledResult(
         Request,
         AttemptId,
         DocumentationScribeCancellationCode.Caller,
         CreateEnvelope(
             ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
             elapsedMilliseconds,
-            allowObservedOverrun: true));
+            allowObservedOverrun: true)));
 
     internal DocumentationScribeRunResult CreateFailure(
         DocumentationScribeFailureCode code,
-        int elapsedMilliseconds) =>
-        DocumentationScribeValidation.CreateFailureResult(
+        int elapsedMilliseconds) => CompleteResult(DocumentationScribeValidation.CreateFailureResult(
             Request,
             AttemptId,
             code,
@@ -226,11 +253,11 @@ internal sealed class RunState
                 ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
                 elapsedMilliseconds,
                 allowObservedOverrun: code is DocumentationScribeFailureCode.Budget
-                    or DocumentationScribeFailureCode.Timeout));
+                    or DocumentationScribeFailureCode.Timeout)));
 
     internal DocumentationScribeRunResult CreateProviderFailure(
         DocumentationScribeProviderFinalDisposition providerFinalDisposition,
-        int elapsedMilliseconds) => DocumentationScribeValidation.CreateFailureResult(
+        int elapsedMilliseconds) => CompleteResult(DocumentationScribeValidation.CreateFailureResult(
         Request,
         AttemptId,
         DocumentationScribeFailureCode.Provider,
@@ -238,12 +265,11 @@ internal sealed class RunState
             [new DocumentationScribeDiagnosticInput("scribe.diagnostic.provider-failure", "provider")],
             elapsedMilliseconds,
             allowObservedOverrun: false),
-        providerFinalDisposition);
+        providerFinalDisposition));
 
     internal DocumentationScribeRunResult CreateToolProtocolFailure(
         string referenceId,
-        int elapsedMilliseconds) =>
-        DocumentationScribeValidation.CreateFailureResult(
+        int elapsedMilliseconds) => CompleteResult(DocumentationScribeValidation.CreateFailureResult(
             Request,
             AttemptId,
             DocumentationScribeFailureCode.ToolProtocol,
@@ -253,12 +279,11 @@ internal sealed class RunState
                     "tool",
                     DocumentationScribeBoundary.ValidateIdentifier(referenceId, nameof(referenceId)))],
                 elapsedMilliseconds,
-                allowObservedOverrun: false));
+                allowObservedOverrun: false)));
 
     internal DocumentationScribeRunResult CreateValidationFailure(
         string validationCode,
-        int elapsedMilliseconds) =>
-        DocumentationScribeValidation.CreateFailureResult(
+        int elapsedMilliseconds) => CompleteResult(DocumentationScribeValidation.CreateFailureResult(
             Request,
             AttemptId,
             DocumentationScribeFailureCode.Validation,
@@ -270,16 +295,16 @@ internal sealed class RunState
                         validationCode,
                         nameof(validationCode)))],
                 elapsedMilliseconds,
-                allowObservedOverrun: false));
+                allowObservedOverrun: false)));
 
-    internal DocumentationScribeRunResult CreateInternalFailure(int elapsedMilliseconds) => DocumentationScribeValidation.CreateFailureResult(
+    internal DocumentationScribeRunResult CreateInternalFailure(int elapsedMilliseconds) => CompleteResult(DocumentationScribeValidation.CreateFailureResult(
         Request,
         AttemptId,
         DocumentationScribeFailureCode.Internal,
         CreateEnvelope(
             [new DocumentationScribeDiagnosticInput("scribe.diagnostic.runtime-failure", "runtime")],
             elapsedMilliseconds,
-            allowObservedOverrun: false));
+            allowObservedOverrun: false)));
 
     internal DocumentationScribeRunEnvelopeInput CreateEnvelope(
         ImmutableArray<DocumentationScribeDiagnosticInput> diagnostics,
@@ -301,7 +326,10 @@ internal sealed class RunState
             cache,
             cost,
             diagnostics)
-        { RestoredRetryableProviderFailures = Scope.RestoredRetryableProviderFailures };
+        {
+            RestoredRetryableProviderFailures = Scope.RestoredRetryableProviderFailures,
+            UsageCoverage = new(inputReports, outputReports, cachedReports, uncachedReports, reasoningReports, costReports, cacheReports)
+        };
     }
 
     private DocumentationScribeUsageObservationInput? CreateUsage(bool allowObservedOverrun)

@@ -73,70 +73,14 @@ internal sealed class DocumentationScribeTerminalReducer
         CancellationToken cancellationToken) =>
         CommitFailureCore(state, cancellationToken, DocumentationScribeFailureCode.Internal);
 
-    internal DocumentationScribeRunResult CommitTerminal(
-        RunState state,
-        CancellationToken cancellationToken,
-        ReadOnlyMemory<byte> terminalUtf8Json)
+    internal DocumentationScribeRunResult CommitFinish(RunState state, CancellationToken cancellationToken,
+        bool contextStop = false)
     {
-        DocumentationScribeResultParseResult? candidate = null;
-        string? validationCode = null;
-        try
-        {
-            var validationElapsed = state.ElapsedMilliseconds;
-            var validationEnvelope = state.CreateEnvelope(
-                ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
-                validationElapsed);
-            var validationBytes = DocumentationScribeRunResultWriter.Write(
-                state.Request,
-                state.AttemptId,
-                state.ActiveDynamicEvidenceReferences,
-                terminalUtf8Json,
-                validationEnvelope);
-            candidate = DocumentationScribeValidation.ParseRunResult(
-                state.Request,
-                state.AttemptId,
-                state.ActiveDynamicEvidenceReferences,
-                validationBytes.AsMemory());
-            if (candidate.Result is null
-                || candidate.Result.Terminal.Kind is not (DocumentationScribeTerminalKind.Proposal
-                    or DocumentationScribeTerminalKind.Skip))
-            {
-                validationCode = candidate.Failure?.Code ?? "scribe.result.invalid-terminal";
-            }
-        }
-        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-        {
-            validationCode = "scribe.result.invalid-terminal";
-        }
-
         lock (gate)
         {
-            if (committed is not null)
-            {
-                return committed;
-            }
-
-            var elapsed = state.ElapsedMilliseconds;
-            committed = CreatePriorityResult(state, cancellationToken, elapsed,
-                allowReturnedTerminal: validationCode is null && candidate?.Result?.Terminal is DocumentationScribeProposalTerminal);
-            if (committed is not null)
-            {
-                return committed;
-            }
-
-            committed = validationCode is null && candidate?.Result is { } validated
-                ? DocumentationScribeValidation.CreateResultFromValidatedTerminal(
-                    state.Request,
-                    state.AttemptId,
-                    validated,
-                    state.CreateEnvelope(
-                        ImmutableArray<DocumentationScribeDiagnosticInput>.Empty,
-                        elapsed))
-                : state.CreateValidationFailure(
-                    validationCode ?? "scribe.result.invalid-terminal",
-                    elapsed);
-
-            return committed;
+            if (committed is not null) return committed;
+            return committed = CreatePriorityResult(state, cancellationToken, state.ElapsedMilliseconds)
+                ?? state.CreateFinished(contextStop);
         }
     }
 
@@ -187,7 +131,7 @@ internal sealed class DocumentationScribeTerminalReducer
         CancellationToken cancellationToken,
         int elapsedMilliseconds, bool allowReturnedTerminal = false)
     {
-        if (cancellationToken.IsCancellationRequested)
+        if (cancellationToken.IsCancellationRequested || state.CallerCancellation.IsCancellationRequested)
         {
             return state.CreateCancelled(elapsedMilliseconds);
         }

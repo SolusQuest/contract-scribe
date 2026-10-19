@@ -314,6 +314,7 @@ public sealed class EvaluationHarnessTests
                 "model.failure.authentication",
                 "model.failure.unsupported",
                 "model.failure.malformed-response",
+                "model.failure.context-limit",
             ],
             observer.Observations
                 .Where(observation => observation.FailureCode is not null)
@@ -588,7 +589,7 @@ public sealed class EvaluationHarnessTests
             "validated-proposal-or-structured-skip-or-bounded-failure",
         ], miMo.ExpectedObservations);
         Assert.Equal(
-            "e5a8f17fb9b2153119a11492781bbb5810a2ead84cb72d1adcb1d3a3fc4d1910",
+            "2fdb84e8db61e6255403b3959e77b017662fb4868ecd496ea21ee6730490fefd",
             loaded.CorpusIdentity);
         Assert.Equal(
             "44005e7eed4c8871190396f4043392f60454640c3a43f2520c537d7a134b72df",

@@ -29,7 +29,7 @@ public sealed partial class DocumentationScribeRuntimeTests
                 truncatedCompleteEvidence: scenario == "truncated", invalidDynamicReferenceId: scenario is "invalid" or "invalid-second" ? "invalid" : null,
                 nullRepositoryLocatorPath: scenario == "null-locator"));
         var request = Request();
-        var terminal = TerminalResponse(ReadTerminal("skip-result.json"));
+        var terminal = SubmitResponse(ReadTerminal("skip-result.json"), request);
         var exchange = Script(response, terminal);
         var session = EvidenceQualification(request, RegistryForCase(), exchange);
         var result = await session.RunAsync();
@@ -48,17 +48,18 @@ public sealed partial class DocumentationScribeRuntimeTests
     {
         var request = Request();
         var tool = ToolResponse(Call(0, "call.one", "tool.read", "valid"));
-        var terminal = TerminalResponse(ReadTerminal("skip-result.json"));
-        var exchange = retry ? Script(tool, FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable), tool, terminal)
-            : Script(tool, terminal);
+        var terminal = SubmitResponse(ReadTerminal("skip-result.json"), request);
+        var exchange = retry ? Script(tool, FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable), tool, terminal, FinishResponse(request))
+            : Script(tool, terminal, FinishResponse(request));
         var session = EvidenceQualification(request,
             RegistryWithCodec(new SyntheticPort(DocumentationScribeToolOutcome.Complete), new SyntheticCodec()), exchange);
         var result = await session.RunAsync();
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Empty(result.DynamicEvidenceReferences); // The accepted skip cites no dynamic evidence.
         Assert.Single(session.State.ChargedDynamicEvidenceById);
         Assert.Single(session.State.ActiveDynamicEvidenceReferences);
-        Assert.Single(session.State.CompletedToolExchanges);
+        Assert.Single(session.State.CompletedToolExchanges.Where(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId));
+        Assert.Single(session.State.CompletedToolExchanges.Where(item => item.OperationId == DocumentationScribeBoundary.TerminalOperationId));
         if (retry) Assert.Empty(exchange.Requests[2].CompletedToolExchanges);
     }
 
@@ -76,7 +77,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var result = await session.RunAsync();
         if (exact)
         {
-            Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+            Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
             Assert.Empty(result.DynamicEvidenceReferences);
             Assert.Empty(session.State.ChargedDynamicEvidenceById);
         }
@@ -106,7 +107,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal(1, result.RunEnvelope.AttemptNumber);
         Assert.Single(exchange.Requests);
         Assert.Equal(expected == DocumentationScribeFailureCode.Provider ? DocumentationScribeProviderFinalDisposition.Retryable : null,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).ProviderFinalDisposition);
     }
 
     [Theory]
@@ -148,14 +149,14 @@ public sealed partial class DocumentationScribeRuntimeTests
     {
         var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 10);
         var clock = new ManualTimeProvider();
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
         var session = new ScribeSessionTestDriver(request, Attempt(), Prompt(request), EmptyRegistry(), exchange,
             DocumentationScribeExecutionScope.ForStandalone(request, clock));
         clock.AdvanceMilliseconds(10);
         using var cancellation = new CancellationTokenSource();
         if (cancelled) cancellation.Cancel();
         var result = await session.RunAsync(cancellation.Token);
-        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         else Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(result));
         Assert.Empty(exchange.Requests);
         Assert.Equal(0, result.RunEnvelope.ProviderRequestCount);

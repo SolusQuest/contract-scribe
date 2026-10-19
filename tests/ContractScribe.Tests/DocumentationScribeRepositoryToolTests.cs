@@ -978,10 +978,10 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         var result = await runtime.RunAsync(fixture.Request, attempt, Prompt(fixture.Request));
 
         Assert.True(
-            result.Terminal.Kind == DocumentationScribeTerminalKind.Skip,
-            result.Terminal is DocumentationScribeFailureTerminal failure
+            result.Submissions.Length == 1 && result.Submissions[0].Result.Kind == DocumentationScribeTerminalKind.Skip,
+            result.Stop is DocumentationScribeFailureTerminal failure
                 ? $"failure={failure.Code}; diagnostics={string.Join(',', result.RunEnvelope.Diagnostics.Select(item => item.Code + ':' + item.ValidationCode))}; completed={exchange.Completed.Length}; anchor={exchange.AnchorId ?? "null"}"
-                : $"terminal={result.Terminal.Kind}");
+                : $"terminal={result.Stop.Kind}");
         Assert.Equal("context.instructions", exchange.AnchorId);
         Assert.Equal(3, exchange.FirstRound.Length);
         Assert.True(exchange.RestartHadNoVisibleHistory);
@@ -997,7 +997,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         Assert.All(searches, item => Assert.Equal(
             preRetryEvidence.EvidenceReferenceId,
             item.EvidenceReferences[0].EvidenceReferenceId));
-        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.Empty(result.DynamicEvidenceReferences);
+        Assert.IsType<DocumentationScribeFinishedTerminal>(result.Stop);
     }
 
     [Fact]
@@ -1416,14 +1417,16 @@ public sealed partial class DocumentationScribeRepositoryToolTests
                     ], [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
+            if (request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+                return ValueTask.FromResult(new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Finish(request))], usage: new(0, 0, 0, 0, 0)));
             Completed = request.CompletedToolExchanges;
             Assert.All(Completed, AssertSeparatedPayload);
             var terminalPath = Path.Join(RepositoryToolFixture.FindRepositoryRoot(),
                 "tests", "fixtures", "documentation-scribe", "v1", "valid", "skip-result.json");
             using var terminal = JsonDocument.Parse(File.ReadAllBytes(terminalPath));
-            var bytes = Encoding.UTF8.GetBytes(terminal.RootElement.GetProperty("terminal").GetRawText());
+            var bytes = Encoding.UTF8.GetBytes(terminal.RootElement.GetProperty("submissions")[0].GetProperty("result").GetRawText());
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
-                [], [new DocumentationScribeModelTerminalSubmission(bytes)], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
+                [], [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(request, bytes))], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
         }
 
         private static DocumentationScribeModelToolCall Call(int index, string id, string operation, object arguments) =>

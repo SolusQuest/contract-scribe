@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.Cli;
+using ContractScribe.IntegrationTests;
 using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
@@ -279,7 +280,7 @@ public sealed partial class CampaignCliProcessTests
             var loser = await second.CompleteAsync();
             AssertCampaign(loser, 4, "campaign.state-present", null);
             Assert.Equal(winnerBytes, await File.ReadAllBytesAsync(statePath));
-            Assert.Equal(executable ? 1 : 0, server.RequestCount);
+            Assert.Equal(executable ? 2 : 0, server.RequestCount);
         }
         finally
         {
@@ -330,7 +331,7 @@ public sealed partial class CampaignCliProcessTests
                 running,
                 CampaignProcessBoundaryHooks.PatchBeforeDispatch,
                 TimeSpan.FromMinutes(3));
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
             await File.WriteAllBytesAsync(configurationPath, [.. configurationBytes, (byte)'\n']);
             await File.WriteAllTextAsync(release, "release\n");
             await running.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
@@ -353,7 +354,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(60_000, completed.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
             Assert.Null(completed.Artifact.State.CandidateObservation);
             AssertCampaign(recovered, 3, "campaign.budget-exhausted", completed.Artifact.CheckpointRevision);
-            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(2, server.RequestCount);
         }
         finally
         {
@@ -827,7 +828,7 @@ public sealed partial class CampaignCliProcessTests
         private readonly string? summaryText;
         private readonly bool includeUsage;
         private readonly int usageOutputTokens;
-        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = false, int usageOutputTokens = 7)
+        internal ProposalLoopbackServer(string scenario = "accepted", string? summaryText = null, bool includeUsage = true, int usageOutputTokens = 7)
         {
             this.usageOutputTokens = usageOutputTokens;
             this.scenario = scenario;
@@ -877,9 +878,7 @@ public sealed partial class CampaignCliProcessTests
                         await stream.WriteAsync(transient, disposal.Token);
                         continue;
                     }
-                    var response = scenario == "closed-proposal"
-                        ? CreateSkipResponse()
-                        : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens);
+                    var response = CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal");
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(headers, disposal.Token);
@@ -892,55 +891,37 @@ public sealed partial class CampaignCliProcessTests
             }
         }
 
-        private static byte[] CreateSkipResponse()
-        {
-            var terminal = "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}";
-            return TerminalResponse(terminal);
-        }
-
-        private static byte[] CreateProposalResponse(byte[] body, string? summaryText, bool includeUsage, int usageOutputTokens)
+        private static byte[] CreateProposalResponse(byte[] body, string? summaryText, bool includeUsage, int usageOutputTokens, bool skip)
         {
             using var wire = JsonDocument.Parse(body);
-            JsonElement? targetEvidence = null;
-            foreach (var message in wire.RootElement.GetProperty("messages").EnumerateArray())
+            var messages = wire.RootElement.GetProperty("messages");
+            using var policy = JsonDocument.Parse(messages[3].GetProperty("content").GetString()!);
+            using var targets = JsonDocument.Parse(messages[4].GetProperty("content").GetString()!);
+            var evidence = targets.RootElement;
+            if (evidence.GetProperty("progress").GetArrayLength() > 0)
+                return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), includeUsage: true, usageOutputTokens: 0, finish: true);
+            var targetId = evidence.GetProperty("executableTargetIds").EnumerateArray().Single().GetString();
+            var member = evidence.GetProperty("manifest").EnumerateArray().Single(item => item.GetProperty("targetId").GetString() == targetId);
+            JsonObject result;
+            if (skip || member.GetProperty("applicableComponents").GetArrayLength() > 0)
+                result = new() { ["kind"] = "skip", ["reason"] = "scribe.skip.insufficient-evidence", ["evidenceReferenceIds"] = new JsonArray() };
+            else
             {
-                var content = message.GetProperty("content").GetString();
-                if (content is null)
+                var summaryId = evidence.GetProperty("evidenceReferences").EnumerateArray()
+                    .First(reference => member.GetProperty("evidenceReferenceIds").EnumerateArray().Any(id => id.GetString() == reference.GetProperty("evidenceReferenceId").GetString())
+                        && reference.GetProperty("subject").TryGetProperty("symbolRef", out _)).GetProperty("evidenceReferenceId").GetString()!;
+                result = new()
                 {
-                    continue;
-                }
-                using var parsed = JsonDocument.Parse(content);
-                if (parsed.RootElement.TryGetProperty("authority", out var authority)
-                    && authority.GetString() == "target-evidence")
-                {
-                    targetEvidence = parsed.RootElement.Clone();
-                    break;
-                }
+                    ["kind"] = "proposal",
+                    ["target"] = JsonNode.Parse(member.GetProperty("proposalTarget").GetRawText()),
+                    ["contentUnits"] = new JsonArray(ContentUnit("content.summary", null, null, summaryId, summaryText))
+                };
             }
-            var evidence = targetEvidence ?? throw new InvalidDataException("Target evidence message was not found.");
-            var evidenceReferences = evidence.GetProperty("evidenceReferences").EnumerateArray().ToArray();
-            var summaryEvidenceReferenceId = evidenceReferences
-                .First(reference => reference.GetProperty("subject").TryGetProperty("symbolRef", out _))
-                .GetProperty("evidenceReferenceId").GetString()!;
-            var components = evidence.GetProperty("applicableComponents").EnumerateArray().ToArray();
-            if (components.Length > 0)
-            {
-                return CreateSkipResponse();
-            }
-            var units = new JsonArray
-            {
-                ContentUnit("content.summary", null, null, summaryEvidenceReferenceId, summaryText),
-            };
-            var terminal = new JsonObject
-            {
-                ["kind"] = "proposal",
-                ["target"] = JsonNode.Parse(evidence.GetProperty("terminalTarget").GetRawText()),
-                ["contentUnits"] = units,
-            };
-            return TerminalResponse(terminal.ToJsonString(), includeUsage, usageOutputTokens);
+            var payload = ScribeProtocolFixture.Submit(policy.RootElement, evidence, Encoding.UTF8.GetBytes(result.ToJsonString()));
+            return TerminalResponse(Encoding.UTF8.GetString(payload), includeUsage, usageOutputTokens);
         }
 
-        private static byte[] TerminalResponse(string terminal, bool includeUsage = false, int usageOutputTokens = 7)
+        private static byte[] TerminalResponse(string terminal, bool includeUsage = false, int usageOutputTokens = 7, bool finish = false)
         {
             var response = new
             {
@@ -952,11 +933,13 @@ public sealed partial class CampaignCliProcessTests
                         message = new
                         {
                             role = "assistant",
+                            content = (string?)null,
+                            reasoning_content = "synthetic-campaign-continuation",
                             tool_calls = new[]
                             {
                                 new
                                 {
-                                    id = "call.terminal",
+                                    id = finish ? "call.finish" : "call.submit",
                                     type = "function",
                                     function = new
                                     {
@@ -974,11 +957,11 @@ public sealed partial class CampaignCliProcessTests
             var node = JsonSerializer.SerializeToNode(response)!;
             node["usage"] = new JsonObject
             {
-                ["prompt_tokens"] = 31,
-                ["prompt_cache_hit_tokens"] = 29,
-                ["prompt_cache_miss_tokens"] = 2,
+                ["prompt_tokens"] = finish ? 0 : 31,
+                ["prompt_cache_hit_tokens"] = finish ? 0 : 29,
+                ["prompt_cache_miss_tokens"] = finish ? 0 : 2,
                 ["completion_tokens"] = usageOutputTokens,
-                ["total_tokens"] = 31 + usageOutputTokens
+                ["total_tokens"] = (finish ? 0 : 31) + usageOutputTokens
             };
             return JsonSerializer.SerializeToUtf8Bytes(node);
         }

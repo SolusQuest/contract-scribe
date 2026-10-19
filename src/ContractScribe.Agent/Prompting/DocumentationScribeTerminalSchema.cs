@@ -8,9 +8,8 @@ internal static class DocumentationScribeTerminalSchema
         """
         {
           "$schema": "https://json-schema.org/draft/2020-12/schema",
+          "description": "Submit a bounded batch of selected target results, receive Host acknowledgement, and finish separately.",
           "type": "object",
-          "additionalProperties": false,
-          "description": "Submit exactly one closed terminal object. A proposal has only kind, target, and contentUnits. A skip has only kind, reason, and evidenceReferenceIds.",
           "$defs": {
             "identifier": {
               "type": "string",
@@ -44,19 +43,37 @@ internal static class DocumentationScribeTerminalSchema
             "symbolRef": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["compilationContextRef", "documentationCommentId"],
+              "required": [
+                "compilationContextRef",
+                "documentationCommentId"
+              ],
               "properties": {
-                "compilationContextRef": { "$ref": "#/$defs/compilationContextRef" },
-                "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" }
+                "compilationContextRef": {
+                  "$ref": "#/$defs/compilationContextRef"
+                },
+                "documentationCommentId": {
+                  "$ref": "#/$defs/documentationCommentId"
+                }
               }
             },
             "span": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["start", "end"],
+              "required": [
+                "start",
+                "end"
+              ],
               "properties": {
-                "start": { "type": "integer", "minimum": 0, "maximum": 2147483647 },
-                "end": { "type": "integer", "minimum": 0, "maximum": 2147483647 }
+                "start": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                },
+                "end": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "maximum": 2147483647
+                }
               }
             },
             "locator": {
@@ -64,15 +81,23 @@ internal static class DocumentationScribeTerminalSchema
                 {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["repository"],
+                  "required": [
+                    "repository"
+                  ],
                   "properties": {
                     "repository": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["path"],
+                      "required": [
+                        "path"
+                      ],
                       "properties": {
-                        "path": { "$ref": "#/$defs/repositoryPath" },
-                        "span": { "$ref": "#/$defs/span" }
+                        "path": {
+                          "$ref": "#/$defs/repositoryPath"
+                        },
+                        "span": {
+                          "$ref": "#/$defs/span"
+                        }
                       }
                     }
                   }
@@ -80,15 +105,24 @@ internal static class DocumentationScribeTerminalSchema
                 {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["metadata"],
+                  "required": [
+                    "metadata"
+                  ],
                   "properties": {
                     "metadata": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["assemblyIdentity", "documentationCommentId"],
+                      "required": [
+                        "assemblyIdentity",
+                        "documentationCommentId"
+                      ],
                       "properties": {
-                        "assemblyIdentity": { "$ref": "#/$defs/compilationContextRef" },
-                        "documentationCommentId": { "$ref": "#/$defs/documentationCommentId" }
+                        "assemblyIdentity": {
+                          "$ref": "#/$defs/compilationContextRef"
+                        },
+                        "documentationCommentId": {
+                          "$ref": "#/$defs/documentationCommentId"
+                        }
                       }
                     }
                   }
@@ -96,35 +130,76 @@ internal static class DocumentationScribeTerminalSchema
                 {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["generatedOutput"],
+                  "required": [
+                    "generatedOutput"
+                  ],
                   "properties": {
                     "generatedOutput": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["producerKind", "producerId", "outputId", "sourceSha256"],
+                      "required": [
+                        "producerKind",
+                        "producerId",
+                        "outputId",
+                        "sourceSha256"
+                      ],
                       "properties": {
-                        "producerKind": { "enum": ["source-generator", "tool-generated"] },
-                        "producerId": { "type": "string" },
-                        "outputId": { "type": "string" },
-                        "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-                        "span": { "$ref": "#/$defs/span" }
+                        "producerKind": {
+                          "enum": [
+                            "source-generator",
+                            "tool-generated"
+                          ]
+                        },
+                        "producerId": {
+                          "type": "string"
+                        },
+                        "outputId": {
+                          "type": "string"
+                        },
+                        "sourceSha256": {
+                          "type": "string",
+                          "pattern": "^[0-9a-f]{64}$"
+                        },
+                        "span": {
+                          "$ref": "#/$defs/span"
+                        }
                       },
                       "allOf": [
                         {
-                          "if": { "properties": { "producerKind": { "const": "source-generator" } } },
+                          "if": {
+                            "properties": {
+                              "producerKind": {
+                                "const": "source-generator"
+                              }
+                            }
+                          },
                           "then": {
                             "properties": {
-                              "producerId": { "pattern": "^sgp\\.[0-9a-f]{64}$" },
-                              "outputId": { "pattern": "^sgo\\.[0-9a-f]{64}$" }
+                              "producerId": {
+                                "pattern": "^sgp\\.[0-9a-f]{64}$"
+                              },
+                              "outputId": {
+                                "pattern": "^sgo\\.[0-9a-f]{64}$"
+                              }
                             }
                           }
                         },
                         {
-                          "if": { "properties": { "producerKind": { "const": "tool-generated" } } },
+                          "if": {
+                            "properties": {
+                              "producerKind": {
+                                "const": "tool-generated"
+                              }
+                            }
+                          },
                           "then": {
                             "properties": {
-                              "producerId": { "pattern": "^tgp\\.[0-9a-f]{64}$" },
-                              "outputId": { "pattern": "^tgo\\.[0-9a-f]{64}$" }
+                              "producerId": {
+                                "pattern": "^tgp\\.[0-9a-f]{64}$"
+                              },
+                              "outputId": {
+                                "pattern": "^tgo\\.[0-9a-f]{64}$"
+                              }
                             }
                           }
                         }
@@ -135,14 +210,20 @@ internal static class DocumentationScribeTerminalSchema
                 {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["synthetic"],
+                  "required": [
+                    "synthetic"
+                  ],
                   "properties": {
                     "synthetic": {
                       "type": "object",
                       "additionalProperties": false,
-                      "required": ["fixtureId"],
+                      "required": [
+                        "fixtureId"
+                      ],
                       "properties": {
-                        "fixtureId": { "$ref": "#/$defs/compilationContextRef" }
+                        "fixtureId": {
+                          "$ref": "#/$defs/compilationContextRef"
+                        }
                       }
                     }
                   }
@@ -152,17 +233,34 @@ internal static class DocumentationScribeTerminalSchema
             "target": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["repositoryContextRef", "symbolRef", "sourceCommitment"],
+              "required": [
+                "repositoryContextRef",
+                "symbolRef",
+                "sourceCommitment"
+              ],
               "properties": {
-                "repositoryContextRef": { "type": "string", "pattern": "^repoctx-[0-9a-f]{32}$" },
-                "symbolRef": { "$ref": "#/$defs/symbolRef" },
+                "repositoryContextRef": {
+                  "type": "string",
+                  "pattern": "^repoctx-[0-9a-f]{32}$"
+                },
+                "symbolRef": {
+                  "$ref": "#/$defs/symbolRef"
+                },
                 "sourceCommitment": {
                   "type": "object",
                   "additionalProperties": false,
-                  "required": ["locator", "contentSha256"],
+                  "required": [
+                    "locator",
+                    "contentSha256"
+                  ],
                   "properties": {
-                    "locator": { "$ref": "#/$defs/locator" },
-                    "contentSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+                    "locator": {
+                      "$ref": "#/$defs/locator"
+                    },
+                    "contentSha256": {
+                      "type": "string",
+                      "pattern": "^[0-9a-f]{64}$"
+                    }
                   }
                 }
               }
@@ -172,175 +270,381 @@ internal static class DocumentationScribeTerminalSchema
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 128,
-                "items": { "type": "string", "minLength": 1, "maxLength": 2048 }
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 2048
+                }
               },
-              "claimCategoryId": { "$ref": "#/$defs/identifier" },
+              "claimCategoryId": {
+                "$ref": "#/$defs/identifier"
+              },
               "evidenceReferenceIds": {
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 512,
                 "uniqueItems": true,
-                "items": { "$ref": "#/$defs/identifier" }
+                "items": {
+                  "$ref": "#/$defs/identifier"
+                }
               }
             },
             "plainUnit": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "lines", "claimCategoryId", "evidenceReferenceIds"],
+              "required": [
+                "kind",
+                "lines",
+                "claimCategoryId",
+                "evidenceReferenceIds"
+              ],
               "properties": {
-                "kind": { "enum": ["content.summary", "content.remarks"] },
-                "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
-                "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
-                "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
+                "kind": {
+                  "enum": [
+                    "content.summary",
+                    "content.remarks"
+                  ]
+                },
+                "lines": {
+                  "$ref": "#/$defs/baseUnitProperties/lines"
+                },
+                "claimCategoryId": {
+                  "$ref": "#/$defs/baseUnitProperties/claimCategoryId"
+                },
+                "evidenceReferenceIds": {
+                  "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds"
+                }
               }
             },
             "namedComponentUnit": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "componentIdentity", "name", "lines", "claimCategoryId", "evidenceReferenceIds"],
+              "required": [
+                "kind",
+                "componentIdentity",
+                "name",
+                "lines",
+                "claimCategoryId",
+                "evidenceReferenceIds"
+              ],
               "properties": {
-                "kind": { "enum": ["content.type-parameter", "content.parameter"] },
-                "componentIdentity": { "$ref": "#/$defs/componentIdentity" },
-                "name": { "type": "string", "minLength": 1, "maxLength": 128 },
-                "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
-                "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
-                "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
+                "kind": {
+                  "enum": [
+                    "content.type-parameter",
+                    "content.parameter"
+                  ]
+                },
+                "componentIdentity": {
+                  "$ref": "#/$defs/componentIdentity"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 128
+                },
+                "lines": {
+                  "$ref": "#/$defs/baseUnitProperties/lines"
+                },
+                "claimCategoryId": {
+                  "$ref": "#/$defs/baseUnitProperties/claimCategoryId"
+                },
+                "evidenceReferenceIds": {
+                  "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds"
+                }
               },
               "allOf": [
                 {
-                  "if": { "properties": { "kind": { "const": "content.type-parameter" } } },
-                  "then": { "properties": { "componentIdentity": { "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$" } } }
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "content.type-parameter"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "componentIdentity": {
+                        "pattern": "^type-parameter/(?:0|[1-9][0-9]*)$"
+                      }
+                    }
+                  }
                 },
                 {
-                  "if": { "properties": { "kind": { "const": "content.parameter" } } },
-                  "then": { "properties": { "componentIdentity": { "pattern": "^parameter/(?:0|[1-9][0-9]*)$" } } }
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "content.parameter"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "componentIdentity": {
+                        "pattern": "^parameter/(?:0|[1-9][0-9]*)$"
+                      }
+                    }
+                  }
                 }
               ]
             },
             "componentUnit": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "componentIdentity", "lines", "claimCategoryId", "evidenceReferenceIds"],
+              "required": [
+                "kind",
+                "componentIdentity",
+                "lines",
+                "claimCategoryId",
+                "evidenceReferenceIds"
+              ],
               "properties": {
-                "kind": { "enum": ["content.return", "content.value"] },
-                "componentIdentity": { "$ref": "#/$defs/componentIdentity" },
-                "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
-                "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
-                "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
+                "kind": {
+                  "enum": [
+                    "content.return",
+                    "content.value"
+                  ]
+                },
+                "componentIdentity": {
+                  "$ref": "#/$defs/componentIdentity"
+                },
+                "lines": {
+                  "$ref": "#/$defs/baseUnitProperties/lines"
+                },
+                "claimCategoryId": {
+                  "$ref": "#/$defs/baseUnitProperties/claimCategoryId"
+                },
+                "evidenceReferenceIds": {
+                  "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds"
+                }
               },
               "allOf": [
                 {
-                  "if": { "properties": { "kind": { "const": "content.return" } } },
-                  "then": { "properties": { "componentIdentity": { "const": "return" } } }
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "content.return"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "componentIdentity": {
+                        "const": "return"
+                      }
+                    }
+                  }
                 },
                 {
-                  "if": { "properties": { "kind": { "const": "content.value" } } },
-                  "then": { "properties": { "componentIdentity": { "const": "value" } } }
+                  "if": {
+                    "properties": {
+                      "kind": {
+                        "const": "content.value"
+                      }
+                    }
+                  },
+                  "then": {
+                    "properties": {
+                      "componentIdentity": {
+                        "const": "value"
+                      }
+                    }
+                  }
                 }
               ]
             },
             "exceptionUnit": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "typeDocumentationId", "lines", "claimCategoryId", "evidenceReferenceIds"],
+              "required": [
+                "kind",
+                "typeDocumentationId",
+                "lines",
+                "claimCategoryId",
+                "evidenceReferenceIds"
+              ],
               "properties": {
-                "kind": { "const": "content.exception" },
+                "kind": {
+                  "const": "content.exception"
+                },
                 "typeDocumentationId": {
                   "type": "string",
                   "minLength": 3,
                   "maxLength": 1024,
                   "pattern": "^T:[^\\s\\u0000-\\u001F\\u007F-\\u009F<>&\\\"']+$"
                 },
-                "lines": { "$ref": "#/$defs/baseUnitProperties/lines" },
-                "claimCategoryId": { "$ref": "#/$defs/baseUnitProperties/claimCategoryId" },
-                "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
+                "lines": {
+                  "$ref": "#/$defs/baseUnitProperties/lines"
+                },
+                "claimCategoryId": {
+                  "$ref": "#/$defs/baseUnitProperties/claimCategoryId"
+                },
+                "evidenceReferenceIds": {
+                  "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds"
+                }
               }
             },
             "inheritDocUnit": {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "lines", "claimCategoryId", "evidenceReferenceIds"],
+              "required": [
+                "kind",
+                "lines",
+                "claimCategoryId",
+                "evidenceReferenceIds"
+              ],
               "properties": {
-                "kind": { "const": "content.inherit-doc" },
-                "lines": { "type": "array", "maxItems": 0 },
-                "claimCategoryId": { "$ref": "#/$defs/identifier" },
-                "evidenceReferenceIds": { "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds" }
+                "kind": {
+                  "const": "content.inherit-doc"
+                },
+                "lines": {
+                  "type": "array",
+                  "maxItems": 0
+                },
+                "claimCategoryId": {
+                  "$ref": "#/$defs/identifier"
+                },
+                "evidenceReferenceIds": {
+                  "$ref": "#/$defs/baseUnitProperties/evidenceReferenceIds"
+                }
               }
             },
             "contentUnit": {
               "oneOf": [
-                { "$ref": "#/$defs/plainUnit" },
-                { "$ref": "#/$defs/namedComponentUnit" },
-                { "$ref": "#/$defs/componentUnit" },
-                { "$ref": "#/$defs/exceptionUnit" },
-                { "$ref": "#/$defs/inheritDocUnit" }
-              ]
-            }
-          },
-          "properties": {
-            "kind": {
-              "type": "string",
-              "enum": ["proposal", "skip"],
-              "description": "Select exactly one terminal variant."
-            },
-            "target": {
-              "$ref": "#/$defs/target",
-              "description": "For a proposal, copy terminalTarget exactly as a JSON object, not as JSON-encoded text."
-            },
-            "contentUnits": {
-              "type": "array",
-              "minItems": 1,
-              "maxItems": 256,
-              "items": { "$ref": "#/$defs/contentUnit" },
-              "description": "For a proposal, emit content units as a JSON array, not as JSON-encoded text."
-            },
-            "reason": {
-              "type": "string",
-              "enum": [
-                "scribe.skip.insufficient-evidence",
-                "scribe.skip.unsupported-current-m3-domain"
+                {
+                  "$ref": "#/$defs/plainUnit"
+                },
+                {
+                  "$ref": "#/$defs/namedComponentUnit"
+                },
+                {
+                  "$ref": "#/$defs/componentUnit"
+                },
+                {
+                  "$ref": "#/$defs/exceptionUnit"
+                },
+                {
+                  "$ref": "#/$defs/inheritDocUnit"
+                }
               ]
             },
-            "evidenceReferenceIds": {
-              "type": "array",
-              "maxItems": 512,
-              "uniqueItems": true,
-              "items": { "$ref": "#/$defs/identifier" }
+            "targetResult": {
+              "oneOf": [
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "target",
+                    "contentUnits"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "proposal"
+                    },
+                    "target": {
+                      "$ref": "#/$defs/target"
+                    },
+                    "contentUnits": {
+                      "type": "array",
+                      "minItems": 1,
+                      "maxItems": 256,
+                      "items": {
+                        "$ref": "#/$defs/contentUnit"
+                      }
+                    }
+                  }
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "kind",
+                    "reason",
+                    "evidenceReferenceIds"
+                  ],
+                  "properties": {
+                    "kind": {
+                      "const": "skip"
+                    },
+                    "reason": {
+                      "enum": [
+                        "scribe.skip.insufficient-evidence",
+                        "scribe.skip.unsupported-current-m3-domain"
+                      ]
+                    },
+                    "evidenceReferenceIds": {
+                      "type": "array",
+                      "maxItems": 512,
+                      "uniqueItems": true,
+                      "items": {
+                        "$ref": "#/$defs/identifier"
+                      }
+                    }
+                  }
+                }
+              ]
             }
           },
           "oneOf": [
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "target", "contentUnits"],
+              "required": [
+                "kind",
+                "scribeRequestSha256",
+                "sequence",
+                "items"
+              ],
               "properties": {
-                "kind": { "const": "proposal" },
-                "target": { "$ref": "#/$defs/target" },
-                "contentUnits": {
+                "kind": {
+                  "const": "submit"
+                },
+                "scribeRequestSha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "sequence": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483647
+                },
+                "items": {
                   "type": "array",
                   "minItems": 1,
-                  "maxItems": 256,
-                  "items": { "$ref": "#/$defs/contentUnit" }
+                  "maxItems": 8,
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "targetId",
+                      "result"
+                    ],
+                    "properties": {
+                      "targetId": {
+                        "$ref": "#/$defs/identifier"
+                      },
+                      "result": {
+                        "$ref": "#/$defs/targetResult"
+                      }
+                    }
+                  }
                 }
               }
             },
             {
               "type": "object",
               "additionalProperties": false,
-              "required": ["kind", "reason", "evidenceReferenceIds"],
+              "required": [
+                "kind",
+                "scribeRequestSha256"
+              ],
               "properties": {
-                "kind": { "const": "skip" },
-                "reason": {
-                  "enum": [
-                    "scribe.skip.insufficient-evidence",
-                    "scribe.skip.unsupported-current-m3-domain"
-                  ]
+                "kind": {
+                  "const": "finish"
                 },
-                "evidenceReferenceIds": {
-                  "type": "array",
-                  "maxItems": 512,
-                  "uniqueItems": true,
-                  "items": { "$ref": "#/$defs/identifier" }
+                "scribeRequestSha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
                 }
               }
             }

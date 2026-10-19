@@ -343,6 +343,14 @@ internal sealed class DocumentationScribeSelectedAudit
 
 internal static class DocumentationScribeComposition
 {
+    private static DocumentationScribeTargetSubmission? SelectedSubmission(DocumentationScribeValidatedRunOutcome? outcome)
+    {
+        if (outcome is null || outcome.Request.ExecutableTargetIds.Length != 1) return null;
+        var selectedId = outcome.Request.ExecutableTargetIds[0];
+        return outcome.RunResult.Submissions.SingleOrDefault(item => item.TargetId == selectedId
+            && item.Stage >= DocumentationScribeAcknowledgementStage.Validated);
+    }
+
     private sealed class PreparedOutcome : IDocumentationScribePreparedOutcome
     {
         private readonly PatchAuthorization? patchAuthorization;
@@ -364,7 +372,7 @@ internal static class DocumentationScribeComposition
 
             var proposalReady = status == DocumentationScribeCompositionStatus.ProposalReady;
             if (proposalReady != (patchAuthorization is not null)
-                || proposalReady && m3Outcome?.RunResult.Terminal is not DocumentationScribeProposalTerminal)
+                || proposalReady && SelectedSubmission(m3Outcome)?.Result is not DocumentationScribeProposalTerminal)
             {
                 throw new ArgumentException("Patch authorization requires a bound proposal-ready M3 outcome.", nameof(patchAuthorization));
             }
@@ -379,7 +387,7 @@ internal static class DocumentationScribeComposition
         public DocumentationScribeValidatedRunOutcome? M3Outcome { get; }
 
         public bool IsProposalReady => Status == DocumentationScribeCompositionStatus.ProposalReady
-            && M3Outcome?.RunResult.Terminal is DocumentationScribeProposalTerminal
+            && SelectedSubmission(M3Outcome)?.Result is DocumentationScribeProposalTerminal
             && patchAuthorization is not null;
 
         public bool TryTakePatchAuthorization(out PatchAuthorization? authorization)
@@ -652,7 +660,8 @@ internal static class DocumentationScribeComposition
         // A checked Runtime budget stop has no independent final completion fact.
         // Proposal-shaped postflight failures do: their typed result must reach Core.
         if (resourceOwner is null && owned.Status == DocumentationScribeCompositionStatus.BudgetExhausted
-            && (m3 is null || m3.RunResult.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }))
+            && (m3 is null || SelectedSubmission(m3)?.Result is not DocumentationScribeProposalTerminal
+                && m3.RunResult.Stop is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }))
         {
             if (coordinator.Scope.LifetimeDeadlineReached || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded
                 || m3 is null && coordinator.LifetimeElapsedExhausted)
@@ -680,7 +689,7 @@ internal static class DocumentationScribeComposition
             }
         }
 
-        var kind = m3?.RunResult.Terminal is not DocumentationScribeProposalTerminal
+        var kind = SelectedSubmission(m3)?.Result is not DocumentationScribeProposalTerminal
             ? CampaignProviderCompletionKind.Ordinary
             : owned.Status switch
             {
@@ -724,7 +733,8 @@ internal static class DocumentationScribeComposition
         try
         {
             var run = bound.RunResult;
-            if (run.Terminal is DocumentationScribeCancelledTerminal cancelled)
+            var selected = SelectedSubmission(bound);
+            if (run.Stop is DocumentationScribeCancelledTerminal cancelled)
             {
                 return CreatePrepared(
                     DocumentationScribeCompositionStatus.Cancelled,
@@ -732,7 +742,12 @@ internal static class DocumentationScribeComposition
                     bound);
             }
 
-            if (run.Terminal is DocumentationScribeFailureTerminal terminalFailure)
+            if (selected?.Result is DocumentationScribeSkipTerminal)
+                return CreatePrepared(DocumentationScribeCompositionStatus.ProposalSkipped, "scribe.proposal.skipped", bound);
+
+            if (run.Stop is DocumentationScribeFailureTerminal terminalFailure
+                && (selected?.Result is not DocumentationScribeProposalTerminal
+                    || terminalFailure.Code == DocumentationScribeFailureCode.Timeout))
             {
                 var status = terminalFailure.Code switch
                 {
@@ -747,15 +762,7 @@ internal static class DocumentationScribeComposition
                     bound);
             }
 
-            if (run.Terminal is DocumentationScribeSkipTerminal)
-            {
-                return CreatePrepared(
-                    DocumentationScribeCompositionStatus.ProposalSkipped,
-                    "scribe.proposal.skipped",
-                    bound);
-            }
-
-            if (run.Terminal is not DocumentationScribeProposalTerminal proposal)
+            if (selected?.Result is not DocumentationScribeProposalTerminal proposal)
             {
                 return CreatePrepared(
                     DocumentationScribeCompositionStatus.ProposalRejected,
@@ -778,7 +785,8 @@ internal static class DocumentationScribeComposition
                 bound.Request,
                 attemptId,
                 configuredAgentEntrypoint,
-                postflightCancellation?.Token ?? cancellationToken, executionScope, manifestSelection).ConfigureAwait(false);
+                postflightCancellation?.Token ?? cancellationToken, executionScope, manifestSelection,
+                prepareModelContext: false).ConfigureAwait(false);
             if (postflight.Failure is { } postflightFailure)
             {
                 if (postflightFailure.Kind == PreflightFailureKind.Cancelled && !cancellationToken.IsCancellationRequested
@@ -853,7 +861,8 @@ internal static class DocumentationScribeComposition
 
         if (!owned.TryTakePatchAuthorization(out var authorization)
             || authorization is null
-            || owned.M3Outcome?.RunResult.Terminal is not DocumentationScribeProposalTerminal proposal)
+            || owned.M3Outcome is null
+            || SelectedSubmission(owned.M3Outcome)?.Result is not DocumentationScribeProposalTerminal proposal)
         {
             return DocumentationScribeCompositionOutcome.Create(
                 DocumentationScribeCompositionStatus.ProposalRejected,
@@ -982,7 +991,7 @@ internal static class DocumentationScribeComposition
         DocumentationScribeAttemptId attemptId,
         string? configuredAgentEntrypoint,
         CancellationToken cancellationToken, DocumentationScribeExecutionScope? executionScope,
-        DocumentationScribeManifestSelection manifestSelection)
+        DocumentationScribeManifestSelection manifestSelection, bool prepareModelContext = true)
     {
         if (!selection.IsCurrent
             || request.Context.RepositoryContextRef
@@ -1089,6 +1098,11 @@ internal static class DocumentationScribeComposition
         {
             return PreflightResult.Rejected("scribe.preflight.edit-authorization-unavailable");
         }
+
+        // Postflight needs fresh patch authorization, but sends no new model prompt.
+        // Do not spend repository-tool quota rematerializing its unused prompt context.
+        if (!prepareModelContext)
+            return new(context, declaration, editKind.Value, manifestContext, [], null, [], null);
 
         // Start the shared repository-tool session only after patch authorization so
         // unrelated baseline capture and declaration resolution cannot consume its timer.

@@ -112,13 +112,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             deferred: () => { credentials++; return exchange; }));
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, resumed.Kind);
         Assert.Equal(2, credentials);
-        Assert.Equal(2, exchange.Sends);
+        Assert.Equal(3, exchange.Sends);
         var ready = store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey);
         Assert.Equal(paused.AttemptId, ready.TrustedProposal!.HistoricalAttemptId);
         Assert.Equal(1, ready.OuterAttemptCount);
         Assert.Null(ready.PausedProviderAttempt);
         Assert.Null(store.Current.State.ActiveReservation);
-        Assert.Equal(2, store.Current.State.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal(3, store.Current.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(0, store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
         Assert.Equal(elapsed ? overrun ? 1001 : 1000 : 0, store.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
         if (dimension == "cost") Assert.Equal(overrun ? 101 : 100, store.Current.State.LineageCharges.CostMicrounits.Observed);
@@ -149,13 +149,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.Equal(cause == "prepare" ? CampaignWorkOutcomeCode.ValidationFailure : CampaignWorkOutcomeCode.Timeout,
             closed.ClosedOutcome!.Code);
         Assert.Null(store.Current.State.ActiveReservation);
-        Assert.Equal(1, sends);
+        Assert.Equal(cause == "host-timeout" ? 2 : 1, sends);
         if (cause == "host-timeout") Assert.Equal(CampaignTerminalReason.Deadline, store.Current.State.TerminalOutcome!.Reason);
         campaign = await ChangeStopCauseCapAsync(fixture, campaign, store, 2000);
         var before = store.Current.ExactUtf8Json;
         await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store, request,
             StopCauseAllowance(fixture, clock), clock, exchange));
-        Assert.Equal(1, sends);
+        Assert.Equal(cause == "host-timeout" ? 2 : 1, sends);
         Assert.True(before.AsSpan().SequenceEqual(store.Current.ExactUtf8Json.AsSpan()));
     }
 
@@ -186,8 +186,12 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             Sends++;
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return ValueTask.FromResult(new DocumentationScribeModelResponse([],
+                    [new(ScribeProtocolFixture.Finish(modelRequest))], usage: new(0, 0, 0, 0),
+                    cost: dimension == "cost" ? new("currency.synthetic", 0) : null));
             if (Sends > 1) return ValueTask.FromResult(new DocumentationScribeModelResponse([],
-                [new(CampaignProposalTerminal(request))], usage: new(0, 0, 0, 0),
+                [new(ScribeProtocolFixture.Submit(modelRequest, CampaignProposalTerminal(request)))], usage: new(0, 0, 0, 0),
                 cost: dimension == "cost" ? new("currency.synthetic", 0) : null));
             var calls = ImmutableArray.CreateBuilder<DocumentationScribeModelToolCall>();
             var count = dimension == "elapsed-host" ? 2 : 1;

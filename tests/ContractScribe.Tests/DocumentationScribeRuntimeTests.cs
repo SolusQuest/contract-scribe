@@ -25,18 +25,19 @@ public sealed partial class DocumentationScribeRuntimeTests
         string fixture,
         DocumentationScribeTerminalKind expectedKind)
     {
-        var response = TerminalResponse(ReadTerminal(fixture));
-        var exchange = Script(response);
+        var response = SubmitResponse(ReadTerminal(fixture));
+        var exchange = Script(response, FinishResponse());
 
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(
             Request(), Attempt(), Prompt());
 
-        Assert.Equal(expectedKind, result.Terminal.Kind);
-        Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(expectedKind, expectedKind is DocumentationScribeTerminalKind.Proposal or DocumentationScribeTerminalKind.Skip
+            ? Assert.Single(result.Submissions).Result.Kind : result.Stop.Kind);
+        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(0, result.RunEnvelope.ToolRoundCount);
-        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(2, result.RunEnvelope.ToolCallCount);
         Assert.Empty(result.RunEnvelope.Diagnostics);
-        Assert.Single(exchange.Requests);
+        Assert.Equal(2, exchange.Requests.Length);
     }
 
     [Fact]
@@ -54,14 +55,14 @@ public sealed partial class DocumentationScribeRuntimeTests
                 "second-content",
                 "second-reasoning-marker",
                 Call(0, "call.a2", "tool.alpha", "a2")),
-            TerminalResponse(ReadTerminal("proposal-result.json")));
+            SubmitResponse(ReadTerminal("proposal-result.json")), FinishResponse());
 
         var result = await CreateRuntime(exchange, registry).RunAsync(Request(), Attempt(), Prompt());
 
-        Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
-        Assert.Equal(3, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Equal(4, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(2, result.RunEnvelope.ToolRoundCount);
-        Assert.Equal(4, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(5, result.RunEnvelope.ToolCallCount);
         Assert.Equal(new[] { "z", "a", "a2" }, port.References.ToArray());
         Assert.Equal(new[] { "tool.alpha", "tool.zeta" }, exchange.Requests[0].Tools.Select(tool => tool.OperationId));
         Assert.Equal(new[] { "call.z", "call.a" }, exchange.Requests[1].CompletedToolExchanges.Select(item => item.CallId));
@@ -71,9 +72,10 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Null(exchange.Requests[1].CompletedToolExchanges[1].AssistantContinuation);
         Assert.Equal("second-reasoning-marker",
             exchange.Requests[2].CompletedToolExchanges[2].AssistantContinuation!.ReasoningContent);
-        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.Empty(result.DynamicEvidenceReferences); // Only cited evidence is returned for recovery.
         Assert.All(
-            exchange.Requests.Skip(1).SelectMany(request => request.CompletedToolExchanges),
+            exchange.Requests.Skip(1).SelectMany(request => request.CompletedToolExchanges)
+                .Where(completed => completed.OperationId != DocumentationScribeBoundary.TerminalOperationId),
             completed => Assert.Single(completed.EvidenceReferences));
         Assert.Single(exchange.Requests
             .Skip(1)
@@ -102,7 +104,8 @@ public sealed partial class DocumentationScribeRuntimeTests
                 new SyntheticCodec(resultContentMarker: marker)))
             .RunAsync(Request(), Attempt(), Prompt());
 
-        Assert.Equal(expectedKind, result.Terminal.Kind);
+        Assert.Equal(expectedKind, expectedKind is DocumentationScribeTerminalKind.Proposal or DocumentationScribeTerminalKind.Skip
+            ? Assert.Single(result.Submissions).Result.Kind : result.Stop.Kind);
         var dynamicReference = Assert.Single(result.DynamicEvidenceReferences);
         Assert.Equal(dynamicReference.EvidenceReferenceId, exchange.ObservedEvidenceReferenceId);
         Assert.NotNull(exchange.ObservedRoutingReferenceId);
@@ -151,7 +154,7 @@ public sealed partial class DocumentationScribeRuntimeTests
                 new SyntheticPort(DocumentationScribeToolOutcome.Complete),
                 new SyntheticCodec(referenceSpecificDynamicEvidence: true)))
             .RunAsync(exactRequest, Attempt(), Prompt(exactRequest));
-        Assert.Equal(DocumentationScribeTerminalKind.Proposal, reused.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(reused.Submissions).Result.Kind);
         Assert.Empty(reused.DynamicEvidenceReferences);
         Assert.Equal(derivedId, exchange.ObservedEvidenceReferenceId);
 
@@ -187,7 +190,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             .Select(result => Assert.Single(result.DynamicEvidenceReferences).EvidenceReferenceId)
             .ToArray();
         Assert.Equal(2, references.Distinct(StringComparer.Ordinal).Count());
-        Assert.All(results, result => Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind));
+        Assert.All(results, result => Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind));
     }
 
     [Theory]
@@ -204,16 +207,17 @@ public sealed partial class DocumentationScribeRuntimeTests
                 ? new[]
                 {
                     ToolResponse(Call(0, "call.one", "tool.read", "one")),
-                    TerminalResponse(ReadTerminal("proposal-result.json")),
+                    SubmitResponse(ReadTerminal("proposal-result.json")), FinishResponse(),
                 }
                 : new[] { ToolResponse(Call(0, "call.one", "tool.read", "one")) };
 
         var result = await CreateRuntime(Script(steps), registry).RunAsync(Request(), Attempt(), Prompt());
 
-        Assert.Equal(expectedKind, result.Terminal.Kind);
+        Assert.Equal(expectedKind, expectedKind is DocumentationScribeTerminalKind.Proposal or DocumentationScribeTerminalKind.Skip
+            ? Assert.Single(result.Submissions).Result.Kind : result.Stop.Kind);
         if (expectedFailure is not null)
         {
-            Assert.Equal(expectedFailure, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.Equal(expectedFailure, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         }
     }
 
@@ -253,7 +257,7 @@ public sealed partial class DocumentationScribeRuntimeTests
     [InlineData("malformed-arguments")]
     public async Task Provider_protocol_conflicts_fail_closed(string scenario)
     {
-        var terminal = new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"));
+        var terminal = new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), Request()));
         var response = scenario switch
         {
             "unknown-operation" => ToolResponse(Call(0, "call.one", "tool.unknown", "one")),
@@ -278,12 +282,12 @@ public sealed partial class DocumentationScribeRuntimeTests
     public async Task Transient_failures_retry_but_final_transient_is_provider_failure()
     {
         var transient = FailureResponse(DocumentationScribeModelFailureCode.TransientUnavailable);
-        var succeeds = Script(transient, TerminalResponse(ReadTerminal("skip-result.json")));
+        var succeeds = Script(transient, SubmitResponse(ReadTerminal("skip-result.json")), FinishResponse());
         var success = await CreateRuntime(succeeds, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
 
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, success.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(success.Submissions).Result.Kind);
         Assert.Equal(2, success.RunEnvelope.AttemptNumber);
-        Assert.Equal(2, success.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(3, success.RunEnvelope.ProviderRequestCount);
         Assert.Empty(succeeds.Requests[1].CompletedToolExchanges);
 
         var exhausts = Script(transient, transient, transient);
@@ -291,7 +295,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal(DocumentationScribeFailureCode.Provider, FailureCode(exhausted));
         Assert.Equal(
             DocumentationScribeProviderFinalDisposition.Retryable,
-            Assert.IsType<DocumentationScribeFailureTerminal>(exhausted.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(exhausted.Stop).ProviderFinalDisposition);
         Assert.Equal(3, exhausted.RunEnvelope.AttemptNumber);
         Assert.Equal(3, exhausted.RunEnvelope.ProviderRequestCount);
     }
@@ -305,7 +309,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal(DocumentationScribeFailureCode.Provider, FailureCode(provider));
         Assert.Equal(
             DocumentationScribeProviderFinalDisposition.Terminal,
-            Assert.IsType<DocumentationScribeFailureTerminal>(provider.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(provider.Stop).ProviderFinalDisposition);
         Assert.Single(permanent.Requests);
 
         var throws = new HostileFailureExchange(hostile);
@@ -331,7 +335,7 @@ public sealed partial class DocumentationScribeRuntimeTests
     {
         var request = Request(root => root["limits"]!["maximumAttempts"] = 1);
         var result = await CreateRuntime(Script(FailureResponse(failureCode)), EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(expected, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).ProviderFinalDisposition);
+        Assert.Equal(expected, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).ProviderFinalDisposition);
         Assert.Throws<ArgumentOutOfRangeException>(() => new DocumentationScribeModelFailure((DocumentationScribeModelFailureCode)int.MaxValue));
     }
 
@@ -344,7 +348,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
         Assert.Equal(
             DocumentationScribeProviderFinalDisposition.Retryable,
-            Assert.IsType<DocumentationScribeFailureTerminal>(rateLimitResult.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(rateLimitResult.Stop).ProviderFinalDisposition);
 
         var mixedResult = await CreateRuntime(
             Script(
@@ -353,7 +357,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
         Assert.Equal(
             DocumentationScribeProviderFinalDisposition.Terminal,
-            Assert.IsType<DocumentationScribeFailureTerminal>(mixedResult.Terminal).ProviderFinalDisposition);
+            Assert.IsType<DocumentationScribeFailureTerminal>(mixedResult.Stop).ProviderFinalDisposition);
         Assert.Equal(2, mixedResult.RunEnvelope.AttemptNumber);
         Assert.Equal(2, mixedResult.RunEnvelope.ProviderRequestCount);
     }
@@ -372,7 +376,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             Script(transient, transient, transient, transient),
             EmptyRegistry()).RunAsync(tiedRequest, Attempt(), Prompt(tiedRequest));
 
-        var tiedFailure = Assert.IsType<DocumentationScribeFailureTerminal>(tied.Terminal);
+        var tiedFailure = Assert.IsType<DocumentationScribeFailureTerminal>(tied.Stop);
         Assert.Equal(DocumentationScribeFailureCode.Provider, tiedFailure.Code);
         Assert.Equal(DocumentationScribeProviderFinalDisposition.Retryable, tiedFailure.ProviderFinalDisposition);
         Assert.Equal(capacity, tied.RunEnvelope.AttemptNumber);
@@ -387,7 +391,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             Script(transient, transient, transient),
             EmptyRegistry()).RunAsync(requestLimited, Attempt(), Prompt(requestLimited));
 
-        var budget = Assert.IsType<DocumentationScribeFailureTerminal>(limited.Terminal);
+        var budget = Assert.IsType<DocumentationScribeFailureTerminal>(limited.Stop);
         Assert.Equal(DocumentationScribeFailureCode.Budget, budget.Code);
         Assert.Null(budget.ProviderFinalDisposition);
         Assert.Equal(capacity - 1, limited.RunEnvelope.ProviderRequestCount);
@@ -413,7 +417,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken.None,
             DocumentationScribeProviderFinalDisposition.Terminal);
 
-        var providerFailure = Assert.IsType<DocumentationScribeFailureTerminal>(provider.Terminal);
+        var providerFailure = Assert.IsType<DocumentationScribeFailureTerminal>(provider.Stop);
         Assert.Equal(DocumentationScribeFailureCode.Provider, providerFailure.Code);
         Assert.Equal(DocumentationScribeProviderFinalDisposition.Terminal, providerFailure.ProviderFinalDisposition);
         Assert.Equal(7, provider.RunEnvelope.Usage?.InputTokens);
@@ -431,7 +435,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken.None,
             DocumentationScribeProviderFinalDisposition.Terminal);
         Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(budget));
-        Assert.Null(Assert.IsType<DocumentationScribeFailureTerminal>(budget.Terminal).ProviderFinalDisposition);
+        Assert.Null(Assert.IsType<DocumentationScribeFailureTerminal>(budget.Stop).ProviderFinalDisposition);
 
         var timeoutRequest = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 10);
         var timeoutClock = new ManualTimeProvider();
@@ -444,7 +448,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken.None,
             DocumentationScribeProviderFinalDisposition.Terminal);
         Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(timeout));
-        Assert.Null(Assert.IsType<DocumentationScribeFailureTerminal>(timeout.Terminal).ProviderFinalDisposition);
+        Assert.Null(Assert.IsType<DocumentationScribeFailureTerminal>(timeout.Stop).ProviderFinalDisposition);
 
         var cancellationState = State(Request(), new ManualTimeProvider());
         cancellationState.ProviderRequestCount = 1;
@@ -455,7 +459,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             cancellationState,
             cancellation.Token,
             DocumentationScribeProviderFinalDisposition.Terminal);
-        Assert.IsType<DocumentationScribeCancelledTerminal>(cancelled.Terminal);
+        Assert.IsType<DocumentationScribeCancelledTerminal>(cancelled.Stop);
     }
 
     [Fact]
@@ -470,7 +474,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             cost: new DocumentationScribeModelCost("currency.usd", 300));
         var second = new DocumentationScribeModelResponse(
             [],
-            [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
+            [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), Request()))],
             usage: new DocumentationScribeModelUsage(inputTokens: 50, outputTokens: 20, cachedInputTokens: 50, uncachedInputTokens: 0),
             cache: DocumentationScribeCacheObservation.Miss,
             cost: new DocumentationScribeModelCost("currency.usd", 200));
@@ -488,7 +492,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             first,
             new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
+                [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), Request()))],
                 cost: new DocumentationScribeModelCost("currency.eur", 1)));
         var rejected = await CreateRuntime(conflicting, Registry(("tool.read", port))).RunAsync(
             Request(), Attempt(), Prompt());
@@ -526,7 +530,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             "uncached-input-token" => ObservedTerminal(new DocumentationScribeModelUsage(uncachedInputTokens: 2)),
             "cost" => new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
+                [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), request))],
                 cost: new DocumentationScribeModelCost("currency.usd", 2)),
             "tool-kind" => ToolResponse(
                 Call(0, "call.one", "tool.read", "one"),
@@ -673,7 +677,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var result = await pending;
         port.Release();
 
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         Assert.Empty(result.DynamicEvidenceReferences);
         Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal(2, result.RunEnvelope.ToolCallCount);
@@ -713,11 +717,11 @@ public sealed partial class DocumentationScribeRuntimeTests
     {
         var request = Request(root => root["limits"]!["maximumEvidenceUtf8Bytes"] = 141);
         var result = await CreateRuntime(
-            Script(ToolResponse(Call(0, "call.one", "tool.read", "one")), TerminalResponse(ReadTerminal("skip-result.json"))),
+            Script(ToolResponse(Call(0, "call.one", "tool.read", "one")), SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request)),
             Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
             .RunAsync(request, Attempt(), Prompt(request));
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-        Assert.Single(result.DynamicEvidenceReferences);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Empty(result.DynamicEvidenceReferences); // Uncited read evidence stays in private history.
     }
 
     [Fact]
@@ -737,19 +741,19 @@ public sealed partial class DocumentationScribeRuntimeTests
     {
         static DocumentationScribeModelResponse Response(DocumentationScribeCacheObservation? cache) => new(
             [],
-            [new DocumentationScribeModelTerminalSubmission(ReadTerminal("proposal-result.json"))],
+            [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("proposal-result.json"), Request()))],
             cache: cache);
 
-        var hit = await CreateRuntime(Script(Response(DocumentationScribeCacheObservation.Hit)), EmptyRegistry())
+        var hit = await CreateRuntime(Script(Response(DocumentationScribeCacheObservation.Hit), FinishResponse()), EmptyRegistry())
             .RunAsync(Request(), Attempt(), Prompt());
-        var miss = await CreateRuntime(Script(Response(DocumentationScribeCacheObservation.Miss)), EmptyRegistry())
+        var miss = await CreateRuntime(Script(Response(DocumentationScribeCacheObservation.Miss), FinishResponse()), EmptyRegistry())
             .RunAsync(Request(), Attempt(), Prompt());
-        var absent = await CreateRuntime(Script(Response(null)), EmptyRegistry())
+        var absent = await CreateRuntime(Script(Response(null), FinishResponse()), EmptyRegistry())
             .RunAsync(Request(), Attempt(), Prompt());
 
-        var expected = JsonSerializer.Serialize(hit.Terminal);
-        Assert.Equal(expected, JsonSerializer.Serialize(miss.Terminal));
-        Assert.Equal(expected, JsonSerializer.Serialize(absent.Terminal));
+        var expected = JsonSerializer.Serialize(Assert.Single(hit.Submissions).Result);
+        Assert.Equal(expected, JsonSerializer.Serialize(Assert.Single(miss.Submissions).Result));
+        Assert.Equal(expected, JsonSerializer.Serialize(Assert.Single(absent.Submissions).Result));
         Assert.Equal(DocumentationScribeCacheObservation.Hit, hit.RunEnvelope.Cache);
         Assert.Equal(DocumentationScribeCacheObservation.Miss, miss.RunEnvelope.Cache);
         Assert.Null(absent.RunEnvelope.Cache);
@@ -762,15 +766,16 @@ public sealed partial class DocumentationScribeRuntimeTests
         var padded = hostile + new string(' ', 200 - hostile.Length);
         var request = Request(root => root["contextReferences"]![0]!["contentSha256"] = Sha256(padded));
         var prompt = PromptWithInstruction(request, hostile);
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
 
         var result = await CreateRuntime(
             exchange,
             Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
             .RunAsync(request, Attempt(), prompt);
 
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-        var modelRequest = Assert.Single(exchange.Requests);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Equal(2, exchange.Requests.Length);
+        var modelRequest = exchange.Requests[0];
         Assert.Equal(["tool.read"], modelRequest.Tools.Select(tool => tool.OperationId));
         Assert.Equal(request.Limits.MaximumToolCalls, modelRequest.OutputLimits.MaximumToolCalls);
         Assert.Contains(hostile, modelRequest.Messages.Single(message =>
@@ -784,15 +789,19 @@ public sealed partial class DocumentationScribeRuntimeTests
     [Fact]
     public async Task Provider_visible_prompt_preserves_core_contract_shapes_and_vocabularies()
     {
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json")), FinishResponse());
 
         await CreateRuntime(exchange, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
 
-        var modelRequest = Assert.Single(exchange.Requests);
+        Assert.Equal(2, exchange.Requests.Length);
+        var modelRequest = exchange.Requests[0];
         using var runPolicy = JsonDocument.Parse(modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.RunPolicy).Content);
         using var maintainedContext = JsonDocument.Parse(modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.MaintainedContext).Content);
+        using var targetEvidence = JsonDocument.Parse(modelRequest.Messages.Single(message =>
+            message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+        var styleProfile = targetEvidence.RootElement.GetProperty("manifest")[0].GetProperty("styleProfile");
         var context = runPolicy.RootElement.GetProperty("context");
         Assert.Equal("samples/Synthetic.csproj", maintainedContext.RootElement
             .GetProperty("scope").GetProperty("inputIdentity").GetString());
@@ -800,16 +809,15 @@ public sealed partial class DocumentationScribeRuntimeTests
             .GetProperty("repositoryContextRef").GetString());
         Assert.Equal("profile.external-api", context.GetProperty("targetProfile").GetString());
         Assert.False(context.TryGetProperty("auditOutcome", out _));
-        Assert.Equal("required", runPolicy.RootElement.GetProperty("styleProfile")
+        Assert.Equal("required", styleProfile
             .GetProperty("summary").GetProperty("disposition").GetString());
-        Assert.Equal("authority.source-declaration", runPolicy.RootElement.GetProperty("styleProfile")
+        Assert.Equal("authority.source-declaration", styleProfile
             .GetProperty("claimPolicies")[0].GetProperty("allowedAuthorities")[0].GetString());
 
-        using var targetEvidence = JsonDocument.Parse(modelRequest.Messages.Single(message =>
-            message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+
         Assert.False(targetEvidence.RootElement.TryGetProperty("target", out _));
         Assert.Equal("audit.outcome.violation", targetEvidence.RootElement.GetProperty("manifest")[0].GetProperty("auditOutcome").GetString());
-        var target = targetEvidence.RootElement.GetProperty("terminalTarget");
+        var target = targetEvidence.RootElement.GetProperty("manifest")[0].GetProperty("proposalTarget");
         Assert.Equal("repoctx-11111111111111111111111111111111", target
             .GetProperty("repositoryContextRef").GetString());
         var source = target.GetProperty("sourceCommitment");
@@ -817,7 +825,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             .GetProperty("repository").GetProperty("path").GetString());
         Assert.Equal(100, source.GetProperty("locator").GetProperty("repository")
             .GetProperty("span").GetProperty("start").GetInt32());
-        Assert.Equal("parameter", targetEvidence.RootElement.GetProperty("applicableComponents")[0]
+        Assert.Equal("parameter", targetEvidence.RootElement.GetProperty("manifest")[0].GetProperty("applicableComponents")[0]
             .GetProperty("kind").GetString());
         using var systemPolicy = JsonDocument.Parse(modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.SystemPolicy).Content);
@@ -833,7 +841,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             .RootElement.GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("omit-both-read-line-bounds-unless-an-exact-valid-range-is-known", systemPolicy.RootElement
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
-        Assert.Contains("proposal-target-is-the-terminalTarget-object-never-a-string", systemPolicy.RootElement
+        Assert.Contains("proposal-target-is-the-manifest-members-proposalTarget-object-never-a-string", systemPolicy.RootElement
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
         Assert.Contains("omit-subdirectory-to-query-the-selected-scope-root", systemPolicy.RootElement
             .GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
@@ -849,7 +857,7 @@ public sealed partial class DocumentationScribeRuntimeTests
                 .Select(item => item.GetString()!).ToArray());
         Assert.Equal("contentUnits[].evidenceReferenceIds", terminalContract
             .GetProperty("proposalEvidenceReferenceLocation").GetString());
-        Assert.Equal("terminalTarget", terminalContract.GetProperty("proposalTargetSource").GetString());
+        Assert.Equal("manifest[].proposalTarget", terminalContract.GetProperty("proposalTargetSource").GetString());
         Assert.Equal("object", terminalContract.GetProperty("proposalTargetType").GetString());
         Assert.Equal(
             ["repositoryContextRef", "symbolRef", "sourceCommitment"],
@@ -924,38 +932,45 @@ public sealed partial class DocumentationScribeRuntimeTests
 
         async Task<DocumentationScribeModelRequest> FirstRequest(DocumentationScribeRequest current)
         {
-            var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+            var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), current), FinishResponse(current));
             await CreateRuntime(exchange, EmptyRegistry()).RunAsync(current, Attempt(), Prompt(current));
-            return Assert.Single(exchange.Requests);
+            Assert.Equal(2, exchange.Requests.Length);
+            return exchange.Requests[0];
         }
     }
 
     [Fact]
     public async Task Terminal_operation_has_one_reserved_id_and_a_closed_current_schema()
     {
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json")), FinishResponse());
         await CreateRuntime(exchange, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
-        var definition = Assert.Single(exchange.Requests).Terminal;
+        Assert.Equal(2, exchange.Requests.Length);
+        var definition = exchange.Requests[0].Terminal;
         Assert.Equal("scribe.submit-terminal", definition.OperationId);
-        var schema = JsonSchema.FromText(definition.SchemaJson);
+        var wireSchema = JsonSchema.FromText(definition.SchemaJson);
+        var targetSchema = JsonNode.Parse(definition.SchemaJson)!.AsObject();
+        targetSchema["oneOf"] = targetSchema["$defs"]!["targetResult"]!["oneOf"]!.DeepClone();
+        var schema = JsonSchema.FromText(targetSchema.ToJsonString());
         using (var schemaDocument = JsonDocument.Parse(definition.SchemaJson))
         {
             var root = schemaDocument.RootElement;
             Assert.Equal("object", root.GetProperty("type").GetString());
-            Assert.False(root.GetProperty("additionalProperties").GetBoolean());
-            Assert.Contains("proposal has only kind, target, and contentUnits", root
-                .GetProperty("description").GetString(), StringComparison.Ordinal);
-            var properties = root.GetProperty("properties");
-            Assert.Equal("string", properties.GetProperty("kind").GetProperty("type").GetString());
-            Assert.Equal("array", properties.GetProperty("contentUnits").GetProperty("type").GetString());
-            Assert.Equal("string", properties.GetProperty("reason").GetProperty("type").GetString());
-            Assert.Equal("array", properties.GetProperty("evidenceReferenceIds").GetProperty("type").GetString());
-            Assert.Equal("#/$defs/target", properties.GetProperty("target").GetProperty("$ref").GetString());
+            Assert.Contains("finish separately", root.GetProperty("description").GetString(), StringComparison.Ordinal);
+            var variants = root.GetProperty("oneOf");
+            Assert.Equal(2, variants.GetArrayLength());
+            Assert.All(variants.EnumerateArray(), variant => Assert.False(variant.GetProperty("additionalProperties").GetBoolean()));
+            Assert.Equal("submit", variants[0].GetProperty("properties").GetProperty("kind").GetProperty("const").GetString());
+            Assert.Equal("finish", variants[1].GetProperty("properties").GetProperty("kind").GetProperty("const").GetString());
         }
+        using (var submit = JsonDocument.Parse(SubmitResponse(ReadTerminal("proposal-result.json")).TerminalSubmissions[0].TerminalUtf8Json))
+            Assert.True(wireSchema.Evaluate(submit.RootElement).IsValid);
+        using (var finish = JsonDocument.Parse(FinishResponse().TerminalSubmissions[0].TerminalUtf8Json))
+            Assert.True(wireSchema.Evaluate(finish.RootElement).IsValid);
 
         using var proposal = JsonDocument.Parse(ReadTerminal("proposal-result.json"));
         using var skip = JsonDocument.Parse(ReadTerminal("skip-result.json"));
         Assert.True(schema.Evaluate(proposal.RootElement).IsValid);
+        Assert.False(wireSchema.Evaluate(proposal.RootElement).IsValid);
         Assert.True(schema.Evaluate(skip.RootElement).IsValid);
 
         var missing = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
@@ -975,12 +990,12 @@ public sealed partial class DocumentationScribeRuntimeTests
         stringified["contentUnits"] = stringified["contentUnits"]!.ToJsonString();
         Assert.False(schema.Evaluate(JsonDocument.Parse(stringified.ToJsonString()).RootElement).IsValid);
 
-        Assert.IsType<DocumentationScribeProposalTerminal>((await RunTerminal(
-            JsonNode.Parse(ReadTerminal("proposal-result.json"))!)).Terminal);
-        Assert.IsType<DocumentationScribeSkipTerminal>((await RunTerminal(
-            JsonNode.Parse(ReadTerminal("skip-result.json"))!)).Terminal);
-        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(await RunTerminal(mixed)));
-        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(await RunTerminal(stringified)));
+        var proposalRun = await RunSubmissionWithFinishOrFiniteRepair(JsonNode.Parse(ReadTerminal("proposal-result.json"))!);
+        Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(proposalRun.Submissions).Result);
+        var skipRun = await RunSubmissionWithFinishOrFiniteRepair(JsonNode.Parse(ReadTerminal("skip-result.json"))!);
+        Assert.IsType<DocumentationScribeSkipTerminal>(Assert.Single(skipRun.Submissions).Result);
+        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(await RunSubmissionWithFinishOrFiniteRepair(mixed)));
+        Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(await RunSubmissionWithFinishOrFiniteRepair(stringified)));
 
         static bool IsValid(JsonSchema candidateSchema, JsonNode value)
         {
@@ -992,9 +1007,9 @@ public sealed partial class DocumentationScribeRuntimeTests
         emptySkip["evidenceReferenceIds"] = new JsonArray();
         Assert.True(IsValid(schema, emptySkip));
         var emptySkipResult = await CreateRuntime(
-            Script(TerminalResponse(Encoding.UTF8.GetBytes(emptySkip.ToJsonString()))),
+            Script(SubmitResponse(Encoding.UTF8.GetBytes(emptySkip.ToJsonString())), FinishResponse()),
             EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
-        Assert.Empty(Assert.IsType<DocumentationScribeSkipTerminal>(emptySkipResult.Terminal)
+        Assert.Empty(Assert.IsType<DocumentationScribeSkipTerminal>(Assert.Single(emptySkipResult.Submissions).Result)
             .EvidenceReferenceIds);
 
         var pathBoundary = JsonNode.Parse(ReadTerminal("proposal-result.json"))!.AsObject();
@@ -1059,9 +1074,14 @@ public sealed partial class DocumentationScribeRuntimeTests
             ToolSchema,
             1));
 
-        Task<DocumentationScribeRunResult> RunTerminal(JsonNode terminal) => CreateRuntime(
-            Script(TerminalResponse(Encoding.UTF8.GetBytes(terminal.ToJsonString()))),
-            EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
+        Task<DocumentationScribeRunResult> RunSubmissionWithFinishOrFiniteRepair(JsonNode result)
+        {
+            var bytes = Encoding.UTF8.GetBytes(result.ToJsonString());
+            var steps = IsValid(schema, result)
+                ? new[] { SubmitResponse(bytes), FinishResponse() }
+                : new[] { SubmitResponse(bytes), SubmitResponse(bytes, sequence: 2), SubmitResponse(bytes, sequence: 3) };
+            return CreateRuntime(Script(steps), EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
+        }
         Assert.Throws<ArgumentException>(() => builder.Add(
             new SyntheticDescriptor("SCRIBE.SUBMIT-TERMINAL"),
             new SyntheticPort(DocumentationScribeToolOutcome.Complete),
@@ -1154,7 +1174,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var inputResult = await CreateRuntime(
             Script(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
+                [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), Request()))],
                 usage: new DocumentationScribeModelUsage(inputTokens: 11))),
             EmptyRegistry()).RunAsync(inputRequest, Attempt(), Prompt(inputRequest));
         Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(inputResult));
@@ -1233,14 +1253,14 @@ public sealed partial class DocumentationScribeRuntimeTests
                 [Call(0, "call.one", "tool.read", "one")],
                 [],
                 usage: new DocumentationScribeModelUsage(inputTokens: 0, outputTokens: 90, cachedInputTokens: 0, uncachedInputTokens: 0)),
-            TerminalResponse(ReadTerminal("skip-result.json")));
+            SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
 
         var result = await CreateRuntime(
             exchange,
             Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
             .RunAsync(request, Attempt(), Prompt(request));
 
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
         Assert.Equal(10, exchange.Requests[1].OutputLimits.MaximumOutputTokens);
     }
 
@@ -1256,7 +1276,7 @@ public sealed partial class DocumentationScribeRuntimeTests
                 usage: new DocumentationScribeModelUsage(inputTokens: maximum - 2, outputTokens: 0, cachedInputTokens: maximum - 2, uncachedInputTokens: 0)),
             new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))],
+                [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), request))],
                 usage: new DocumentationScribeModelUsage(inputTokens: 3, outputTokens: 0, cachedInputTokens: 3, uncachedInputTokens: 0)));
 
         var result = await CreateRuntime(
@@ -1322,6 +1342,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(deadline));
 
         var cancellationState = State(request, new ManualTimeProvider());
+        cancellationState.ProviderRequestCount = 1;
         Assert.True(cancellationState.TryApplyObservations(new DocumentationScribeModelResponse(
             [],
             [],
@@ -1332,7 +1353,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             cancellationState,
             cancellation.Token,
             DocumentationScribeProviderFinalDisposition.Terminal);
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Stop.Kind);
         Assert.Equal(2, cancelled.RunEnvelope.Usage!.OutputTokens);
 
         var committedReducer = new DocumentationScribeTerminalReducer();
@@ -1350,61 +1371,35 @@ public sealed partial class DocumentationScribeRuntimeTests
     }
 
     [Fact]
-    public void Terminal_validation_precedes_one_fresh_final_priority_and_elapsed_sample()
+    public void Finish_priority_retains_confirmed_progress_and_binds_the_exact_request_and_attempt()
     {
         var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
-        using var cancellation = new CancellationTokenSource();
-        var cancellationClock = new SequencedTimeProvider(read =>
-        {
-            if (read == 3)
-            {
-                cancellation.Cancel();
-            }
-
-            return 0;
-        });
-        var cancelled = new DocumentationScribeTerminalReducer().CommitTerminal(
-            State(request, cancellationClock),
-            cancellation.Token,
-            ReadTerminal("proposal-result.json"));
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Terminal.Kind);
-
-        var deadlineClock = new SequencedTimeProvider(read => read >= 3 ? 50 : 0);
-        var timedOut = new DocumentationScribeTerminalReducer().CommitTerminal(
-            State(request, deadlineClock),
-            CancellationToken.None,
-            ReadTerminal("proposal-result.json"));
-        Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(timedOut));
-        Assert.Equal(50, timedOut.RunEnvelope.ElapsedMilliseconds);
-
-        var elapsedClock = new SequencedTimeProvider(read => read >= 3 ? 17 : 0);
+        var clock = new ManualTimeProvider();
+        var state = State(request, clock);
+        var validation = DocumentationScribeValidation.ValidateTargetSubmission(request, request.ExecutableTargetIds[0], [],
+            ReadTerminal("proposal-result.json")).Submission!;
+        var accepted = DocumentationScribeValidation.AcknowledgeSubmission(validation,
+            new(request.ArtifactSha256, validation.TargetId, validation.ContentSha256, DocumentationScribeAcknowledgementStage.Validated));
+        state.Submissions = state.Submissions.Add(accepted.TargetId, accepted);
+        clock.AdvanceMilliseconds(17);
         var reducer = new DocumentationScribeTerminalReducer();
-        var elapsedState = State(request, elapsedClock);
-        var proposal = reducer.CommitTerminal(
-            elapsedState,
-            CancellationToken.None,
-            ReadTerminal("proposal-result.json"));
-        Assert.Equal(DocumentationScribeTerminalKind.Proposal, proposal.Terminal.Kind);
+        var proposal = reducer.CommitFinish(state, CancellationToken.None);
+        Assert.Equal(DocumentationScribeTerminalKind.Finished, proposal.Stop.Kind);
+        Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(proposal.Submissions).Result);
         Assert.Equal(17, proposal.RunEnvelope.ElapsedMilliseconds);
         var otherRequest = Request(root => root["context"]!["inputIdentity"] = "samples/Other.csproj");
-        Assert.Throws<ArgumentException>(() =>
-            DocumentationScribeValidation.CreateResultFromValidatedTerminal(
-                otherRequest,
-                Attempt(),
-                proposal,
-                null!));
-        Assert.True(DocumentationScribeAttemptId.TryParse(
-            "scribe-attempt.11111111111111111111111111111111",
-            out var otherAttempt));
-        Assert.Throws<ArgumentException>(() =>
-            DocumentationScribeValidation.CreateResultFromValidatedTerminal(
-                request,
-                otherAttempt,
-                proposal,
-                null!));
-        using var lateCancellation = new CancellationTokenSource();
-        lateCancellation.Cancel();
-        Assert.Same(proposal, reducer.CommitCancelled(elapsedState, lateCancellation.Token));
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.BindValidatedRunOutcome(otherRequest, Attempt(), proposal));
+        Assert.True(DocumentationScribeAttemptId.TryParse("scribe-attempt.11111111111111111111111111111111", out var otherAttempt));
+        Assert.Throws<ArgumentException>(() => DocumentationScribeValidation.BindValidatedRunOutcome(request, otherAttempt, proposal));
+        using var cancellation = new CancellationTokenSource(); cancellation.Cancel();
+        Assert.Same(proposal, reducer.CommitCancelled(state, cancellation.Token));
+        var cancelled = new DocumentationScribeTerminalReducer().CommitFinish(state, cancellation.Token);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Stop.Kind);
+        Assert.Single(cancelled.Submissions);
+        clock.AdvanceMilliseconds(33);
+        var timedOut = new DocumentationScribeTerminalReducer().CommitFinish(state, CancellationToken.None);
+        Assert.Equal(DocumentationScribeFailureCode.Timeout, FailureCode(timedOut));
+        Assert.Single(timedOut.Submissions);
     }
 
     [Fact]
@@ -1415,7 +1410,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var cancelledExchange = new SynchronousFaultExchange(() => cancellation.Cancel(), marker);
         var cancelled = await CreateRuntime(cancelledExchange, EmptyRegistry()).RunAsync(
             Request(), Attempt(), Prompt(), cancellation.Token);
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, cancelled.Stop.Kind);
 
         var request = Request(root => root["limits"]!["maximumElapsedMilliseconds"] = 50);
         var clock = new ManualTimeProvider();
@@ -1445,7 +1440,7 @@ public sealed partial class DocumentationScribeRuntimeTests
                 first.IsTruncated,
                 substituted)],
             valid.Evidence);
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
 
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), mismatched);
 
@@ -1479,7 +1474,7 @@ public sealed partial class DocumentationScribeRuntimeTests
     [Fact]
     public async Task Cancellation_wins_over_a_late_model_response()
     {
-        var step = ScriptedDocumentationScribeStep.Hold(TerminalResponse(ReadTerminal("proposal-result.json")));
+        var step = ScriptedDocumentationScribeStep.Hold(SubmitResponse(ReadTerminal("proposal-result.json")));
         var exchange = new ScriptedDocumentationScribeModelExchange([step]);
         using var cancellation = new CancellationTokenSource();
         var pending = CreateRuntime(exchange, EmptyRegistry()).RunAsync(
@@ -1490,7 +1485,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var result = await pending;
         step.Release();
 
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
     }
 
@@ -1511,7 +1506,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var result = await pending;
         port.Release();
 
-        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(1, result.RunEnvelope.ToolRoundCount);
         Assert.Equal(1, result.RunEnvelope.ToolCallCount);
@@ -1545,7 +1540,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         if (cancelled) cancellation.Cancel();
         var result = new DocumentationScribeTerminalReducer().TryCommitPriority(state, cancellation.Token);
         Assert.NotNull(result);
-        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        if (cancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         else Assert.Equal(campaign ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout, FailureCode(result));
     }
 
@@ -1577,12 +1572,12 @@ public sealed partial class DocumentationScribeRuntimeTests
         var port = new SyntheticPort(DocumentationScribeToolOutcome.Complete);
         var exchange = Script(
             ToolResponse(Call(0, "call.one", "tool.read", "one")),
-            TerminalResponse(ReadTerminal("skip-result.json")));
+            SubmitResponse(ReadTerminal("skip-result.json")), FinishResponse());
 
         var result = await CreateRuntime(exchange, RegistryForPort(port), clock).RunAsync(
             Request(), Attempt(), Prompt());
 
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
         Assert.True(clock.CreatedTimerCount >= 3);
         Assert.Equal(0, clock.ActiveTimerCount);
     }
@@ -1600,8 +1595,8 @@ public sealed partial class DocumentationScribeRuntimeTests
 
         Assert.All(results, result =>
         {
-            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-            Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+            Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
             Assert.Equal(1, result.RunEnvelope.AttemptNumber);
         });
     }
@@ -1619,7 +1614,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             var exchange = Script(
                 ToolResponse(Call(0, "call.z", "tool.zeta", "z"), Call(1, "call.a", "tool.alpha", "a")),
                 ToolResponse(Call(0, "call.a2", "tool.alpha", "a2")),
-                TerminalResponse(ReadTerminal("proposal-result.json")));
+                SubmitResponse(ReadTerminal("proposal-result.json")), FinishResponse());
             await CreateRuntime(
                 exchange,
                 Registry(("tool.zeta", port), ("tool.alpha", port))).RunAsync(Request(), Attempt(), Prompt());
@@ -1628,7 +1623,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             Assert.Equal(5, exchange.Requests[2].Messages.Length);
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            Assert.Equal("465e5cfb24a6dc0c5c909abccf9dbd1c7a1c54186963ca5a9d8c5f9d3ed415ac", digest);
+            Assert.Equal("9b422a2844e9fe032ed8cfb2e7de2d897730d714de0720c95eb6fc5353468ac4", digest);
         }
         finally
         {
@@ -1666,7 +1661,7 @@ public sealed partial class DocumentationScribeRuntimeTests
     }
 
     private static DocumentationScribeFailureCode FailureCode(DocumentationScribeRunResult result) =>
-        Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code;
+        Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code;
 
     private static RunState State(DocumentationScribeRequest request, TimeProvider timeProvider) => new(
         request,
@@ -1719,12 +1714,13 @@ public sealed partial class DocumentationScribeRuntimeTests
             "Reads bounded synthetic evidence.", ToolSchema, 1024);
         var responses = Enumerable.Range(0, 32).Select(round => ToolResponse(Enumerable.Range(0, round == 31 ? 15 : 16)
             .Select(index => Call(index, "call." + round + "." + index, "tool.read", "small")).ToArray())).ToList();
-        responses.Add(TerminalResponse(ReadTerminal("skip-result.json")));
+        responses.Add(SubmitResponse(ReadTerminal("skip-result.json"), request));
+        responses.Add(FinishResponse(request));
         var exchange = Script(responses.ToArray());
         var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create()), null, 0, 0);
         var result = await CreateRuntime(exchange, builder.Build()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
-        Assert.True(result.Terminal.Kind == DocumentationScribeTerminalKind.Skip,
-            $"terminal={result.Terminal} requests={scope.Allowance.ProviderRequestCount} tools={scope.Allowance.ToolCallCount} diagnostics={string.Join(',', result.RunEnvelope.Diagnostics.Select(item => item.ValidationCode))}");
+        Assert.True(Assert.Single(result.Submissions).Result.Kind == DocumentationScribeTerminalKind.Skip,
+            $"terminal={result.Stop} requests={scope.Allowance.ProviderRequestCount} tools={scope.Allowance.ToolCallCount} diagnostics={string.Join(',', result.RunEnvelope.Diagnostics.Select(item => item.ValidationCode))}");
         Assert.Equal(511, port.References.Length);
         Assert.Equal(512, scope.Allowance.ToolCallCount);
         Assert.Equal(512, result.RunEnvelope.ToolCallCount);
@@ -1742,13 +1738,13 @@ public sealed partial class DocumentationScribeRuntimeTests
         var request = ActionSafetyRequest();
         var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(
             maximumElapsedMilliseconds: shorterAction ? 500 : 5000)), null, restored ? 1 : 0, restored ? 1000 : 0);
-        var terminal = TerminalResponse(ReadTerminal("skip-result.json"));
+        var terminal = SubmitResponse(ReadTerminal("skip-result.json"), request);
         var transient = new DocumentationScribeModelResponse([], [],
             new DocumentationScribeModelFailure(DocumentationScribeModelFailureCode.TransientUnavailable,
                 retryAfterMilliseconds: 1000), usage: new(0, 0, 0, 0, 0));
-        var exchange = restored ? Script(terminal) : Script(transient, terminal);
+        var exchange = restored ? Script(terminal, FinishResponse(request)) : Script(transient, terminal, FinishResponse(request));
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
-        Assert.Equal(shorterAction ? restored ? 0 : 1 : restored ? 1 : 2, exchange.Requests.Length);
+        Assert.Equal(shorterAction ? restored ? 0 : 1 : restored ? 2 : 3, exchange.Requests.Length);
         if (shorterAction)
         {
             Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
@@ -1756,9 +1752,9 @@ public sealed partial class DocumentationScribeRuntimeTests
         }
         else
         {
-            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
             Assert.Equal(2, result.RunEnvelope.AttemptNumber);
-            Assert.Equal(restored ? 1 : 2, result.RunEnvelope.ProviderRequestCount);
+            Assert.Equal(restored ? 2 : 3, result.RunEnvelope.ProviderRequestCount);
             Assert.Equal(0, scope.PendingRetryAfterMilliseconds);
         }
     }
@@ -1769,10 +1765,10 @@ public sealed partial class DocumentationScribeRuntimeTests
         var request = ActionSafetyRequest();
         var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(
             maximumElapsedMilliseconds: 5000, maximumRequestElapsedMilliseconds: 100)), null, 1, 300);
-        var exchange = Script(TerminalResponse(ReadTerminal("skip-result.json")));
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
-        Assert.Single(exchange.Requests);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Equal(2, exchange.Requests.Length);
         Assert.Equal(0, scope.PendingRetryAfterMilliseconds);
         Assert.Equal(2, result.RunEnvelope.AttemptNumber);
     }
@@ -1786,11 +1782,11 @@ public sealed partial class DocumentationScribeRuntimeTests
         var text = Encoding.UTF8.GetString(terminal).Replace("Runs the synthetic widget operation.", "Runs 中文 😀 widget.", StringComparison.Ordinal);
         var bytes = Encoding.UTF8.GetBytes(text);
         if (malformed) bytes[Array.IndexOf(bytes, (byte)'R')] = 0xff;
-        var exchange = Script(TerminalResponse(bytes));
+        var exchange = Script(SubmitResponse(bytes), FinishResponse());
         var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
         if (malformed) Assert.Equal(DocumentationScribeFailureCode.Validation, FailureCode(result));
-        else Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
-        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+        else Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
+        Assert.Equal(malformed ? 1 : 2, result.RunEnvelope.ToolCallCount);
     }
 
     [Fact]
@@ -1813,7 +1809,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         var request = ActionSafetyRequest();
         var exchange = Script(new DocumentationScribeModelResponse(
             [Call(0, "call.one", "tool.read", "small")], [], usage: new(inputTokens: 1)),
-            TerminalResponse(ReadTerminal("skip-result.json")));
+            SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
         var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create()), null, 0, 0);
         var result = await CreateRuntime(exchange, Registry(("tool.read", new SyntheticPort(DocumentationScribeToolOutcome.Complete))))
             .RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
@@ -1909,14 +1905,53 @@ public sealed partial class DocumentationScribeRuntimeTests
             new DocumentationScribeAssistantContinuation(content, reasoningContent),
             DocumentationScribeContinuationObservation.Observed);
 
-    private static DocumentationScribeModelResponse TerminalResponse(byte[] terminal) =>
-        new([], [new DocumentationScribeModelTerminalSubmission(terminal)], usage: new(0, 0, 0, 0, 0));
+    private static DocumentationScribeModelResponse SubmitResponse(byte[] result, DocumentationScribeRequest? request = null, int sequence = 1) =>
+        new([], [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(result, request ?? Request(), sequence), "call.submit." + sequence)], usage: new(0, 0, 0, 0, 0));
+
+    private static byte[] SubmissionBytes(byte[] result, DocumentationScribeRequest request, int sequence = 1) =>
+        SubmissionBytes(result, request.ArtifactSha256, request.ExecutableTargetIds[0], sequence);
+
+    private static byte[] SubmissionBytes(byte[] result, string requestSha256, string targetId, int sequence)
+    {
+        using var output = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(output))
+        {
+            writer.WriteStartObject(); writer.WriteString("kind", "submit"); writer.WriteString("scribeRequestSha256", requestSha256);
+            writer.WriteNumber("sequence", sequence); writer.WritePropertyName("items"); writer.WriteStartArray();
+            writer.WriteStartObject(); writer.WriteString("targetId", targetId); writer.WritePropertyName("result");
+            writer.WriteRawValue(result, skipInputValidation: true); writer.WriteEndObject(); writer.WriteEndArray(); writer.WriteEndObject();
+        }
+        return output.ToArray();
+    }
+
+    private static DocumentationScribeModelResponse FinishResponse(DocumentationScribeRequest? request = null) =>
+        FinishResponse((request ?? Request()).ArtifactSha256);
+
+    private static DocumentationScribeModelResponse FinishResponse(string requestSha256) => new([], [new(
+        JsonSerializer.SerializeToUtf8Bytes(new { kind = "finish", scribeRequestSha256 = requestSha256 }), "call.finish")], usage: new(0, 0, 0, 0, 0));
+
+    private static DocumentationScribeModelResponse SubmitForModel(DocumentationScribeModelRequest request, byte[] result)
+    {
+        using var policy = JsonDocument.Parse(request.Messages.Single(message => message.Kind == DocumentationScribeMessageKind.RunPolicy).Content);
+        using var targets = JsonDocument.Parse(request.Messages.Single(message => message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+        var sequence = targets.RootElement.GetProperty("nextSequence").GetInt32();
+        return new([], [new(SubmissionBytes(result, policy.RootElement.GetProperty("artifactSha256").GetString()!,
+            targets.RootElement.GetProperty("executableTargetIds")[0].GetString()!, sequence), "call.submit." + sequence)], usage: new(0, 0, 0, 0, 0));
+    }
+
+    private static DocumentationScribeModelResponse? CompletedSingletonFinish(DocumentationScribeModelRequest request)
+    {
+        using var targets = JsonDocument.Parse(request.Messages.Single(message => message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+        if (targets.RootElement.GetProperty("progress").GetArrayLength() == 0) return null;
+        using var policy = JsonDocument.Parse(request.Messages.Single(message => message.Kind == DocumentationScribeMessageKind.RunPolicy).Content);
+        return FinishResponse(policy.RootElement.GetProperty("artifactSha256").GetString()!);
+    }
 
     private static DocumentationScribeModelResponse FailureResponse(DocumentationScribeModelFailureCode code) =>
         new([], [], new DocumentationScribeModelFailure(code), usage: new(0, 0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse ObservedTerminal(DocumentationScribeModelUsage usage) =>
-        new([], [new DocumentationScribeModelTerminalSubmission(ReadTerminal("skip-result.json"))], usage: usage);
+        new([], [new DocumentationScribeModelTerminalSubmission(SubmissionBytes(ReadTerminal("skip-result.json"), Request()))], usage: usage);
 
     private static DocumentationScribeModelToolCall Call(
         int responseIndex,
@@ -2001,7 +2036,7 @@ public sealed partial class DocumentationScribeRuntimeTests
     private static byte[] ReadTerminal(string resultFixture)
     {
         using var result = JsonDocument.Parse(ReadFixture(resultFixture));
-        return Encoding.UTF8.GetBytes(result.RootElement.GetProperty("terminal").GetRawText());
+        return Encoding.UTF8.GetBytes(result.RootElement.GetProperty("submissions")[0].GetProperty("result").GetRawText());
     }
 
     private static byte[] CiteDynamicReference(byte[] terminalUtf8Json, string evidenceReferenceId)
@@ -2319,6 +2354,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (CompletedSingletonFinish(request) is { } finished) return ValueTask.FromResult(finished);
             if (request.CompletedToolExchanges.IsEmpty)
             {
                 ObservedRoutingReferenceId = marker;
@@ -2343,14 +2379,14 @@ public sealed partial class DocumentationScribeRuntimeTests
                     ObservedRoutingReferenceId)));
             }
 
-            var completed = Assert.Single(request.CompletedToolExchanges);
+            var completed = Assert.Single(request.CompletedToolExchanges.Where(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId));
             var reference = Assert.Single(completed.EvidenceReferences);
             ObservedEvidenceReferenceId = reference.EvidenceReferenceId;
             ObservedProductOwnedEvidence = true;
             ObservedMarkerInModelRequest = Encoding.UTF8
                 .GetString(request.DeterministicUtf8.AsSpan())
                 .Contains(marker, StringComparison.Ordinal);
-            return ValueTask.FromResult(TerminalResponse(CiteDynamicReference(
+            return ValueTask.FromResult(SubmitForModel(request, CiteDynamicReference(
                 ReadTerminal(terminalFixture),
                 reference.EvidenceReferenceId)));
         }
@@ -2366,6 +2402,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (CompletedSingletonFinish(request) is { } finished) return ValueTask.FromResult(finished);
             if (request.CompletedToolExchanges.IsEmpty)
             {
                 return ValueTask.FromResult(ToolResponse(Call(
@@ -2375,12 +2412,12 @@ public sealed partial class DocumentationScribeRuntimeTests
                     forgedEvidenceReferenceId)));
             }
 
-            var completed = Assert.Single(request.CompletedToolExchanges);
+            var completed = Assert.Single(request.CompletedToolExchanges.Where(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId));
             Assert.Empty(completed.EvidenceReferences);
             ObservedOpaqueOnlyResult = Encoding.UTF8
                 .GetString(completed.ResultUtf8Json.Span)
                 .Contains(forgedEvidenceReferenceId, StringComparison.Ordinal);
-            return ValueTask.FromResult(TerminalResponse(CiteDynamicReference(
+            return ValueTask.FromResult(SubmitForModel(request, CiteDynamicReference(
                 ReadTerminal("proposal-result.json"),
                 forgedEvidenceReferenceId)));
         }
@@ -2395,6 +2432,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (CompletedSingletonFinish(request) is { } finished) return ValueTask.FromResult(finished);
             if (request.CompletedToolExchanges.IsEmpty)
             {
                 var reference = "run-" + Interlocked.Increment(ref nextReference).ToString(CultureInfo.InvariantCulture);
@@ -2402,8 +2440,8 @@ public sealed partial class DocumentationScribeRuntimeTests
             }
 
             var referenceId = Assert.Single(Assert.Single(
-                request.CompletedToolExchanges).EvidenceReferences).EvidenceReferenceId;
-            return ValueTask.FromResult(TerminalResponse(CiteDynamicReference(
+                request.CompletedToolExchanges.Where(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId)).EvidenceReferences).EvidenceReferenceId;
+            return ValueTask.FromResult(SubmitForModel(request, CiteDynamicReference(
                 ReadTerminal("proposal-result.json"),
                 referenceId)));
         }
@@ -2416,7 +2454,8 @@ public sealed partial class DocumentationScribeRuntimeTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(TerminalResponse(terminal));
+            if (CompletedSingletonFinish(request) is { } finished) return ValueTask.FromResult(finished);
+            return ValueTask.FromResult(SubmitForModel(request, terminal));
         }
     }
 

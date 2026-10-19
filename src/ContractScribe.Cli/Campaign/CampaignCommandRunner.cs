@@ -486,9 +486,15 @@ internal static class CampaignCommandRunner
                 continue;
             }
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted
-                && proposal.Artifact?.State.CandidateObservation is not null)
+                && proposal.Artifact is { } stoppedArtifact
+                && (stoppedArtifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete)
+                    || stoppedArtifact.State.CandidateObservation is not null))
             {
-                invocationStopped = true; reconstructPriorAccepted = true; continue;
+                invocationStopped = true;
+                // A returned proposal still needs independent M2 acceptance. Reconstructing
+                // only old accepted work here would leave that proposal unprocessed.
+                reconstructPriorAccepted = !stoppedArtifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete);
+                continue;
             }
             var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Reason == CampaignTerminalReason.Unresolved
                 ? "campaign.unresolved"

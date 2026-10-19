@@ -33,26 +33,28 @@ public sealed partial class CampaignStateContractTests
         var steps = ImmutableArray.CreateBuilder<ScriptedDocumentationScribeStep>();
         if (precedingCalls > 0) steps.Add(Batch(precedingCalls, "prior"));
         steps.Add(Batch(batchCalls, "current"));
-        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0))));
+        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(trial.Scenario, trial.Request))], usage: new(0, 0, 0, 0))));
+        steps.Add(C3FinishStep(trial.Request));
         var exchange = new ScriptedDocumentationScribeModelExchange(steps.ToImmutable());
         var session = trial.Session(exchange, ReviewBoundaryRegistry(trial.Request, port));
         var result = await session.RunAsync();
         var reads = precedingCalls + (accepted ? batchCalls : 0);
         Assert.Equal(reads, port.Calls);
-        Assert.Equal(reads + (accepted ? 1 : 0), result.RunEnvelope.ToolCallCount);
+        var finishSent = accepted && reads + 1 < Math.Min(invocationCalls, targetCalls);
+        Assert.Equal(reads + (accepted ? 1 : 0) + (finishSent ? 1 : 0), result.RunEnvelope.ToolCallCount);
         Assert.Equal(result.RunEnvelope.ToolCallCount, trial.Coordinator.Scope.Allowance.ToolCallCount);
         Assert.Equal(reads, trial.Store.CompletedHostReadbacks.Count(phase => phase == CampaignProviderHostPhase.SemanticTool));
         Assert.Equal(reads, trial.Store.AdmittedHostPhases.Count(phase => phase == CampaignProviderHostPhase.SemanticTool));
-        Assert.Equal(reads, session.State.CompletedToolExchanges.Length);
-        Assert.Equal(precedingCalls > 0 ? accepted ? 3 : 2 : accepted ? 2 : 1, exchange.Requests.Length);
+        Assert.Equal(reads, session.State.CompletedToolExchanges.Count(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId));
+        Assert.Equal((precedingCalls > 0 ? accepted ? 3 : 2 : accepted ? 2 : 1) + (finishSent ? 1 : 0), exchange.Requests.Length);
         Assert.Equal(exchange.Requests.Length, trial.Store.Dispatches);
         Assert.Equal(exchange.Requests.Length, trial.Store.Settlements);
         Assert.Equal(exchange.Requests.Length, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal((precedingCalls > 0 ? 2 : 1) * 3, result.RunEnvelope.Usage?.InputTokens);
         Assert.Equal((precedingCalls > 0 ? 2 : 1) * 2, result.RunEnvelope.Usage?.OutputTokens);
-        if (accepted) Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        if (accepted) Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
         else
-            Assert.Equal(DocumentationScribeFailureCode.Budget, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.Equal(DocumentationScribeFailureCode.Budget, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         await trial.CompleteAsync(result);
         Assert.Equal(exchange.Requests.Length, trial.Store.Current.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal((precedingCalls > 0 ? 2 : 1) * 3, trial.Store.Current.State.LineageCharges.InputTokens.Observed);
@@ -87,9 +89,9 @@ public sealed partial class CampaignStateContractTests
         Assert.Contains(CampaignProviderHostPhase.SemanticTool, trial.Store.CompletedHostReadbacks);
         Assert.NotEqual(CampaignProviderHostPhase.SemanticTool,
             Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).HostPhase);
-        if (callerCancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Terminal.Kind);
+        if (callerCancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         else Assert.Equal(invocationCut ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         await trial.CompleteAsync(result);
     }
 
@@ -101,14 +103,14 @@ public sealed partial class CampaignStateContractTests
         trial.Store.DelayedReadbackPhase = CampaignProviderHostPhase.TerminalSubmission;
         trial.Store.DelayedReadback = () => clock.Advance(600);
         var exchange = new ScriptedDocumentationScribeModelExchange([
-            ScriptedDocumentationScribeStep.Return(new([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0)))]);
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(trial.Scenario, trial.Request))], usage: new(0, 0, 0, 0)))]);
         var result = await trial.Session(exchange).RunAsync();
         Assert.Equal(0, result.RunEnvelope.ToolCallCount);
         Assert.Single(exchange.Requests);
         Assert.Contains(CampaignProviderHostPhase.TerminalSubmission, trial.Store.CompletedHostReadbacks);
         Assert.NotEqual(CampaignProviderHostPhase.TerminalSubmission,
             Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).HostPhase);
-        Assert.Equal(DocumentationScribeFailureCode.Timeout, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        Assert.Equal(DocumentationScribeFailureCode.Timeout, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         await trial.CompleteAsync(result);
     }
 
@@ -124,7 +126,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Single(exchange.Requests);
         Assert.Equal(CampaignProviderHostPhase.Continuation,
             Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).HostPhase);
-        Assert.Equal(DocumentationScribeFailureCode.Internal, Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+        Assert.Equal(DocumentationScribeFailureCode.Internal, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         Assert.DoesNotContain(marker, JsonSerializer.Serialize(result.RunEnvelope.Diagnostics), StringComparison.Ordinal);
         await trial.CompleteAsync(result);
         Assert.Equal(CampaignWorkOutcomeCode.InternalFailure,
@@ -140,7 +142,7 @@ public sealed partial class CampaignStateContractTests
     {
         var trial = await SolusTrialAsync();
         var exchange = new ScriptedDocumentationScribeModelExchange([
-            ScriptedDocumentationScribeStep.Return(new([], [new(C3ProposalTerminal(trial.Scenario))], usage: new(0, 0, 0, 0)))]);
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(trial.Scenario, trial.Request))], usage: new(0, 0, 0, 0))), C3FinishStep(trial.Request)]);
         var session = DocumentationScribeExecution.Prepare(trial.Request, trial.Attempt, trial.Prompt,
             new DocumentationScribeToolRegistryBuilder(trial.Request.ToolPolicyId).Build(), exchange,
             new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), trial.Coordinator.Scope.Allowance.Clock,
@@ -148,8 +150,8 @@ public sealed partial class CampaignStateContractTests
         if (scenario == "valid")
         {
             var result = await DocumentationScribeExecution.RunAsync(session);
-            Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
-            Assert.Single(exchange.Requests);
+            Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
+            Assert.Equal(2, exchange.Requests.Length);
             await trial.CompleteAsync(result);
             return;
         }
@@ -170,7 +172,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Empty(exchange.Requests);
         Assert.Equal(0, trial.Store.Dispatches);
         Assert.Equal(ProviderOutcome.Rejected, rejected.Outcome);
-        var resultFailure = Assert.IsType<DocumentationScribeFailureTerminal>(session.Result!.Terminal);
+        var resultFailure = Assert.IsType<DocumentationScribeFailureTerminal>(session.Result!.Stop);
         Assert.Equal(DocumentationScribeFailureCode.Validation, resultFailure.Code);
         await trial.CompleteAsync(session.Result);
     }

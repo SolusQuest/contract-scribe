@@ -12,6 +12,58 @@ namespace ContractScribe.Tests;
 public sealed partial class CampaignStateContractTests
 {
     [Theory]
+    [InlineData(1, false)]
+    [InlineData(2, false)]
+    [InlineData(1, true)]
+    [InlineData(2, true)]
+    public async Task Runtime_unknown_usage_retains_returned_proposal_before_continuation_capacity_stop(int maximumRequests, bool actualHttp)
+    {
+        var scenario = CreateProposalScenario(targetLimit: 1, maximumProviderRequests: null,
+            maximumInputTokens: null, maximumUncachedInputTokens: null, maximumOutputTokens: null,
+            maximumCostMicrounits: null, maximumElapsedMilliseconds: null);
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(scenario))]))]);
+        var response = System.Text.Json.JsonSerializer.Serialize(new
+        {
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    message = new
+                    {
+                        role = "assistant", content = (string?)null, reasoning_content = "synthetic-unknown-usage",
+                        tool_calls = new[] { new { id = "call.unknown-proposal", type = "function",
+                            function = new { name = "cs_terminal", arguments = Encoding.UTF8.GetString(C3Submission(scenario)) } } }
+                    },
+                    finish_reason = "tool_calls"
+                }
+            }
+        });
+        using var handler = new C3UsageHandler(response);
+        var profile = new OpenAiCompatibleChatCompletionsRequestProfile(OpenAiCompatibleThinkingMode.Enabled,
+            OpenAiCompatibleReasoningEffort.High, OpenAiCompatibleToolChoice.Required,
+            OpenAiCompatibleContinuationPolicy.RequiredForToolCalls, OpenAiCompatibleOutputTokenField.MaxTokens);
+        using var http = new OpenAiCompatibleHttpModelExchange(
+            new(new Uri("https://example.test/v1"), "model", profile, networkEnabled: true), handler, disposeHandler: false);
+        var limits = C3Request(scenario).Limits;
+        var (artifact, result) = await CompleteC3RuntimeAsync(scenario, actualHttp ? http : exchange,
+            DocumentationScribeInvocationLimits.Create(maximumProviderRequests: maximumRequests,
+                maximumCachedInputTokens: limits.MaximumInputTokens / 2,
+                maximumUncachedInputTokens: Math.Min(limits.MaximumUncachedInputTokens, limits.MaximumInputTokens / 2),
+                maximumOutputTokens: limits.MaximumOutputTokens, maximumRequestOutputTokens: limits.MaximumOutputTokens,
+                maximumToolCalls: limits.MaximumToolCalls, maximumElapsedMilliseconds: limits.MaximumElapsedMilliseconds,
+                maximumRequestElapsedMilliseconds: Math.Min(300_000, limits.MaximumElapsedMilliseconds)));
+        Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(result.Submissions).Result);
+        Assert.Equal(DocumentationScribeFailureCode.Budget, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
+        Assert.Equal(CampaignWorkStatus.ProposalComplete, artifact.State.WorkItems[0].Status);
+        Assert.Equal(1, actualHttp ? handler.Calls : exchange.Requests.Length);
+        Assert.Equal(1, artifact.State.LineageCharges.ProviderRequests.Observed);
+        Assert.True(artifact.State.LineageCharges.InputTokens.ConservativeUnobserved > 0);
+        Assert.Null(result.RunEnvelope.Usage);
+    }
+
+    [Theory]
     [InlineData("input", false)]
     [InlineData("input", true)]
     [InlineData("cached", false)]
@@ -38,15 +90,16 @@ public sealed partial class CampaignStateContractTests
         var exchange = new ScriptedDocumentationScribeModelExchange([
             ScriptedDocumentationScribeStep.Return(new([], [],
                 failure: new(DocumentationScribeModelFailureCode.TransientUnavailable), usage: Usage(missingFirst))),
-            ScriptedDocumentationScribeStep.Return(new([], [new DocumentationScribeModelTerminalSubmission(C3ProposalTerminal(scenario))],
+            ScriptedDocumentationScribeStep.Return(new([], [new DocumentationScribeModelTerminalSubmission(C3Submission(scenario))],
                 usage: Usage(!missingFirst))),
-        ]);
+            C3FinishStep(C3Request(scenario))]);
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, exchange);
-        Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
         Assert.Equal(CampaignWorkStatus.ProposalComplete, artifact.State.WorkItems[0].Status);
-        Assert.Equal(2, result.RunEnvelope.ProviderRequestCount + result.RunEnvelope.RestoredRetryableProviderFailures);
-        Assert.Equal(2, artifact.State.LineageCharges.ProviderRequests.Observed);
-        Assert.Equal(2, exchange.Requests.Length);
+        var expectedRequests = !missingFirst && dimension != "reasoning" ? 2 : 3;
+        Assert.Equal(expectedRequests, result.RunEnvelope.ProviderRequestCount + result.RunEnvelope.RestoredRetryableProviderFailures);
+        Assert.Equal(expectedRequests, artifact.State.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal(expectedRequests, exchange.Requests.Length);
         var charges = artifact.State.LineageCharges;
         var charge = dimension switch
         {
@@ -92,7 +145,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(charges, admission.Artifact.State.LineageCharges);
         Assert.Null(capped.State.ActiveReservation);
         Assert.Equal(charges.OuterInvocations, capped.State.LineageCharges.OuterInvocations);
-        Assert.Equal(2, exchange.Requests.Length);
+        Assert.Equal(expectedRequests, exchange.Requests.Length);
     }
 
     [Fact]
@@ -165,7 +218,7 @@ public sealed partial class CampaignStateContractTests
         var exchange = new ScriptedDocumentationScribeModelExchange([
             ScriptedDocumentationScribeStep.Return(new([], [],
                 failure: new(DocumentationScribeModelFailureCode.TransientUnavailable))),
-            ScriptedDocumentationScribeStep.Return(new([], [new DocumentationScribeModelTerminalSubmission(C3ProposalTerminal(scenario))],
+            ScriptedDocumentationScribeStep.Return(new([], [new DocumentationScribeModelTerminalSubmission(C3Submission(scenario))],
                 usage: usage, cost: dimension == "cost" ? new("currency.usd", known) : null)),
         ]);
         var wireUsage = new JsonObject();
@@ -201,9 +254,9 @@ public sealed partial class CampaignStateContractTests
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, actualHttp ? http : exchange);
         Assert.Equal(2, result.RunEnvelope.ProviderRequestCount + result.RunEnvelope.RestoredRetryableProviderFailures);
         Assert.Equal(2, artifact.State.LineageCharges.ProviderRequests.Observed);
-        if (dimension == "cost") Assert.Equal(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        if (dimension == "cost") Assert.Equal(DocumentationScribeTerminalKind.Proposal, Assert.Single(result.Submissions).Result.Kind);
         else Assert.Equal(DocumentationScribeFailureCode.Budget,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         var charges = artifact.State.LineageCharges;
         var charge = dimension switch
         {
@@ -289,7 +342,7 @@ public sealed partial class CampaignStateContractTests
             handler, disposeHandler: false);
         var (artifact, result) = await CompleteC3RuntimeAsync(scenario, exchange);
         Assert.Equal(DocumentationScribeFailureCode.Provider,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         Assert.Equal(1, handler.Calls);
         Assert.Null(result.RunEnvelope.Usage);
         var exposure = scenario.InitialState.ConfiguredCeilings.ScribeRunLimits.MaximumOutputTokens;
@@ -327,11 +380,34 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(0, artifact.State.LineageCharges.ReasoningTokens.ConservativeUnobserved);
     }
 
+    private static byte[] C3Submission(ProposalScenario scenario, DocumentationScribeRequest? request = null, int sequence = 1) =>
+        C3Submit(request ?? C3Request(scenario), C3ProposalTerminal(scenario), sequence);
+
+    private static DocumentationScribeRequest C3Request(ProposalScenario scenario) =>
+        CreateScribeExchange(scenario.Plan.WorkItems[0], requestMutation: root =>
+            root["limits"]!["maximumCostMicrounits"] = scenario.InitialState.ConfiguredCeilings.ScribeRunLimits.MaximumCostMicrounits,
+            resultMutation: root => root["runEnvelope"]!.AsObject().Remove("cost"), scenario: scenario).Request;
+
+    private static byte[] C3Submit(DocumentationScribeRequest request, byte[] result, int sequence = 1) =>
+        System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            kind = "submit",
+            scribeRequestSha256 = request.ArtifactSha256,
+            sequence,
+            items = new[] { new { targetId = Assert.Single(request.ExecutableTargetIds), result = JsonNode.Parse(result) } }
+        });
+
+    private static byte[] C3Finish(DocumentationScribeRequest request) => System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(
+        new { kind = "finish", scribeRequestSha256 = request.ArtifactSha256 });
+
+    private static ScriptedDocumentationScribeStep C3FinishStep(DocumentationScribeRequest request) =>
+        ScriptedDocumentationScribeStep.Return(new([], [new(C3Finish(request))], usage: new(0, 0, 0, 0, 0)));
+
     private static byte[] C3ProposalTerminal(ProposalScenario scenario)
     {
         var work = scenario.Plan.WorkItems[0];
         var target = Assert.Single(work.Targets);
-        var terminal = ReadJsonFixture("documentation-scribe", "v1", "valid", "proposal-result.json")["terminal"]!;
+        var terminal = ScribeResultFixture.Payload(ReadJsonFixture("documentation-scribe", "v1", "valid", "proposal-result.json"));
         SetSymbol(terminal["target"]!["symbolRef"]!, target.SymbolRef);
         SetSource(terminal["target"]!["sourceCommitment"]!, Assert.IsType<CampaignPlanningRepositorySourceAuthority>(target.Source));
         foreach (var unit in terminal["contentUnits"]!.AsArray())
@@ -384,7 +460,8 @@ public sealed partial class CampaignStateContractTests
                     new string('e', reference.IncludedUtf8ByteCount))).ToImmutableArray());
             var result = await runtime.RunAsync(request, reservation.AttemptId, prompt, executionScope: coordinator.Scope);
             CampaignTransitionResult complete;
-            if (result.Terminal is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }
+            if (CampaignStateFactory.GetSingletonScribeSubmission(request, result)?.Result is not DocumentationScribeProposalTerminal
+                && result.Stop is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }
                 && (allowance.HasCheckedStop || coordinator.Scope.LifetimeDeadlineReached
                     || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded))
             {

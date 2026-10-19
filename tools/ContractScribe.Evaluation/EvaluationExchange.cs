@@ -31,13 +31,19 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
             await Task.Delay(TimeSpan.FromSeconds(2), cancellationToken).ConfigureAwait(false);
         }
 
+        if (prepared.Scenario.Script is "tool-proposal" or "proposal" or "skip"
+            && request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId))
+            return new([], [new(JsonSerializer.SerializeToUtf8Bytes(new
+            { kind = "finish", scribeRequestSha256 = prepared.Request.ArtifactSha256 }), "call.evaluation-finish")],
+                usage: new(0, 0));
+
         return prepared.Scenario.Script switch
         {
             "tool-proposal" => ToolProposal(request),
-            "proposal" => Proposal(),
-            "skip" => Skip(),
+            "proposal" => Proposal(request),
+            "skip" => Skip(request),
             "invalid-tool" => InvalidTool(),
-            "malformed-output" => MalformedOutput(),
+            "malformed-output" => MalformedOutput(request),
             "rate-limited" => Failure(DocumentationScribeModelFailureCode.RateLimited),
             "unavailable" => Failure(DocumentationScribeModelFailureCode.PermanentUnavailable),
             "budget-exhausted" => BudgetExhausted(),
@@ -77,7 +83,7 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
 
         return new DocumentationScribeModelResponse(
             [],
-            [new DocumentationScribeModelTerminalSubmission(ProposalTerminal())],
+            [new DocumentationScribeModelTerminalSubmission(Submission(request, ProposalTerminal()))],
             usage: new DocumentationScribeModelUsage(
                 inputTokens: 120,
                 outputTokens: 40,
@@ -86,19 +92,19 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
             cache: DocumentationScribeCacheObservation.Mixed);
     }
 
-    private DocumentationScribeModelResponse Proposal() => new(
+    private DocumentationScribeModelResponse Proposal(DocumentationScribeModelRequest request) => new(
         [],
-        [new DocumentationScribeModelTerminalSubmission(ProposalTerminal())],
+        [new DocumentationScribeModelTerminalSubmission(Submission(request, ProposalTerminal()))],
         usage: new DocumentationScribeModelUsage(
             inputTokens: 80,
             outputTokens: 24,
             uncachedInputTokens: 80),
         cache: DocumentationScribeCacheObservation.Miss);
 
-    private static DocumentationScribeModelResponse Skip() => new(
+    private DocumentationScribeModelResponse Skip(DocumentationScribeModelRequest request) => new(
         [],
-        [new DocumentationScribeModelTerminalSubmission(Encoding.UTF8.GetBytes(
-            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}"))],
+        [new DocumentationScribeModelTerminalSubmission(Submission(request, Encoding.UTF8.GetBytes(
+            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}")))],
         usage: new DocumentationScribeModelUsage(inputTokens: 64, outputTokens: 8));
 
     private static DocumentationScribeModelResponse InvalidTool() => new(
@@ -111,12 +117,12 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
         ],
         []);
 
-    private static DocumentationScribeModelResponse MalformedOutput() => new(
+    private DocumentationScribeModelResponse MalformedOutput(DocumentationScribeModelRequest request) => new(
         [],
         [
-            new DocumentationScribeModelTerminalSubmission(Encoding.UTF8.GetBytes(
-                "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[],\"rawResponse\":\"forbidden\"}")),
-        ]);
+            new DocumentationScribeModelTerminalSubmission(Submission(request, Encoding.UTF8.GetBytes(
+                "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[],\"rawResponse\":\"forbidden\"}"))),
+        ], usage: new(0, 0, 0, 0));
 
     private static DocumentationScribeModelResponse Failure(DocumentationScribeModelFailureCode code) =>
         new([], [], new DocumentationScribeModelFailure(code), usage: new(0, 0, 0, 0, 0));
@@ -139,6 +145,20 @@ internal sealed class ScriptedEvaluationExchange : IDocumentationScribeModelExch
         }
 
         return new DocumentationScribeModelResponse(calls.ToImmutable(), []);
+    }
+
+    private byte[] Submission(DocumentationScribeModelRequest modelRequest, ReadOnlyMemory<byte> result)
+    {
+        var request = prepared.Request;
+        if (request.ExecutableTargetIds.Length != 1) throw new InvalidOperationException("evaluation.manifest.not-singleton");
+        using var policy = JsonDocument.Parse(modelRequest.Messages.Single(item => item.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
+        return JsonSerializer.SerializeToUtf8Bytes(new
+        {
+            kind = "submit",
+            scribeRequestSha256 = request.ArtifactSha256,
+            sequence = policy.RootElement.GetProperty("nextSequence").GetInt32(),
+            items = new[] { new { targetId = request.ExecutableTargetIds[0], result = JsonNode.Parse(result.Span) } }
+        });
     }
 
     private ReadOnlyMemory<byte> ProposalTerminal()

@@ -15,6 +15,16 @@ internal enum CampaignTrustedProposalAdmissionKind
 
 public static partial class CampaignStateFactory
 {
+    internal static DocumentationScribeTargetSubmission? GetSingletonScribeSubmission(
+        DocumentationScribeRequest request, DocumentationScribeRunResult result)
+    {
+        // S5 owns aggregate campaign acceptance. This consumer remains an explicit singleton Host.
+        if (request.Manifest.Length != 1 || request.ExecutableTargetIds.Length != 1) return null;
+        var targetId = request.ExecutableTargetIds[0];
+        return result.Submissions.SingleOrDefault(item => item.TargetId == targetId
+            && item.Stage >= DocumentationScribeAcknowledgementStage.Validated);
+    }
+
     private static readonly HashSet<string> RemovablePatchDiagnosticCodes = new(StringComparer.Ordinal)
     {
         "patch.rejected.unsupported-target",
@@ -440,7 +450,7 @@ public static partial class CampaignStateFactory
             || planWork.Targets.Length != 1
             || request.Manifest.Length != 1
             || request.ExecutableTargetIds.Length != 1
-            || result.Terminal is not DocumentationScribeProposalTerminal terminal
+            || GetSingletonScribeSubmission(request, result)?.Result is not DocumentationScribeProposalTerminal terminal
             || !string.Equals(
                 result.ScribeRequestSha256,
                 request.ArtifactSha256,
@@ -462,7 +472,7 @@ public static partial class CampaignStateFactory
                 executionAuthority.ScribeProtocolId,
                 StringComparison.Ordinal)
             || !string.Equals(
-                result.RunEnvelope.StyleProfileId,
+                result.RunEnvelope.StyleProfileIds.SingleOrDefault(),
                 request.ExecutionStyleProfile.StyleProfileId,
                 StringComparison.Ordinal)
             || !string.Equals(

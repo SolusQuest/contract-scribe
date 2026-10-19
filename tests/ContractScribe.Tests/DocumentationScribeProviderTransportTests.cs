@@ -16,6 +16,44 @@ namespace ContractScribe.Tests;
 
 public sealed partial class DocumentationScribeProviderTransportTests
 {
+    [Theory]
+    [InlineData("submit", "missing")]
+    [InlineData("submit", "null")]
+    [InlineData("submit", "empty")]
+    [InlineData("finish", "missing")]
+    [InlineData("finish", "null")]
+    [InlineData("finish", "empty")]
+    public void Incremental_terminal_branches_enforce_required_continuation_and_capture_empty_exactly(string kind, string shape)
+    {
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(Request([]), "synthetic-model", RequiredContinuationProfile());
+        var payload = kind == "finish" ? new JsonObject { ["kind"] = kind, ["scribeRequestSha256"] = new string('a', 64) }
+            : new JsonObject
+            {
+                ["kind"] = kind,
+                ["scribeRequestSha256"] = new string('a', 64),
+                ["sequence"] = 1,
+                ["items"] = new JsonArray(new JsonObject
+                {
+                    ["targetId"] = "target.selected",
+                    ["result"] = new JsonObject
+                    { ["kind"] = "skip", ["reason"] = "scribe.skip.insufficient-evidence", ["evidenceReferenceIds"] = new JsonArray() }
+                })
+            };
+        var response = JsonNode.Parse(TerminalResponse("call.incremental", payload.ToJsonString()))!;
+        if (shape != "missing") response["choices"]![0]!["message"]!["reasoning_content"] = shape == "null" ? null : "";
+        var bytes = Encoding.UTF8.GetBytes(response.ToJsonString());
+        if (shape != "empty")
+        {
+            var rejected = Assert.Throws<OpenAiCompatibleProtocolException>(() => OpenAiCompatibleChatCompletionsCodec.ParseResponse(bytes, prepared));
+            Assert.Equal(DocumentationScribeContinuationObservation.MissingRequired, rejected.ContinuationObservation);
+            return;
+        }
+        var accepted = OpenAiCompatibleChatCompletionsCodec.ParseResponse(bytes, prepared);
+        Assert.Equal("", accepted.AssistantContinuation!.ReasoningContent);
+        Assert.Equal("call.incremental", Assert.Single(accepted.TerminalSubmissions).CallId);
+        Assert.Equal(DocumentationScribeContinuationObservation.Observed, accepted.ContinuationObservation);
+    }
+
     [Fact]
     [Trait("MinimumRuntime", "10.0.2")]
     public void Minimum_runtime_probe_reports_the_requested_runtime()
@@ -90,16 +128,16 @@ public sealed partial class DocumentationScribeProviderTransportTests
             ReadProviderFixture("terminal-response.json"),
             second);
         var terminal = Assert.Single(terminalResponse.TerminalSubmissions);
-        Assert.Equal("skip", JsonDocument.Parse(terminal.TerminalUtf8Json).RootElement.GetProperty("kind").GetString());
+        Assert.Equal("finish", JsonDocument.Parse(terminal.TerminalUtf8Json).RootElement.GetProperty("kind").GetString());
 
         Assert.Equal(
-            "68781078e22df92791bdc62253fe1437f684ba8af78dd8373d7d70d7a98eeda2",
+            "29675790cf310575bff27be45a7749efe2027c6285eca7e3cf065795a2e539e8",
             OpenAiCompatibleChatCompletionsCodec.Digest(prepared.BodyUtf8));
         Assert.Equal(
             "d97a87532f0c1776bd07324fbeeadfd146d4968b9c0e81b1c0dfdf4e1edcf0d8",
             OpenAiCompatibleChatCompletionsCodec.Digest(prepared.ProductProjectionUtf8));
         Assert.Equal(
-            "08882feee6b85b27af5dd0610e42f76252e2003f7ef6a107087e0330ad873199",
+            "973b49f71b5c731e00775c24b079b6112984368adc322266ccee72d6cc225538",
             OpenAiCompatibleChatCompletionsCodec.Digest(second.BodyUtf8));
         Assert.Equal(
             "057dd9c7ad1e0819cc2708520eda78ed8fb9f5fe3355330049b65de7aa067e51",
@@ -1504,7 +1542,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
         var result = await runtime.RunAsync(request, attempt, ScribePrompt(request));
 
         Assert.Equal(DocumentationScribeFailureCode.Provider,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         Assert.Equal(1, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(1, handler.CallCount);
     }
@@ -1782,7 +1820,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
             Request([], messages: oversizedMessages),
             CancellationToken.None);
 
-        Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, response.Failure!.Code);
+        Assert.Equal(DocumentationScribeModelFailureCode.ContextLimit, response.Failure!.Code);
         Assert.Equal(0, handler.CallCount);
     }
 
@@ -1808,7 +1846,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
                 "model",
                 RequiredContinuationProfile()));
 
-        Assert.Equal(DocumentationScribeModelFailureCode.Unsupported, exception.Code);
+        Assert.Equal(DocumentationScribeModelFailureCode.ContextLimit, exception.Code);
     }
 
     [Fact]
@@ -1886,9 +1924,9 @@ public sealed partial class DocumentationScribeProviderTransportTests
         }
         var result = await pending.WaitAsync(TimeSpan.FromSeconds(5));
 
-        if (callerCancelled) Assert.IsType<DocumentationScribeCancelledTerminal>(result.Terminal);
+        if (callerCancelled) Assert.IsType<DocumentationScribeCancelledTerminal>(result.Stop);
         else Assert.Equal(DocumentationScribeFailureCode.Timeout,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Terminal).Code);
+            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         var expectedRequests = expiredBeforeDispatch ? 0 : 1;
         Assert.Equal(expectedRequests, result.RunEnvelope.ProviderRequestCount);
         Assert.Equal(expectedRequests, handler.CallCount);
@@ -1901,7 +1939,7 @@ public sealed partial class DocumentationScribeProviderTransportTests
             Assert.True(handler.CancellationObserved);
         }
         Assert.DoesNotContain(marker, result.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain(marker, result.Terminal.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(marker, result.Stop.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]

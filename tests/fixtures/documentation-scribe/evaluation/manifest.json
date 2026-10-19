@@ -53,9 +53,9 @@
       "coverage": ["m2-acceptance", "nested-instructions", "prompt-injection", "tool-loop", "usage-cache", "useful-proposal"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 2,
+        "providerRequestCount": 3,
         "toolRoundCount": 1,
-        "toolCallCount": 2,
+        "toolCallCount": 3,
         "proposalStatus": "validated",
         "usage": {
           "inputTokens": 220,
@@ -177,12 +177,19 @@
       "coverage": ["model-output-malformed", "proposal-validation"],
       "offlineExpectation": {
         "attemptCount": 1,
-        "providerRequestCount": 1,
+        "providerRequestCount": 3,
         "toolRoundCount": 0,
-        "toolCallCount": 1,
+        "toolCallCount": 3,
         "proposalStatus": "not-reported",
-        "usage": null,
-        "observationIds": ["model-output-malformed", "provider-request", "tool-call"]
+        "usage": {
+          "inputTokens": 0,
+          "outputTokens": 0,
+          "cachedInputTokens": 0,
+          "uncachedInputTokens": 0,
+          "reasoningTokens": null,
+          "cacheObservation": null
+        },
+        "observationIds": ["model-output-malformed", "provider-request", "tool-call", "usage-observed"]
       }
     },
     {

@@ -7,52 +7,69 @@ namespace ContractScribe.Agent.Prompting;
 
 internal static class DocumentationScribeRunResultWriter
 {
-    internal static ImmutableArray<byte> Write(
-        DocumentationScribeRequest request,
-        DocumentationScribeAttemptId attemptId,
-        ImmutableArray<DocumentationScribeEvidenceReference> dynamicEvidenceReferences,
-        ReadOnlyMemory<byte> terminalUtf8Json,
-        DocumentationScribeRunEnvelopeInput envelope)
+    internal static ImmutableArray<byte> Write(DocumentationScribeRequest request, DocumentationScribeRunResult result)
     {
-        using var terminal = JsonDocument.Parse(
-            terminalUtf8Json,
-            new JsonDocumentOptions
-            {
-                AllowTrailingCommas = false,
-                CommentHandling = JsonCommentHandling.Disallow,
-                MaxDepth = DocumentationScribeContract.MaximumJsonDepth,
-            });
         var buffer = new ArrayBufferWriter<byte>();
-        using (var writer = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = false }))
+        using (var writer = new Utf8JsonWriter(buffer))
         {
             writer.WriteStartObject();
             writer.WriteNumber("scribeRunResultVersion", DocumentationScribeContract.Version);
-            writer.WriteString("scribeRequestSha256", request.ArtifactSha256);
-            writer.WriteString("attemptId", attemptId.Value);
+            writer.WriteString("scribeRequestSha256", result.ScribeRequestSha256);
+            writer.WriteString("attemptId", result.AttemptId.Value);
             writer.WritePropertyName("dynamicEvidenceReferences");
-            writer.WriteRawValue(
-                CanonicalJson.Serialize(dynamicEvidenceReferences).AsSpan(),
-                skipInputValidation: true);
-            writer.WritePropertyName("terminal");
-            terminal.RootElement.WriteTo(writer);
-            writer.WritePropertyName("runEnvelope");
-            WriteEnvelope(writer, request, attemptId, envelope);
-            writer.WriteEndObject();
+            writer.WriteRawValue(CanonicalJson.Serialize(result.DynamicEvidenceReferences).AsSpan());
+            writer.WritePropertyName("submissions"); writer.WriteStartArray();
+            foreach (var item in result.Submissions)
+            {
+                writer.WriteStartObject(); writer.WriteString("targetId", item.TargetId);
+                writer.WriteString("contentSha256", item.ContentSha256);
+                writer.WriteString("stage", DocumentationScribeValidation.StageId(item.Stage));
+                writer.WritePropertyName("result"); writer.WriteRawValue(item.Validation.ResultUtf8Json.AsSpan()); writer.WriteEndObject();
+            }
+            writer.WriteEndArray(); writer.WritePropertyName("targetFailures");
+            writer.WriteRawValue(CanonicalJson.Serialize(result.TargetFailures).AsSpan());
+            writer.WritePropertyName("stop"); WriteStop(writer, result.Stop);
+            writer.WriteNumber("repairCount", result.RepairCount); writer.WriteNumber("nextSequence", result.NextSequence);
+            writer.WritePropertyName("coverage"); writer.WriteStartArray();
+            foreach (var row in DocumentationScribeValidation.GetCoverage(request, result))
+            {
+                writer.WriteStartObject(); writer.WriteString("targetId", row.TargetId);
+                writer.WriteString("auditOutcome", AuditVocabulary.GetId(row.AuditOutcome)); writer.WriteString("status", row.Status);
+                if (row.Stage is { } stage) writer.WriteString("stage", DocumentationScribeValidation.StageId(stage));
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray(); writer.WritePropertyName("runEnvelope");
+            WriteEnvelope(writer, request, result.AttemptId, result.RunEnvelope); writer.WriteEndObject();
         }
-
         if (buffer.WrittenCount > DocumentationScribeContract.MaximumArtifactUtf8Bytes)
-        {
             throw new JsonException("The run result is outside the product boundary.");
-        }
-
         return buffer.WrittenSpan.ToArray().ToImmutableArray();
+    }
+
+    private static void WriteStop(Utf8JsonWriter writer, DocumentationScribeTerminal stop)
+    {
+        writer.WriteStartObject(); writer.WriteString("kind", DocumentationScribeVocabulary.GetId(stop.Kind));
+        switch (stop)
+        {
+            case DocumentationScribeFinishedTerminal finished:
+                writer.WriteString("reason", finished.Reason switch
+                { DocumentationScribeFinishReason.Completed => "completed", DocumentationScribeFinishReason.Unresolved => "unresolved", DocumentationScribeFinishReason.Context => "context", _ => throw new JsonException() }); break;
+            case DocumentationScribeFailureTerminal failure:
+                writer.WriteString("code", DocumentationScribeVocabulary.GetId(failure.Code));
+                if (failure.ProviderFinalDisposition is { } disposition)
+                    writer.WriteString("providerFinalDisposition", DocumentationScribeVocabulary.GetId(disposition)); break;
+            case DocumentationScribeCancelledTerminal cancelled:
+                writer.WriteString("code", DocumentationScribeVocabulary.GetId(cancelled.Code)); break;
+            default: throw new JsonException("A session stop is required.");
+        }
+        writer.WriteEndObject();
     }
 
     private static void WriteEnvelope(
         Utf8JsonWriter writer,
         DocumentationScribeRequest request,
         DocumentationScribeAttemptId attemptId,
-        DocumentationScribeRunEnvelopeInput envelope)
+        DocumentationScribeRunEnvelope envelope)
     {
         writer.WriteStartObject();
         writer.WriteString("scribeRequestSha256", request.ArtifactSha256);
@@ -61,13 +78,16 @@ internal static class DocumentationScribeRunResultWriter
         writer.WriteString("modelConfigurationId", envelope.ModelConfigurationId);
         writer.WriteString("scribeProtocolId", envelope.ScribeProtocolId);
         writer.WriteString("toolPolicyId", request.ToolPolicyId);
-        writer.WriteString("styleProfileId", request.ExecutionStyleProfile.StyleProfileId);
+        writer.WritePropertyName("styleProfileIds");
+        writer.WriteRawValue(CanonicalJson.Serialize(envelope.StyleProfileIds).AsSpan());
         writer.WriteNumber("attemptNumber", envelope.AttemptNumber);
         writer.WriteNumber("restoredRetryableProviderFailures", envelope.RestoredRetryableProviderFailures);
         writer.WriteNumber("providerRequestCount", envelope.ProviderRequestCount);
         writer.WriteNumber("toolRoundCount", envelope.ToolRoundCount);
         writer.WriteNumber("toolCallCount", envelope.ToolCallCount);
         writer.WriteNumber("elapsedMilliseconds", envelope.ElapsedMilliseconds);
+        if (envelope.UsageCoverage is { } coverage)
+        { writer.WritePropertyName("usageCoverage"); writer.WriteRawValue(CanonicalJson.Serialize(coverage).AsSpan()); }
         if (envelope.Usage is { } usage)
         {
             writer.WritePropertyName("usage");
