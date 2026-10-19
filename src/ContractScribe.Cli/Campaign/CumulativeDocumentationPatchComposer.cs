@@ -58,7 +58,7 @@ internal static class CumulativeDocumentationPatchComposer
             session,
             planningInput,
             acceptedPlan,
-            selected.Select(pair => pair.First.TrustedProposal!).ToImmutableArray(),
+            selected.Select(pair => (pair.First.WorkItemKey, pair.First.TrustedProposal!.Evidence)).ToImmutableArray(),
             currentContextEvidence,
             cancellationToken);
         var context = new DocumentationPatchContext(
@@ -150,16 +150,16 @@ internal static class CumulativeDocumentationPatchComposer
         return currentEvidence.ToImmutable();
     }
 
-    private static ImmutableArray<DocumentationScribeEvidenceReference> RebuildEvidence(
+    internal static ImmutableArray<DocumentationScribeEvidenceReference> RebuildEvidence(
         ClassifiedRepositorySession session,
         CampaignPlanningInput planningInput,
         CampaignWorkPlan acceptedPlan,
-        ImmutableArray<CampaignTrustedProposal> proposals,
+        ImmutableArray<(string WorkItemKey, ImmutableArray<CampaignEvidenceProjection> Evidence)> sources,
         ImmutableArray<DocumentationScribeEvidenceContextFact> currentContextEvidence,
         CancellationToken cancellationToken)
     {
-        var expected = proposals
-            .SelectMany(proposal => proposal.Evidence)
+        var expected = sources
+            .SelectMany(source => source.Evidence)
             .GroupBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
             .Select(group => group.All(item => ProjectionEquals(item, group.First()))
                 ? group.First()
@@ -217,7 +217,7 @@ internal static class CumulativeDocumentationPatchComposer
                 }
             }
 
-            ValidateClaimAuthority(acceptedPlan, proposals, projection);
+            ValidateSourceClaimAuthority(acceptedPlan, sources, projection);
             result.Add(new DocumentationScribeEvidenceReference(
                 projection.EvidenceReferenceId,
                 session.RepositorySession.RepositoryContextRef,
@@ -318,15 +318,21 @@ internal static class CumulativeDocumentationPatchComposer
         CampaignWorkPlan acceptedPlan,
         ImmutableArray<CampaignTrustedProposal> proposals,
         CampaignEvidenceProjection projection)
+        => ValidateSourceClaimAuthority(acceptedPlan,
+            proposals.Select(proposal => (proposal.PatchBlock.BlockId, proposal.Evidence)).ToImmutableArray(), projection);
+
+    private static void ValidateSourceClaimAuthority(CampaignWorkPlan acceptedPlan,
+        ImmutableArray<(string WorkItemKey, ImmutableArray<CampaignEvidenceProjection> Evidence)> sources,
+        CampaignEvidenceProjection projection)
     {
-        var profiles = proposals
-            .Where(proposal => proposal.Evidence.Any(evidence => string.Equals(
+        var profiles = sources
+            .Where(source => source.Evidence.Any(evidence => string.Equals(
                 evidence.EvidenceReferenceId,
                 projection.EvidenceReferenceId,
                 StringComparison.Ordinal)))
-            .Select(proposal => acceptedPlan.WorkItems.SingleOrDefault(work => string.Equals(
+            .Select(source => acceptedPlan.WorkItems.SingleOrDefault(work => string.Equals(
                 work.WorkItemKey,
-                proposal.PatchBlock.BlockId,
+                source.WorkItemKey,
                 StringComparison.Ordinal)))
             .Select(work => work is { Targets.Length: 1 } ? work.Targets[0].StyleProfile : null)
             .ToArray();

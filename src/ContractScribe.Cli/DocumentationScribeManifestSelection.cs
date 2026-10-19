@@ -51,6 +51,23 @@ internal sealed class DocumentationScribeManifestSelection
         return new([new Member(audit, declaration)], [target.SymbolRef]);
     }
 
+    internal static DocumentationScribeManifestSelection FromAcceptedBatch(DocumentationScribeAuditAuthority audit,
+        CampaignPlanningInput planning, ImmutableArray<CampaignPlanningTargetFact> targets, ImmutableArray<SymbolRef> executable)
+    {
+        var members = targets.Select(target =>
+        {
+            var selected = audit.Select(planning.Classifications.Targets.Single(item => item.SymbolRef == target.SymbolRef));
+            if (!selected.IsCurrent || selected.Outcome != target.AuditOutcome
+                || target.Source is not CampaignPlanningRepositorySourceAuthority)
+                throw new ArgumentException("scribe.manifest.selection-invalid");
+            var declaration = new CampaignPlanningTargetAuthority(selected.Target, target.Source, target.ApplicableComponents,
+                target.OwnerSymbolRefs, false, false, false, target.StyleProfile)
+            { GroupingAuthority = target.GroupingAuthority };
+            return new Member(selected, declaration);
+        }).ToImmutableArray();
+        return new(members, executable);
+    }
+
     internal static DocumentationScribeManifestSelection Create(
         IEnumerable<(DocumentationScribeSelectedAudit Audit, DocumentationScribeStyleProfile? StyleProfile)> selected,
         ImmutableArray<SymbolRef> executableSymbols,

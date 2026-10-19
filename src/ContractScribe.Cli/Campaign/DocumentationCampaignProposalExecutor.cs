@@ -119,7 +119,11 @@ internal static class DocumentationCampaignProposalExecutor
                     "campaign.proposal.replay", work.WorkItemKey, current.Artifact);
             }
         }
-        var orderedKeys = (targetAllowance.RecoveryWorkItemKey is { } recoveryKey
+        var pausedAnchor = state.ScribeProgress?.Session is { Ended: false } session
+            && state.WorkItems.Any(work => work.WorkItemKey == session.AnchorWorkItemKey && work.PausedProviderAttempt is not null)
+            && targetAllowance.WorkItemKeys.Any(key => state.WorkItems.Single(work => work.WorkItemKey == key).Status == CampaignWorkStatus.Planned)
+                ? session.AnchorWorkItemKey : targetAllowance.RecoveryWorkItemKey;
+        var orderedKeys = (pausedAnchor is { } recoveryKey
                 ? new[] { recoveryKey } : [])
             .Concat(targetAllowance.WorkItemKeys).Distinct(StringComparer.Ordinal);
         foreach (var key in orderedKeys)
@@ -128,13 +132,14 @@ internal static class DocumentationCampaignProposalExecutor
             var planWork = input.AcceptedPlan.WorkItems.SingleOrDefault(item => item.WorkItemKey == key);
             if (work is null || planWork is null || work.AttemptDisposition != CampaignAttemptDisposition.Open
                 || !CampaignStateFactory.AllowsTarget(state, key, targetAllowance)) continue;
-            if (work.Status is CampaignWorkStatus.Accepted
+            var recoveringSession = key == pausedAnchor && work.PausedProviderAttempt is not null;
+            if (!recoveringSession && (work.Status is CampaignWorkStatus.Accepted
                 || work.Status == CampaignWorkStatus.Closed
                     && work.ClosedOutcome is not
                     {
                         Code: CampaignWorkOutcomeCode.ProviderFailure,
                         ProviderDisposition: CampaignProviderFinalDisposition.Retryable
-                    })
+                    }))
             {
                 continue;
             }
@@ -176,7 +181,9 @@ internal static class DocumentationCampaignProposalExecutor
         {
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.request.invalid");
         }
-        var manifestSelection = DocumentationScribeManifestSelection.FromAcceptedWork(selectedAudit!, selectedPlan);
+        var manifestSelection = DocumentationScribeManifestSelection.FromAcceptedBatch(auditAuthority, input.PlanningInput,
+            CampaignScribeRequestBuilder.SelectedMembers(state, input.AcceptedPlan),
+            CampaignScribeRequestBuilder.ExecutableMembers(state, input.AcceptedPlan, targetAllowance));
         if (!manifestSelection.Matches(request))
             return Outcome(DocumentationCampaignProposalOutcomeKind.HostContractError, "campaign.reservation.invalid");
         var projection = input.ExecutionCapability.PersistedProjection;
@@ -304,7 +311,13 @@ internal static class DocumentationCampaignProposalExecutor
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);
-        if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
+        if (coordinator.CheckpointCapacityStop || coordinator.ProjectionCapacityStop)
+        {
+            completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
+                lifetimeStop: false, checkpointCapacityStop: coordinator.CheckpointCapacityStop,
+                projectionCapacityStop: coordinator.ProjectionCapacityStop);
+        }
+        else if (prepared.Kind == DocumentationCampaignPreparationKind.Completion && prepared.CompletionAuthority is not null)
         {
             completed = CampaignStateReducer.CompleteProviderInvocation(
                 invocation.AcceptedCheckpoint.Artifact, prepared.CompletionAuthority,
@@ -355,6 +368,16 @@ internal static class DocumentationCampaignProposalExecutor
             CampaignProcessBoundaryHooks.Reach(proposalResult
                 ? CampaignProcessBoundaryHooks.ProposalAfterProposalReadback
                 : CampaignProcessBoundaryHooks.ProposalAfterClosedReadback);
+            if (coordinator.CheckpointCapacityStop)
+                return new(DocumentationCampaignProposalOutcomeKind.CheckpointCapacity,
+                    "campaign.checkpoint-too-large", selectedState.WorkItemKey, settled.Artifact);
+            if (coordinator.ProjectionCapacityStop)
+            {
+                if (settled.Artifact.State.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted })
+                    return FromArtifact(settled.Artifact, selectedState.WorkItemKey);
+                return new(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted,
+                    "campaign.proposal-over-bound", selectedState.WorkItemKey, settled.Artifact);
+            }
             if (coordinator.Scope.Allowance.HasCheckedStop && settled.Artifact.State.TerminalOutcome is null)
                 return new(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted,
                     "campaign.invocation-budget-exhausted", selectedState.WorkItemKey, settled.Artifact);
@@ -395,7 +418,9 @@ internal static class DocumentationCampaignProposalExecutor
     private static DocumentationCampaignProposalOutcome FromArtifact(CampaignCheckpointArtifact artifact, string workKey)
     {
         var work = artifact.State.WorkItems.Single(item => item.WorkItemKey == workKey);
-        if (work.Status == CampaignWorkStatus.ProposalComplete)
+        if (artifact.State.TerminalOutcome?.Kind is CampaignTerminalKind.Cancelled or CampaignTerminalKind.Timeout or CampaignTerminalKind.Failed)
+            return FromTerminal(artifact);
+        if (artifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete))
             return new(DocumentationCampaignProposalOutcomeKind.ProposalReady, "campaign.proposal.ready", workKey, artifact);
         if (work.ClosedOutcome is
             {
@@ -403,6 +428,8 @@ internal static class DocumentationCampaignProposalExecutor
                 ProviderDisposition: CampaignProviderFinalDisposition.Retryable
             } && work.AttemptDisposition == CampaignAttemptDisposition.Open && artifact.State.TerminalOutcome is null)
             return new(DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.provider.retryable", workKey, artifact);
+        if (artifact.State.ScribeProgress?.Session is { Ended: false } && artifact.State.TerminalOutcome is null)
+            return new(DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.session.pending", workKey, artifact);
         return FromTerminal(artifact);
     }
 

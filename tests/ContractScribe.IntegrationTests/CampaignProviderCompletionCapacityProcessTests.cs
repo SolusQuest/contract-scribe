@@ -12,7 +12,8 @@ public sealed partial class CampaignCliProcessTests
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await LoaderFixture.CreateAsync();
-        await using var server = new ProposalLoopbackServer(summaryText: new string('\u754c', 1024), includeUsage: true);
+        var generatedLine = new string('\u754c', 1000);
+        await using var server = new ProposalLoopbackServer(summaryText: generatedLine + "\n" + generatedLine, includeUsage: true);
         var outside = CreatePrivateDirectory("contract-scribe-completion-capacity");
         try
         {
@@ -77,7 +78,9 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(31, valid.LineageCharges.InputTokens.Observed);
             Assert.Equal(7, valid.LineageCharges.OutputTokens.Observed);
 
-            const int RemainingBytes = 2000;
+            // Physical history and closed member/progress completion must fit
+            // before dispatch. The larger generated body still cannot fit.
+            const int RemainingBytes = 10_000;
             const int BytesPerNamespaceScalar = 164 * 4 * 6;
             var growth = CampaignStateContract.MaximumArtifactUtf8Bytes - RemainingBytes - baseline.ExactUtf8Json.Length;
             await File.WriteAllTextAsync(sourcePath, ProviderCapacitySource(900 + growth / BytesPerNamespaceScalar,
@@ -87,15 +90,15 @@ public sealed partial class CampaignCliProcessTests
             var parsed = CampaignStateJson.Parse(bytes);
             Assert.True(parsed.IsValid, parsed.FailureCode?.ToString());
             var state = parsed.Artifact!.State;
-            Assert.Equal(4, server.RequestCount);
+            Assert.Equal(3, server.RequestCount); // Capacity stops before another finish request.
             Assert.Null(state.ActiveReservation);
             var closed = Assert.Single(state.WorkItems.Where(item => item.ClosedOutcome?.Code == CampaignWorkOutcomeCode.CompletedOverBound));
             Assert.Equal(1, closed.OuterAttemptCount);
             Assert.NotNull(closed.ClosedOutcome!.ScribeResultCommitmentSha256);
             Assert.Equal(64, closed.ClosedOutcome.ScribeResultCommitmentSha256!.Length);
             Assert.Equal(1, state.LineageCharges.OuterInvocations);
-            Assert.Equal(2, state.LineageCharges.ProviderRequests.Observed);
-            Assert.Equal(2, state.LineageCharges.ProviderRequests.TotalCharged);
+            Assert.Equal(1, state.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(1, state.LineageCharges.ProviderRequests.TotalCharged);
             Assert.Equal(31, state.LineageCharges.InputTokens.Observed);
             Assert.Equal(7, state.LineageCharges.OutputTokens.Observed);
             Assert.Equal(0, state.LineageCharges.PatchValidationInvocations);
@@ -104,7 +107,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Contains("campaign.budget-exhausted", result.StandardOutput, StringComparison.Ordinal);
             Assert.True(bytes.Length <= CampaignStateContract.MaximumArtifactUtf8Bytes);
             Assert.Equal(bytes, CampaignStateJson.Write(state));
-            Assert.DoesNotContain(new string('\u754c', 1024), await File.ReadAllTextAsync(sourcePath), StringComparison.Ordinal);
+            Assert.DoesNotContain(generatedLine, await File.ReadAllTextAsync(sourcePath), StringComparison.Ordinal);
         }
         finally { Directory.Delete(outside, recursive: true); }
     }

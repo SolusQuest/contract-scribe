@@ -40,6 +40,10 @@ internal static class CampaignProcessBoundaryHooks
     internal const string PhysicalReservationAfterReadback = "proposal.physical-reservation.after-readback";
     internal const string PhysicalSettlementAfterReadback = "proposal.physical-settlement.after-readback";
     internal const string RetryWaitAfterReadback = "proposal.retry-wait.after-readback";
+    internal const string ScribeMemberAfterReadback = "proposal.scribe-member.after-readback";
+    internal const string ScribeProgressAfterReadback = "proposal.scribe-progress.after-readback";
+    internal const string ScribeMemberReplacementScope = "proposal.scribe-member";
+    internal const string ScribeProgressReplacementScope = "proposal.scribe-progress";
 
     internal const string InitialReplacementScope = "checkpoint.initial";
     internal const string ProposalReservationReplacementScope = "proposal.reservation";
@@ -57,6 +61,12 @@ internal static class CampaignProcessBoundaryHooks
         PhysicalReservationAfterReadback,
         PhysicalSettlementAfterReadback,
         RetryWaitAfterReadback,
+        ScribeMemberAfterReadback,
+        ScribeProgressAfterReadback,
+        ScribeMemberReplacementScope + "." + InReplacement,
+        ScribeMemberReplacementScope + "." + AfterReplacementBeforeReadback,
+        ScribeProgressReplacementScope + "." + InReplacement,
+        ScribeProgressReplacementScope + "." + AfterReplacementBeforeReadback,
         PhysicalReservationReplacementScope + "." + InReplacement,
         PhysicalReservationReplacementScope + "." + AfterReplacementBeforeReadback,
         PhysicalSettlementReplacementScope + "." + InReplacement,
@@ -110,6 +120,8 @@ internal static class CampaignProcessBoundaryHooks
         PhysicalReservationReplacementScope,
         PhysicalSettlementReplacementScope,
         RetryWaitReplacementScope,
+        ScribeMemberReplacementScope,
+        ScribeProgressReplacementScope,
         InitialReplacementScope,
         ProposalReservationReplacementScope,
         ProposalResultReplacementScope,

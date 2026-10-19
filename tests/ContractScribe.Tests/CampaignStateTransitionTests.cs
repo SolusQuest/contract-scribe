@@ -46,7 +46,8 @@ public sealed class CampaignStateTransitionTests
                 new string('a', 64),
                 attemptId,
                 budget.Exposure!)
-            { ExecutionStartRevision = 1, CurrentOperationOrdinal = 1 });
+            { ExecutionStartRevision = 1, CurrentOperationOrdinal = 1 },
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress);
         var predecessor = CampaignStateJson.CreateArtifact(reserved);
         var unboundStop = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
         Assert.Equal(CampaignTransitionKind.Rejected, unboundStop.Kind);
@@ -110,7 +111,8 @@ public sealed class CampaignStateTransitionTests
             state.ConfiguredCeilings,
             state.LineageCharges,
             state.WorkItems,
-            state.Batch);
+            state.Batch,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress);
         var predecessor = CampaignStateJson.CreateArtifact(max);
 
         var result = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Timeout);
@@ -149,7 +151,8 @@ public sealed class CampaignStateTransitionTests
             basis.ConfiguredCeilings,
             basis.LineageCharges,
             [work],
-            CampaignTestBatchFixtures.Singleton(basis.Snapshot.ExecutionCommitmentSha256, work.WorkItemKey));
+            CampaignTestBatchFixtures.Singleton(basis.Snapshot.ExecutionCommitmentSha256, work.WorkItemKey),
+            dispatchObservations: basis.DispatchObservations, scribeProgress: basis.ScribeProgress);
     }
 
     private static CampaignAcceptedCheckpoint AcceptForTest(CampaignCheckpointArtifact artifact)

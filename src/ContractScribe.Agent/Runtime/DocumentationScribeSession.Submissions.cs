@@ -37,7 +37,8 @@ internal sealed partial class DocumentationScribeSession
         State.Submissions = restored.Submissions.ToImmutableDictionary(item => item.TargetId, StringComparer.Ordinal);
         State.TargetFailures = restored.TargetFailures.ToImmutableDictionary(item => item.TargetId, StringComparer.Ordinal);
         State.RestoredClosedTargets = restored.Submissions.Select(item => item.TargetId)
-            .Concat(restored.TargetFailures.Select(item => item.TargetId)).ToImmutableHashSet(StringComparer.Ordinal);
+            .Concat(restored.Stop is DocumentationScribeFinishedTerminal ? restored.TargetFailures.Select(item => item.TargetId) : [])
+            .ToImmutableHashSet(StringComparer.Ordinal);
         State.RepairCount = restored.RepairCount;
         State.NextSequence = restored.NextSequence;
         foreach (var reference in restored.DynamicEvidenceReferences)
@@ -134,7 +135,7 @@ internal sealed partial class DocumentationScribeSession
                     if (State.RestoredClosedTargets.Contains(targetId)) { Add(targetId, "scribe.submission.target-closed"); continue; }
                     if (!State.AttemptedTargets.Contains(targetId))
                     {
-                        if (State.AttemptedTargets.Count >= State.Scope.Allowance.Limits.MaximumTargets)
+                        if (State.AttemptedTargets.Count >= State.Scope.MaximumTargets)
                         { Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget); break; }
                         State.AttemptedTargets = State.AttemptedTargets.Add(targetId);
                     }
@@ -193,7 +194,7 @@ internal sealed partial class DocumentationScribeSession
                     throw new InvalidOperationException("scribe.submission.ack-over-bound");
                 if (rejected && State.RepairCount >= DocumentationScribeValidation.MaximumInvalidSubmissions)
                     Result = new DocumentationScribeTerminalReducer().CommitValidation(State, token, "scribe.repair.exhausted");
-                if (Result is null && State.AttemptedTargets.Count >= State.Scope.Allowance.Limits.MaximumTargets
+                if (Result is null && State.AttemptedTargets.Count >= State.Scope.MaximumTargets
                     && State.AttemptedTargets.All(id => State.Submissions.ContainsKey(id))
                     && State.Request.ExecutableTargetIds.Any(id => !State.Submissions.ContainsKey(id) && !State.RestoredClosedTargets.Contains(id)))
                     Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
@@ -215,6 +216,36 @@ internal sealed partial class DocumentationScribeSession
                     State.Scope.ObserveDeadline(permit);
                 Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
                 return End(false);
+            }
+            finally
+            {
+                // A completed snapshot is reported within the existing TerminalSubmission permit.
+                // No second permit, renewed deadline, transcript or Host capability enters the Agent.
+                if (submissionHost is not null && !linked.IsCancellationRequested)
+                {
+                    var progress = DocumentationScribeValidation.CreateProgressNotification(State.Request, State.AttemptId,
+                        State.RepairCount, State.NextSequence, State.AttemptedTargets, State.Submissions.Values,
+                        State.TargetFailures.Values, Result is not null, finished: Result?.Stop is DocumentationScribeFinishedTerminal);
+                    Task<DocumentationScribeProgressAcknowledgement?>? pending = null;
+                    try
+                    {
+                        pending = submissionHost.ObserveProgressAsync(progress, linked.Token).AsTask();
+                        var acknowledgement = await pending.WaitAsync(linked.Token).ConfigureAwait(false);
+                        if (acknowledgement?.ProgressSha256 != progress.ProgressSha256)
+                            Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        if (pending is not null) _ = DocumentationScribeTaskObservation.ObserveLateAsync(pending);
+                        if (!token.IsCancellationRequested && !State.CallerCancellation.IsCancellationRequested)
+                            State.Scope.ObserveDeadline(permit);
+                        Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
+                    }
+                    catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                    {
+                        Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
+                    }
+                }
             }
         }
         finally

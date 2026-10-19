@@ -69,7 +69,8 @@ public sealed partial class CampaignCliProcessTests
                                         work.Disposition.Kind == CampaignPlanningDispositionKind.Executable ? CampaignWorkStatus.Planned : CampaignWorkStatus.Closed,
                                         null, work.Disposition.Kind == CampaignPlanningDispositionKind.Terminal
                                             ? new CampaignWorkClosedOutcome(CampaignWorkOutcomeStage.Planning, CampaignWorkOutcomeCode.PlanningTerminal,
-                                                null, null, null, null, null, null, work.WorkItemKey) : null)), plan.Batch);
+                                                null, null, null, null, null, null, work.WorkItemKey) : null)), plan.Batch,
+            dispatchObservations: reference.DispatchObservations, scribeProgress: reference.ScribeProgress);
                             artifact = CampaignStateJson.CreateArtifact(state);
                             var work = plan.WorkItems.Single(item => item.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
                             request = DocumentationScribeValidation.ParseRequest(CampaignScribeRequestBuilder.Build(bundle, work, policy, configuration, token)).Request;
@@ -295,7 +296,8 @@ public sealed partial class CampaignCliProcessTests
         CampaignStateFactory.CreateValidated(state.ProductRevision, state.CampaignLineage, state.Snapshot,
             state.CheckpointRevision, state.ConfiguredCeilings, charges, workItems, state.Batch,
             state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
-            state.TerminalOutcome, state.Predecessor);
+            state.TerminalOutcome, state.Predecessor,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress);
 
     private static CampaignCheckpointArtifact ProviderCapacityLoadedReservation(CampaignCheckpointArtifact initial,
         DocumentationScribeRequest request)
@@ -313,6 +315,7 @@ public sealed partial class CampaignCliProcessTests
             new CampaignProviderReservation(work.WorkItemKey, request.ArtifactSha256, attempt, budget.Exposure!)
             { ExecutionStartRevision = state.CheckpointRevision + 1, CurrentOperationOrdinal = 1 },
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
-            state.TerminalOutcome, state.Predecessor));
+            state.TerminalOutcome, state.Predecessor,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress));
     }
 }

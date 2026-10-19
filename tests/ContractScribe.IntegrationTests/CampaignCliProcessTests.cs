@@ -816,7 +816,7 @@ public sealed partial class CampaignCliProcessTests
 
     private sealed record BoundaryVector(string Hook, string Scenario);
 
-    internal sealed class ProposalLoopbackServer : IAsyncDisposable
+    internal sealed partial class ProposalLoopbackServer : IAsyncDisposable
     {
         private readonly TcpListener listener = new(IPAddress.Loopback, 0);
         private readonly CancellationTokenSource disposal = new();
@@ -878,7 +878,9 @@ public sealed partial class CampaignCliProcessTests
                         await stream.WriteAsync(transient, disposal.Token);
                         continue;
                     }
-                    var response = CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal");
+                    var response = scenario == "shared"
+                        ? CreateSharedResponse(body)
+                        : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal");
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(headers, disposal.Token);
@@ -898,6 +900,8 @@ public sealed partial class CampaignCliProcessTests
             using var policy = JsonDocument.Parse(messages[3].GetProperty("content").GetString()!);
             using var targets = JsonDocument.Parse(messages[4].GetProperty("content").GetString()!);
             var evidence = targets.RootElement;
+            if (evidence.GetProperty("executableTargetIds").GetArrayLength() > 1)
+                return CreateSharedResponse(body, batch: false, includeUsage, usageOutputTokens, summaryText);
             if (evidence.GetProperty("progress").GetArrayLength() > 0)
                 return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), includeUsage: true, usageOutputTokens: 0, finish: true);
             var targetId = evidence.GetProperty("executableTargetIds").EnumerateArray().Single().GetString();
@@ -976,7 +980,8 @@ public sealed partial class CampaignCliProcessTests
             var unit = new JsonObject
             {
                 ["kind"] = kind,
-                ["lines"] = new JsonArray(summaryText ?? "Documents the selected contract."),
+                ["lines"] = new JsonArray((summaryText ?? "Documents the selected contract.").Split('\n')
+                    .Select(line => (JsonNode?)JsonValue.Create(line)).ToArray()),
                 ["claimCategoryId"] = "claim.behavior",
                 ["evidenceReferenceIds"] = new JsonArray(evidenceReferenceId),
             };

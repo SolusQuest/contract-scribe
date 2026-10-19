@@ -165,6 +165,9 @@ public static partial class CampaignStateJson
         writer.WriteNumber("checkpointRevision", state.CheckpointRevision);
         WriteCeilings(writer, state.ConfiguredCeilings);
         WriteCharges(writer, state.LineageCharges);
+        WriteDispatchObservations(writer, state.DispatchObservations);
+        writer.WritePropertyName("scribeProgress");
+        WriteScribeProgress(writer, state.ScribeProgress);
         writer.WritePropertyName("workItems");
         writer.WriteStartArray();
         foreach (var work in state.WorkItems)
@@ -387,6 +390,7 @@ public static partial class CampaignStateJson
         writer.WriteString("styleProfileCommitmentSha256", proposal.StyleProfileCommitmentSha256);
         writer.WriteString("toolPolicyId", proposal.ToolPolicyId);
         writer.WriteString("proposalCommitmentSha256", proposal.ProposalCommitmentSha256);
+        WriteContentUnitProvenance(writer, proposal.ContentUnitProvenance);
         writer.WriteEndObject();
     }
 
@@ -909,6 +913,8 @@ public static partial class CampaignStateJson
             "checkpointRevision",
             "configuredCeilings",
             "lineageCharges",
+            "dispatchObservations",
+            "scribeProgress",
             "workItems",
             "batch",
             "targetProgress",
@@ -946,6 +952,9 @@ public static partial class CampaignStateJson
             ParsePredecessor(root.GetProperty("predecessor")))
         {
             AcceptedCandidateOrigin = ParseOrigin(root.GetProperty("acceptedCandidateOrigin")),
+            ScribeProgress = ParseScribeProgress(root.GetProperty("scribeProgress")),
+            DispatchObservations = ParseArray(root.GetProperty("dispatchObservations"),
+                ParseDispatchObservation, CampaignStateContract.MaximumArtifactUtf8Bytes),
         };
     }
 
@@ -1184,7 +1193,8 @@ public static partial class CampaignStateJson
             "evidence",
             "styleProfileCommitmentSha256",
             "toolPolicyId",
-            "proposalCommitmentSha256");
+            "proposalCommitmentSha256",
+            "contentUnitProvenance");
         if (!DocumentationScribeAttemptId.TryParse(
                 ReadString(element, "historicalAttemptId"),
                 out var attempt))
@@ -1205,7 +1215,9 @@ public static partial class CampaignStateJson
                 CampaignStateContract.MaximumEvidenceReferences),
             ReadString(element, "styleProfileCommitmentSha256"),
             ReadString(element, "toolPolicyId"),
-            ReadString(element, "proposalCommitmentSha256"));
+            ReadString(element, "proposalCommitmentSha256"),
+            ParseArray(element.GetProperty("contentUnitProvenance"), ParseContentUnitProvenance,
+                DocumentationScribeContract.MaximumContentUnits));
     }
 
     private static DocumentationPatchBlockRequest ParsePatchBlock(JsonElement element)

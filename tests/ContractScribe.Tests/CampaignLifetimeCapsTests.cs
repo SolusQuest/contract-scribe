@@ -401,7 +401,8 @@ public sealed partial class CampaignStateContractTests
         var state = CampaignStateFactory.CreateValidated(basis.ProductRevision, basis.CampaignLineage, basis.Snapshot,
             basis.CheckpointRevision, basis.ConfiguredCeilings, basis.LineageCharges, basis.WorkItems, basis.Batch,
             null, basis.CandidateObservation, basis.CumulativeOutcome, basis.KnownCompletedOperations,
-            new(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget), basis.Predecessor);
+            new(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget), basis.Predecessor,
+            dispatchObservations: basis.DispatchObservations, scribeProgress: basis.ScribeProgress);
         var initial = CampaignStateJson.CreateArtifact(state);
         var input = WithBudget(scenario, scenario.Input.ExecutionPolicy.CampaignBudget with { MaximumElapsedMilliseconds = null });
         var result = RefreshCaps(initial, scenario, input);

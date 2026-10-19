@@ -1,6 +1,6 @@
 # Scribe context and prompt economics
 
-> **Status:** M7-S4 supplies incremental target submission, correlated Host acknowledgements, finite repair, retained progress and explicit coverage/stop outcomes over the SolusAgent runtime. Selected targets share one normal conversation with scoped evidence/style authority. Campaign durable execution remains singleton until S5. Physical accounting and original shared deadlines remain authoritative. Historical M3–M6 and CR1 evidence stays bound to its original revision.
+> **Status:** M7-S5 connects the shared fixed-manifest Runtime to durable campaign progress and cumulative M2 validation. Each accepted member and completed Runtime progress notification passes through the existing conditional checkpoint port before continuation. Fresh actions revalidate saved generated content and evidence without regenerating accepted members or charging historical provider work. Physical accounting and original shared deadlines remain authoritative. Historical M3–M6 and CR1 evidence stays bound to its original revision.
 
 ## Decision
 
@@ -91,7 +91,7 @@ Context discovery is a phase of the Scribe loop, not a handoff between two model
 
 ### Campaign runner
 
-The current campaign runner starts independent single-target runs under its current contracts. M7 selects a fixed semantic manifest and presents all selected targets to one bounded Scribe conversation. Grouping respects containing-type/direct-member, project/compilation and instruction/style boundaries; nested types are independent, groups are never skipped for quota packing, and oversized groups split to make progress. Grouping is selection and relationship metadata, not sequential runtime feeding, separate context preparation or a cache warm-up/concurrency policy.
+The campaign runner presents the complete original fixed semantic manifest to one bounded Scribe conversation, with an executable subset derived from durable progress and the current invocation allowance. Grouping respects containing-type/direct-member, project/compilation and instruction/style boundaries; nested types are independent, groups are never skipped for quota packing, and oversized groups split to make progress. Grouping is selection and relationship metadata, not sequential runtime feeding, separate context preparation or a cache warm-up/concurrency policy.
 
 ## Context layers
 
@@ -247,7 +247,7 @@ RepositoryContextSnapshot
 
 Shared reads never promote ordinary evidence into instructions or make one target's style/claims applicable to another target. Structured acceptance is separate from patch/publication/merge; foreign, duplicate or omitted targets cannot claim completed coverage. Bounded assistant continuation remains private provider-wire state, never evidence, ledger content or recovery authority.
 
-M7 does not fork agents or share a hidden parent conversation. A later Action reconstructs validated accepted results and starts a new bounded conversation for unresolved members of the original unpublished batch. It restores neither complete model history nor reasoning, and stops at resource/context limits without automatic compaction. After partial publication, the sealed subset waits for review and remaining work requires a later allowed fresh Audit. S1 supplies the complete manifest boundary and scoped tools. S4 validates incremental member results and explicit coverage within that conversation. S5 owns durable multi-target campaign acceptance and later-Action orchestration.
+M7 does not fork agents or share a hidden parent conversation. A later Action reconstructs validated accepted results and starts a new bounded conversation for unresolved members of the original unpublished batch. It restores neither complete model history nor reasoning, and stops at resource/context limits without automatic compaction. After partial publication, the sealed subset waits for review and remaining work requires a later allowed fresh Audit. S1 supplies the complete manifest boundary and scoped tools. S4 validates incremental member results and explicit coverage within that conversation. S5 supplies durable multi-target campaign acceptance and later-action reconstruction. Each saved generated field retains its exact claim category and evidence-ID association; its body has one durable truth in the patch block. The fresh Host rederives evidence and revalidates the fields against the new process-local request before supplying receipts to Runtime. Historical per-dispatch usage remains in the checkpoint, while the fresh Runtime envelope begins with zero provider requests, token usage and tool calls.
 
 ### Current S1 materialization and confinement
 

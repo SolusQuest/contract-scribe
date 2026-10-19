@@ -21,7 +21,12 @@ public static partial class CampaignStateFactory
         Require(exposure!.ElapsedMilliseconds >= 0 && exposure.ElapsedMilliseconds <= limits.MaximumElapsedMilliseconds,
             CampaignStateValidationCode.InvalidBound);
         var work = state.WorkItems.SingleOrDefault(item => item.WorkItemKey == provider.WorkItemKey);
-        Require(work is { Status: CampaignWorkStatus.Planned, PausedProviderAttempt: null }
+        Require(work is { PausedProviderAttempt: null }
+            && (work.Status == CampaignWorkStatus.Planned || state.ScribeProgress is { Session.Ended: false } progress
+                && progress.Session.AnchorWorkItemKey == work.WorkItemKey && progress.Session.AttemptId == provider.AttemptId
+                && progress.Members.Any(member => member.WorkItemKey == work.WorkItemKey
+                    && (member.ContentSha256 is not null || work.ClosedOutcome is { Code: CampaignWorkOutcomeCode.CompletedOverBound } closed
+                        && closed.AttemptId == member.AttemptId && closed.ScribeRequestSha256 == member.ScribeRequestSha256)))
             && work.OuterAttemptCount > 0 && work.AttemptDisposition == CampaignAttemptDisposition.Open
             && CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
                 state.ConfiguredCeilings.ScribeExecutionAuthority, provider.WorkItemKey, work.OuterAttemptCount) == provider.AttemptId,
@@ -63,7 +68,12 @@ public static partial class CampaignStateFactory
     private static void ValidatePausedProviderAttempt(CampaignCheckpointState state,
         CampaignWorkItemState work, CampaignPausedProviderAttempt paused)
     {
-        Require(work.Status == CampaignWorkStatus.Planned && work.OuterAttemptCount > 0
+        Require((work.Status == CampaignWorkStatus.Planned || state.ScribeProgress is { Session.Ended: false } progress
+                && progress.Session.AnchorWorkItemKey == work.WorkItemKey && progress.Session.AttemptId == paused.AttemptId
+                && progress.Members.Any(member => member.WorkItemKey == work.WorkItemKey
+                    && (member.ContentSha256 is not null || work.ClosedOutcome is { Code: CampaignWorkOutcomeCode.CompletedOverBound } closed
+                        && closed.AttemptId == member.AttemptId && closed.ScribeRequestSha256 == member.ScribeRequestSha256)))
+            && work.OuterAttemptCount > 0
             && work.AttemptDisposition == CampaignAttemptDisposition.Open
             && (state.ActiveReservation is not CampaignProviderReservation active || active.WorkItemKey != work.WorkItemKey)
             && IsSha256(paused.ScribeRequestSha256) && paused.LastDispatchOrdinal >= 0

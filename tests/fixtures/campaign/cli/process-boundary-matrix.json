@@ -48,5 +48,11 @@
   {"hook":"proposal.physical-settlement.after-readback","scenario":"retry"},
   {"hook":"proposal.retry-wait.in-replacement","scenario":"retry-wait"},
   {"hook":"proposal.retry-wait.after-replacement-before-readback","scenario":"retry-wait"},
-  {"hook":"proposal.retry-wait.after-readback","scenario":"retry-wait"}
+  {"hook":"proposal.retry-wait.after-readback","scenario":"retry-wait"},
+  {"hook":"proposal.scribe-member.in-replacement","scenario":"accepted"},
+  {"hook":"proposal.scribe-member.after-replacement-before-readback","scenario":"accepted"},
+  {"hook":"proposal.scribe-member.after-readback","scenario":"accepted"},
+  {"hook":"proposal.scribe-progress.in-replacement","scenario":"accepted"},
+  {"hook":"proposal.scribe-progress.after-replacement-before-readback","scenario":"accepted"},
+  {"hook":"proposal.scribe-progress.after-readback","scenario":"accepted"}
 ]

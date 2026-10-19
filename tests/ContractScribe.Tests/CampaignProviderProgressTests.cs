@@ -29,7 +29,8 @@ public sealed partial class CampaignStateContractTests
         var winner = changed ? CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(state.ProductRevision,
             state.CampaignLineage, state.Snapshot, state.CheckpointRevision + 1, state.ConfiguredCeilings, state.LineageCharges,
             state.WorkItems, state.Batch, state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome,
-            state.KnownCompletedOperations, state.TerminalOutcome, state.Predecessor)) : admitted.Artifact;
+            state.KnownCompletedOperations, state.TerminalOutcome, state.Predecessor,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress)) : admitted.Artifact;
         var currentStore = new TransitionCheckpointStore(winner);
         var retirementAcceptance = await CampaignCommandRunner.AcceptProviderRetirementAsync(observer.AcceptedCheckpoint!, currentStore, default);
         if (changed)

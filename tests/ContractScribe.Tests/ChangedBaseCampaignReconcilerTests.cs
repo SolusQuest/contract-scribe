@@ -235,6 +235,8 @@ public sealed class ChangedBaseCampaignReconcilerTests
         var state = scenario.Artifact.State;
         attemptId = CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
             state.ConfiguredCeilings.ScribeExecutionAuthority, WorkItemKey, 1);
+        var batch = CampaignTestBatchFixtures.Singleton(state.Snapshot.ExecutionCommitmentSha256, WorkItemKey);
+        var exposure = new CampaignProviderReservationExposure(1, 3, 2, 4, 0, 6) { CachedInputTokens = 1 };
         var reserved = CampaignStateFactory.CreateValidated(
             state.ProductRevision,
             state.CampaignLineage,
@@ -249,19 +251,12 @@ public sealed class ChangedBaseCampaignReconcilerTests
                 CampaignWorkStatus.Planned,
                 TrustedProposal: null,
                 ClosedOutcome: null)],
-            CampaignTestBatchFixtures.Singleton(state.Snapshot.ExecutionCommitmentSha256, WorkItemKey),
+            batch,
             new CampaignProviderReservation(
                 WorkItemKey,
                 Hash('8'),
                 attemptId,
-                new CampaignProviderReservationExposure(
-                    ProviderRequests: 1,
-                    InputTokens: 3,
-                    UncachedInputTokens: 2,
-                    OutputTokens: 4,
-                    CostMicrounits: 0,
-                    ElapsedMilliseconds: 6)
-                { CachedInputTokens = 1 })
+                exposure)
             {
                 ExecutionStartRevision = 1,
                 CurrentOperationOrdinal = 1,
@@ -274,7 +269,11 @@ public sealed class ChangedBaseCampaignReconcilerTests
             cumulativeOutcome: null,
             state.KnownCompletedOperations,
             terminalOutcome: null,
-            state.Predecessor);
+            state.Predecessor,
+            dispatchObservations: [new CampaignDispatchObservation(state.Snapshot.ExecutionCommitmentSha256, batch.Identity,
+                state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256, WorkItemKey, attemptId, Hash('8'),
+                1, 1, 1, 1, Hash('7'), exposure, CampaignDispatchObservationState.Reserved, null, null,
+                DocumentationScribeCacheObservation.NotReported, null, 0, null, null)], scribeProgress: state.ScribeProgress);
         var artifact = CampaignStateJson.CreateArtifact(reserved);
         var accepted = CampaignCheckpointAcceptance.AcceptCurrent(CampaignCheckpointReadResult.Found(
             artifact.ExactUtf8Json.AsSpan(),

@@ -222,7 +222,9 @@ public static partial class CampaignStateFactory
         CampaignCumulativeOutcome? cumulativeOutcome = null,
         IEnumerable<CampaignKnownCompletedOperation>? knownCompletedOperations = null,
         CampaignTerminalOutcome? terminalOutcome = null,
-        CampaignPredecessorSummary? predecessor = null)
+        CampaignPredecessorSummary? predecessor = null,
+        IEnumerable<CampaignDispatchObservation>? dispatchObservations = null,
+        CampaignScribeProgress? scribeProgress = null)
     {
         ArgumentNullException.ThrowIfNull(productRevision);
         ArgumentNullException.ThrowIfNull(campaignLineage);
@@ -253,7 +255,13 @@ public static partial class CampaignStateFactory
             boundedKnownCompletedOperations,
             terminalOutcome,
             predecessor);
-        state = state with { AcceptedCandidateOrigin = CreateSelfOrigin(state) };
+        state = state with
+        {
+            AcceptedCandidateOrigin = CreateSelfOrigin(state),
+            ScribeProgress = scribeProgress,
+            DispatchObservations = CollectBounded(dispatchObservations ?? [],
+                CampaignStateContract.MaximumArtifactUtf8Bytes, "Dispatch history exceeds the checkpoint byte bound."),
+        };
         Validate(state);
         return state;
     }
@@ -398,182 +406,89 @@ public static partial class CampaignStateFactory
     }
 
     public static CampaignTrustedProposal CreateTrustedProposal(
-        CampaignCheckpointState state,
-        CampaignScribeExecutionCapability executionCapability,
-        string styleConfigurationId,
-        JsonElement validatedStyleConfigurationProjection,
-        CampaignPlanningInput planningInput,
-        CampaignWorkPlan acceptedPlan,
-        string workItemKey,
-        DocumentationScribeRequest request,
-        DocumentationScribeRunResult result)
+        CampaignCheckpointState state, CampaignScribeExecutionCapability executionCapability,
+        string styleConfigurationId, JsonElement validatedStyleConfigurationProjection,
+        CampaignPlanningInput planningInput, CampaignWorkPlan acceptedPlan, string workItemKey,
+        DocumentationScribeRequest request, DocumentationScribeRunResult result)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(result);
-        var executionAuthority = executionCapability.Projection;
-        _ = ValidateProviderRequestAuthority(
-            state,
-            executionCapability,
-            styleConfigurationId,
-            validatedStyleConfigurationProjection,
-            planningInput,
-            acceptedPlan,
-            workItemKey,
-            request);
-        ValidateCurrentContext(
-            state,
-            executionCapability,
-            styleConfigurationId,
-            validatedStyleConfigurationProjection,
-            request.Context.InputIdentity,
-            planningInput,
-            acceptedPlan);
-        var stateWork = state.WorkItems.SingleOrDefault(item =>
-            string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
-        var planWork = acceptedPlan.WorkItems.SingleOrDefault(item =>
-            string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
-        var providerReservation = state.ActiveReservation as CampaignProviderReservation;
-        var expectedScribeSource = planWork is null || planWork.Targets.Length != 1
-            ? null
-            : CreateScribeSourceLocator(planWork.Targets[0].Source);
-        if (stateWork is null
-            || planWork is null
-            || providerReservation is null
-            || !string.Equals(providerReservation.WorkItemKey, workItemKey, StringComparison.Ordinal)
-            || !string.Equals(
-                providerReservation.ScribeRequestSha256,
-                request.ArtifactSha256,
-                StringComparison.Ordinal)
-            || providerReservation.AttemptId != result.AttemptId
-            || stateWork.Status != CampaignWorkStatus.Planned
-            || planWork.Disposition.Kind != CampaignPlanningDispositionKind.Executable
-            || planWork.Targets.Length != 1
-            || request.Manifest.Length != 1
-            || request.ExecutableTargetIds.Length != 1
-            || GetSingletonScribeSubmission(request, result)?.Result is not DocumentationScribeProposalTerminal terminal
-            || !string.Equals(
-                result.ScribeRequestSha256,
-                request.ArtifactSha256,
-                StringComparison.Ordinal)
-            || result.AttemptId != result.RunEnvelope.AttemptId
-            || request.Limits != planningInput.ExecutionPolicy.ScribeRunLimits
-            || !string.Equals(request.ToolPolicyId, executionAuthority.ToolPolicyId, StringComparison.Ordinal)
-            || !string.Equals(result.RunEnvelope.ToolPolicyId, executionAuthority.ToolPolicyId, StringComparison.Ordinal)
-            || !string.Equals(
-                result.RunEnvelope.ProviderConfigurationId,
-                executionAuthority.ProviderConfigurationId,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                result.RunEnvelope.ModelConfigurationId,
-                executionAuthority.ModelConfigurationId,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                result.RunEnvelope.ScribeProtocolId,
-                executionAuthority.ScribeProtocolId,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                result.RunEnvelope.StyleProfileIds.SingleOrDefault(),
-                request.ExecutionStyleProfile.StyleProfileId,
-                StringComparison.Ordinal)
-            || !string.Equals(
-                result.RunEnvelope.ScribeRequestSha256,
-                request.ArtifactSha256,
-                StringComparison.Ordinal)
-            || request.ExecutionTarget.Target.SymbolRef != planWork.Targets[0].SymbolRef
-            || request.ExecutionTarget.Target.SourceLocator != expectedScribeSource
-            || request.Context.TargetProfile != state.Snapshot.TargetProfile
-            || request.ExecutionTarget.AuditOutcome != planWork.Targets[0].AuditOutcome
-            || !string.Equals(
-                request.ExecutionTarget.Target.SourceSha256,
-                planWork.Targets[0].Source.ContentSha256,
-                StringComparison.Ordinal)
-            || terminal.Target.SymbolRef != request.ExecutionTarget.Target.SymbolRef
-            || terminal.Target.RepositoryContextRef != request.Context.RepositoryContextRef
-            || terminal.Target.SourceLocator != request.ExecutionTarget.Target.SourceLocator
-            || !string.Equals(
-                terminal.Target.SourceSha256,
-                request.ExecutionTarget.Target.SourceSha256,
-                StringComparison.Ordinal)
-            || !request.ExecutionTarget.Target.ApplicableComponents.SequenceEqual(
-                planWork.Targets[0].ApplicableComponents.Select(component =>
-                    new DocumentationPatchApplicableComponent(
-                        MapComponentKind(component.Kind),
-                        component.Identity,
-                        component.Name)))
-            || planWork.Targets[0].StyleProfile is null
-            || !string.Equals(
-                CreateStyleProfileCommitment(request.ExecutionStyleProfile),
-                CreateStyleProfileCommitment(planWork.Targets[0].StyleProfile!),
-                StringComparison.Ordinal))
-        {
-            throw Fail(
-                CampaignStateValidationCode.InvalidCorrelation,
-                "Trusted proposal does not match the current work authority.");
-        }
+        _ = DocumentationScribeValidation.BindValidatedRunOutcome(request, result.AttemptId, result);
+        var execution = executionCapability.Projection;
+        var envelope = result.RunEnvelope;
+        Require(envelope.ProviderConfigurationId == execution.ProviderConfigurationId
+            && envelope.ModelConfigurationId == execution.ModelConfigurationId
+            && envelope.ScribeProtocolId == execution.ScribeProtocolId && envelope.ToolPolicyId == execution.ToolPolicyId,
+            CampaignStateValidationCode.InvalidCorrelation);
+        var work = acceptedPlan.WorkItems.Single(item => item.WorkItemKey == workItemKey);
+        var member = request.Manifest.SingleOrDefault(item => work.Targets.Length == 1 && item.Target.SymbolRef == work.Targets[0].SymbolRef);
+        Require(member is not null, CampaignStateValidationCode.InvalidCorrelation);
+        var submission = result.Submissions.SingleOrDefault(item => item.TargetId == member!.TargetId
+            && item.Stage >= DocumentationScribeAcknowledgementStage.Validated);
+        Require(submission is not null, CampaignStateValidationCode.InvalidCorrelation);
+        return CreateTrustedSubmissionProposal(state, executionCapability, styleConfigurationId, validatedStyleConfigurationProjection,
+            planningInput, acceptedPlan, workItemKey, request, result.AttemptId, submission!.Validation);
+    }
 
-        var source = CreatePatchLocator(planWork.Targets[0].Source);
+    internal static CampaignTrustedProposal CreateTrustedSubmissionProposal(
+        CampaignCheckpointState state, CampaignScribeExecutionCapability executionCapability,
+        string styleConfigurationId, JsonElement validatedStyleConfigurationProjection,
+        CampaignPlanningInput planningInput, CampaignWorkPlan acceptedPlan, string workItemKey,
+        DocumentationScribeRequest request, DocumentationScribeAttemptId attemptId,
+        DocumentationScribeValidatedSubmission submission)
+    {
+        var planWork = ValidateProviderRequestAuthority(state, executionCapability, styleConfigurationId,
+            validatedStyleConfigurationProjection, planningInput, acceptedPlan, workItemKey, request);
+        var member = request.Manifest.Single(item => item.TargetId == submission.TargetId);
+        var work = state.WorkItems.Single(item => item.WorkItemKey == workItemKey);
+        var claim = state.ActiveReservation as CampaignProviderReservation;
+        var binding = state.ScribeProgress?.Members.SingleOrDefault(item => item.WorkItemKey == workItemKey);
+        Require(claim is not null && claim.AttemptId == attemptId && claim.ScribeRequestSha256 == request.ArtifactSha256
+            && work.Status == CampaignWorkStatus.Planned && work.OuterAttemptCount > 0
+            && (claim.WorkItemKey == workItemKey || binding is not null && binding.AttemptId == attemptId
+                && binding.OuterAttemptOrdinal == work.OuterAttemptCount
+                && binding.SessionAnchorWorkItemKey == claim.WorkItemKey
+                && state.ScribeProgress!.Session is { Ended: false } session
+                && session.AttemptId == attemptId && session.AdmittedWorkItemKeys.Contains(workItemKey, StringComparer.Ordinal))
+            && submission.ScribeRequestSha256 == request.ArtifactSha256
+            && request.ExecutableTargetIds.Contains(member.TargetId, StringComparer.Ordinal)
+            && member.Target.SymbolRef == planWork.Targets[0].SymbolRef
+            && submission.Result is DocumentationScribeProposalTerminal,
+            CampaignStateValidationCode.InvalidCorrelation);
+        var terminal = (DocumentationScribeProposalTerminal)submission.Result;
+        Require(terminal.Target.RepositoryContextRef == request.Context.RepositoryContextRef
+            && terminal.Target.SymbolRef == member.Target.SymbolRef
+            && terminal.Target.SourceLocator == member.Target.SourceLocator
+            && terminal.Target.SourceSha256 == member.Target.SourceSha256,
+            CampaignStateValidationCode.InvalidCorrelation);
+        var referencedIds = terminal.ContentUnits.SelectMany(unit => unit.EvidenceReferenceIds)
+            .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToImmutableArray();
+        var references = request.EvidenceReferences.Concat(submission.DynamicEvidenceReferences)
+            .GroupBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
+            .Select(group => group.Count() == 1 ? group.Single()
+                : throw Fail(CampaignStateValidationCode.InvalidReference, "Trusted proposal evidence identifiers are not unique."))
+            .Where(item => referencedIds.Contains(item.EvidenceReferenceId, StringComparer.Ordinal))
+            .OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal).ToImmutableArray();
+        Require(references.Length == referencedIds.Length
+            && references.All(item => item.RepositoryContextRef == request.Context.RepositoryContextRef),
+            CampaignStateValidationCode.InvalidReference);
+        var evidence = references.Select(ProjectEvidence).ToImmutableArray();
         var editKind = planWork.Disposition.EditCapability switch
         {
             CampaignPlanningEditCapability.Insert => DocumentationPatchEditKind.Insert,
             CampaignPlanningEditCapability.Replace => DocumentationPatchEditKind.Replace,
-            _ => throw Fail(
-                CampaignStateValidationCode.InvalidCorrelation,
-                "Executable work has no patch edit capability."),
+            _ => throw Fail(CampaignStateValidationCode.InvalidCorrelation, "Executable work has no patch edit capability."),
         };
-        var referencedIds = terminal.ContentUnits
-            .SelectMany(unit => unit.EvidenceReferenceIds)
-            .Distinct(StringComparer.Ordinal)
-            .Order(StringComparer.Ordinal)
-            .ToImmutableArray();
-        var referencedEvidence = request.EvidenceReferences
-            .Concat(result.DynamicEvidenceReferences)
-            .GroupBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
-            .Select(group => group.Count() == 1
-                ? group.Single()
-                : throw Fail(
-                    CampaignStateValidationCode.InvalidReference,
-                    "Trusted proposal evidence identifiers are not unique."))
-            .Where(item => referencedIds.Contains(item.EvidenceReferenceId, StringComparer.Ordinal))
-            .OrderBy(item => item.EvidenceReferenceId, StringComparer.Ordinal)
-            .ToImmutableArray();
-        if (referencedEvidence.Length != referencedIds.Length
-            || referencedEvidence.Any(item =>
-                item.RepositoryContextRef != request.Context.RepositoryContextRef))
-        {
-            throw Fail(
-                CampaignStateValidationCode.InvalidReference,
-                "Trusted proposal evidence closure is incomplete.");
-        }
-
-        var allEvidence = referencedEvidence.Select(ProjectEvidence).ToImmutableArray();
-
-        var block = new DocumentationPatchBlockRequest(
-            workItemKey,
-            request.ExecutionTarget.Target.SymbolRef,
-            source,
-            editKind,
-            request.ExecutionTarget.Target.ApplicableComponents,
-            terminal.PatchContent,
-            referencedIds);
-        var styleCommitment = CreateStyleProfileCommitment(request.ExecutionStyleProfile);
-        var proposalCommitment = CreateProposalCommitment(
-            state,
-            request,
-            result,
-            block,
-            allEvidence,
-            styleCommitment);
-        var proposal = new CampaignTrustedProposal(
-            request.ArtifactSha256,
-            result.AttemptId,
-            result.RunEnvelope.ProviderConfigurationId,
-            result.RunEnvelope.ModelConfigurationId,
-            result.RunEnvelope.ScribeProtocolId,
-            block,
-            allEvidence,
-            styleCommitment,
-            request.ToolPolicyId,
-            proposalCommitment);
+        var block = new DocumentationPatchBlockRequest(workItemKey, member.Target.SymbolRef,
+            CreatePatchLocator(planWork.Targets[0].Source), editKind, member.Target.ApplicableComponents,
+            terminal.PatchContent, referencedIds);
+        var style = CreateStyleProfileCommitment(member.StyleProfile!);
+        var provenance = terminal.ContentUnits.Select(unit => new CampaignContentUnitProvenance(unit.Kind,
+            unit.ComponentIdentity, unit.TypeDocumentationId, unit.ClaimCategoryId, unit.EvidenceReferenceIds)).ToImmutableArray();
+        var execution = executionCapability.Projection;
+        var commitment = CreateProposalCommitment(state, request.ArtifactSha256, attemptId,
+            execution.ProviderConfigurationId, execution.ModelConfigurationId, execution.ScribeProtocolId,
+            block, evidence, style, request.ToolPolicyId, provenance);
+        var proposal = new CampaignTrustedProposal(request.ArtifactSha256, attemptId, execution.ProviderConfigurationId,
+            execution.ModelConfigurationId, execution.ScribeProtocolId, block, evidence, style, request.ToolPolicyId, commitment, provenance);
         ValidateProposal(state, proposal, workItemKey);
         return proposal;
     }
@@ -656,7 +571,8 @@ public static partial class CampaignStateFactory
                 MapComponentKind(component.Kind),
                 component.Identity,
                 component.Name));
-        var expectedAttempt = stateWork.OuterAttemptCount > 0
+        var memberBinding = state.ScribeProgress?.Members.SingleOrDefault(member => member.WorkItemKey == stateWork.WorkItemKey);
+        var expectedAttempt = memberBinding?.ContentSha256 is not null ? memberBinding.AttemptId : stateWork.OuterAttemptCount > 0
             ? CreateScribeAttemptId(
                 state.Snapshot.ExecutionCommitmentSha256,
                 state.ConfiguredCeilings.ScribeExecutionAuthority,
@@ -758,72 +674,69 @@ public static partial class CampaignStateFactory
     }
 
     internal static CampaignPlanningWorkItem ValidateProviderRequestAuthority(
-        CampaignCheckpointState state,
-        CampaignScribeExecutionCapability executionCapability,
-        string styleConfigurationId,
-        JsonElement validatedStyleConfigurationProjection,
-        CampaignPlanningInput planningInput,
-        CampaignWorkPlan acceptedPlan,
-        string workItemKey,
-        DocumentationScribeRequest request)
+        CampaignCheckpointState state, CampaignScribeExecutionCapability executionCapability,
+        string styleConfigurationId, JsonElement validatedStyleConfigurationProjection,
+        CampaignPlanningInput planningInput, CampaignWorkPlan acceptedPlan,
+        string workItemKey, DocumentationScribeRequest request)
     {
-        ArgumentNullException.ThrowIfNull(state);
-        ArgumentNullException.ThrowIfNull(executionCapability);
-        ArgumentNullException.ThrowIfNull(planningInput);
-        ArgumentNullException.ThrowIfNull(acceptedPlan);
         ArgumentNullException.ThrowIfNull(request);
-        var executionAuthority = executionCapability.Projection;
-        ValidateExecutionAuthority(executionAuthority);
-        Require(
-            executionAuthority == state.ConfiguredCeilings.ScribeExecutionAuthority,
+        var execution = executionCapability.Projection;
+        ValidateExecutionAuthority(execution);
+        Require(execution == state.ConfiguredCeilings.ScribeExecutionAuthority,
             CampaignStateValidationCode.InvalidCorrelation);
-        ValidateCurrentContext(
-            state,
-            executionCapability,
-            styleConfigurationId,
-            validatedStyleConfigurationProjection,
-            request.Context.InputIdentity,
-            planningInput,
-            acceptedPlan);
-        var stateWork = state.WorkItems.SingleOrDefault(item =>
-            string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
-        var planWork = acceptedPlan.WorkItems.SingleOrDefault(item =>
-            string.Equals(item.WorkItemKey, workItemKey, StringComparison.Ordinal));
-        var target = planWork is { Targets.Length: 1 } ? planWork.Targets[0] : null;
-        var expectedSource = target is null ? null : CreateScribeSourceLocator(target.Source);
-        var expectedComponents = target?.ApplicableComponents.Select(component =>
-            new DocumentationPatchApplicableComponent(
-                MapComponentKind(component.Kind),
-                component.Identity,
-                component.Name));
-        Require(request.Manifest.Length == 1
-            && request.ExecutableTargetIds.Length == 1
-            && stateWork is not null
-            && planWork is not null
-            && planWork.Disposition.Kind == CampaignPlanningDispositionKind.Executable
-            && target is not null
-            && target.M3Eligible
-            && target.StyleProfile is not null
-            && state.Batch.CompleteTargets.Any(candidate => candidate.WorkItemKey == workItemKey
-                && candidate.SymbolRef == target.SymbolRef && candidate.Dispatchable
-                && state.Batch.SelectedTargetKeys.Contains(candidate.TargetKey, StringComparer.Ordinal))
-            && target.GroupingAuthority?.InstructionsSha256
-                == CampaignPlanner.CreateInstructionStackCommitment(request.ContextReferences)
-            && request.Context.TargetProfile == state.Snapshot.TargetProfile
-            && request.ExecutionTarget.AuditOutcome == target.AuditOutcome
-            && request.ExecutionTarget.Target.SymbolRef == target.SymbolRef
-            && request.ExecutionTarget.Target.SourceLocator == expectedSource
-            && string.Equals(request.ExecutionTarget.Target.SourceSha256, target.Source.ContentSha256, StringComparison.Ordinal)
-            && expectedComponents is not null
-            && request.ExecutionTarget.Target.ApplicableComponents.SequenceEqual(expectedComponents)
-            && string.Equals(
-                CreateStyleProfileCommitment(request.ExecutionStyleProfile),
-                CreateStyleProfileCommitment(target.StyleProfile),
-                StringComparison.Ordinal)
-            && request.Limits == planningInput.ExecutionPolicy.ScribeRunLimits
-            && string.Equals(request.ToolPolicyId, executionAuthority.ToolPolicyId, StringComparison.Ordinal),
+        ValidateCurrentContext(state, executionCapability, styleConfigurationId, validatedStyleConfigurationProjection,
+            request.Context.InputIdentity, planningInput, acceptedPlan);
+        Require(request.Limits == planningInput.ExecutionPolicy.ScribeRunLimits
+            && request.ToolPolicyId == execution.ToolPolicyId && request.Context.TargetProfile == state.Snapshot.TargetProfile,
             CampaignStateValidationCode.InvalidCorrelation);
-        return planWork;
+        CampaignPlanningWorkItem? requested = null;
+        foreach (var member in request.Manifest)
+        {
+            var matches = acceptedPlan.WorkItems.Where(work => work.Targets.Length == 1
+                && work.Targets[0].SymbolRef == member.Target.SymbolRef).ToArray();
+            Require(matches.Length == 1, CampaignStateValidationCode.InvalidCorrelation);
+            var work = matches[0];
+            var target = work.Targets[0];
+            var executable = request.ExecutableTargetIds.Contains(member.TargetId, StringComparer.Ordinal);
+            var components = target.ApplicableComponents.Select(component =>
+                new DocumentationPatchApplicableComponent(MapComponentKind(component.Kind), component.Identity, component.Name));
+            Require(state.Batch.CompleteTargets.Any(candidate => candidate.WorkItemKey == work.WorkItemKey
+                    && candidate.SymbolRef == target.SymbolRef && state.Batch.SelectedTargetKeys.Contains(candidate.TargetKey, StringComparer.Ordinal))
+                && member.AuditOutcome == target.AuditOutcome
+                && member.Target.SourceLocator == CreateScribeSourceLocator(target.Source)
+                && member.Target.SourceSha256 == target.Source.ContentSha256
+                && member.Target.ApplicableComponents.SequenceEqual(components)
+                && (member.StyleProfile is null ? target.StyleProfile is null : target.StyleProfile is not null
+                    && CreateStyleProfileCommitment(member.StyleProfile) == CreateStyleProfileCommitment(target.StyleProfile))
+                && target.GroupingAuthority?.InstructionsSha256 == CampaignPlanner.CreateInstructionStackCommitment(
+                    member.ContextReferenceIds.Select(id => request.ContextReferences.Single(reference => reference.ContextReferenceId == id)))
+                && (target.GroupingAuthority is null ? member.Grouping is null : member.Grouping is { } grouping
+                    && grouping.ProjectIdentity == target.GroupingAuthority.ProjectIdentity
+                    && grouping.ContainingTypeSymbolRef.CompilationContextRef == target.SymbolRef.CompilationContextRef
+                    && grouping.ContainingTypeSymbolRef.DocumentationCommentId == target.GroupingAuthority.ContainingTypeDocumentationCommentId
+                    && grouping.MemberFamilySha256 == target.GroupingAuthority.MemberFamilySha256)
+                && (!executable || work.Disposition.Kind == CampaignPlanningDispositionKind.Executable
+                    && target.M3Eligible && target.StyleProfile is not null
+                    && state.Batch.CompleteTargets.Any(candidate => candidate.WorkItemKey == work.WorkItemKey && candidate.Dispatchable)),
+                CampaignStateValidationCode.InvalidCorrelation);
+            if (work.WorkItemKey == workItemKey && (executable || state.ScribeProgress?.Session is { Ended: false } existingSession
+                && existingSession.AnchorWorkItemKey == workItemKey
+                && state.WorkItems.Any(item => item.WorkItemKey == workItemKey
+                    && (item.PausedProviderAttempt is not null || state.ActiveReservation is CampaignProviderReservation active && active.WorkItemKey == workItemKey))))
+                requested = work;
+        }
+        Require(requested is not null, CampaignStateValidationCode.InvalidCorrelation);
+        if (state.ActiveReservation is CampaignProviderReservation claim && claim.ScribeRequestSha256 == request.ArtifactSha256
+            && state.ScribeProgress is { Session: { } session } progress)
+        {
+            var admitted = request.ExecutableTargetIds.Select(id => state.Batch.CompleteTargets.Single(target =>
+                target.SymbolRef == request.Manifest.Single(member => member.TargetId == id).Target.SymbolRef).WorkItemKey).ToImmutableArray();
+            Require(session.AdmittedWorkItemKeys.SequenceEqual(admitted, StringComparer.Ordinal), CampaignStateValidationCode.InvalidCorrelation);
+            foreach (var binding in progress.Members.Where(binding => admitted.Contains(binding.WorkItemKey, StringComparer.Ordinal)))
+                Require(request.Manifest.Any(member => member.TargetId == binding.TargetId && state.Batch.CompleteTargets.Any(target =>
+                    target.WorkItemKey == binding.WorkItemKey && target.SymbolRef == member.Target.SymbolRef)), CampaignStateValidationCode.InvalidCorrelation);
+        }
+        return requested!;
     }
 
     public static DocumentationPatchRequest ReconstructPatchRequest(
@@ -1308,6 +1221,8 @@ public static partial class CampaignStateFactory
                 state.Predecessor)
             {
                 AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
+                DispatchObservations = state.DispatchObservations,
+                ScribeProgress = state.ScribeProgress,
             };
             Validate(projectionCheck);
 
@@ -1403,6 +1318,8 @@ public static partial class CampaignStateFactory
             CampaignStateValidationCode.InvalidBound);
         ValidateCeilings(state.ConfiguredCeilings);
         ValidateCharges(state.LineageCharges);
+        ValidateDispatchObservations(state);
+        ValidateScribeProgress(state);
         Require(!state.WorkItems.IsDefault, CampaignStateValidationCode.InvalidShape);
         Require(state.WorkItems.Length <= CampaignStateContract.MaximumWorkItems, CampaignStateValidationCode.InvalidBound);
         var keys = new HashSet<string>(StringComparer.Ordinal);
@@ -2010,6 +1927,7 @@ public static partial class CampaignStateFactory
                 proposal.Evidence.Select(evidence => evidence.EvidenceReferenceId),
                 StringComparer.Ordinal),
             CampaignStateValidationCode.InvalidReference);
+        ValidateContentUnitProvenance(proposal);
         RequireSha(proposal.StyleProfileCommitmentSha256);
         Require(IsOpaqueId(proposal.ToolPolicyId, 512), CampaignStateValidationCode.InvalidVocabulary);
         RequireSha(proposal.ProposalCommitmentSha256);
@@ -2025,7 +1943,8 @@ public static partial class CampaignStateFactory
                 proposal.PatchBlock,
                 proposal.Evidence,
                 proposal.StyleProfileCommitmentSha256,
-                proposal.ToolPolicyId),
+                proposal.ToolPolicyId,
+                proposal.ContentUnitProvenance),
             StringComparison.Ordinal),
             CampaignStateValidationCode.InvalidCorrelation);
     }
@@ -2369,9 +2288,17 @@ public static partial class CampaignStateFactory
             Stage: CampaignWorkOutcomeStage.Scribe,
             Code: CampaignWorkOutcomeCode.CompletedOverBound,
         });
+        var incrementalOverboundHandoff = state.KnownCompletedOperations.IsEmpty && hasScribeOverbound && state.TerminalOutcome is null
+            && state.ScribeProgress is { } progress
+            && state.WorkItems.Where(work => work.ClosedOutcome?.Code == CampaignWorkOutcomeCode.CompletedOverBound).All(work =>
+                progress.Members.Any(member => member.WorkItemKey == work.WorkItemKey && member.ContentSha256 is null
+                    && member.AttemptId == work.ClosedOutcome!.AttemptId
+                    && member.ScribeRequestSha256 == work.ClosedOutcome.ScribeRequestSha256))
+            && (state.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host }
+                || state.ActiveReservation is null && state.WorkItems.Any(work => work.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted));
         if (!state.KnownCompletedOperations.IsEmpty || hasScribeOverbound)
         {
-            Require(state.ActiveReservation is CampaignPatchReservation
+            Require(state.ActiveReservation is CampaignPatchReservation || incrementalOverboundHandoff
                 ? state.TerminalOutcome is null
                 : state.TerminalOutcome is
                 {
@@ -2483,7 +2410,7 @@ public static partial class CampaignStateFactory
         }
     }
 
-    private static CampaignEvidenceProjection ProjectEvidence(
+    internal static CampaignEvidenceProjection ProjectEvidence(
         DocumentationScribeEvidenceReference evidence) => new(
             evidence.EvidenceReferenceId,
             evidence.Subject,
@@ -2651,25 +2578,6 @@ public static partial class CampaignStateFactory
 
     private static string CreateProposalCommitment(
         CampaignCheckpointState state,
-        DocumentationScribeRequest request,
-        DocumentationScribeRunResult result,
-        DocumentationPatchBlockRequest block,
-        ImmutableArray<CampaignEvidenceProjection> evidence,
-        string styleCommitment)
-        => CreateProposalCommitment(
-            state,
-            request.ArtifactSha256,
-            result.AttemptId,
-            result.RunEnvelope.ProviderConfigurationId,
-            result.RunEnvelope.ModelConfigurationId,
-            result.RunEnvelope.ScribeProtocolId,
-            block,
-            evidence,
-            styleCommitment,
-            request.ToolPolicyId);
-
-    private static string CreateProposalCommitment(
-        CampaignCheckpointState state,
         string historicalScribeRequestSha256,
         DocumentationScribeAttemptId historicalAttemptId,
         string providerConfigurationId,
@@ -2678,7 +2586,8 @@ public static partial class CampaignStateFactory
         DocumentationPatchBlockRequest block,
         ImmutableArray<CampaignEvidenceProjection> evidence,
         string styleCommitment,
-        string toolPolicyId)
+        string toolPolicyId,
+        ImmutableArray<CampaignContentUnitProvenance> provenance)
     {
         using var writer = new CampaignPlanningCommitmentWriter(
             "contract-scribe/campaign-trusted-proposal/v1");
@@ -2727,6 +2636,16 @@ public static partial class CampaignStateFactory
             }
         }
 
+        writer.Add("content-unit-provenance.count", provenance.Length);
+        foreach (var unit in provenance)
+        {
+            writer.Add("unit.kind", DocumentationScribeVocabulary.GetId(unit.Kind));
+            writer.AddOptional("unit.component", unit.ComponentIdentity);
+            writer.AddOptional("unit.type", unit.TypeDocumentationId);
+            writer.Add("unit.claim", unit.ClaimCategoryId);
+            writer.Add("unit.evidence.count", unit.EvidenceReferenceIds.Length);
+            foreach (var id in unit.EvidenceReferenceIds) writer.Add("unit.evidence", id);
+        }
         writer.Add("style", styleCommitment);
         writer.Add("tool", toolPolicyId);
         return writer.Complete();

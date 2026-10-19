@@ -4,7 +4,7 @@
   "title": "ContractScribe Campaign State v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "workItems", "batch", "targetProgress", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
+  "required": ["campaignStateVersion", "productRevision", "campaignLineage", "snapshot", "checkpointRevision", "configuredCeilings", "lineageCharges", "dispatchObservations", "scribeProgress", "workItems", "batch", "targetProgress", "activeReservation", "candidateObservation", "acceptedCandidateOrigin", "cumulativeOutcome", "knownCompletedOperations", "terminalOutcome", "predecessor"],
   "properties": {
     "campaignStateVersion": { "const": 1 },
     "productRevision": { "$ref": "#/$defs/revision" },
@@ -13,6 +13,8 @@
     "checkpointRevision": { "$ref": "#/$defs/nonNegativeInt64" },
     "configuredCeilings": { "$ref": "#/$defs/ceilings" },
     "lineageCharges": { "$ref": "#/$defs/charges" },
+    "dispatchObservations": { "$comment": "Ordered per-dispatch history, with settlement headroom reserved before effects under the existing 4 MiB checkpoint ceiling.", "type": "array", "items": { "$ref": "#/$defs/dispatchObservation" } },
+    "scribeProgress": { "oneOf": [{"type":"null"}, {"$ref":"#/$defs/scribeProgress"}] },
     "workItems": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/work" } },
     "batch": { "$ref": "#/$defs/batch" },
     "targetProgress": { "$comment": "The count ceiling does not waive the independent 4 MiB complete canonical checkpoint admission bound.", "type": "array", "maxItems": 16384, "items": { "$ref": "#/$defs/targetProgress" } },
@@ -25,6 +27,585 @@
     "predecessor": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/predecessor" }] }
   },
   "$defs": {
+    "scribeProgress": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "batchIdentity",
+        "repairCount",
+        "nextSequence",
+        "lastProgressSha256",
+        "lastProgressRequestSha256",
+        "lastProgressAttemptId",
+        "lastProgressStopped",
+        "session",
+        "members",
+        "lastProgressFinished",
+        "targetFailures"
+      ],
+      "properties": {
+        "batchIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "repairCount": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 3
+        },
+        "nextSequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647
+        },
+        "lastProgressSha256": {
+          "$ref": "#/$defs/nullableSha"
+        },
+        "lastProgressRequestSha256": {
+          "$ref": "#/$defs/nullableSha"
+        },
+        "lastProgressAttemptId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/scribeAttemptId"
+            }
+          ]
+        },
+        "lastProgressStopped": {
+          "type": "boolean"
+        },
+        "session": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "anchorWorkItemKey",
+                "anchorOuterAttemptOrdinal",
+                "attemptId",
+                "admittedWorkItemKeys",
+                "ended"
+              ],
+              "properties": {
+                "anchorWorkItemKey": {
+                  "type": "string",
+                  "pattern": "^campaign-work\\.[0-9a-f]{64}$"
+                },
+                "anchorOuterAttemptOrdinal": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 2147483647
+                },
+                "attemptId": {
+                  "$ref": "#/$defs/scribeAttemptId"
+                },
+                "admittedWorkItemKeys": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 4096,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^campaign-work\\.[0-9a-f]{64}$"
+                  }
+                },
+                "ended": {
+                  "type": "boolean"
+                }
+              }
+            }
+          ]
+        },
+        "members": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "workItemKey",
+              "targetId",
+              "outerAttemptOrdinal",
+              "sessionAnchorWorkItemKey",
+              "sessionAnchorOuterAttemptOrdinal",
+              "attemptId",
+              "scribeRequestSha256",
+              "contentSha256",
+              "skip"
+            ],
+            "properties": {
+              "workItemKey": {
+                "type": "string",
+                "pattern": "^campaign-work\\.[0-9a-f]{64}$"
+              },
+              "targetId": {
+                "$ref": "#/$defs/scribeId"
+              },
+              "outerAttemptOrdinal": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "sessionAnchorWorkItemKey": {
+                "type": "string",
+                "pattern": "^campaign-work\\.[0-9a-f]{64}$"
+              },
+              "sessionAnchorOuterAttemptOrdinal": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 2147483647
+              },
+              "attemptId": {
+                "$ref": "#/$defs/scribeAttemptId"
+              },
+              "scribeRequestSha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "contentSha256": {
+                "$ref": "#/$defs/nullableSha"
+              },
+              "skip": {
+                "oneOf": [
+                  {
+                    "type": "null"
+                  },
+                  {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "reason",
+                      "evidence"
+                    ],
+                    "properties": {
+                      "reason": {
+                        "enum": [
+                          "scribe.skip.insufficient-evidence",
+                          "scribe.skip.unsupported-current-m3-domain"
+                        ]
+                      },
+                      "evidence": {
+                        "type": "array",
+                        "maxItems": 64,
+                        "items": {
+                          "$ref": "#/$defs/evidence"
+                        }
+                      }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "lastProgressFinished": {
+          "type": "boolean"
+        },
+        "targetFailures": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "targetId",
+              "validationCode"
+            ],
+            "properties": {
+              "targetId": {
+                "$ref": "#/$defs/scribeId"
+              },
+              "validationCode": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "^[A-Za-z0-9.-]+$"
+              }
+            }
+          }
+        }
+      }
+    },
+    "contentUnitProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind",
+        "componentIdentity",
+        "typeDocumentationId",
+        "claimCategoryId",
+        "evidenceReferenceIds"
+      ],
+      "properties": {
+        "kind": {
+          "enum": [
+            "content.summary",
+            "content.type-parameter",
+            "content.parameter",
+            "content.return",
+            "content.value",
+            "content.exception",
+            "content.remarks",
+            "content.inherit-doc"
+          ]
+        },
+        "componentIdentity": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            }
+          ]
+        },
+        "typeDocumentationId": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/exceptionTypeDocumentationId"
+            }
+          ]
+        },
+        "claimCategoryId": {
+          "$ref": "#/$defs/evidenceIdentifier"
+        },
+        "evidenceReferenceIds": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/evidenceIdentifier"
+          }
+        }
+      }
+    },
+    "dispatchObservation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "executionCommitmentSha256",
+        "batchIdentity",
+        "configurationCommitmentSha256",
+        "workItemKey",
+        "attemptId",
+        "scribeRequestSha256",
+        "executionStartRevision",
+        "dispatchOrdinal",
+        "logicalAttemptNumber",
+        "providerRequestNumber",
+        "requestCommitmentSha256",
+        "exposure",
+        "state",
+        "disposition",
+        "usage",
+        "cache",
+        "elapsedMilliseconds",
+        "retryAfterMilliseconds",
+        "charges",
+        "settlementCommitmentSha256"
+      ],
+      "properties": {
+        "executionCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "batchIdentity": {
+          "$ref": "#/$defs/sha256"
+        },
+        "configurationCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "workItemKey": {
+          "type": "string",
+          "pattern": "^campaign-work\\.[0-9a-f]{64}$"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/scribeAttemptId"
+        },
+        "scribeRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "executionStartRevision": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000000
+        },
+        "dispatchOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000000
+        },
+        "logicalAttemptNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 3
+        },
+        "providerRequestNumber": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 128
+        },
+        "requestCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "exposure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "providerRequests",
+            "inputTokens",
+            "cachedInputTokens",
+            "uncachedInputTokens",
+            "outputTokens",
+            "costMicrounits",
+            "elapsedMilliseconds"
+          ],
+          "properties": {
+            "providerRequests": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "inputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "cachedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "uncachedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "outputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            },
+            "costMicrounits": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            "elapsedMilliseconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          }
+        },
+        "state": {
+          "enum": [
+            "reserved",
+            "settled",
+            "not-sent",
+            "unknown"
+          ]
+        },
+        "disposition": {
+          "enum": [
+            null,
+            "success",
+            "retryable-failure",
+            "terminal-failure",
+            "interrupted"
+          ]
+        },
+        "usage": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "inputTokens",
+                "cachedInputTokens",
+                "uncachedInputTokens",
+                "outputTokens",
+                "reasoningTokens",
+                "currencyId",
+                "costMicrounits"
+              ],
+              "properties": {
+                "inputTokens": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    }
+                  ]
+                },
+                "cachedInputTokens": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    }
+                  ]
+                },
+                "uncachedInputTokens": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    }
+                  ]
+                },
+                "outputTokens": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    }
+                  ]
+                },
+                "reasoningTokens": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 2147483647
+                    }
+                  ]
+                },
+                "currencyId": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128
+                    }
+                  ]
+                },
+                "costMicrounits": {
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 0,
+                      "maximum": 1000000000000000
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        },
+        "cache": {
+          "enum": [
+            "cache.hit",
+            "cache.miss",
+            "cache.mixed",
+            "cache.not-reported"
+          ]
+        },
+        "elapsedMilliseconds": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 2147483647
+            }
+          ]
+        },
+        "retryAfterMilliseconds": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 300000
+        },
+        "charges": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "providerRequests",
+                "inputTokens",
+                "cachedInputTokens",
+                "uncachedInputTokens",
+                "outputTokens",
+                "reasoningTokens",
+                "costMicrounits",
+                "activeElapsedMilliseconds"
+              ],
+              "properties": {
+                "providerRequests": {
+                  "$ref": "#/$defs/charge"
+                },
+                "inputTokens": {
+                  "$ref": "#/$defs/charge"
+                },
+                "cachedInputTokens": {
+                  "$ref": "#/$defs/charge"
+                },
+                "uncachedInputTokens": {
+                  "$ref": "#/$defs/charge"
+                },
+                "outputTokens": {
+                  "$ref": "#/$defs/charge"
+                },
+                "reasoningTokens": {
+                  "$ref": "#/$defs/charge"
+                },
+                "costMicrounits": {
+                  "$ref": "#/$defs/charge"
+                },
+                "activeElapsedMilliseconds": {
+                  "$ref": "#/$defs/charge"
+                }
+              }
+            }
+          ]
+        },
+        "settlementCommitmentSha256": {
+          "$ref": "#/$defs/nullableSha"
+        }
+      }
+    },
     "targetKey": {"type":"string","pattern":"^campaign-target\\.[0-9a-f]{64}$"},
     "batch": {"type":"object","additionalProperties":false,"required":["identity","planCommitment","creationQuota","selectedTargetKeys"],"properties":{"identity":{"$ref":"#/$defs/sha256"},"planCommitment":{"$ref":"#/$defs/sha256"},"creationQuota":{"type":"integer","minimum":0,"maximum":4096},"selectedTargetKeys":{"type":"array","maxItems":4096,"uniqueItems":true,"items":{"$ref":"#/$defs/targetKey"}}}},
     "targetProgress": {"type":"object","additionalProperties":false,"required":["targetKey","workItemKey","symbolRef","batchEligible","dispatchable","groupIdentity","memberFamilyIdentity","status"],"properties":{"targetKey":{"$ref":"#/$defs/targetKey"},"workItemKey":{"type":"string","pattern":"^campaign-work\\.[0-9a-f]{64}$"},"symbolRef":{"$ref":"#/$defs/symbol"},"batchEligible":{"type":"boolean"},"dispatchable":{"type":"boolean"},"groupIdentity":{"$ref":"#/$defs/nullableSha"},"memberFamilyIdentity":{"$ref":"#/$defs/nullableSha"},"status":{"enum":["pending","deferred","active","retryable","proposal-complete","accepted-proposal","skipped","failed","suppressed","infrastructure-blocked","unsupported-current-executor","excluded"]}}},
@@ -148,8 +729,65 @@
       "properties": { "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "outerAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "candidateAttemptCount": { "type": "integer", "minimum": 0, "maximum": 1000 }, "status": { "enum": ["planned", "proposal-complete", "accepted", "closed"] }, "attemptDisposition": { "enum": ["open", "suppressed-at-attempt-limit"] }, "trustedProposal": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/proposal" }] }, "closedOutcome": { "oneOf": [{ "type": "null" }, { "$ref": "#/$defs/closed" }] }, "pausedProviderAttempt": {"oneOf":[{"type":"null"},{"$ref":"#/$defs/pausedProviderAttempt"}]} }
     },
     "proposal": {
-      "type": "object", "additionalProperties": false, "required": ["historicalScribeRequestSha256", "historicalAttemptId", "providerConfigurationId", "modelConfigurationId", "scribeProtocolId", "patchBlock", "evidence", "styleProfileCommitmentSha256", "toolPolicyId", "proposalCommitmentSha256"],
-      "properties": { "historicalScribeRequestSha256": { "$ref": "#/$defs/sha256" }, "historicalAttemptId": { "$ref": "#/$defs/scribeAttemptId" }, "providerConfigurationId": { "$ref": "#/$defs/scribeId" }, "modelConfigurationId": { "$ref": "#/$defs/scribeId" }, "scribeProtocolId": { "$ref": "#/$defs/scribeId" }, "patchBlock": { "$ref": "#/$defs/campaignPatchBlock" }, "evidence": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/evidence" } }, "styleProfileCommitmentSha256": { "$ref": "#/$defs/sha256" }, "toolPolicyId": { "$ref": "#/$defs/scribeId" }, "proposalCommitmentSha256": { "$ref": "#/$defs/sha256" } }
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "historicalScribeRequestSha256",
+        "historicalAttemptId",
+        "providerConfigurationId",
+        "modelConfigurationId",
+        "scribeProtocolId",
+        "patchBlock",
+        "evidence",
+        "styleProfileCommitmentSha256",
+        "toolPolicyId",
+        "proposalCommitmentSha256",
+        "contentUnitProvenance"
+      ],
+      "properties": {
+        "historicalScribeRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "historicalAttemptId": {
+          "$ref": "#/$defs/scribeAttemptId"
+        },
+        "providerConfigurationId": {
+          "$ref": "#/$defs/scribeId"
+        },
+        "modelConfigurationId": {
+          "$ref": "#/$defs/scribeId"
+        },
+        "scribeProtocolId": {
+          "$ref": "#/$defs/scribeId"
+        },
+        "patchBlock": {
+          "$ref": "#/$defs/campaignPatchBlock"
+        },
+        "evidence": {
+          "type": "array",
+          "maxItems": 4096,
+          "items": {
+            "$ref": "#/$defs/evidence"
+          }
+        },
+        "styleProfileCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "toolPolicyId": {
+          "$ref": "#/$defs/scribeId"
+        },
+        "proposalCommitmentSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "contentUnitProvenance": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/contentUnitProvenance"
+          }
+        }
+      }
     },
     "campaignPatchBlock": {
       "allOf": [

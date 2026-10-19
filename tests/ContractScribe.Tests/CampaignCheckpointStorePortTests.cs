@@ -187,7 +187,8 @@ public sealed class CampaignCheckpointStorePortTests
             state.LineageCharges,
             state.WorkItems,
             state.Batch,
-            terminalOutcome: null));
+            terminalOutcome: null,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress));
     }
 
     private static CampaignCheckpointArtifact CreateInitialArtifact()
