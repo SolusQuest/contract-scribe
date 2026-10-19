@@ -46,6 +46,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
     internal int RejectionStatus = 403;
     internal bool DelayResponses { get; set; }
     internal bool IncompletePagination { get; set; }
+    internal Action<Request, byte[]>? BeforeBody { get; set; }
     internal Action<Request>? Before { get; set; }
     internal Action<Request>? After { get; set; }
     private string? barrierPath;
@@ -133,6 +134,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
                 request = new(method, path, kind, method == "POST" ? ++Mutations : 0);
                 Requests.Add(request);
                 if (method == "POST" && path == "/repos/Owner/repo/pulls") PrAttempts++;
+                BeforeBody?.Invoke(request, body);
                 Before?.Invoke(request);
                 if (method == "POST" && request.Mutation == LoseAt && !LoseAfter)
                 {
@@ -356,7 +358,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         ["email"] = "synthetic@example.invalid",
         ["date"] = "2000-01-01T00:00:00Z",
     };
-    private string BuildTree(IReadOnlyDictionary<string, byte[]> files) => AddTree(files.GroupBy(p => p.Key.Split('/')[0])
+    internal string BuildTree(IReadOnlyDictionary<string, byte[]> files) => AddTree(files.GroupBy(p => p.Key.Split('/')[0])
         .Select(group => group.Key == group.First().Key
             ? new Entry(group.Key, "100644", AddBlob(group.Single().Value))
             : new Entry(group.Key, "040000", BuildTree(group.ToDictionary(p => p.Key[(group.Key.Length + 1)..], p => p.Value)))).ToArray());

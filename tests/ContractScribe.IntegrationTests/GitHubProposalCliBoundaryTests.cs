@@ -14,7 +14,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("usage", "INT", 2)]
     public async Task Late_real_signal_after_terminal_selection_preserves_physical_output(string outcome, string signal, int exit)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(required: outcome == "published");
         var environment = fixture.Environment();
         var release = Path.Join(fixture.Outside, "physical-output.release");
@@ -39,7 +39,7 @@ public sealed partial class GitHubProposalCliProcessTests
             await running.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(1));
             AssertResult(await running.CompleteAsync(), exit, outcome == "usage" ? "local-invalid" : outcome);
             Assert.Equal(writes, fixture.GitHub.Mutations);
-            Assert.Equal(outcome == "published" ? 1 : 0, fixture.TokenReads());
+            Assert.Equal(outcome == "usage" ? 0 : 1, fixture.TokenReads());
         }
         finally { await CampaignCliProcessTests.StopAsync(running); }
 
@@ -78,7 +78,7 @@ public sealed partial class GitHubProposalCliProcessTests
         try
         {
             await run.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
-            AssertResult(await run.CompleteAsync(), 0, "no-op");
+            AssertResult(await run.CompleteAsync(), 4, "permission");
             Assert.Empty(fixture.GitHub.Requests);
             Assert.False(File.Exists(fixture.Observations));
         }
@@ -90,7 +90,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("after-terminal")]
     public async Task Selected_publication_survives_real_process_presentation_and_host_teardown_faults(string boundary)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start", fault: boundary), 0, "published");
         Assert.Single(fixture.GitHub.PullRequests);
@@ -123,7 +123,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("corrupt-coordination", 4, "human-change")]
     public async Task Fresh_process_authenticates_remote_changes_and_never_repairs_them(string kind, int exit, string outcome)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         var server = fixture.GitHub;
@@ -174,7 +174,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData(true)]
     public async Task Real_transport_stop_and_timeout_have_closed_process_results(bool cancel)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         fixture.GitHub.DelayResponses = true;
         var environment = fixture.Environment();

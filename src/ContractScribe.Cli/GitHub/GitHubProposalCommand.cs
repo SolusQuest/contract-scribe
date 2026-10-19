@@ -68,7 +68,8 @@ internal static class GitHubProposalCommand
                     GitHubFailureCode.Cancelled => "cancelled",
                     GitHubFailureCode.Timeout => "timeout",
                     _ => claim is CampaignCheckpointReadKind.LeaseConflict or CampaignCheckpointReadKind.LeaseUnverifiable
-                        ? "conflict" : claim == CampaignCheckpointReadKind.Unreadable ? "host-failure" : "local-invalid",
+                        ? "conflict" : claim == CampaignCheckpointReadKind.Invalid ? "human-change"
+                        : claim == CampaignCheckpointReadKind.Unreadable ? "host-failure" : "local-invalid",
                 };
                 return GitHubProposalPresentation.Local(identity, arguments.Operation, outcome);
             }

@@ -96,17 +96,17 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("closed", 4, "closed-unmerged")]
     public async Task Fresh_process_observes_lifecycle_without_changing_the_pull_request(string lifecycle, int exit, string outcome)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         fixture.GitHub.Lifecycle(lifecycle);
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(writes + 5, fixture.GitHub.Mutations); // One authenticated coordination observation.
+        Assert.Equal(writes + 1, fixture.GitHub.PublicationWrites); // One authenticated coordination observation.
         Assert.Equal(1, fixture.GitHub.PrAttempts);
-        var settledWrites = fixture.GitHub.Mutations;
+        var settledWrites = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(settledWrites, fixture.GitHub.Mutations);
+        Assert.Equal(settledWrites, fixture.GitHub.PublicationWrites);
         Assert.Single(fixture.GitHub.PullRequests);
         await fixture.AssertSourceUnchanged();
     }

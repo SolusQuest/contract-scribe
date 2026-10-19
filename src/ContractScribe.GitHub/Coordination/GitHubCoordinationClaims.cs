@@ -44,7 +44,9 @@ internal sealed partial class GitHubCoordinationStore
         {
             CheckpointFailure = exception is GitHubCoordinationException boundary ? boundary.TransportFailure
                 : new(exception is OperationCanceledException ? GitHubFailureCode.Cancelled : GitHubFailureCode.HostFailure);
-            StopCheckpoint(); return CampaignCheckpointReadKind.Unreadable;
+            StopCheckpoint();
+            return exception is GitHubCoordinationException { TransportFailure: null } or CampaignStateValidationException
+                ? CampaignCheckpointReadKind.Invalid : CampaignCheckpointReadKind.Unreadable;
         }
         finally { checkpointGate.Release(); }
     }

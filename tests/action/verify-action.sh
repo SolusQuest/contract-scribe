@@ -986,8 +986,7 @@ prepare_real() {
     # $1 = workdir; materializes fixture + request + layer; writes plan via
     # the real prepare.py with production env names.
     local w="$1"
-    mkdir -p "$w/target repo x" "$w/checkpoint"
-    chmod 0700 "$w/checkpoint"
+    mkdir -p "$w/target repo x"
     cp -r "$FIXTURE/." "$w/target repo x/"
     (cd "$w/target repo x" && dotnet restore Fixture.slnx >/dev/null && dotnet build Fixture.slnx --no-restore >/dev/null)
     cat > "$w/layer.json" <<EOF
@@ -999,7 +998,7 @@ prepare_real() {
 EOF
     cat > "$w/request.json" <<EOF
 {"githubProposalRequestVersion":1,
- "campaignLineage":"campaign.action.test","snapshot":"snapshot.action.test",
+ "campaignLineage":"campaign.action.${w##*/}","snapshot":"snapshot.action.test",
  "checkpointStore":"coordination-ref",
  "github":{"repositoryOwner":"Owner","repositoryName":"repo",
    "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",

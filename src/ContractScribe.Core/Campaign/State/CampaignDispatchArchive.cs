@@ -40,7 +40,7 @@ public static class CampaignDispatchArchive
             state.Batch, candidateObservation: state.CandidateObservation, cumulativeOutcome: state.CumulativeOutcome,
             knownCompletedOperations: state.KnownCompletedOperations, terminalOutcome: state.TerminalOutcome,
             predecessor: state.Predecessor, scribeProgress: state.ScribeProgress, archivedDispatchPrefix: prefix);
-        return CampaignStateJson.CreateArtifact(next with { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin });
+        return CampaignStateJson.CreateArtifact(CampaignStateFactory.PreserveOrigin(predecessor, next));
     }
 
     /// <summary>Checks the exact compacted successor before accepting a new archive tip.</summary>
