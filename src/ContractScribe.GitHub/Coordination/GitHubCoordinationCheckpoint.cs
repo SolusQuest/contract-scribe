@@ -108,7 +108,10 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             else if (document.Archive is not null) throw new GitHubCoordinationException();
         }
         var reread = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
-        if (reread.Value?.Oid != current.Value.Oid) throw new GitHubCoordinationException();
+        if (reread.Value is null && reread.Failure?.Code != GitHubFailureCode.NotFound)
+            throw new GitHubCoordinationException(transportFailure: reread.Failure ?? new(GitHubFailureCode.InvalidResponse));
+        if (reread.Value?.Oid != current.Value.Oid)
+            throw new GitHubCoordinationException(transportFailure: new(GitHubFailureCode.Conflict));
         return new(current.Value.Oid, document, artifact, evidence);
     }
 
@@ -122,6 +125,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
                 : CampaignCheckpointReadResult.Found(artifact.ExactUtf8Json.AsSpan(), artifact.CheckpointRevision,
                     artifact.Sha256, remote.ArchiveEvidence);
         }
+        catch (GitHubCoordinationException exception) when (exception.TransportFailure?.Code == GitHubFailureCode.Conflict)
+        { return CampaignCheckpointReadResult.LeaseConflict(); }
         catch (GitHubCoordinationException) { return CampaignCheckpointReadResult.Invalid(); }
         finally { checkpointGate.Release(); }
     }

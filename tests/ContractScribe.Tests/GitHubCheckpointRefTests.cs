@@ -20,7 +20,7 @@ public sealed partial class GitHubCoordinationRefTests
     public async Task Disposal_waits_for_inflight_renewal_then_releases_claim_for_immediate_successor()
     {
         var remote = new CoordinationRemote();
-        using var handler = new PausedRenewalHandler(remote);
+        using var handler = new CheckpointInterceptHandler(remote);
         using var firstClient = CheckpointClient(remote, handler: handler);
         using var nextClient = CheckpointClient(remote);
         var first = GitHubCoordinationStore.Create(firstClient);
@@ -49,8 +49,54 @@ public sealed partial class GitHubCoordinationRefTests
         }
     }
 
-    private sealed class PausedRenewalHandler(CoordinationRemote remote) : HttpMessageHandler
+    [Theory]
+    [InlineData(true, false)]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    [InlineData(false, true)]
+    public async Task Coordination_ref_movement_during_read_is_a_retryable_conflict_not_corrupt_state(bool acquiring, bool disappears)
     {
+        var remote = new CoordinationRemote();
+        using var firstClient = CheckpointClient(remote);
+        var first = GitHubCoordinationStore.Create(firstClient);
+        Task? release = null;
+        try
+        {
+            Assert.Equal(CampaignCheckpointReadKind.Found, await first.AcquireCheckpointAsync(default));
+            using var handler = new CheckpointInterceptHandler(remote);
+            using var readerClient = CheckpointClient(remote, handler: handler);
+            await using var reader = GitHubCoordinationStore.Create(readerClient);
+            var reads = 0;
+            var writesAfterRelease = 0;
+            handler.BeforeRequest = async request =>
+            {
+                if (request.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)
+                    && ++reads == 2)
+                {
+                    release = first.DisposeAsync().AsTask();
+                    await release;
+                    writesAfterRelease = remote.RefMutationAttempts;
+                    if (disappears) remote.ForceCoordinationHead(null!);
+                }
+            };
+            var kind = acquiring ? await reader.AcquireCheckpointAsync(default) : (await reader.ReadAsync(default)).Kind;
+            Assert.NotNull(release);
+            Assert.Equal(CampaignCheckpointReadKind.LeaseConflict, kind);
+            Assert.Equal(writesAfterRelease, remote.RefMutationAttempts);
+            using var nextClient = CheckpointClient(remote);
+            await using var next = GitHubCoordinationStore.Create(nextClient);
+            Assert.Equal(CampaignCheckpointReadKind.Found, await next.AcquireCheckpointAsync(default));
+        }
+        finally
+        {
+            if (release is null) await first.DisposeAsync();
+            else await release;
+        }
+    }
+
+    private sealed class CheckpointInterceptHandler(CoordinationRemote remote) : HttpMessageHandler
+    {
+        internal Func<HttpRequestMessage, Task>? BeforeRequest;
         internal bool PauseNextRequest;
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -58,6 +104,7 @@ public sealed partial class GitHubCoordinationRefTests
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
+            if (BeforeRequest is { } before) await before(request);
             if (PauseNextRequest)
             {
                 PauseNextRequest = false;
