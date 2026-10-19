@@ -203,7 +203,8 @@ public static partial class DocumentationScribeValidation
             ReadBoundedInt(element, "cacheRequests", pointer, 0, requests));
     }
 
-    private static void ValidateUsageCoverage(DocumentationScribeUsageCoverage? coverage, int requests, DocumentationScribeUsageObservation? usage)
+    private static void ValidateUsageCoverage(DocumentationScribeUsageCoverage? coverage, int requests,
+        DocumentationScribeUsageObservation? usage, DocumentationScribeCacheObservation? cache, DocumentationScribeCostObservation? cost)
     {
         if (coverage is null) return; // Reporting population is explicitly unknown, not an implied complete total.
         if (new[] { coverage.InputRequests, coverage.OutputRequests, coverage.CachedInputRequests, coverage.UncachedInputRequests,
@@ -212,7 +213,9 @@ public static partial class DocumentationScribeValidation
             || coverage.OutputRequests == 0 && usage?.OutputTokens is not null
             || coverage.CachedInputRequests == 0 && usage?.CachedInputTokens is not null
             || coverage.UncachedInputRequests == 0 && usage?.UncachedInputTokens is not null
-            || coverage.ReasoningRequests == 0 && usage?.ReasoningTokens is not null)
+            || coverage.ReasoningRequests == 0 && usage?.ReasoningTokens is not null
+            || coverage.CostRequests == 0 && cost is not null
+            || coverage.CacheRequests == 0 && cache is not (null or DocumentationScribeCacheObservation.NotReported))
             throw new ArgumentException("Invalid usage reporting population.", nameof(coverage));
         if (requests > 0 && usage is not null)
         {

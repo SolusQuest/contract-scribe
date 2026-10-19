@@ -523,7 +523,7 @@ public static partial class DocumentationScribeValidation
                 diagnostic.ValidationCode));
         }
 
-        ValidateUsageCoverage(input.UsageCoverage, input.ProviderRequestCount, usage);
+        ValidateUsageCoverage(input.UsageCoverage, input.ProviderRequestCount, usage, input.Cache, cost);
         return new DocumentationScribeRunEnvelope(
             request.ArtifactSha256,
             attemptId,
@@ -1935,7 +1935,7 @@ public static partial class DocumentationScribeValidation
 
         var usageCoverage = element.TryGetProperty("usageCoverage", out var coverageElement)
             ? ParseUsageCoverage(coverageElement, pointer + "/usageCoverage", providerRequestCount) : null;
-        try { ValidateUsageCoverage(usageCoverage, providerRequestCount, usage); }
+        try { ValidateUsageCoverage(usageCoverage, providerRequestCount, usage, cache, cost); }
         catch (ArgumentException) { throw Fail("invalid-correlation", pointer + "/usageCoverage"); }
         return new DocumentationScribeRunEnvelope(
             requestSha,
