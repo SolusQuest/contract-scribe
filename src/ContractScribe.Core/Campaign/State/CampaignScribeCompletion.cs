@@ -88,10 +88,8 @@ public static partial class CampaignStateReducer
                         new DocumentationScribeFailureTerminal(DocumentationScribeFailureCode.Validation, null)));
             }
         }
-        var selected = state.Batch.SelectedTargetKeys.ToHashSet(StringComparer.Ordinal);
-        var pending = state.Batch.CompleteTargets.Where(target => selected.Contains(target.TargetKey) && target.Dispatchable)
-            .Any(target => items.Single(item => item.WorkItemKey == target.WorkItemKey) is
-            { AttemptDisposition: CampaignAttemptDisposition.Open, Status: CampaignWorkStatus.Planned });
+        var pending = session.AdmittedWorkItemKeys.Any(key => items.Single(item => item.WorkItemKey == key) is
+        { AttemptDisposition: CampaignAttemptDisposition.Open, Status: CampaignWorkStatus.Planned });
         var continuing = hostRejection is null && !failed && pending;
         if (continuing || stopped is DocumentationScribeCancelledTerminal && hostRejection is null)
             items = PreservePausedAttempt(items, claim);

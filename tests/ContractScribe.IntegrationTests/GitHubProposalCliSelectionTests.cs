@@ -10,10 +10,10 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Nonremovable_mixed_append_rejection_preserves_failure_without_publication()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true, rejectNewPath: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();

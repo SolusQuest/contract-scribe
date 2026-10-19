@@ -119,7 +119,9 @@ public sealed class DocumentationScribeProviderTransportIntegrationTests
         using var finishRequest = JsonDocument.Parse(server.RequestBodies[1]);
         var messages = finishRequest.RootElement.GetProperty("messages");
         Assert.Equal("synthetic-campaign-continuation", messages[5].GetProperty("reasoning_content").GetString());
-        Assert.Equal("call.submit", messages[6].GetProperty("tool_call_id").GetString());
+        var submissionCallId = messages[5].GetProperty("tool_calls")[0].GetProperty("id").GetString();
+        Assert.StartsWith("call.submit.", submissionCallId);
+        Assert.Equal(submissionCallId, messages[6].GetProperty("tool_call_id").GetString());
     }
 
     private const string AttemptId = "scribe-attempt.0123456789abcdef0123456789abcdef";

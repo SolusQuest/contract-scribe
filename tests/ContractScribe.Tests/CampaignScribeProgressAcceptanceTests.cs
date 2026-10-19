@@ -8,6 +8,17 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Fact]
+    public void Unfinished_shared_session_uses_the_existing_retryable_outcome_category()
+    {
+        var outcome = new DocumentationCampaignProposalOutcome(
+            DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.session.pending");
+        Assert.Equal(DocumentationCampaignProposalOutcomeKind.RetryableStop, outcome.Kind);
+        Assert.Equal("campaign.session.pending", outcome.Code);
+        Assert.Throws<ArgumentException>(() => new DocumentationCampaignProposalOutcome(
+            DocumentationCampaignProposalOutcomeKind.ProposalReady, "campaign.session.pending"));
+    }
+
     [Theory]
     [InlineData(false, false, false, false, null, null)]
     [InlineData(true, false, false, false, null, null)]
@@ -24,9 +35,13 @@ public sealed partial class CampaignStateContractTests
     [InlineData(false, false, false, false, null, "equality")]
     [InlineData(false, false, false, false, null, "overrun")]
     [InlineData(false, false, false, false, null, "elapsed")]
+    [InlineData(false, false, false, false, null, "finished-subset")]
+    [InlineData(false, false, true, false, "TimeoutNoSibling", null)]
     public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, bool projectionCapacity, string? hostRejection, string? pauseBoundary)
     {
-        var scenario = CreateProposalScenario(targetLimit: 2, maximumElapsedMilliseconds: pauseBoundary == "elapsed" || hostRejection is not null ? 1000 : null,
+        var noSibling = hostRejection == "TimeoutNoSibling";
+        var subset = pauseBoundary == "finished-subset";
+        var scenario = CreateProposalScenario(workItemCount: subset ? 3 : 2, targetLimit: subset ? 3 : 2, maximumElapsedMilliseconds: pauseBoundary == "elapsed" || hostRejection is not null ? 1000 : null,
             maximumProviderRequests: pauseBoundary == "equality" ? 1 : 100, maximumOutputTokens: pauseBoundary == "overrun" ? 7 : 100000, maximumBlocks: projectionCapacity ? 1 : 100);
         var exchanges = scenario.Plan.WorkItems.Select(work => skipSecond && work == scenario.Plan.WorkItems[1]
             ? CreateNonProposalExchange(work, scenario) : CreateScribeExchange(work, scenario: scenario)).ToArray();
@@ -42,7 +57,7 @@ public sealed partial class CampaignStateContractTests
             scribeRequestVersion = 1,
             first.Context,
             manifest = members,
-            executableTargetIds = members.Select(member => member.TargetId),
+            executableTargetIds = members.Take(2).Select(member => member.TargetId),
             first.ContextReferences,
             evidenceReferences = exchanges.SelectMany(exchange => exchange.Request.EvidenceReferences).OrderBy(reference => reference.EvidenceReferenceId, StringComparer.Ordinal),
             first.EvidenceConflicts,
@@ -91,10 +106,10 @@ public sealed partial class CampaignStateContractTests
             var validation = DocumentationScribeValidation.ValidateTargetSubmission(request, members[index].TargetId,
                 source.DynamicEvidenceReferences, source.ResultUtf8Json.AsMemory());
             Assert.NotNull(validation.Submission);
-            if (unconfirmedHost && index == 0)
+            if (unconfirmedHost && index == (noSibling ? 1 : 0))
             {
                 var rejectedKind = hostRejection is null ? (CampaignProviderCompletionKind?)null
-                    : Enum.Parse<CampaignProviderCompletionKind>(hostRejection);
+                    : Enum.Parse<CampaignProviderCompletionKind>(noSibling ? "Timeout" : hostRejection);
                 if (rejectedKind is { } kind)
                 {
                     Assert.True(invocation.TryRecordHostRejection(validation.Submission, kind));
@@ -106,12 +121,15 @@ public sealed partial class CampaignStateContractTests
                 receipts.Add(DocumentationScribeValidation.AcknowledgeSubmission(validation.Submission,
                     new(request.ArtifactSha256, members[index].TargetId, validation.Submission.ContentSha256,
                         DocumentationScribeAcknowledgementStage.Received)));
-                var stoppedProgress = DocumentationScribeValidation.CreateProgressNotification(request, attempt, 0, 1,
-                    members.Select(member => member.TargetId), receipts, [], true);
-                var observedStop = CampaignStateReducer.AcceptScribeProgress(invocation, stoppedProgress);
-                Assert.Equal(CampaignTransitionKind.Applied, observedStop.Kind);
-                Assert.True(await coordinator.AcceptHostProgressAsync(observedStop, default));
-                Assert.Null(invocation.AcceptedCheckpoint.Artifact.State.ScribeProgress!.Members[0].ContentSha256);
+                if (!noSibling)
+                {
+                    var stoppedProgress = DocumentationScribeValidation.CreateProgressNotification(request, attempt, 0, 1,
+                        request.ExecutableTargetIds, receipts, [], true);
+                    var observedStop = CampaignStateReducer.AcceptScribeProgress(invocation, stoppedProgress);
+                    Assert.Equal(CampaignTransitionKind.Applied, observedStop.Kind);
+                    Assert.True(await coordinator.AcceptHostProgressAsync(observedStop, default));
+                }
+                Assert.Null(invocation.AcceptedCheckpoint.Artifact.State.ScribeProgress!.Members.SingleOrDefault(member => member.TargetId == members[index].TargetId)?.ContentSha256);
                 Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
                 var execution = scenario.ExecutionAuthority.Projection;
                 var result = DocumentationScribeValidation.CreateSessionResult(request, attempt,
@@ -125,7 +143,14 @@ public sealed partial class CampaignStateContractTests
                 var completed = CampaignStateReducer.CompleteProviderInvocation(invocation.AcceptedCheckpoint.Artifact, completion!,
                     scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
                 Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
-                Assert.Equal(CampaignWorkStatus.ProposalComplete, completed.Artifact.State.WorkItems[1].Status);
+                if (!noSibling)
+                    Assert.Equal(CampaignWorkStatus.ProposalComplete, completed.Artifact.State.WorkItems[1].Status);
+                else
+                {
+                    Assert.All(completed.Artifact.State.WorkItems, work => Assert.Null(work.TrustedProposal));
+                    Assert.True(completed.Artifact.State.ScribeProgress!.Session!.Ended);
+                    Assert.Null(invocation.AcceptedCheckpoint.Artifact.State.ScribeProgress!.LastProgressSha256);
+                }
                 Assert.Equal(rejectedKind switch
                 {
                     CampaignProviderCompletionKind.ProposalInvalid => CampaignWorkOutcomeCode.ValidationFailure,
@@ -134,7 +159,7 @@ public sealed partial class CampaignStateContractTests
                     CampaignProviderCompletionKind.CallerCancelled => CampaignWorkOutcomeCode.CancelledByCaller,
                     CampaignProviderCompletionKind.ShutdownCancelled => CampaignWorkOutcomeCode.CancelledByShutdown,
                     _ => CampaignWorkOutcomeCode.InternalFailure,
-                }, completed.Artifact.State.WorkItems[0].ClosedOutcome!.Code);
+                }, completed.Artifact.State.WorkItems[index].ClosedOutcome!.Code);
                 if (rejectedKind is { } consumedKind)
                 {
                     Assert.False(invocation.TryRecordHostRejection(validation.Submission, consumedKind));
@@ -148,7 +173,7 @@ public sealed partial class CampaignStateContractTests
                         _ => CampaignTerminalReason.Host,
                     }, completed.Artifact.State.TerminalOutcome!.Reason);
                 }
-                Assert.Null(completed.Artifact.State.WorkItems[0].TrustedProposal);
+                Assert.Null(completed.Artifact.State.WorkItems[index].TrustedProposal);
                 Assert.Equal(charges.ProviderRequests, completed.Artifact.State.LineageCharges.ProviderRequests);
                 Assert.Equal(charges.InputTokens, completed.Artifact.State.LineageCharges.InputTokens);
                 Assert.Null(completed.Artifact.State.ActiveReservation);
@@ -158,7 +183,7 @@ public sealed partial class CampaignStateContractTests
             Assert.Equal(CampaignTransitionKind.Applied, transition.Kind);
             Assert.True(await coordinator.AcceptHostProgressAsync(transition, default));
             var state = invocation.AcceptedCheckpoint.Artifact.State;
-            if (pauseBoundary is not null)
+            if (pauseBoundary is "equality" or "overrun" or "elapsed")
             {
                 Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
                 var paused = CampaignStateReducer.PauseProviderInvocation(invocation,
@@ -258,11 +283,40 @@ public sealed partial class CampaignStateContractTests
             }
         }
         var progress = DocumentationScribeValidation.CreateProgressNotification(request, attempt, 1, 2,
-            members.Select(member => member.TargetId), receipts, [], false);
+            request.ExecutableTargetIds, receipts, [], false);
         var recorded = CampaignStateReducer.AcceptScribeProgress(invocation, progress);
         Assert.Equal(CampaignTransitionKind.Applied, recorded.Kind);
         Assert.True(await coordinator.AcceptHostProgressAsync(recorded, default));
         Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
+        if (subset)
+        {
+            var execution = scenario.ExecutionAuthority.Projection;
+            var result = DocumentationScribeValidation.CreateSessionResult(request, attempt,
+                new DocumentationScribeFinishedTerminal(DocumentationScribeFinishReason.Unresolved),
+                new(execution.ProviderConfigurationId, execution.ModelConfigurationId, execution.ScribeProtocolId,
+                    1, 1, 0, 1, 0, null, null, null, []), receipts.ToImmutable(), [], 1, 2);
+            var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(request, attempt, result);
+            var registrar = invocation.TryCreateCompletionRegistrar();
+            Assert.NotNull(registrar);
+            Assert.True(registrar.TryRegister(CampaignProviderCompletionKind.Ordinary, outcome, 0, out var completion));
+            var completed = CampaignStateReducer.CompleteProviderInvocation(invocation.AcceptedCheckpoint.Artifact, completion!,
+                scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
+            Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+            Assert.True(completed.Artifact.State.ScribeProgress!.Session!.Ended);
+            Assert.All(completed.Artifact.State.WorkItems.Take(2), work =>
+            {
+                Assert.Equal(CampaignWorkStatus.ProposalComplete, work.Status);
+                Assert.Null(work.PausedProviderAttempt);
+            });
+            Assert.Equal(CampaignWorkStatus.Planned, completed.Artifact.State.WorkItems[2].Status);
+            Assert.Equal(0, completed.Artifact.State.WorkItems[2].OuterAttemptCount);
+            Assert.Null(completed.Artifact.State.TerminalOutcome);
+            Assert.Equal(charges.ProviderRequests, completed.Artifact.State.LineageCharges.ProviderRequests);
+            Assert.Equal(charges.InputTokens, completed.Artifact.State.LineageCharges.InputTokens);
+            Assert.Null(completed.Artifact.State.ActiveReservation);
+            Assert.True(CampaignStateJson.Parse(completed.Artifact.ExactUtf8Json.AsMemory()).IsValid);
+            return;
+        }
         var artifact = invocation.AcceptedCheckpoint.Artifact;
         using var schemaDocument = System.Text.Json.JsonDocument.Parse(artifact.ExactUtf8Json.AsMemory());
         var schemaResult = EvaluateCampaignSchema(schemaDocument.RootElement);

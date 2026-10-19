@@ -48,6 +48,7 @@ internal sealed class DocumentationCampaignProposalOutcome
             or (DocumentationCampaignProposalOutcomeKind.ProposalReady, "campaign.proposal.replay")
             or (DocumentationCampaignProposalOutcomeKind.ProposalReady, "campaign.proposal.ready")
             or (DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.provider.retryable")
+            or (DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.session.pending")
             or (DocumentationCampaignProposalOutcomeKind.TerminalStop, "campaign.terminal")
             or (DocumentationCampaignProposalOutcomeKind.Cancelled, "campaign.cancelled")
             or (DocumentationCampaignProposalOutcomeKind.TimedOut, "campaign.timed-out")

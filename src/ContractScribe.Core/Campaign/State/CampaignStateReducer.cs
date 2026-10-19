@@ -539,7 +539,9 @@ public static partial class CampaignStateReducer
             }
 
             if (state.ScribeProgress is { } recorded
-                && (recorded.LastProgressSha256 is not null || outcome!.RunResult.Submissions.Any(item => item.Stage >= DocumentationScribeAcknowledgementStage.DurablyRecorded)))
+                && (recorded.LastProgressSha256 is not null || outcome!.Request.Manifest.Length > 1
+                    || invocationAuthority.HostRejection is not null
+                    || outcome.RunResult.Submissions.Any(item => item.Stage >= DocumentationScribeAcknowledgementStage.DurablyRecorded)))
                 return CompleteRecordedScribeProgress(predecessor, completionAuthority, reservation);
 
             var ordinaryOutcome = outcome!;

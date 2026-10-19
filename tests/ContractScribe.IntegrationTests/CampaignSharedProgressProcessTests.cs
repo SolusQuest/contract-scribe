@@ -76,10 +76,10 @@ public sealed partial class CampaignCliProcessTests
         else Assert.Equal("target.first", arguments.RootElement.GetProperty("scopeId").GetString());
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Shared_accepted_members_reconstruct_in_a_fresh_process_without_regeneration_or_historical_recharge()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         var firstPath = Path.Join(fixture.Root, "App", "App.cs");
         var otherPath = Path.Join(fixture.Root, "App", "Other.cs");

@@ -7,12 +7,12 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class CampaignCliProcessTests
 {
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task A_single_executable_member_reaches_M2_after_one_shared_request_and_restores_without_regeneration(bool includeUsage)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         await SetSingleWorkItemSourceAsync(fixture.Root);
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);

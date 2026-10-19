@@ -36,12 +36,12 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Killed_accepted_only_or_mixed_append_reservation_uses_fresh_retry_and_preserves_accounting(bool append)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
@@ -131,12 +131,12 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(new[] { "blobs", "cas", "commits", "pulls", "trees" }, covered.Order(StringComparer.Ordinal));
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Same_snapshot_append_accepts_new_work_and_its_fresh_process_retry_is_zero_write(bool newPath)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: newPath);
         AssertResult(await fixture.Run("start"), 0, "published");
         var first = fixture.Checkpoint();
@@ -159,14 +159,14 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false, false)]
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
     public async Task Independent_checkpoint_copies_reach_the_same_remote_race_without_duplicate_publication(bool differentOperation, bool append)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: append);
         if (append)
         {
@@ -209,7 +209,7 @@ public sealed partial class GitHubProposalCliProcessTests
     private static async Task WriteCheckpointCopy(string path, byte[] bytes)
     {
         await File.WriteAllBytesAsync(path, bytes);
-        if (OperatingSystem.IsLinux()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
     private static async Task ConfigureAppend(Fixture fixture)
