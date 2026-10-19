@@ -2,31 +2,46 @@ using System.Text.Json;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
-public sealed class GitHubProposalHttpLoss0Tests
+public sealed class GitHubProposalHttpLoss0BeforeTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes(bool after) =>
-        GitHubProposalHttpLossScenario.RunAsync(after, 0);
+    [Fact]
+    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes() =>
+        GitHubProposalHttpLossScenario.RunAsync(false, 0);
 }
 
-public sealed class GitHubProposalHttpLoss1Tests
+public sealed class GitHubProposalHttpLoss0AfterTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes(bool after) =>
-        GitHubProposalHttpLossScenario.RunAsync(after, 1);
+    [Fact]
+    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes() =>
+        GitHubProposalHttpLossScenario.RunAsync(true, 0);
 }
 
-public sealed class GitHubProposalHttpLoss2Tests
+public sealed class GitHubProposalHttpLoss1BeforeTests
 {
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes(bool after) =>
-        GitHubProposalHttpLossScenario.RunAsync(after, 2);
+    [Fact]
+    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes() =>
+        GitHubProposalHttpLossScenario.RunAsync(false, 1);
+}
+
+public sealed class GitHubProposalHttpLoss1AfterTests
+{
+    [Fact]
+    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes() =>
+        GitHubProposalHttpLossScenario.RunAsync(true, 1);
+}
+
+public sealed class GitHubProposalHttpLoss2BeforeTests
+{
+    [Fact]
+    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes() =>
+        GitHubProposalHttpLossScenario.RunAsync(false, 2);
+}
+
+public sealed class GitHubProposalHttpLoss2AfterTests
+{
+    [Fact]
+    public Task Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes() =>
+        GitHubProposalHttpLossScenario.RunAsync(true, 2);
 }
 
 // Separate classes use the existing xUnit workers in a full run; CI assigns each

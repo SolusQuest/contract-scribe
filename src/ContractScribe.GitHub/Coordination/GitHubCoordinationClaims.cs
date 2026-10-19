@@ -177,11 +177,13 @@ internal sealed partial class GitHubCoordinationStore
 
     public async ValueTask DisposeAsync()
     {
-        checkpointLifetime.Cancel();
-        if (renewal is not null) await renewal.ConfigureAwait(false);
+        // Let an in-flight renewal finish before stopping its loop. Cancelling
+        // its transport read/write would fence this owner and skip normal release.
         await checkpointGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            checkpointLifetime.Cancel();
+            if (renewal is not null) await renewal.ConfigureAwait(false);
             if (!checkpointStopped && invocationOwner is not null)
             {
                 using var deadline = new CancellationTokenSource(RecoveryTimeout);

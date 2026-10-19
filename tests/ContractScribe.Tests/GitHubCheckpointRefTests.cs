@@ -7,13 +7,68 @@ namespace ContractScribe.Tests;
 
 public sealed partial class GitHubCoordinationRefTests
 {
-    internal static GitHubApiClient CheckpointClient(CoordinationRemote remote, string lineage = "campaign-1")
+    internal static GitHubApiClient CheckpointClient(CoordinationRemote remote, string lineage = "campaign-1", HttpMessageHandler? handler = null)
     {
         using var registration = (IDisposable)typeof(GitHubTransportTestHook)
             .GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
-            .Invoke(null, [Origin, new RemoteHandler(remote), 30_000])!;
+            .Invoke(null, [Origin, handler ?? new RemoteHandler(remote), 30_000])!;
         return GitHubApiClient.CreateCheckpoint(ValidatedGitHubCheckpointAuthority.Create(
             "Owner", "repo", "refs/heads/main", lineage, Oid('1')), GitHubTransportTestHook.Placeholder);
+    }
+
+    [Fact]
+    public async Task Disposal_waits_for_inflight_renewal_then_releases_claim_for_immediate_successor()
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new PausedRenewalHandler(remote);
+        using var firstClient = CheckpointClient(remote, handler: handler);
+        using var nextClient = CheckpointClient(remote);
+        var first = GitHubCoordinationStore.Create(firstClient);
+        Task? disposal = null;
+        try
+        {
+            Assert.Equal(CampaignCheckpointReadKind.Found, await first.AcquireCheckpointAsync(default));
+            handler.PauseNextRequest = true;
+            await handler.Entered.Task.WaitAsync(TimeSpan.FromSeconds(75));
+            disposal = first.DisposeAsync().AsTask();
+            // Normal shutdown must not cancel an already-dispatched renewal read
+            // and convert it into a fail-closed lease loss that skips release.
+            await Task.Delay(100);
+            Assert.False(handler.Cancelled.Task.IsCompleted);
+            handler.Release.TrySetResult();
+            await disposal.WaitAsync(TimeSpan.FromSeconds(10));
+            await using var next = GitHubCoordinationStore.Create(nextClient);
+            Assert.Equal(CampaignCheckpointReadKind.Found, await next.AcquireCheckpointAsync(default));
+            Assert.Equal(2, FixtureDocuments[remote.CoordinationHead!].Claim!.Epoch);
+        }
+        finally
+        {
+            handler.Release.TrySetResult();
+            if (disposal is null) await first.DisposeAsync();
+            else await disposal;
+        }
+    }
+
+    private sealed class PausedRenewalHandler(CoordinationRemote remote) : HttpMessageHandler
+    {
+        internal bool PauseNextRequest;
+        internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal readonly TaskCompletionSource Cancelled = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
+        {
+            if (PauseNextRequest)
+            {
+                PauseNextRequest = false;
+                Entered.TrySetResult();
+                try { await Release.Task.WaitAsync(token); }
+                catch (OperationCanceledException) { Cancelled.TrySetResult(); throw; }
+            }
+            var response = await remote.Reply(request);
+            if (remote.IncludeServerDate) response.Headers.Date = remote.ServerNow;
+            return response;
+        }
     }
 
     [Fact]
