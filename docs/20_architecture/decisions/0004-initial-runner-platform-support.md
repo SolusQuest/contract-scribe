@@ -23,11 +23,22 @@ The initial runner matrix is:
 | GitHub-hosted Ubuntu x64 (`ubuntu-latest`) | Sole required M1-M5 pre-release source-validation runner and planned initial M6 supported-runner target; not yet a released or release-qualified support claim |
 | WSL2 on a Windows host | Suggested local Linux route; not independently qualified and not native-Windows evidence |
 | Native GitHub-hosted Windows | Unsupported and non-gating; it may happen to run but carries no CI, maintenance, compatibility, or support obligation |
-| macOS, ARM64, other Linux environments, containers, and self-hosted runners | Unvalidated and outside the initial matrix |
+| Native macOS arm64 local development | Bounded local feedback on qualified APFS storage; the boundary below does not add a required CI cell or released support claim |
+| Other macOS architectures, other Linux environments, containers, and self-hosted runners | Unvalidated and outside the initial matrix |
 
 M1 through M5 use GitHub-hosted Ubuntu x64 as the sole required repository CI and pre-release production-validation platform. `ubuntu-latest` is a moving GitHub-hosted runner label. Record its resolved image and relevant toolchain facts when interpreting performance or platform evidence, but do not require exact image-build equality for ordinary pre-release comparisons. Refresh evidence when a demonstrated relevant environment change invalidates its claim, not automatically for every hosted-image rollout.
 
 M6 may claim released Ubuntu support only after one exact release candidate passes the selected payload acquisition and integrity path, Action-host and wrapper/payload composition, a supported target-repository consumer smoke, release controls, and maintainer approval. Ordinary source or candidate CI cannot substitute for those gates.
+
+## macOS local development amendment (2026-10-19)
+
+Issue [#251](https://github.com/SolusQuest/contract-scribe/issues/251) adds native macOS arm64 feedback for the source CLI, context and repository reads, deterministic candidate workspaces, atomic result publication, campaign checkpoints, and owned-process observation. This is a local developer boundary. Required exact-head Ubuntu x64 CI, Action runner policy, release controls, public contracts, and campaign state and recovery semantics retain their existing authority.
+
+The Darwin path requires qualified local APFS volumes with the required identity and directory metadata capabilities. Source storage and private staging/state storage qualify separately. Read-only source access can use an APFS mount that ignores ownership. Private candidate and checkpoint storage requires enforced ownership, the current effective user, exact private modes, and no extended ACL. Unknown storage, identities, returned metadata, or topology fail closed. Temporary paths must have physical, link-free ancestors; `TMPDIR=/private/tmp` supplies the qualified local route without changing host settings.
+
+The accepted Darwin boundary permits pathname lookup and opening a descriptor for identity inspection before authorization. That lookup may cross a mounted or firmlink entry and may block in the kernel. It is not the Linux `RESOLVE_NO_XDEV` guarantee. Before reading file bytes, enumerating a child's contents, or mutating an existing object, the adapter verifies the actual retained descriptor against the qualified root, original retained ancestors, exact stored name, physical volume and file identity, parent relationship, type, links, and independent directory mount status. A bulk enumeration's default zero mount status is insufficient. APFS namespace aliases use physical volume UUID and object-ID ancestry, including candidate-location checks before exclusive creation. Revalidation and freshness checks remain mandatory.
+
+Native observations on macOS 27 arm64 with .NET SDK 10.0.302/runtime 10.0.10 cover separate source and private temporary APFS volumes, including ownership-ignored source storage. These are dated local observations, not certification of every macOS release or filesystem. Linux-specific mount-namespace and `/proc` tests remain explicitly platform-specific; a skip is not evidence that the corresponding native invariant ran. Native process arguments are captured only for verified owned descendants, with stable start-identity checks, bounded parsing, and erasure of the transient buffer that can also contain environment bytes.
 
 ## Target-repository boundary
 

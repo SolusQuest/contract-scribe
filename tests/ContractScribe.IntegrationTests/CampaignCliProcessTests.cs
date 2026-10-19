@@ -131,7 +131,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task SharedProductionSession_WithoutTemporaryRoots_DoesNotInspectRepositoryLinks()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -169,7 +169,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task StartAndResume_AreFreshProcessExpectedPresenceOperations()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -217,7 +217,7 @@ public sealed partial class CampaignCliProcessTests
     [InlineData(true)]
     public async Task ConcurrentStarts_OnlyTheCreatingProcessOwnsTheCampaign(bool executable)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -292,7 +292,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task ConfigurationReplacementAfterPatchReservation_PreventsDispatchAndRecovers()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -365,7 +365,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task ReplacementReadbackCrash_LeavesOnlyTheCommittedCheckpointAsAuthority()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -433,7 +433,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task AcceptedCampaign_ResumesInAFreshProcessWithoutProviderReplay()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -496,7 +496,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -547,7 +547,7 @@ public sealed partial class CampaignCliProcessTests
         await File.WriteAllTextAsync(destination, root.ToJsonString(), new UTF8Encoding(false, true));
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static async Task RunCrashVectorAsync(BoundaryVector vector)
     {
         await using var fixture = await LoaderFixture.CreateAsync();

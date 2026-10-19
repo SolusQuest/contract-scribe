@@ -11,7 +11,7 @@ public sealed partial class CampaignCliProcessTests
     [InlineData(true)]
     public async Task LifetimeCapLayerChanges_StopBeforeDispatchAndResumeWithoutProviderReplay(bool monetary)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         await SetSingleWorkItemSourceAsync(fixture.Root);
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
@@ -110,7 +110,7 @@ public sealed partial class CampaignCliProcessTests
     [InlineData(true)]
     public async Task Returned_valid_HTTP_proposal_survives_output_lifetime_crossing_and_cap_clear_without_replay(bool equality)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         await SetSingleWorkItemSourceAsync(fixture.Root);
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);

@@ -10,7 +10,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task Shared_request_stop_preserves_the_accepted_candidate_and_fresh_action_finishes_original_membership()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         var sourcePath = Path.Join(fixture.Root, "App", "App.cs");
         await File.WriteAllTextAsync(sourcePath,
@@ -69,7 +69,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task Fresh_action_restores_accepted_failure_and_retry_wait_with_a_new_process_context()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         await SetSingleWorkItemSourceAsync(fixture.Root);
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);

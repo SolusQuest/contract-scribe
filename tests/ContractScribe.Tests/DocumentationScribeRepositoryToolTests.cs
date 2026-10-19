@@ -191,6 +191,14 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             new("context.instructions", "docs/guide.md"), default);
 
         Assert.True(swapped);
+        if (DarwinFileSystem.IsSupported)
+        {
+            // Retained ancestors reject the substitution before the post-open hook.
+            Assert.False(restored);
+            Directory.Move(docs, replacement);
+            Directory.Move(retained, docs);
+            restored = true;
+        }
         Assert.True(restored);
         Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, result.FailureCode);
         Assert.Null(result.Excerpt);
@@ -243,6 +251,14 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             : (await bundle.ListFiles.InvokeAsync(new("context.instructions", "docs", 8), default)).FailureCode;
 
         Assert.True(swapped);
+        if (DarwinFileSystem.IsSupported)
+        {
+            // Retained ancestors reject the substitution before the post-open hook.
+            Assert.False(restored);
+            Directory.Move(docs, replacement);
+            Directory.Move(retained, docs);
+            restored = true;
+        }
         Assert.True(restored);
         Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, failure);
     }
@@ -284,6 +300,14 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         var result = await bundle.ReadExcerpt.InvokeAsync(new("context.instructions", "docs/guide.md"), default);
 
         Assert.True(swapped);
+        if (DarwinFileSystem.IsSupported)
+        {
+            // Retained ancestors reject the substitution before the post-open hook.
+            Assert.False(restored);
+            Directory.Move(docs, replacement);
+            Directory.Move(retained, docs);
+            restored = true;
+        }
         Assert.True(restored);
         Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.Stale, result.FailureCode);
         Assert.Null(result.Excerpt);
@@ -1074,17 +1098,12 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         Assert.Equal("context.unsafe.repository-object", exception.Code);
     }
 
-    [Theory]
+    [CaseSensitiveNamesTheory]
     [InlineData("empty")]
     [InlineData("excluded")]
     [InlineData("allowed")]
     public async Task CaseCollidingDirectoryEntriesFailBeforeChildFiltering(string topology)
     {
-        if (OperatingSystem.IsWindows())
-        {
-            return;
-        }
-
         using var fixture = RepositoryToolFixture.Create();
         var upper = Path.Join(fixture.Root, "docs", "Case");
         var lower = Path.Join(fixture.Root, "docs", "case");

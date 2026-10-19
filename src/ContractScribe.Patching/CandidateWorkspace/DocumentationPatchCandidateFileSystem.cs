@@ -76,7 +76,7 @@ internal static class DocumentationPatchCandidateFileSystem
             throw new IOException("The candidate parent directory changed.");
         }
 
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             throw new PlatformNotSupportedException();
         }
@@ -91,6 +91,11 @@ internal static class DocumentationPatchCandidateFileSystem
         RequireValid(directory);
         try
         {
+            if (DarwinFileSystem.IsSupported)
+            {
+                DarwinFileSystem.RequireRelativeDirectoryMount(directory);
+                DarwinFileSystem.RequirePrivate(directory, directory: true);
+            }
             var actual = ReadIdentity(directory, expectDirectory: true);
             if (actual != expectedDirectory)
             {
@@ -109,20 +114,26 @@ internal static class DocumentationPatchCandidateFileSystem
     public static CandidatePhysicalIdentity CreateNewDirectory(
         string parentPath,
         CandidatePhysicalIdentity expectedParent,
-        string leafName)
+        string leafName,
+        Func<bool>? validateLocation = null,
+        DarwinFileSystem.RootLease? native = null,
+        string? nativeRoot = null)
     {
         RequireLeafName(leafName);
-        using var parent = OpenDirectory(parentPath);
+        using var parent = OpenDirectory(parentPath, native, nativeRoot);
         if (ReadIdentity(parent, expectDirectory: true) != expectedParent)
         {
             throw new IOException("The candidate parent directory changed.");
         }
 
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             throw new PlatformNotSupportedException();
         }
 
+        if (validateLocation is not null && (!validateLocation()
+            || ReadIdentity(parent, expectDirectory: true) != expectedParent))
+            throw new IOException("The candidate location changed before creation.");
         var created = MkdirAt(
             checked((int)parent.DangerousGetHandle()),
             leafName,
@@ -142,22 +153,29 @@ internal static class DocumentationPatchCandidateFileSystem
                 0),
             ownsHandle: true);
         RequireValid(directory);
+        if (DarwinFileSystem.IsSupported)
+        {
+            DarwinFileSystem.RequireRelativeDirectoryMount(directory);
+            DarwinFileSystem.RequirePrivate(directory, directory: true);
+        }
         return ReadIdentity(directory, expectDirectory: true);
     }
 
     public static FileStream CreateNewRegularFile(
         string parentPath,
         CandidatePhysicalIdentity expectedParent,
-        string leafName)
+        string leafName,
+        DarwinFileSystem.RootLease? native = null,
+        string? nativeRoot = null)
     {
         RequireLeafName(leafName);
-        using var parent = OpenDirectory(parentPath);
+        using var parent = OpenDirectory(parentPath, native, nativeRoot);
         if (ReadIdentity(parent, expectDirectory: true) != expectedParent)
         {
             throw new IOException("The candidate parent directory changed.");
         }
 
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             throw new PlatformNotSupportedException();
         }
@@ -174,6 +192,7 @@ internal static class DocumentationPatchCandidateFileSystem
         RequireValid(handle);
         try
         {
+            if (DarwinFileSystem.IsSupported) DarwinFileSystem.RequirePrivate(handle, directory: false);
             _ = ReadIdentity(handle, expectDirectory: false);
             return new FileStream(handle, FileAccess.ReadWrite, 64 * 1024, isAsync: false);
         }
@@ -222,6 +241,37 @@ internal static class DocumentationPatchCandidateFileSystem
         }
     }
 
+    internal static CandidatePhysicalIdentity ReadNativeIdentity(SafeFileHandle handle, bool directory) =>
+        ReadIdentity(handle, directory);
+
+    internal static CandidateFileReadLease ReadNativeFile(
+        DarwinFileSystem.RootLease native, SafeFileHandle parent, DarwinFileSystem.Entry entry,
+        CandidatePhysicalIdentity expected, CancellationToken cancellationToken)
+    {
+        var handle = native.OpenFile(parent, entry.Name, cancellationToken, observation: entry);
+        try
+        {
+            DarwinFileSystem.RequirePrivate(handle, directory: false);
+            if (ReadIdentity(handle, expectDirectory: false) != expected)
+                throw new IOException("The candidate file identity changed.");
+            using var borrowed = new SafeFileHandle(handle.DangerousGetHandle(), ownsHandle: false);
+            using var stream = new FileStream(borrowed, FileAccess.Read, 64 * 1024, isAsync: false);
+            using var buffer = new MemoryStream();
+            var chunk = new byte[64 * 1024];
+            while (true)
+            {
+                native.Revalidate(cancellationToken);
+                var count = stream.Read(chunk, 0, chunk.Length);
+                if (count == 0) break;
+                buffer.Write(chunk, 0, count);
+            }
+            if (ReadIdentity(handle, expectDirectory: false) != expected || buffer.Length != expected.Length)
+                throw new IOException("The candidate file changed during readback.");
+            return new(buffer.ToArray(), expected, handle);
+        }
+        catch { handle.Dispose(); throw; }
+    }
+
     public static bool DeleteOwnedEntry(
         string parentPath,
         CandidatePhysicalIdentity expectedParent,
@@ -237,9 +287,21 @@ internal static class DocumentationPatchCandidateFileSystem
                 return false;
             }
 
-            if (!OperatingSystem.IsLinux())
+            if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
             {
                 return false;
+            }
+
+            if (DarwinFileSystem.IsSupported)
+            {
+                using var entry = DarwinFileSystem.OpenAt(parent, leafName,
+                    DarwinFileSystem.NonBlocking | DarwinFileSystem.NoFollowAny | DarwinFileSystem.Beneath
+                        | DarwinFileSystem.CloseOnExec | (expectedEntry.IsDirectory ? DarwinFileSystem.Directory : 0));
+                if (expectedEntry.IsDirectory) DarwinFileSystem.RequireRelativeDirectoryMount(entry);
+                DarwinFileSystem.RequirePrivate(entry, expectedEntry.IsDirectory);
+                if (ReadIdentity(entry, expectedEntry.IsDirectory) != expectedEntry) return false;
+                return UnlinkAt(checked((int)parent.DangerousGetHandle()), leafName,
+                    expectedEntry.IsDirectory ? DarwinFileSystem.AtRemoveDirectory : 0) == 0;
             }
 
             if (FStatAt(
@@ -282,7 +344,7 @@ internal static class DocumentationPatchCandidateFileSystem
             throw new IOException("The candidate parent directory changed.");
         }
 
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             throw new PlatformNotSupportedException();
         }
@@ -298,6 +360,7 @@ internal static class DocumentationPatchCandidateFileSystem
         RequireValid(handle);
         try
         {
+            if (DarwinFileSystem.IsSupported) DarwinFileSystem.RequirePrivate(handle, directory: false);
             if (ReadIdentity(handle, expectDirectory: false) != expectedFile)
             {
                 throw new IOException("The candidate file identity changed.");
@@ -312,10 +375,25 @@ internal static class DocumentationPatchCandidateFileSystem
         }
     }
 
-    private static SafeFileHandle OpenDirectory(string path)
+    private static SafeFileHandle OpenDirectory(string path,
+        DarwinFileSystem.RootLease? native = null, string? nativeRoot = null)
     {
+        if (native is not null)
+            return native.OpenDirectoryPath(Path.GetRelativePath(nativeRoot!, path).Replace(Path.DirectorySeparatorChar, '/'),
+                CancellationToken.None);
+        if (DarwinFileSystem.IsSupported)
+        {
+            var directory = DarwinFileSystem.OpenDirectory(path);
+            try
+            {
+                DarwinFileSystem.Qualify(directory, requireOwnership: true);
+                DarwinFileSystem.RequireNoAcl(directory);
+                return directory;
+            }
+            catch { directory.Dispose(); throw; }
+        }
         EnsureNoReparseComponents(path);
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             throw new PlatformNotSupportedException();
         }
@@ -377,6 +455,15 @@ internal static class DocumentationPatchCandidateFileSystem
         SafeFileHandle handle,
         bool expectDirectory)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            var stat = DarwinFileSystem.ReadStat(handle);
+            if ((stat.Mode & UnixFileTypeMask) != (expectDirectory ? UnixDirectory : UnixRegularFile))
+                throw new IOException("The candidate entry has an unsupported kind.");
+            return new(unchecked((uint)stat.Device), stat.Inode,
+                expectDirectory ? 0 : stat.Size, expectDirectory ? 0ul : stat.LinkCount, expectDirectory);
+        }
+
         if (OperatingSystem.IsLinux())
         {
             if (FStat(handle, out var information) != 0)
@@ -467,7 +554,21 @@ internal static class DocumentationPatchCandidateFileSystem
     private static extern int Open(string path, int flags);
 
     [DllImport("libc", EntryPoint = "openat", SetLastError = true)]
-    private static extern int OpenAt(int directoryFileDescriptor, string path, int flags, uint mode);
+    private static extern int LinuxOpenAt(int directoryFileDescriptor, string path, int flags, uint mode);
+
+    private static int OpenAt(int descriptor, string path, int flags, uint mode)
+    {
+        if (!DarwinFileSystem.IsSupported) return LinuxOpenAt(descriptor, path, flags, mode);
+        using var parent = new SafeFileHandle((nint)descriptor, ownsHandle: false);
+        var nativeFlags = DarwinFileSystem.NonBlocking | DarwinFileSystem.CloseOnExec
+            | DarwinFileSystem.NoFollowAny | DarwinFileSystem.Beneath;
+        if ((flags & UnixOpenReadWrite) != 0) nativeFlags |= DarwinFileSystem.ReadWrite;
+        if ((flags & UnixOpenDirectory) != 0) nativeFlags |= DarwinFileSystem.Directory;
+        if ((flags & UnixOpenSync) != 0) nativeFlags |= DarwinFileSystem.Sync;
+        if ((flags & UnixOpenCreate) != 0) nativeFlags |= DarwinFileSystem.Create;
+        if ((flags & UnixOpenExclusive) != 0) nativeFlags |= DarwinFileSystem.Exclusive;
+        return DarwinFileSystem.CreateAt(parent, path, nativeFlags, mode);
+    }
 
     [DllImport("libc", EntryPoint = "mkdirat", SetLastError = true)]
     private static extern int MkdirAt(int directoryFileDescriptor, string path, uint mode);

@@ -3,12 +3,13 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using ContractScribe.Core;
+using ContractScribe.Roslyn;
 using Microsoft.Win32.SafeHandles;
 
 namespace ContractScribe.Cli;
 
 /// <summary>
-/// Linux-only, owner-private implementation of the campaign checkpoint store port.
+/// Owner-private implementation of the campaign checkpoint store port.
 /// The coordination files are deliberately an implementation detail of this adapter.
 /// </summary>
 internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
@@ -30,10 +31,10 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private const uint DirectoryFile = 0x4000;
     private const uint OwnerDirectoryMode = 0x1C0; // 0700
     private const uint OwnerFileMode = 0x180; // 0600
-    private const int NoData = 61;
+    private static int NoData => DarwinFileSystem.IsSupported ? 93 : 61;
     private const int AlreadyExists = 17;
     private const int NotFound = 2;
-    private const int WouldBlock = 11;
+    private static int WouldBlock => DarwinFileSystem.IsSupported ? 35 : 11;
     private const int MaximumLeaseBytes = 2048;
     private const int MaximumMarkerBytes = 160;
     private const int ExtendedAttributeCreate = 1;
@@ -1048,7 +1049,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             {
                 var segment = segments[index];
                 var current = handles[^1];
-                var observed = InspectAt(current, segment);
+                var observed = InspectAt(current, segment, absoluteAncestor: true);
                 if (observed.Kind != NameKind.Directory)
                 {
                     throw observed.Kind == NameKind.Absent ? UnreadableFault() : InvalidFault();
@@ -1084,7 +1085,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
                 handles,
                 identities,
                 segmentNames,
-                ReadBackingLocation(fullPath, identities[^1]));
+                ReadBackingLocation(fullPath, identities[^1], handles[^1]));
         }
         catch
         {
@@ -1118,20 +1119,27 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             var childIdentity = context.ChainIdentities[index + 1];
             if (ReadIdentity(parent) != parentIdentity
                 || ReadIdentity(child) != childIdentity
-                || InspectAt(parent, context.SegmentNames[index]) is not { Kind: NameKind.Directory } rebound
+                || InspectAt(parent, context.SegmentNames[index], absoluteAncestor: true) is not { Kind: NameKind.Directory } rebound
                 || rebound.Identity != childIdentity)
             {
                 throw UnreadableFault();
             }
         }
-        if (ReadBackingLocation(context.SelectedPath, context.DirectoryIdentity) != context.BackingLocation)
+        if (ReadBackingLocation(context.SelectedPath, context.DirectoryIdentity, context.DirectoryHandle) != context.BackingLocation)
         {
             throw UnreadableFault();
         }
     }
 
-    private static BackingLocation ReadBackingLocation(string selectedPath, FileIdentity identity)
+    private static BackingLocation ReadBackingLocation(string selectedPath, FileIdentity identity, SafeFileHandle directory)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            if (ReadIdentity(directory) != identity) throw UnreadableFault();
+            var backing = DarwinFileSystem.ReadAncestry(directory);
+            if (ReadIdentity(directory) != identity) throw UnreadableFault();
+            return new(identity.Device, backing.Projection);
+        }
         foreach (var line in File.ReadLines("/proc/self/mountinfo"))
         {
             var separator = line.IndexOf(" - ", StringComparison.Ordinal);
@@ -1197,13 +1205,39 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     }
 
     private static bool BackingLocationsOverlap(BackingLocation first, BackingLocation second) =>
-        first.Device == second.Device && Overlaps(first.Path, second.Path);
+        (DarwinFileSystem.IsSupported || first.Device == second.Device) && Overlaps(first.Path, second.Path);
 
     private static NameStatus InspectName(DirectoryContext context, string name) =>
         InspectAt(context.DirectoryHandle, name);
 
-    private static NameStatus InspectAt(SafeFileHandle directory, string name)
+    private static NameStatus InspectAt(SafeFileHandle directory, string name, bool absoluteAncestor = false)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            if (DarwinFileSystem.ReadStatAt(directory, name, out var nativeStat) != 0)
+            {
+                if (Marshal.GetLastPInvokeError() == NotFound) return NameStatus.Absent();
+                throw UnreadableFault();
+            }
+            var inspectedStat = FromDarwin(nativeStat);
+            var kind = inspectedStat.Mode & FileTypeMask;
+            if (kind is not RegularFile and not DirectoryFile)
+                return NameStatus.Other(Identity(inspectedStat, 0), inspectedStat);
+            if (kind == RegularFile && ((inspectedStat.Mode & 0xFFF) != OwnerFileMode
+                || inspectedStat.UserId != GetEffectiveUserId() || inspectedStat.LinkCount != 1))
+                return NameStatus.Other(Identity(inspectedStat, 0), inspectedStat);
+            using var inspected = DarwinFileSystem.OpenAt(directory, name,
+                DarwinFileSystem.EventOnly | DarwinFileSystem.NonBlocking | DarwinFileSystem.NoFollowAny
+                    | DarwinFileSystem.CloseOnExec | DarwinFileSystem.Beneath);
+            var actual = DarwinFileSystem.ReadEntry(inspected);
+            var parent = DarwinFileSystem.ReadEntry(directory);
+            if (actual.Name != name || actual.Inode != inspectedStat.Inode || actual.Device != inspectedStat.Device
+                || (!absoluteAncestor && (actual.ParentInode != parent.Inode
+                    || actual.FileSystem != parent.FileSystem || actual.Device != parent.Device
+                    || (actual.Flags & 0x800000) != 0))) throw InvalidFault();
+            var inspectedIdentity = Identity(inspectedStat, ReadMountIdentity(inspected));
+            return kind == DirectoryFile ? NameStatus.Directory(inspectedIdentity, inspectedStat) : NameStatus.Regular(inspectedIdentity, inspectedStat);
+        }
         if (FStatAt(FileDescriptor(directory), name, out var stat, AtSymlinkNoFollow) != 0)
         {
             var error = Marshal.GetLastPInvokeError();
@@ -1263,6 +1297,12 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             throw InvalidFault();
         }
+        if (DarwinFileSystem.IsSupported)
+        {
+            if ((DarwinFileSystem.ReadFileSystem(handle).Flags & DarwinFileSystem.IgnoreOwnership) != 0)
+                throw InvalidFault();
+            DarwinFileSystem.Qualify(handle, requireOwnership: true);
+        }
         RequireNoAcl(handle, includeDefault: true);
         return Identity(stat, ReadMountIdentity(handle));
     }
@@ -1277,6 +1317,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
         {
             throw InvalidFault();
         }
+        if (DarwinFileSystem.IsSupported
+            && (DarwinFileSystem.ReadFileSystem(handle).Flags & DarwinFileSystem.IgnoreOwnership) != 0)
+            throw InvalidFault();
         RequireNoAcl(handle, includeDefault: false);
         return Identity(stat, ReadMountIdentity(handle));
     }
@@ -1345,6 +1388,12 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private static void RequireNoAcl(SafeFileHandle handle, bool includeDefault)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            try { DarwinFileSystem.RequireNoAcl(handle); }
+            catch (DarwinFileSystemException) { throw InvalidFault(); }
+            return;
+        }
         RequireNoAcl(handle, "system.posix_acl_access");
         if (includeDefault)
         {
@@ -1368,12 +1417,28 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private static LinuxStat ReadStat(SafeFileHandle handle)
     {
+        if (DarwinFileSystem.IsSupported) return FromDarwin(DarwinFileSystem.ReadStat(handle));
         if (FStat(FileDescriptor(handle), out var stat) != 0)
         {
             throw UnreadableFault();
         }
         return stat;
     }
+
+    private static LinuxStat FromDarwin(DarwinFileSystem.Stat value) => new()
+    {
+        Device = unchecked((uint)value.Device),
+        Inode = value.Inode,
+        Mode = value.Mode,
+        LinkCount = value.LinkCount,
+        UserId = value.UserId,
+        GroupId = value.GroupId,
+        Size = value.Size,
+        ModificationTimeSeconds = value.ModificationTimeSeconds,
+        ModificationTimeNanoseconds = checked((ulong)value.ModificationTimeNanoseconds),
+        ChangeTimeSeconds = value.ChangeTimeSeconds,
+        ChangeTimeNanoseconds = checked((ulong)value.ChangeTimeNanoseconds),
+    };
 
     private static FileIdentity ReadIdentity(SafeFileHandle handle) =>
         Identity(ReadStat(handle), ReadMountIdentity(handle));
@@ -1398,6 +1463,12 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private static ulong ReadMountIdentity(SafeFileHandle handle)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            var identity = DarwinFileSystem.ReadFileSystem(handle).FileSystem;
+            if (identity == 0) throw UnreadableFault();
+            return identity;
+        }
         const string prefix = "mnt_id:\t";
         try
         {
@@ -1502,17 +1573,30 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private static void CreateObjectMarker(SafeFileHandle handle, byte[] marker)
     {
-        if (marker.Length is 0 or > MaximumMarkerBytes
+        var bound = BindObjectMarker(handle, marker);
+        if (bound.Length is 0 or > MaximumMarkerBytes
             || SetExtendedAttribute(
-                FileDescriptor(handle),
-                ObjectMarkerName,
-                marker,
-                checked((nuint)marker.Length),
+                FileDescriptor(handle), ObjectMarkerName, bound, checked((nuint)bound.Length),
                 ExtendedAttributeCreate) != 0)
-        {
             throw UnreadableFault();
-        }
         ValidateObjectMarker(handle, marker);
+    }
+
+    private static byte[] BindObjectMarker(SafeFileHandle handle, byte[] marker)
+    {
+        if (!DarwinFileSystem.IsSupported) return marker;
+        // APFS copies preserve xattrs. The native private witness must identify
+        // the actual physical object, rather than authorize a copied marker.
+        // The lease record and Linux marker representation remain unchanged.
+        var identity = ReadIdentity(handle);
+        var volume = DarwinFileSystem.ReadVolumeUuid(handle);
+        var physical = Encoding.ASCII.GetBytes(FormattableString.Invariant(
+            $"contract-scribe-native-object-v1:{volume}:{identity.Device}:{identity.Inode}:{identity.Mount}"));
+        var digest = SHA256.HashData(physical);
+        var bound = new byte[checked(marker.Length + 1 + digest.Length)];
+        marker.CopyTo(bound, 0);
+        digest.CopyTo(bound, marker.Length + 1);
+        return bound;
     }
 
     private static void RequireObjectMarkerAbsent(SafeFileHandle handle)
@@ -1529,8 +1613,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
 
     private static void ValidateObjectMarker(SafeFileHandle handle, byte[] expected)
     {
+        var boundExpected = BindObjectMarker(handle, expected);
         var size = GetExtendedAttribute(FileDescriptor(handle), ObjectMarkerName, null, 0);
-        if (size != expected.Length || size is <= 0 or > MaximumMarkerBytes)
+        if (size != boundExpected.Length || size is <= 0 or > MaximumMarkerBytes)
         {
             throw InvalidFault();
         }
@@ -1540,14 +1625,15 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             ObjectMarkerName,
             actual,
             checked((nuint)actual.Length));
-        if (read != actual.Length || !actual.AsSpan().SequenceEqual(expected))
+        if (read != actual.Length || !actual.AsSpan().SequenceEqual(boundExpected))
         {
             throw InvalidFault();
         }
     }
 
     private static bool IsSupportedPlatform() =>
-        OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64;
+        OperatingSystem.IsLinux() && RuntimeInformation.ProcessArchitecture == Architecture.X64
+        || DarwinFileSystem.IsSupported;
 
     private static bool Overlaps(string first, string second) =>
         IsSameOrDescendant(first, second) || IsSameOrDescendant(second, first);
@@ -1877,10 +1963,34 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     }
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
-    private static extern int Open(string path, int flags, uint mode);
+    private static extern int LinuxOpen(string path, int flags, uint mode);
+
+    private static int Open(string path, int flags, uint mode)
+    {
+        if (!DarwinFileSystem.IsSupported) return LinuxOpen(path, flags, mode);
+        using var directory = DarwinFileSystem.OpenDirectory(path);
+        using var duplicate = DarwinFileSystem.Duplicate(directory);
+        var descriptor = checked((int)duplicate.DangerousGetHandle());
+        duplicate.SetHandleAsInvalid();
+        return descriptor;
+    }
 
     [DllImport("libc", EntryPoint = "openat", SetLastError = true)]
-    private static extern int OpenAt(int directory, string path, int flags, uint mode);
+    private static extern int LinuxOpenAt(int directory, string path, int flags, uint mode);
+
+    private static int OpenAt(int directory, string path, int flags, uint mode)
+    {
+        if (!DarwinFileSystem.IsSupported) return LinuxOpenAt(directory, path, flags, mode);
+        using var parent = new SafeFileHandle((nint)directory, ownsHandle: false);
+        var nativeFlags = DarwinFileSystem.NonBlocking | DarwinFileSystem.NoFollowAny
+            | DarwinFileSystem.CloseOnExec | DarwinFileSystem.Beneath;
+        if ((flags & OpenReadWrite) != 0) nativeFlags |= DarwinFileSystem.ReadWrite;
+        if ((flags & OpenDirectory) != 0) nativeFlags |= DarwinFileSystem.Directory;
+        if ((flags & OpenCreate) != 0) nativeFlags |= DarwinFileSystem.Create;
+        if ((flags & OpenExclusive) != 0) nativeFlags |= DarwinFileSystem.Exclusive;
+        if ((flags & 0x200000) != 0) nativeFlags |= DarwinFileSystem.EventOnly;
+        return DarwinFileSystem.CreateAt(parent, path, nativeFlags, mode);
+    }
 
     [DllImport("libc", EntryPoint = "fstat", SetLastError = true)]
     private static extern int FStat(int fileDescriptor, out LinuxStat value);
@@ -1895,12 +2005,20 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private static extern int SetLength(int fileDescriptor, long length);
 
     [DllImport("libc", EntryPoint = "renameat2", SetLastError = true)]
-    private static extern int RenameAt2(
+    private static extern int LinuxRenameAt2(
         int oldDirectory,
         string oldPath,
         int newDirectory,
         string newPath,
         uint flags);
+
+    [DllImport("libc", EntryPoint = "renameatx_np", SetLastError = true)]
+    private static extern int DarwinRenameAt(int oldDirectory, string oldPath, int newDirectory, string newPath, uint flags);
+
+    private static int RenameAt2(int oldDirectory, string oldPath, int newDirectory, string newPath, uint flags) =>
+        DarwinFileSystem.IsSupported
+            ? DarwinRenameAt(oldDirectory, oldPath, newDirectory, newPath, flags == RenameNoReplace ? 4u : 0u)
+            : LinuxRenameAt2(oldDirectory, oldPath, newDirectory, newPath, flags);
 
     [DllImport("libc", EntryPoint = "unlinkat", SetLastError = true)]
     private static extern int UnlinkAt(int directory, string path, int flags);
@@ -1909,17 +2027,33 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
     private static extern uint GetEffectiveUserId();
 
     [DllImport("libc", EntryPoint = "fgetxattr", SetLastError = true)]
-    private static extern nint GetExtendedAttribute(
+    private static extern nint LinuxGetExtendedAttribute(
         int fileDescriptor,
         string name,
         [Out] byte[]? value,
         nuint size);
 
     [DllImport("libc", EntryPoint = "fsetxattr", SetLastError = true)]
-    private static extern int SetExtendedAttribute(
+    private static extern int LinuxSetExtendedAttribute(
         int fileDescriptor,
         string name,
         [In] byte[] value,
         nuint size,
         int flags);
+    [DllImport("libc", EntryPoint = "fgetxattr", SetLastError = true)]
+    private static extern nint DarwinGetExtendedAttribute(int fileDescriptor, string name, [Out] byte[]? value,
+        nuint size, uint position, int options);
+
+    [DllImport("libc", EntryPoint = "fsetxattr", SetLastError = true)]
+    private static extern int DarwinSetExtendedAttribute(int fileDescriptor, string name, [In] byte[] value,
+        nuint size, uint position, int options);
+
+    private static nint GetExtendedAttribute(int descriptor, string name, byte[]? value, nuint size) =>
+        DarwinFileSystem.IsSupported ? DarwinGetExtendedAttribute(descriptor, name, value, size, 0, 0)
+            : LinuxGetExtendedAttribute(descriptor, name, value, size);
+
+    private static int SetExtendedAttribute(int descriptor, string name, byte[] value, nuint size, int flags) =>
+        DarwinFileSystem.IsSupported ? DarwinSetExtendedAttribute(descriptor, name, value, size, 0,
+            flags == ExtendedAttributeCreate ? 2 : flags) : LinuxSetExtendedAttribute(descriptor, name, value, size, flags);
+
 }

@@ -855,6 +855,8 @@ internal sealed class OwnedProcessTreeObserver : IAsyncDisposable
 
     private static int? ParentProcessId(int processId)
     {
+        if (DarwinFileSystem.IsSupported)
+            return DarwinProcessObservation.ReadIdentity(processId).ParentProcessId;
         if (OperatingSystem.IsLinux())
         {
             var stat = File.ReadAllText($"/proc/{processId}/stat");

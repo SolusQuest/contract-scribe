@@ -221,20 +221,38 @@ internal sealed class StablePublicationDirectory : IDisposable
     private readonly string path;
     private readonly SafeFileHandle handle;
     private readonly StableNodeIdentity identity;
+    private readonly DarwinFileSystem.RootLease? native;
 
     private StablePublicationDirectory(
         string path,
         SafeFileHandle handle,
-        StableNodeIdentity identity)
+        StableNodeIdentity identity,
+        DarwinFileSystem.RootLease? native = null)
     {
         this.path = path;
         this.handle = handle;
         this.identity = identity;
+        this.native = native;
     }
 
     public static StablePublicationDirectory Open(string path)
     {
         var fullPath = Path.GetFullPath(path);
+        if (DarwinFileSystem.IsSupported)
+        {
+            return Native(() =>
+            {
+                var authority = new DarwinFileSystem.RootLease(fullPath);
+                SafeFileHandle? directory = null;
+                try
+                {
+                    directory = authority.OpenRoot();
+                    DarwinFileSystem.Qualify(directory, requireOwnership: true);
+                    return new StablePublicationDirectory(fullPath, directory, ReadDirectoryIdentity(directory), authority);
+                }
+                catch { directory?.Dispose(); authority.Dispose(); throw; }
+            });
+        }
         EnsureNoReparseComponents(fullPath);
         var handle = OpenDirectoryNoFollow(fullPath);
         try
@@ -254,6 +272,8 @@ internal sealed class StablePublicationDirectory : IDisposable
     public bool EntryExists(string name)
     {
         RequireLeafName(name);
+        if (native is not null)
+            return Native(() => native.Find(handle, name, CancellationToken.None) is not null);
         if (OperatingSystem.IsLinux())
         {
             return FStatAt(DirectoryDescriptor, name, out _, UnixAtSymlinkNoFollow) == 0;
@@ -265,7 +285,28 @@ internal sealed class StablePublicationDirectory : IDisposable
     {
         RequireLeafName(name);
         SafeFileHandle fileHandle;
-        if (OperatingSystem.IsWindows())
+        if (native is not null)
+        {
+            fileHandle = Native(() =>
+            {
+                native.Revalidate();
+                if (native.Find(handle, name, CancellationToken.None) is not null) throw FinalizationFailure();
+                var created = DarwinFileSystem.OpenAt(handle, name, DarwinFileSystem.ReadWrite
+                    | DarwinFileSystem.Create | DarwinFileSystem.Exclusive | DarwinFileSystem.Sync
+                    | DarwinFileSystem.CloseOnExec | DarwinFileSystem.NoFollowAny | DarwinFileSystem.Beneath, 0x180);
+                try
+                {
+                    native.Revalidate();
+                    DarwinFileSystem.RequirePrivate(created, directory: false);
+                    var observed = native.Find(handle, name, CancellationToken.None) ?? throw FinalizationFailure();
+                    var actual = DarwinFileSystem.ReadEntry(created);
+                    if (observed != actual) throw FinalizationFailure();
+                    return created;
+                }
+                catch { created.Dispose(); throw; }
+            });
+        }
+        else if (OperatingSystem.IsWindows())
         {
             fileHandle = CreateFileW(
                 Path.Join(path, name),
@@ -315,7 +356,12 @@ internal sealed class StablePublicationDirectory : IDisposable
     {
         RequireLeafName(name);
         SafeFileHandle fileHandle;
-        if (OperatingSystem.IsWindows())
+        if (native is not null)
+        {
+            fileHandle = Native(() => native.OpenFile(handle, name, CancellationToken.None,
+                writable: access != FileAccess.Read));
+        }
+        else if (OperatingSystem.IsWindows())
         {
             var desiredAccess = access switch
             {
@@ -375,6 +421,21 @@ internal sealed class StablePublicationDirectory : IDisposable
 
     public StableFileIdentity ReadRegularFileIdentity(SafeFileHandle fileHandle)
     {
+        if (native is not null)
+        {
+            return Native(() =>
+            {
+                native.Revalidate();
+                var stat = DarwinFileSystem.ReadStat(fileHandle);
+                var actual = DarwinFileSystem.ReadEntry(fileHandle);
+                var parent = DarwinFileSystem.ReadEntry(handle);
+                if ((stat.Mode & UnixFileTypeMask) != UnixRegularFile || stat.LinkCount != 1
+                    || actual.ParentInode != parent.Inode || actual.FileSystem != parent.FileSystem
+                    || actual.Device != parent.Device || actual.Inode != stat.Inode
+                    || unchecked((uint)stat.Device) != actual.Device) throw FinalizationFailure();
+                return new StableFileIdentity(unchecked((uint)stat.Device), stat.Inode, stat.Size, stat.LinkCount);
+            });
+        }
         if (OperatingSystem.IsWindows())
         {
             if (GetFileType(fileHandle) != FileTypeDisk
@@ -410,6 +471,11 @@ internal sealed class StablePublicationDirectory : IDisposable
 
     public void RebindPath()
     {
+        if (native is not null)
+        {
+            Native(() => { native.Revalidate(); return true; });
+            return;
+        }
         EnsureNoReparseComponents(path);
         using var current = OpenDirectoryNoFollow(path);
         if (ReadDirectoryIdentity(current) != identity)
@@ -429,6 +495,13 @@ internal sealed class StablePublicationDirectory : IDisposable
 
     public void Delete(SafeFileHandle fileHandle, string name)
     {
+        if (native is not null)
+        {
+            RebindPath();
+            RebindEntry(name, ReadRegularFileIdentity(fileHandle));
+            if (UnlinkAt(DirectoryDescriptor, name, 0) != 0) throw FinalizationFailure();
+            return;
+        }
         if (OperatingSystem.IsWindows())
         {
             var disposition = new FileDispositionInformation { DeleteFile = true };
@@ -454,6 +527,14 @@ internal sealed class StablePublicationDirectory : IDisposable
     {
         RequireLeafName(sourceName);
         RequireLeafName(destinationName);
+        if (native is not null)
+        {
+            RebindPath();
+            RebindEntry(sourceName, ReadRegularFileIdentity(fileHandle));
+            if (RenameAtExclusive(DirectoryDescriptor, sourceName, DirectoryDescriptor, destinationName, 4) != 0)
+                throw FinalizationFailure(new Win32Exception(Marshal.GetLastPInvokeError()));
+            return;
+        }
         if (OperatingSystem.IsWindows())
         {
             RenameWindows(fileHandle, handle, destinationName);
@@ -472,7 +553,11 @@ internal sealed class StablePublicationDirectory : IDisposable
         throw FinalizationFailure(new Win32Exception(Marshal.GetLastWin32Error()));
     }
 
-    public void Dispose() => handle.Dispose();
+    public void Dispose()
+    {
+        handle.Dispose();
+        native?.Dispose();
+    }
 
     private int DirectoryDescriptor => handle.DangerousGetHandle().ToInt32();
 
@@ -551,6 +636,12 @@ internal sealed class StablePublicationDirectory : IDisposable
 
     private static StableNodeIdentity ReadDirectoryIdentity(SafeFileHandle directory)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            var stat = DarwinFileSystem.ReadStat(directory);
+            if ((stat.Mode & UnixFileTypeMask) != UnixDirectory) throw FinalizationFailure();
+            return new(unchecked((uint)stat.Device), stat.Inode);
+        }
         if (OperatingSystem.IsWindows())
         {
             if (GetFileType(directory) != FileTypeDisk
@@ -604,6 +695,16 @@ internal sealed class StablePublicationDirectory : IDisposable
             throw FinalizationFailure();
         }
     }
+
+    private static T Native<T>(Func<T> operation)
+    {
+        try { return operation(); }
+        catch (DarwinFileSystemException exception) { throw FinalizationFailure(exception); }
+    }
+
+    [DllImport("libc", EntryPoint = "renameatx_np", SetLastError = true)]
+    private static extern int RenameAtExclusive(int sourceDirectory, string source, int destinationDirectory,
+        string destination, uint flags);
 
     private static PublicationException FinalizationFailure(Exception? inner = null) =>
         new("host.publication.finalization-failed", inner);

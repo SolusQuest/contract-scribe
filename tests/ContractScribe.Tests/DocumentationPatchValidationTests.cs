@@ -15,6 +15,55 @@ namespace ContractScribe.Tests;
 
 public sealed class DocumentationPatchValidationTests
 {
+    [MacArm64Fact]
+    public void Native_candidate_descendant_alias_is_rejected_before_creation_and_safe_parents_work()
+    {
+        const string source = "namespace N; public class C { public void M() { } }";
+        using var fixture = ValidationFixture.Create(source, DocumentationPatchRepositoryEncoding.Utf8);
+        var unused = Path.Join(fixture.Root, "unused");
+        Directory.CreateDirectory(unused);
+        var alias = "/System/Volumes/Data" + unused;
+        using (var original = DarwinFileSystem.OpenDirectory(unused))
+        using (var alternate = DarwinFileSystem.OpenDirectory(alias))
+            Assert.Equal(DarwinFileSystem.ReadAncestry(original).Projection, DarwinFileSystem.ReadAncestry(alternate).Projection);
+        var before = Directory.EnumerateFileSystemEntries(fixture.Root, "*", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal).ToArray();
+        var created = false;
+        var builder = new ContractScribe.Patching.DocumentationPatchCandidateWorkspaceBuilder(
+            (stage, _) => created |= stage == DocumentationPatchApplicationStage.CandidateRootCreated,
+            () => alias);
+        var failure = Assert.Throws<DocumentationPatchApplicationException>(() => builder.Build(
+            fixture.Baseline, new Dictionary<string, byte[]>(), CancellationToken.None));
+        Assert.Equal(DocumentationPatchApplicationStatus.Rejected, failure.Status);
+        Assert.False(created);
+        Assert.Empty(Directory.EnumerateFileSystemEntries(unused));
+        Assert.Equal(before, Directory.EnumerateFileSystemEntries(fixture.Root, "*", SearchOption.AllDirectories)
+            .Order(StringComparer.Ordinal));
+        Assert.Equal(source, File.ReadAllText(Path.Join(fixture.Root, "Sample.cs")));
+        Assert.Equal(DocumentationPatchRepositoryRebindStatus.Unchanged, fixture.Baseline.Rebind().Status);
+        var sibling = fixture.Root + "-staging";
+        Directory.CreateDirectory(sibling);
+        try
+        {
+            foreach (var parent in new[] { sibling, Path.GetDirectoryName(fixture.Root)! })
+            {
+                string? candidateRoot = null;
+                var positive = new ContractScribe.Patching.DocumentationPatchCandidateWorkspaceBuilder(
+                    (stage, path) => { if (stage == DocumentationPatchApplicationStage.CandidateRootCreated) candidateRoot = path; },
+                    () => parent);
+                using (var candidate = positive.Build(fixture.Baseline, new Dictionary<string, byte[]>(), CancellationToken.None))
+                {
+                    Assert.NotNull(candidateRoot);
+                    Assert.True(fixture.Baseline.ValidateCandidateRoot(candidateRoot!).IsValid);
+                    Assert.NotEmpty(candidate.Files);
+                }
+                Assert.False(Directory.Exists(candidateRoot));
+                Assert.Equal(source, File.ReadAllText(Path.Join(fixture.Root, "Sample.cs")));
+            }
+        }
+        finally { Directory.Delete(sibling); }
+    }
+
     [Theory]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8, "\n")]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8Bom, "\r\n")]

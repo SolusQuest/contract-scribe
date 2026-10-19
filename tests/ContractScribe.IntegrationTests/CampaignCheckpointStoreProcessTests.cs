@@ -14,14 +14,10 @@ public sealed class CampaignCheckpointStoreProcessTests
     private const string BindMountWorkerVariable = "CONTRACTSCRIBE_CHECKPOINT_BIND_MOUNT_WORKER";
     private const ulong MountBind = 4096;
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     [SupportedOSPlatform("linux")]
     public async Task Bind_mounted_repository_aliases_are_rejected_without_rejecting_unrelated_backing_storage()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
         if (!string.Equals(
                 Environment.GetEnvironmentVariable(BindMountWorkerVariable),
                 "1",
@@ -37,15 +33,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         await AssertBindMountScenarioAsync("outside-repository");
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Old_timestamps_do_not_make_a_live_lease_stale_and_only_one_process_publishes()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         var first = RunWorkerAsync(fixture, "hold-after-record", "first");
         await WaitForFileAsync(fixture.ReadyPath, TimeSpan.FromSeconds(20));
@@ -64,15 +55,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Contender_never_locks_a_fresh_but_uninitialized_lease_inode()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         var first = RunWorkerAsync(fixture, "hold-after-lease-create", "first");
         await WaitForFileAsync(fixture.ReadyPath, TimeSpan.FromSeconds(20));
@@ -87,15 +73,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Crash_before_publish_recovers_only_the_witnessed_temp_then_retries_fresh()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(fixture, "crash-after-record", "crashed"));
@@ -112,15 +93,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Recovery_preserves_a_substituted_same_name_temp_inode()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(fixture, "crash-after-record", "crashed"));
@@ -144,15 +120,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Crash_after_publish_recovers_lost_ack_without_republishing_partial_bytes()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(fixture, "crash-after-publish", "crashed"));
@@ -169,15 +140,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Fresh_process_replace_preserves_exact_conditional_outcomes()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         var predecessor = CreateOpenArtifact();
         var successor = Assert.IsType<CampaignCheckpointArtifact>(
             CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact);
@@ -212,15 +178,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         AssertExact(await CreateStore(mismatch.CheckpointPath).ReadAsync(CancellationToken.None), predecessor);
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Stale_recovery_releases_old_domain_before_one_fresh_writer_wins()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(fixture, "crash-after-record", "crashed"));
@@ -237,15 +198,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Stale_recovery_rejects_an_ancestor_swap_and_preserves_the_moved_residue()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         var anchor = Path.Join(Path.GetTempPath(), $"contractscribe-recovery-path-{Guid.NewGuid():N}");
         var movedAnchor = anchor + "-moved";
         var control = anchor + "-control";
@@ -309,15 +265,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         }
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Witnessed_partial_temp_is_deleted_but_never_adopted()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(fixture, "crash-after-record", "crashed"));
@@ -338,15 +289,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Strict_record_and_object_marker_faults_are_never_recovery_authority()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var copiedLease = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(copiedLease, "crash-after-record", "crashed"));
@@ -420,19 +366,14 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.True(File.Exists(markedTemp));
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData("cancel-after-temp-write", false)]
     [InlineData("cancel-after-publish", true)]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Fresh_process_cancellation_cleans_before_publish_and_preserves_after(
         string mode,
         bool published)
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await RunWorkerAsync(fixture, mode, "cancelled");
 
@@ -450,19 +391,14 @@ public sealed class CampaignCheckpointStoreProcessTests
         }
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData("crash-before-publish", "Written")]
     [InlineData("crash-after-readback", "AlreadyPresent")]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Crashes_around_rename_and_readback_recover_only_complete_state(
         string crashMode,
         string recoveryKind)
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var fixture = ProcessFixture.Create();
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             RunWorkerAsync(fixture, crashMode, "crashed"));
@@ -479,15 +415,10 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Fifo_checkpoint_and_lease_names_return_without_blocking()
     {
-        if (!IsLinuxX64())
-        {
-            return;
-        }
-
         using var checkpointFixture = ProcessFixture.Create();
         Assert.Equal(0, MakeFifo(checkpointFixture.CheckpointPath, 0x180));
         var read = await CreateStore(checkpointFixture.CheckpointPath)
@@ -514,8 +445,8 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.True(File.Exists(leasePath));
     }
 
-    [Fact]
-    [SupportedOSPlatform("linux")]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [UnsupportedOSPlatform("windows")]
     public async Task Process_worker()
     {
         var operation = Environment.GetEnvironmentVariable(WorkerVariable);
@@ -738,7 +669,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             environment: new Dictionary<string, string?> { [BindMountWorkerVariable] = "1" });
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static async Task AssertBindMountScenarioAsync(string scenario)
     {
         var root = Path.Join(Path.GetTempPath(), $"contractscribe-bind-mount-{Guid.NewGuid():N}");
@@ -859,7 +790,7 @@ public sealed class CampaignCheckpointStoreProcessTests
         Assert.True(result.ExactUtf8Json.AsSpan().SequenceEqual(artifact.ExactUtf8Json.AsSpan()));
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void SetMarker(string path, string marker)
     {
         var bytes = Encoding.ASCII.GetBytes(marker);
@@ -871,7 +802,7 @@ public sealed class CampaignCheckpointStoreProcessTests
             0));
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void RemoveMarker(string path) => Assert.Equal(
         0,
         RemoveExtendedAttribute(path, "user.contractscribe.checkpoint-object"));
@@ -909,9 +840,9 @@ public sealed class CampaignCheckpointStoreProcessTests
         AppContext.BaseDirectory,
         "..", "..", "..", "..", ".."));
 
-    private static bool IsLinuxX64() =>
+    private static bool IsSupportedNative() =>
         OperatingSystem.IsLinux()
-        && RuntimeInformation.ProcessArchitecture == Architecture.X64;
+        && RuntimeInformation.ProcessArchitecture == Architecture.X64 || DarwinFileSystem.IsSupported;
 
     private sealed class ProcessFixture : IDisposable
     {
@@ -933,7 +864,7 @@ public sealed class CampaignCheckpointStoreProcessTests
         internal string ReleasePath { get; }
         internal string ResultPath(string name) => Path.Join(ControlDirectory, $"{name}.result");
 
-        [SupportedOSPlatform("linux")]
+        [UnsupportedOSPlatform("windows")]
         internal static ProcessFixture Create()
         {
             var root = Path.Join(Path.GetTempPath(), $"contractscribe-process-{Guid.NewGuid():N}");
@@ -960,7 +891,7 @@ public sealed class CampaignCheckpointStoreProcessTests
     private static extern int MakeFifo(string path, uint mode);
 
     [DllImport("libc", EntryPoint = "setxattr", SetLastError = true)]
-    private static extern int SetExtendedAttribute(
+    private static extern int LinuxSetExtendedAttribute(
         string path,
         string name,
         byte[] value,
@@ -968,7 +899,18 @@ public sealed class CampaignCheckpointStoreProcessTests
         int flags);
 
     [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
-    private static extern int RemoveExtendedAttribute(string path, string name);
+    private static extern int LinuxRemoveExtendedAttribute(string path, string name);
+
+    [DllImport("libc", EntryPoint = "setxattr", SetLastError = true)]
+    private static extern int DarwinSetExtendedAttribute(string path, string name, byte[] value, nuint size,
+        uint position, int options);
+    [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
+    private static extern int DarwinRemoveExtendedAttribute(string path, string name, int options);
+    private static int SetExtendedAttribute(string path, string name, byte[] value, nuint size, int flags) =>
+        DarwinFileSystem.IsSupported ? DarwinSetExtendedAttribute(path, name, value, size, 0, flags == 1 ? 2 : flags)
+            : LinuxSetExtendedAttribute(path, name, value, size, flags);
+    private static int RemoveExtendedAttribute(string path, string name) =>
+        DarwinFileSystem.IsSupported ? DarwinRemoveExtendedAttribute(path, name, 0) : LinuxRemoveExtendedAttribute(path, name);
 
     [DllImport("libc", EntryPoint = "mount", SetLastError = true)]
     private static extern int Mount(

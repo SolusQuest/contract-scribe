@@ -16,7 +16,7 @@ public sealed partial class CampaignCliProcessTests
     public async Task Production_zero_creation_quota_preserves_deferred_manifest_and_batch_complete_across_fresh_invocations(
         bool unsupportedProperty)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         var source = "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App {\n"
             + "public static void First() { }\npublic static void Second() { }\n"
@@ -69,7 +69,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task Production_saved100_batch_restores_at10_in_a_fresh_runner_process_and_reconstructs_at0()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         await File.WriteAllTextAsync(Path.Join(fixture.Root, "App", "App.cs"),
             "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static class App {\n"
