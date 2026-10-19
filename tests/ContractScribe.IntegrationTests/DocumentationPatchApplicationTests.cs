@@ -958,7 +958,7 @@ public sealed class DocumentationPatchApplicationTests
         }
     }
 
-    [ContractScribe.TestSupport.NativeFileSystemFact]
+    [Fact]
     public void WindowsFailsClosedBeforeCandidateRootCreation()
     {
         if (!OperatingSystem.IsWindows())
