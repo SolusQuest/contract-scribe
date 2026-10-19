@@ -65,7 +65,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task Production_large_manifest_admission_preserves_the_byte_ceiling_and_changed_base_predecessor()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         await using var server = new ProposalLoopbackServer();
         var outside = CreatePrivateDirectory("contract-scribe-checkpoint-capacity");
@@ -145,7 +145,7 @@ public sealed partial class CampaignCliProcessTests
             var sourcePath = Path.Join(fixture.Root, "App", "App.cs");
             var stateDirectory = Path.Join(outside, "state");
             Directory.CreateDirectory(stateDirectory);
-            if (OperatingSystem.IsLinux())
+            if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
                 File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var statePath = Path.Join(stateDirectory, "checkpoint.json");
             CampaignPreflightResult Preflight(CampaignOperation operation, string snapshot) => CampaignPreflight.Run(
@@ -224,7 +224,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Equal(predecessor.Artifact.Sha256, valid.Artifact.State.Predecessor!.FinalCheckpointSha256);
             Assert.True(CampaignStateJson.Parse(valid.Artifact.ExactUtf8Json.AsMemory()).IsValid);
 
-            if (!OperatingSystem.IsLinux()) return;
+            if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
             await File.WriteAllBytesAsync(statePath, predecessor.Artifact.ExactUtf8Json.ToArray());
             File.SetUnixFileMode(statePath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
             var before = await File.ReadAllBytesAsync(statePath);

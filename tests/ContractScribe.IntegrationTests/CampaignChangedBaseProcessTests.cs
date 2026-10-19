@@ -34,7 +34,7 @@ public sealed class CampaignChangedBaseProcessTests
     [Fact]
     public async Task ExactFixtureRevisions_WithIdenticalAuditAndContent_RotateAllCurrentAuthority()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await ProcessFixture.CreateAsync(
             executable: true,
             maximumCampaignElapsedMilliseconds: 600_000);
@@ -110,7 +110,7 @@ public sealed class CampaignChangedBaseProcessTests
         bool successorExpected,
         bool noReservationExpected)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
         await InterruptAtAsync(fixture, "start", "snapshot.crash.a",
             CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
@@ -142,7 +142,7 @@ public sealed class CampaignChangedBaseProcessTests
     [Fact]
     public async Task DriftAndUndeclaredAuthority_LeaveThePredecessorByteIdenticalWithoutDispatch()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
         await InterruptAtAsync(fixture, "start", "snapshot.drift.a",
             CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
@@ -199,7 +199,7 @@ public sealed class CampaignChangedBaseProcessTests
     [Fact]
     public async Task TargetEvolution_SelectsOnlyTheFreshAuditAndPlan()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         var matrixPath = Path.Join(
             CampaignCliProcessTests.RepositoryRoot,
             "tests", "fixtures", "campaign", "changed-base", "target-evolution-matrix.json");
@@ -301,7 +301,7 @@ public sealed class CampaignChangedBaseProcessTests
     [InlineData(true)]
     public async Task ConcurrentSupersession_ProducesOneSuccessorAndNoDuplicateDispatch(bool competing)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await ProcessFixture.CreateAsync(executable: true);
         await InterruptAtAsync(fixture, "start", "snapshot.concurrent.a",
             CampaignProcessBoundaryHooks.ProposalBeforeReservationCommit);
@@ -398,7 +398,7 @@ public sealed class CampaignChangedBaseProcessTests
     [Fact]
     public async Task CompleteM4ProductionPath_RecoversSupersedesAndCompletes()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await ProcessFixture.CreateAsync(
             executable: true,
             maximumCampaignElapsedMilliseconds: 600_000,
@@ -688,7 +688,7 @@ public sealed class CampaignChangedBaseProcessTests
                 : argument)
             .ToArray();
 
-        [SupportedOSPlatform("linux")]
+        [UnsupportedOSPlatform("windows")]
         internal static async Task<ProcessFixture> CreateAsync(
             bool executable,
             int? maximumCampaignElapsedMilliseconds = null,

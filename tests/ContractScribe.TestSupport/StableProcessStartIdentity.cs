@@ -40,6 +40,22 @@ internal static class StableProcessStartIdentity
             return creation;
         }
 
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
+        {
+            // Use integer native time. Process.StartTime combines seconds and
+            // microseconds through double, which can lose identity precision.
+            var bytes = new byte[136];
+            if (DarwinProcessInfo(process.Id, 3, 0, bytes, bytes.Length) != bytes.Length
+                || BitConverter.ToUInt32(bytes, 12) != (uint)process.Id)
+                throw new Win32Exception(Marshal.GetLastWin32Error());
+            var seconds = BitConverter.ToUInt64(bytes, 120);
+            var microseconds = BitConverter.ToUInt64(bytes, 128);
+            if (seconds == 0 || microseconds >= 1_000_000)
+                throw new InvalidDataException("The native process start identity is invalid.");
+            return checked(621355968000000000L + checked((long)seconds * TimeSpan.TicksPerSecond)
+                + checked((long)microseconds * 10));
+        }
+
         return process.StartTime.ToUniversalTime().Ticks;
     }
 
@@ -65,6 +81,9 @@ internal static class StableProcessStartIdentity
             NumberStyles.None,
             CultureInfo.InvariantCulture);
     }
+
+    [DllImport("/usr/lib/libproc.dylib", EntryPoint = "proc_pidinfo", SetLastError = true)]
+    private static extern int DarwinProcessInfo(int processId, int flavor, ulong argument, [Out] byte[] bytes, int size);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]

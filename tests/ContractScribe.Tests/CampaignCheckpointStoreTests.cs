@@ -1,5 +1,6 @@
 using ContractScribe.Cli;
 using ContractScribe.Core;
+using ContractScribe.Roslyn;
 using Microsoft.Win32.SafeHandles;
 using System.Runtime.InteropServices;
 using System.Runtime.Versioning;
@@ -39,9 +40,7 @@ public sealed class CampaignCheckpointStoreTests
     [Fact]
     public async Task Unsupported_platform_fails_closed_without_creating_state()
     {
-        if (OperatingSystem.IsLinux()
-            && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
-                == System.Runtime.InteropServices.Architecture.X64)
+        if (IsSupportedStorePlatform())
         {
             return;
         }
@@ -63,10 +62,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
-    public async Task Linux_store_creates_reads_and_replaces_exact_canonical_checkpoint()
+    [UnsupportedOSPlatform("windows")]
+    public async Task Native_store_creates_reads_and_replaces_exact_canonical_checkpoint()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -102,10 +101,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Conditional_outcomes_do_not_fall_back_or_overwrite()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -137,10 +136,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Live_complete_lease_rejects_a_concurrent_writer_and_cleans_exact_residue()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -174,10 +173,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Unsafe_checkpoint_is_invalid_and_is_never_repaired_or_overwritten()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -202,10 +201,10 @@ public sealed class CampaignCheckpointStoreTests
     [InlineData(UnixFileMode.UserWrite)]
     [InlineData(UnixFileMode.UserRead)]
     [InlineData(UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.GroupRead)]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Safely_observed_wrong_checkpoint_modes_are_invalid(UnixFileMode mode)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -225,10 +224,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Safely_observed_hard_link_and_state_directory_mode_are_invalid()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -265,10 +264,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Cancellation_before_acquisition_mutates_nothing()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -288,10 +287,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Cancellation_before_publication_removes_only_exact_owned_residue()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -324,10 +323,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Cancellation_after_publication_preserves_exact_state_and_cleans_lease()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -358,10 +357,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Malformed_lease_is_never_locked_rewritten_or_deleted()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -390,12 +389,12 @@ public sealed class CampaignCheckpointStoreTests
     [InlineData(true, "append")]
     [InlineData(true, "same-size")]
     [InlineData(true, "other-c2")]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Final_byte_revalidation_prevents_mutated_temp_publication(
         bool replace,
         string mutation)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -496,13 +495,13 @@ public sealed class CampaignCheckpointStoreTests
 
     [Theory]
     [MemberData(nameof(PostPublicationCleanupMutations))]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Postpublication_cleanup_revalidates_the_complete_authority_graph(
         bool replace,
         string hook,
         string mutation)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -562,12 +561,12 @@ public sealed class CampaignCheckpointStoreTests
     [InlineData(true, "after-readback-before-cleanup")]
     [InlineData(false, "before-lease-cleanup")]
     [InlineData(true, "before-lease-cleanup")]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Unsafe_postpublication_cleanup_wins_over_cancellation(
         bool replace,
         string hook)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -631,13 +630,13 @@ public sealed class CampaignCheckpointStoreTests
 
     [Theory]
     [MemberData(nameof(UnsafeConflictCleanupMutations))]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Unsafe_conflict_cleanup_wins_over_cancellation_and_preserves_authority(
         string scenario,
         string hook,
         string mutation)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -711,12 +710,12 @@ public sealed class CampaignCheckpointStoreTests
     [InlineData(true, "after-readback-before-cleanup")]
     [InlineData(false, "before-lease-cleanup")]
     [InlineData(true, "before-lease-cleanup")]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Complete_absolute_path_binding_rejects_moved_ancestor_trees(
         bool replace,
         string hook)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -796,10 +795,10 @@ public sealed class CampaignCheckpointStoreTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Fresh_lease_initialization_revalidates_confinement_after_creator_hook(bool replace)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -920,12 +919,12 @@ public sealed class CampaignCheckpointStoreTests
     [InlineData(true, "arbitrary-bytes")]
     [InlineData(true, "canonical-record")]
     [InlineData(true, "wrong-marker")]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Fresh_lease_initialization_preserves_same_inode_hook_mutations(
         bool replace,
         string mutation)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -1028,10 +1027,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Read_rejects_a_checkpoint_from_an_ancestor_tree_moved_after_open()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -1093,12 +1092,12 @@ public sealed class CampaignCheckpointStoreTests
     [Theory]
     [InlineData("after-lease-create-before-lock", 1)]
     [InlineData("before-publish", 2)]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Publication_rejects_a_rebound_repository_path_used_for_confinement(
         string hook,
         int expectedStateEntryCount)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -1172,12 +1171,12 @@ public sealed class CampaignCheckpointStoreTests
     [InlineData("replace-missing", "before-lease-cleanup")]
     [InlineData("replace-mismatch", "before-temp-cleanup")]
     [InlineData("replace-mismatch", "before-lease-cleanup")]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Cancellation_during_successful_conflict_cleanup_is_not_lost(
         string scenario,
         string cancelPhase)
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -1240,10 +1239,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Setup_cleanup_failure_always_releases_the_process_local_flock()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -1284,10 +1283,10 @@ public sealed class CampaignCheckpointStoreTests
     }
 
     [Fact]
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     public async Task Setup_cleanup_preserves_a_changed_canonical_record_and_releases_flock()
     {
-        if (!IsLinuxX64())
+        if (!IsSupportedStorePlatform())
         {
             return;
         }
@@ -1326,7 +1325,7 @@ public sealed class CampaignCheckpointStoreTests
         Assert.Equal(2, Directory.EnumerateFileSystemEntries(fixture.StateDirectory).Count());
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void ApplyCleanupMutation(
         StoreFixture fixture,
         CampaignCheckpointArtifact intended,
@@ -1416,7 +1415,7 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void AssertCleanupMutationPreserved(
         StoreFixture fixture,
         CampaignCheckpointArtifact intended,
@@ -1498,7 +1497,7 @@ public sealed class CampaignCheckpointStoreTests
             string.Empty));
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void AssertFreshLeaseMutationPreserved(
         string leasePath,
         string mutation,
@@ -1521,7 +1520,7 @@ public sealed class CampaignCheckpointStoreTests
                 0));
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void SetObjectMarker(string path, byte[] marker)
     {
         Assert.Equal(
@@ -1534,7 +1533,7 @@ public sealed class CampaignCheckpointStoreTests
                 1));
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static byte[] ReadObjectMarker(string path)
     {
         var size = GetExtendedAttributeSize(
@@ -1554,7 +1553,7 @@ public sealed class CampaignCheckpointStoreTests
         return marker;
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static byte[] ReadNativeBytes(string path)
     {
         using var handle = OpenNative(path, flags: 0);
@@ -1573,11 +1572,11 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static string ReadNativeText(string path) =>
         System.Text.Encoding.UTF8.GetString(ReadNativeBytes(path));
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static void WriteNativeBytes(
         string path,
         ReadOnlySpan<byte> bytes,
@@ -1607,9 +1606,18 @@ public sealed class CampaignCheckpointStoreTests
         }
     }
 
-    [SupportedOSPlatform("linux")]
+    [UnsupportedOSPlatform("windows")]
     private static SafeFileHandle OpenNative(string path, int flags)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            using var parent = DarwinFileSystem.OpenDirectory(Path.GetDirectoryName(path)!);
+            var nativeFlags = (flags & 3) | DarwinFileSystem.CloseOnExec | DarwinFileSystem.NoFollowAny;
+            if ((flags & 0x40) != 0) nativeFlags |= DarwinFileSystem.Create;
+            if ((flags & 0x80) != 0) nativeFlags |= DarwinFileSystem.Exclusive;
+            if ((flags & 0x200) != 0) nativeFlags |= 0x400; // O_TRUNC
+            return DarwinFileSystem.OpenAt(parent, Path.GetFileName(path), nativeFlags, 0x180);
+        }
         var descriptor = OpenFile(path, flags, 0x180);
         Assert.True(descriptor >= 0, $"open failed for '{path}' with errno {Marshal.GetLastPInvokeError()}");
         return new SafeFileHandle((nint)descriptor, ownsHandle: true);
@@ -1652,10 +1660,10 @@ public sealed class CampaignCheckpointStoreTests
             terminalOutcome: null));
     }
 
-    private static bool IsLinuxX64() =>
+    private static bool IsSupportedStorePlatform() =>
         OperatingSystem.IsLinux()
         && System.Runtime.InteropServices.RuntimeInformation.ProcessArchitecture
-            == System.Runtime.InteropServices.Architecture.X64;
+            == System.Runtime.InteropServices.Architecture.X64 || DarwinFileSystem.IsSupported;
 
     private static string RepositoryRoot() => Path.GetFullPath(Path.Join(
         AppContext.BaseDirectory,
@@ -1665,20 +1673,20 @@ public sealed class CampaignCheckpointStoreTests
     private static extern int CreateHardLink(string existingPath, string newPath);
 
     [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
-    private static extern int RemoveExtendedAttribute(string path, string name);
+    private static extern int LinuxRemoveExtendedAttribute(string path, string name);
 
     [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
-    private static extern nint GetExtendedAttributeSize(string path, string name, nint value, nuint size);
+    private static extern nint LinuxGetExtendedAttributeSize(string path, string name, nint value, nuint size);
 
     [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
-    private static extern nint GetExtendedAttributeValue(
+    private static extern nint LinuxGetExtendedAttributeValue(
         string path,
         string name,
         [Out] byte[] value,
         nuint size);
 
     [DllImport("libc", EntryPoint = "setxattr", SetLastError = true)]
-    private static extern int SetExtendedAttributeValue(
+    private static extern int LinuxSetExtendedAttributeValue(
         string path,
         string name,
         [In] byte[] value,
@@ -1687,6 +1695,30 @@ public sealed class CampaignCheckpointStoreTests
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int OpenFile(string path, int flags, uint mode);
+
+    [DllImport("libc", EntryPoint = "removexattr", SetLastError = true)]
+    private static extern int DarwinRemoveExtendedAttribute(string path, string name, int options);
+    [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
+    private static extern nint DarwinGetExtendedAttributeSize(string path, string name, nint value, nuint size,
+        uint position, int options);
+    [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
+    private static extern nint DarwinGetExtendedAttributeValue(string path, string name, [Out] byte[] value,
+        nuint size, uint position, int options);
+    [DllImport("libc", EntryPoint = "setxattr", SetLastError = true)]
+    private static extern int DarwinSetExtendedAttributeValue(string path, string name, [In] byte[] value,
+        nuint size, uint position, int options);
+
+    private static int RemoveExtendedAttribute(string path, string name) =>
+        DarwinFileSystem.IsSupported ? DarwinRemoveExtendedAttribute(path, name, 0) : LinuxRemoveExtendedAttribute(path, name);
+    private static nint GetExtendedAttributeSize(string path, string name, nint value, nuint size) =>
+        DarwinFileSystem.IsSupported ? DarwinGetExtendedAttributeSize(path, name, value, size, 0, 0)
+            : LinuxGetExtendedAttributeSize(path, name, value, size);
+    private static nint GetExtendedAttributeValue(string path, string name, byte[] value, nuint size) =>
+        DarwinFileSystem.IsSupported ? DarwinGetExtendedAttributeValue(path, name, value, size, 0, 0)
+            : LinuxGetExtendedAttributeValue(path, name, value, size);
+    private static int SetExtendedAttributeValue(string path, string name, byte[] value, nuint size, int flags) =>
+        DarwinFileSystem.IsSupported ? DarwinSetExtendedAttributeValue(path, name, value, size, 0, flags == 1 ? 2 : flags)
+            : LinuxSetExtendedAttributeValue(path, name, value, size, flags);
 
     private sealed class StoreFixture : IDisposable
     {
@@ -1703,7 +1735,7 @@ public sealed class CampaignCheckpointStoreTests
         internal string CheckpointPath { get; }
         internal FileCampaignCheckpointStore Store { get; }
 
-        [SupportedOSPlatform("linux")]
+        [UnsupportedOSPlatform("windows")]
         internal static StoreFixture Create()
         {
             var root = Path.Join(Path.GetTempPath(), $"contractscribe-checkpoint-{Guid.NewGuid():N}");

@@ -24,8 +24,12 @@ internal static class DocumentationPatchBaselineFileSystem
 
     public static DocumentationPatchStableFileRead ReadRegularFile(
         string path,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DarwinFileSystem.RootLease? native = null,
+        string? repositoryRoot = null)
     {
+        if (native is not null)
+            return Native(() => ReadNativeFile(native, repositoryRoot!, path, cancellationToken));
         cancellationToken.ThrowIfCancellationRequested();
         using var stream = OpenRegularFile(path);
         var before = ReadIdentity(stream.SafeFileHandle, expectDirectory: false);
@@ -67,6 +71,53 @@ internal static class DocumentationPatchBaselineFileSystem
         using var handle = OpenDirectory(path);
         return ReadIdentity(handle, expectDirectory: true);
     }
+
+    internal static T Native<T>(Func<T> operation)
+    {
+        try { return operation(); }
+        catch (DarwinFileSystemException exception)
+        {
+            throw exception.Failure == DarwinFileSystemFailure.Stale
+                ? DocumentationPatchBaselineException.Stale() : DocumentationPatchBaselineException.Rejected();
+        }
+    }
+
+    internal static DocumentationPatchPhysicalIdentity ReadNativeDirectoryIdentity(SafeFileHandle handle) =>
+        ReadIdentity(handle, expectDirectory: true);
+
+    private static DocumentationPatchStableFileRead ReadNativeFile(
+        DarwinFileSystem.RootLease native, string root, string path, CancellationToken cancellationToken)
+    {
+        var relative = Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
+        var segments = relative.Split('/');
+        using var parent = native.OpenDirectoryPath(string.Join('/', segments[..^1]), cancellationToken);
+        using var handle = native.OpenFile(parent, segments[^1], cancellationToken);
+        var before = DarwinFileSystem.ReadStat(handle);
+        using var stream = new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false);
+        using var buffer = new MemoryStream();
+        var chunk = new byte[64 * 1024];
+        while (true)
+        {
+            native.Revalidate(cancellationToken);
+            var count = stream.Read(chunk, 0, chunk.Length);
+            if (count == 0) break;
+            buffer.Write(chunk, 0, count);
+        }
+        var after = DarwinFileSystem.ReadStat(handle);
+        using var rebound = native.OpenFile(parent, segments[^1], cancellationToken);
+        var final = DarwinFileSystem.ReadStat(rebound);
+        if (!SameFile(before, after) || !SameFile(before, final) || before.Size != buffer.Length)
+            throw DocumentationPatchBaselineException.Stale();
+        return new(buffer.ToArray(), ReadIdentity(handle, expectDirectory: false));
+    }
+
+    private static bool SameFile(DarwinFileSystem.Stat left, DarwinFileSystem.Stat right) =>
+        left.Device == right.Device && left.Inode == right.Inode && left.Mode == right.Mode
+        && left.LinkCount == right.LinkCount && left.Size == right.Size
+        && left.ModificationTimeSeconds == right.ModificationTimeSeconds
+        && left.ModificationTimeNanoseconds == right.ModificationTimeNanoseconds
+        && left.ChangeTimeSeconds == right.ChangeTimeSeconds
+        && left.ChangeTimeNanoseconds == right.ChangeTimeNanoseconds;
 
     private static FileStream OpenRegularFile(string path)
     {
@@ -116,6 +167,15 @@ internal static class DocumentationPatchBaselineFileSystem
 
     private static SafeFileHandle OpenDirectory(string path)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            return Native(() =>
+            {
+                var handle = DarwinFileSystem.OpenDirectory(path);
+                try { DarwinFileSystem.Qualify(handle); return handle; }
+                catch { handle.Dispose(); throw; }
+            });
+        }
         EnsureNoReparseComponents(path);
         SafeFileHandle handle;
         if (OperatingSystem.IsWindows())
@@ -156,6 +216,15 @@ internal static class DocumentationPatchBaselineFileSystem
         SafeFileHandle handle,
         bool expectDirectory)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            var stat = Native(() => DarwinFileSystem.ReadStat(handle));
+            if ((stat.Mode & UnixFileTypeMask) != (expectDirectory ? UnixDirectory : UnixRegularFile))
+                throw DocumentationPatchBaselineException.Rejected();
+            return new(unchecked((uint)stat.Device), stat.Inode,
+                expectDirectory ? 0 : stat.Size, expectDirectory ? 0ul : stat.LinkCount, expectDirectory);
+        }
+
         if (OperatingSystem.IsWindows())
         {
             if (GetFileType(handle) != FileTypeDisk

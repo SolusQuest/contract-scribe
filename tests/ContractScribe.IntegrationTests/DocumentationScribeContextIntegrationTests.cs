@@ -615,6 +615,14 @@ public sealed class DocumentationScribeContextIntegrationTests
             var result = fixture.Bootstrap(bootstrapper: bootstrapper);
 
             Assert.True(installed);
+            if (DarwinFileSystem.IsSupported)
+            {
+                // Native retained authority rejects before the post-open observer.
+                Assert.False(restored);
+                Directory.Move(parent, replacement);
+                Directory.Move(backup, parent);
+                restored = true;
+            }
             Assert.True(restored);
             Assert.Equal(DocumentationScribeContextBootstrapStatus.Failed, result.Status);
             Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
@@ -954,13 +962,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Equal("context.unsafe.repository-object", exception.Code);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void LinuxChildMountIsUnsafeForCaptureAndPresenceObservation()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/");
 
@@ -975,13 +979,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, presence.Failure);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void LinuxChildMountIsUnsafeForAcceptedFileRevalidation()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/");
         var procIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/proc");
@@ -997,13 +997,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Equal(DocumentationScribeContextReadFailure.Unsafe, exception.Failure);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void LinuxChildMountIsUnsafeForAbsenceRevalidation()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         var rootIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/");
         var procIdentity = DocumentationScribeContextStableFileReader.ReadDirectoryIdentity("/proc");
@@ -1165,6 +1161,14 @@ public sealed class DocumentationScribeContextIntegrationTests
             var result = fixture.Bootstrap(bootstrapper: bootstrapper);
 
             Assert.True(installed);
+            if (DarwinFileSystem.IsSupported)
+            {
+                // Native retained authority rejects before the post-open observer.
+                Assert.False(restored);
+                Directory.Move(root, replacement);
+                Directory.Move(backup, root);
+                restored = true;
+            }
             Assert.True(restored);
             Assert.Equal(DocumentationScribeContextFailureCategory.Stale, result.Failure?.Category);
             Assert.Null(result.Context);
@@ -1361,13 +1365,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         }
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void BoundParentReturnsOriginalBytesWhenPathIsRestoredBeforeFinalObservation()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         const string path = "src/App/Widget.cs";
         using var fixture = ContextFixture.Create(BasicSource());
@@ -1435,13 +1435,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         }
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void ExactPlusCaseVariantLeafCollisionIsUnsafeOnCaseSensitiveHost()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         using var fixture = ContextFixture.Create(BasicSource());
         fixture.WriteText("src/App/WIDGET.CS", "namespace Collision; public class LeafMarker { }\n");
@@ -1454,13 +1450,9 @@ public sealed class DocumentationScribeContextIntegrationTests
         Assert.Null(result.Context);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void ExactPlusCaseVariantDirectoryCollisionIsUnsafeOnCaseSensitiveHost()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         using var fixture = ContextFixture.Create(BasicSource());
         fixture.WriteText("src/APP/Other.cs", "namespace Collision; public class ParentMarker { }\n");

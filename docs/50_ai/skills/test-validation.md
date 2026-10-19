@@ -16,11 +16,28 @@ The ranges below are evidence-based guidance for the current local Windows devel
 
 ### Default local execution path
 
-Use the existing native-Windows workspace by default for the applicable build, the complete fast suite when its failure surface is affected, and the narrowest sufficient filtered integration slice. Do not run the complete integration suite locally merely as routine pull-request validation; exact-head GitHub-hosted Ubuntu x64 CI owns the complete integration run and the final platform conclusion.
+Use the current native development workspace for the applicable build, the complete fast suite when its failure surface is affected, and the narrowest sufficient filtered integration slice. Qualified macOS arm64 follows the local boundary below; native-Windows observations retain their historical feedback-only status. Do not run the complete integration suite locally merely as routine pull-request validation; exact-head GitHub-hosted Ubuntu x64 CI owns the complete integration run and the final platform conclusion.
 
 Run the complete integration suite locally only when diagnosing a failure whose surface cannot be bounded by focused tests, changing suite-wide discovery or execution behavior, collecting an explicitly requested local performance baseline, or otherwise needing evidence that exact-head CI cannot supply. A native-Windows result remains developer feedback, not support evidence.
 
 Use WSL only to exercise Linux-specific behavior or reproduce an Ubuntu CI failure before another push. Keep a WSL validation checkout or worktree on the WSL-native filesystem rather than `/mnt/<drive>` so host-mounted filesystem overhead and semantics do not distort the result. WSL does not replace exact-head GitHub-hosted Ubuntu CI and is not independently qualified support evidence.
+
+### Native macOS arm64 local feedback
+
+[ADR 0004](../../20_architecture/decisions/0004-initial-runner-platform-support.md) limits this path to local development. Qualify the actual source volume and the private temporary/checkpoint volume separately. Read-only APFS source mounts may ignore ownership; private candidate and state storage must enforce ownership, exact user/modes and absence of extended ACLs. Unsupported or unverifiable storage fails closed. Do not repair host permissions, ACLs, mounts, or system settings to obtain a passing test.
+
+Use a physical, link-free temporary path for the test command and its children:
+
+```sh
+TMPDIR=/private/tmp dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj -c Release --no-build --no-restore --logger "trx;LogFilePrefix=fast-native" --results-directory TestResults/native/fast
+TMPDIR=/private/tmp dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj -c Release --no-build --no-restore --filter "FullyQualifiedName~DocumentationPatch|FullyQualifiedName~CampaignCheckpointStoreProcessTests|FullyQualifiedName~LoaderLifecycleProcessTests" --logger "trx;LogFilePrefix=focused-native" --results-directory TestResults/native/focused
+```
+
+The normal restore and applicable Release build must precede `--no-build --no-restore`. Keep the original process and unique result paths, run suites sequentially, and expand the focused filter for the actual changed paths. Native SDK IPC/cache access must be available; a silent sandboxed build exit without compilation diagnostics is not a successful build and does not authorize overlapping retries. Retain ordinary shared compiler servers.
+
+Report executed assertions and explicit platform skips separately. Common candidate, checkpoint, lease, crash/recovery and owned-process cases execute on the native path; Linux mount namespaces, `/proc` and case-distinct-name fixtures remain Linux-specific. New Darwin-only primitive regressions live in the fast suite so required Ubuntu integration's complete-result/no-skip guard remains unchanged. Neither local native success nor an OS early return substitutes for exact-head Ubuntu CI.
+
+Darwin permits lookup/open effects and possibly blocking kernel lookup for identity inspection before authorization. Its proof is required before content bytes, child enumeration and existing-object mutation; it does not claim equivalence to Linux no-cross-device lookup. Verify native negative cases alongside positive reads and writes. The 2026-10-19 local observations used macOS 27 arm64, SDK 10.0.302/runtime 10.0.10 and separate APFS source/private storage. The Windows timing table below remains historical guidance, not a macOS performance bound.
 
 | Changed failure surface | Narrowest initial validation | Expected duration | Outer observation budget |
 | --- | --- | ---: | ---: |

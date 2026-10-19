@@ -57,13 +57,9 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
         Assert.DoesNotContain(fixture.OutsideRoot, listed.ToString(), StringComparison.OrdinalIgnoreCase);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public async Task ReadExcerptRejectsLinuxChildMountWithoutContentOrEvidence()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         using var fixture = RepositoryToolFixture.CreateLinuxRoot();
 
@@ -112,13 +108,9 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
         Assert.Null(listed.Cursor);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public async Task CaseCollisionIsRejectedOnCaseSensitiveHosts()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
 
         using var fixture = RepositoryToolFixture.Create();
         File.WriteAllText(Path.Join(fixture.Root, "docs", "Case.md"), "upper\n", new UTF8Encoding(false));
@@ -389,7 +381,7 @@ public sealed class DocumentationScribeRepositoryToolIntegrationTests
                 var alias = Path.Join(Root, "docs", "hard-alias.md");
                 return OperatingSystem.IsWindows()
                     ? CreateHardLinkW(alias, source, IntPtr.Zero)
-                    : OperatingSystem.IsLinux() && Link(source, alias) == 0;
+                    : (OperatingSystem.IsLinux() || OperatingSystem.IsMacOS()) && Link(source, alias) == 0;
             }
             catch (Exception exception) when (exception is UnauthorizedAccessException or IOException or PlatformNotSupportedException)
             {

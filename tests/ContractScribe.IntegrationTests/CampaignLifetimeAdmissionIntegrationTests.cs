@@ -21,7 +21,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     public async Task Campaign_lifetime_admission_denial_after_exact_settlement_preserves_attempt_and_resumes(
         string dimension, bool clear)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await VerifyLifetimeAdmissionAsync(dimension, clear, overrun: false);
     }
 
@@ -31,7 +31,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     [InlineData("elapsed-provider")]
     public async Task Campaign_lifetime_settlement_overrun_preserves_the_same_resource_owner(string dimension)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await VerifyLifetimeAdmissionAsync(dimension, clear: true, overrun: true);
     }
 
@@ -129,7 +129,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     [InlineData("host-timeout")]
     public async Task Campaign_genuine_non_lifetime_failure_keeps_closed_authority(string cause)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await EndToEndFixture.CreateAsync(additionalSources: AdditionalPatchSources());
         var campaign = StopCauseCampaign(fixture, null);
         var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));

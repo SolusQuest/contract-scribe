@@ -14,16 +14,26 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace ContractScribe.IntegrationTests;
 
 [Collection("Integration process lane 1")]
+[System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
 public sealed class DocumentationPatchApplicationTests
 {
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    public void Wide_unprotected_directory_tree_preserves_the_actual_baseline_rebind()
+    {
+        using var fixture = ApplicationFixture.Create(
+            "namespace N; public class C { public void M() { } }",
+            DocumentationPatchRepositoryEncoding.Utf8,
+            allowedOutputRoots: ["unrelated"]);
+        for (var index = 0; index < 512; index++)
+            Directory.CreateDirectory(Path.Join(fixture.Root, "unrelated", index.ToString("D4")));
+        var capture = fixture.ClassifiedSession.RepositorySession.CaptureDocumentationPatchRepositoryBaseline();
+        var baseline = Assert.IsType<DocumentationPatchRepositoryBaseline>(capture.Baseline);
+        Assert.Equal(DocumentationPatchRepositoryRebindStatus.Unchanged, baseline.Rebind().Status);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task RealLoaderPreservesRepositoryRolesAndLinkedLogicalPathsThroughE1()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await using var fixture = await LoaderFixture.CreateAsync();
         var appSource = Path.Join(fixture.Root, "App", "App.cs");
         const string source =
@@ -165,14 +175,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Equal(source, await File.ReadAllTextAsync(appSource));
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void InsertBuildsACompleteIsolatedCandidateAndLeavesOriginalUntouched()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\n\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -221,7 +226,7 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8, "\n")]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8Bom, "\r\n")]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf16LittleEndianBom, "\n")]
@@ -230,11 +235,6 @@ public sealed class DocumentationPatchApplicationTests
         DocumentationPatchRepositoryEncoding encoding,
         string newline)
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         var vector = LoadRenderingVector("insert-inheritdoc");
         var source = string.Join(newline, vector.SourceLines) + newline;
         using var fixture = ApplicationFixture.Create(source, encoding);
@@ -254,14 +254,9 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void ReplaceConsumesOnlyTheAttachedDocumentationRegion()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\n\npublic class C\n{\n    // unrelated\n    /// <summary>\n    /// Old.\n    /// </summary>\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -281,7 +276,7 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8, "\r\n")]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8Bom, "\n")]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf16LittleEndianBom, "\r\n")]
@@ -290,11 +285,6 @@ public sealed class DocumentationPatchApplicationTests
         DocumentationPatchRepositoryEncoding encoding,
         string newline)
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         var source = string.Join(newline,
             "namespace N;",
             "public class C",
@@ -323,14 +313,9 @@ public sealed class DocumentationPatchApplicationTests
             CandidateBytes(candidate, "Sample.cs"));
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void InsertPreservesAnAbsentTerminalNewline()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -352,14 +337,9 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void FileWithoutASeparatorUsesLfForATopLevelDeclaration()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "public class C { }";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -377,14 +357,9 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void MultipleSameFileEditsAreComputedFromTheOriginalAndAppliedDescending()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void A() { }\n\n    public void B() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -404,14 +379,9 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void SeveralSelectedFilesAreRenderedFromTheSameBaseline()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source =
             "namespace N;\npublic class C\n{\n    public void A() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
@@ -440,14 +410,9 @@ public sealed class DocumentationPatchApplicationTests
             StringComparison.Ordinal);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void InsertionUsesTheAttributedOwnerLineWithNonBmpPrefixText()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\n// 😀 prefix\npublic class C\n{\n    [Obsolete]\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -465,7 +430,7 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void MixedNewlinesAreRejectedWithoutPublishingAHandle()
     {
         const string source = "namespace N;\r\npublic class C\n{\r\n    public void M() { }\r\n}\r\n";
@@ -482,7 +447,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void StandaloneCarriageReturnIsRejectedWithoutPublishingAHandle()
     {
         const string source = "namespace N;\rpublic class C { public void M() { } }";
@@ -499,7 +464,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void InvalidUtf8BytesAreRejectedWithoutPublishingAHandle()
     {
         const string source = "namespace N; public class C { public void M() { } }";
@@ -517,7 +482,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void NoEffectiveReplacementIsRejectedBeforeCandidatePublication()
     {
         const string source = "namespace N;\npublic class C\n{\n    /// <inheritdoc/>\n    public void M() { }\n}\n";
@@ -534,7 +499,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void NoEffectiveReplacementIgnoresBlankLineBeforeDeclaration()
     {
         const string source = "namespace N;\npublic class C\n{\n    /// <inheritdoc/>\n\n    public void M() { }\n}\n";
@@ -551,7 +516,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void AnyNoEffectiveBlockRejectsTheWholeMultiBlockRequest()
     {
         const string source =
@@ -572,7 +537,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void UnprotectedDirectoryShapeDriftDoesNotInvalidateTheRepositoryBaseline()
     {
         const string source =
@@ -600,7 +565,7 @@ public sealed class DocumentationPatchApplicationTests
             baseline.Rebind().Status);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void ProtectedDriftAfterAuthoritySealIsStaleAndProducesNoHandle()
     {
         const string source = "namespace N; public class C { public void M() { } }";
@@ -619,14 +584,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void DriftAfterBaselineCaptureUsesTheCapturedBytesThenFailsFinalRebind()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -656,7 +616,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.False(Directory.Exists(candidateRoot));
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void SessionWithoutSealedAuthorityFailsClosed()
     {
         const string source = "namespace N; public class C { public void M() { } }";
@@ -674,7 +634,7 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void DisposedSessionFailsClosed()
     {
         const string source = "namespace N; public class C { public void M() { } }";
@@ -692,14 +652,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void CancellationAfterTheFirstWritePublishesNoHandleAndCleansTheWorkspace()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -732,14 +687,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.False(Directory.Exists(candidateRoot));
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void MutationAfterSealDoesNotTriggerLaterE1AuthorizationIo()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -765,14 +715,9 @@ public sealed class DocumentationPatchApplicationTests
         candidate.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void ConsumptionTransfersCleanupOwnershipExactlyOnce()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -796,14 +741,9 @@ public sealed class DocumentationPatchApplicationTests
         consumption.Dispose();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void ConsumedCandidateCapturesCurrentDiskBytesExactlyOnce()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -832,18 +772,13 @@ public sealed class DocumentationPatchApplicationTests
             consumption.CaptureCandidateForValidation().Status);
     }
 
-    [Theory]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData("add")]
     [InlineData("delete")]
     [InlineData("replace")]
     [InlineData("replace-directory")]
     public void ConsumedCandidateRejectsTerminalTreeShapeDrift(string mutation)
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source =
             "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
@@ -899,14 +834,9 @@ public sealed class DocumentationPatchApplicationTests
         }
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void ConsumedCandidateRejectsAReplacedRootWithoutReadingTheReplacement()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -934,14 +864,9 @@ public sealed class DocumentationPatchApplicationTests
         Directory.Delete(movedRoot, recursive: true);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void ConsumedCandidateRejectsAReplacedSubtreeWithoutReadingTheReplacement()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -973,14 +898,9 @@ public sealed class DocumentationPatchApplicationTests
         Directory.Delete(candidateRoot, recursive: true);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void StagingInsideTheOriginalCheckoutIsRejectedBeforeRootCreation()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source =
             "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
@@ -1006,14 +926,9 @@ public sealed class DocumentationPatchApplicationTests
             .Order(StringComparer.Ordinal));
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void StagingThroughAnAliasOfTheOriginalCheckoutIsRejectedBeforeRootCreation()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source =
             "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
@@ -1069,14 +984,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void DeterministicWriteFailurePublishesNoHandleAndCleansTheWorkspace()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source =
             "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
@@ -1111,14 +1021,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.False(Directory.Exists(candidateRoot));
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void CandidateRootObserverFailureCleansTheCreatedWorkspace()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source =
             "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
@@ -1144,14 +1049,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void RepeatedApplicationsProduceIdenticalCandidateBytes()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -1180,14 +1080,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.NotEqual(first.RootPath, second.RootPath);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void CleanupAbandonsAReplacedRootWithoutTouchingTheReplacement()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -1212,14 +1107,9 @@ public sealed class DocumentationPatchApplicationTests
         Directory.Delete(movedRoot, recursive: true);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void GovernedHardLinksFailClosedOnLinux()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N; public class C { public void M() { } }";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -1235,14 +1125,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void GovernedSymbolicLinksFailClosedOnLinux()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N; public class C { public void M() { } }";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -1258,14 +1143,9 @@ public sealed class DocumentationPatchApplicationTests
         Assert.Null(result.Candidate);
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public void OutputRootDirectoryLinksFailClosedBeforeCandidateCaptureOnLinux()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N; public class C { public void M() { } }";
         using var fixture = ApplicationFixture.Create(
             source,
@@ -1300,14 +1180,9 @@ public sealed class DocumentationPatchApplicationTests
         }
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.LinuxFact]
     public void CaseDistinctGovernedFilesRemainDistinctOnLinux()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         const string source = "namespace N;\npublic class C\n{\n    public void M() { }\n}\n";
         using var fixture = ApplicationFixture.Create(
             source,

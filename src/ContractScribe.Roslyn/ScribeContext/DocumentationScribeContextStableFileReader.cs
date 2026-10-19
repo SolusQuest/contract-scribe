@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace ContractScribe.Roslyn;
@@ -122,8 +123,9 @@ internal static class DocumentationScribeContextStableFileReader
         Action? checkpoint = null,
         Action<DocumentationScribeContextObservationEvent>? observer = null)
     {
+        using var native = CreateNativeLease(repositoryRoot);
         var segments = Segments(repositoryPath);
-        var before = ObservePath(
+        var before = ObservePath(native,
             repositoryRoot,
             rootIdentity,
             repositoryPath,
@@ -137,7 +139,7 @@ internal static class DocumentationScribeContextStableFileReader
             -1,
             cancellationToken,
             checkpoint);
-        using (var parent = OpenBoundParent(
+        using (var parent = OpenBoundParent(native,
                    repositoryRoot,
                    rootIdentity,
                    repositoryPath,
@@ -147,7 +149,7 @@ internal static class DocumentationScribeContextStableFileReader
                    checkpoint,
                    observer))
         {
-            var leaf = InspectExactName(
+            var leaf = InspectExactName(native,
                 parent,
                 segments[^1],
                 cancellationToken,
@@ -159,7 +161,7 @@ internal static class DocumentationScribeContextStableFileReader
             RequireSpelling(leaf, allowMissing: before.FileIdentity is null);
             var identity = leaf.ExactCount == 0
                 ? null
-                : ReadRelativeFileIdentity(
+                : ReadRelativeFileIdentity(native,
                     parent,
                     segments[^1],
                     repositoryPath,
@@ -181,7 +183,7 @@ internal static class DocumentationScribeContextStableFileReader
             -1,
             cancellationToken,
             checkpoint);
-        var after = ObservePath(
+        var after = ObservePath(native,
             repositoryRoot,
             rootIdentity,
             repositoryPath,
@@ -274,6 +276,7 @@ internal static class DocumentationScribeContextStableFileReader
         Action<DocumentationScribeContextObservationEvent>? observer,
         bool invokePreObservation)
     {
+        using var native = CreateNativeLease(repositoryRoot);
         if (observation.FileIdentity is null)
         {
             throw Stale();
@@ -293,7 +296,7 @@ internal static class DocumentationScribeContextStableFileReader
 
         byte[] bytes;
         DocumentationScribeContextPhysicalIdentity identity;
-        using (var parent = OpenBoundParent(
+        using (var parent = OpenBoundParent(native,
                    repositoryRoot,
                    rootIdentity,
                    observation.RepositoryPath,
@@ -304,7 +307,7 @@ internal static class DocumentationScribeContextStableFileReader
                    observer))
         {
             RequireSpelling(
-                InspectExactName(
+                InspectExactName(native,
                     parent,
                     segments[^1],
                     cancellationToken,
@@ -314,7 +317,7 @@ internal static class DocumentationScribeContextStableFileReader
                     observer,
                     DocumentationScribeContextObservationKind.FirstContentLeaf),
                 allowMissing: false);
-            using var stream = OpenRegularFileAfterInspection(
+            using var stream = OpenRegularFileAfterInspection(native,
                 parent,
                 segments[^1],
                 observation.RepositoryPath,
@@ -343,7 +346,7 @@ internal static class DocumentationScribeContextStableFileReader
                         "context.budget.file-bytes");
             }
 
-            bytes = ReadAll(
+            bytes = ReadAll(native,
                 stream,
                 maximumBytes,
                 acceptedBytes,
@@ -367,7 +370,7 @@ internal static class DocumentationScribeContextStableFileReader
                 cancellationToken,
                 checkpoint);
             RequireSpelling(
-                InspectExactName(
+                InspectExactName(native,
                     parent,
                     segments[^1],
                     cancellationToken,
@@ -378,7 +381,7 @@ internal static class DocumentationScribeContextStableFileReader
                     DocumentationScribeContextObservationKind.ReboundContentLeaf),
                 allowMissing: false);
             stream.Dispose();
-            using var rebound = OpenRegularFileAfterInspection(
+            using var rebound = OpenRegularFileAfterInspection(native,
                 parent,
                 segments[^1],
                 observation.RepositoryPath,
@@ -388,7 +391,12 @@ internal static class DocumentationScribeContextStableFileReader
                 observer,
                 DocumentationScribeContextObservationKind.ReboundContentLeaf);
             var reboundBefore = ReadIdentity(rebound.SafeFileHandle, expectDirectory: false);
-            var reboundBytes = ReadAll(
+            if (reboundBefore != identity)
+            {
+                throw Stale();
+            }
+
+            var reboundBytes = ReadAll(native,
                 rebound,
                 maximumBytes,
                 acceptedBytes,
@@ -414,7 +422,7 @@ internal static class DocumentationScribeContextStableFileReader
             -1,
             cancellationToken,
             checkpoint);
-        var final = ObservePath(
+        var final = ObservePath(native,
             repositoryRoot,
             rootIdentity,
             observation.RepositoryPath,
@@ -437,6 +445,7 @@ internal static class DocumentationScribeContextStableFileReader
         Action? checkpoint,
         Action<DocumentationScribeContextObservationEvent>? observer)
     {
+        using var native = CreateNativeLease(repositoryRoot);
         var segments = Segments(observation.RepositoryPath);
         InvokeObserver(
             observer,
@@ -445,7 +454,7 @@ internal static class DocumentationScribeContextStableFileReader
             -1,
             cancellationToken,
             checkpoint);
-        using (var parent = OpenBoundParent(
+        using (var parent = OpenBoundParent(native,
                    repositoryRoot,
                    rootIdentity,
                    observation.RepositoryPath,
@@ -455,7 +464,7 @@ internal static class DocumentationScribeContextStableFileReader
                    checkpoint,
                    observer))
         {
-            var leaf = InspectExactName(
+            var leaf = InspectExactName(native,
                 parent,
                 segments[^1],
                 cancellationToken,
@@ -467,7 +476,7 @@ internal static class DocumentationScribeContextStableFileReader
             RequireSpelling(leaf, allowMissing: observation.FileIdentity is null);
             var identity = leaf.ExactCount == 0
                 ? null
-                : ReadRelativeFileIdentity(
+                : ReadRelativeFileIdentity(native,
                     parent,
                     segments[^1],
                     observation.RepositoryPath,
@@ -489,7 +498,7 @@ internal static class DocumentationScribeContextStableFileReader
             -1,
             cancellationToken,
             checkpoint);
-        var final = ObservePath(
+        var final = ObservePath(native,
             repositoryRoot,
             rootIdentity,
             observation.RepositoryPath,
@@ -505,6 +514,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static DocumentationScribeContextPathObservation ObservePath(
+        DarwinFileSystem.RootLease? native,
         string repositoryRoot,
         DocumentationScribeContextPhysicalIdentity rootIdentity,
         string repositoryPath,
@@ -514,18 +524,18 @@ internal static class DocumentationScribeContextStableFileReader
     {
         cancellationToken.ThrowIfCancellationRequested();
         checkpoint?.Invoke();
-        using var parent = OpenObservedParent(
+        using var parent = OpenObservedParent(native,
             repositoryRoot,
             rootIdentity,
             segments,
             cancellationToken,
             checkpoint,
             out var directoryIdentities);
-        var spelling = InspectExactName(parent, segments[^1], cancellationToken, checkpoint);
+        var spelling = InspectExactName(native, parent, segments[^1], cancellationToken, checkpoint);
         RequireSpelling(spelling, allowMissing: true);
         var fileIdentity = spelling.ExactCount == 0
             ? null
-            : ReadRelativeFileIdentity(
+            : ReadRelativeFileIdentity(native,
                 parent,
                 segments[^1],
                 repositoryPath,
@@ -538,6 +548,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static SafeFileHandle OpenObservedParent(
+        DarwinFileSystem.RootLease? native,
         string repositoryRoot,
         DocumentationScribeContextPhysicalIdentity rootIdentity,
         string[] segments,
@@ -546,7 +557,7 @@ internal static class DocumentationScribeContextStableFileReader
         out ImmutableArray<DocumentationScribeContextPhysicalIdentity> identities)
     {
         var builder = ImmutableArray.CreateBuilder<DocumentationScribeContextPhysicalIdentity>();
-        var current = OpenDirectory(repositoryRoot);
+        var current = native is null ? OpenDirectory(repositoryRoot) : Native(() => native.OpenRoot());
         try
         {
             var currentIdentity = ReadIdentity(current, expectDirectory: true);
@@ -561,9 +572,9 @@ internal static class DocumentationScribeContextStableFileReader
                 cancellationToken.ThrowIfCancellationRequested();
                 checkpoint?.Invoke();
                 RequireSpelling(
-                    InspectExactName(current, segments[index], cancellationToken, checkpoint),
+                    InspectExactName(native, current, segments[index], cancellationToken, checkpoint),
                     allowMissing: false);
-                var next = OpenDirectoryAfterInspection(
+                var next = OpenDirectoryAfterInspection(native,
                     current,
                     segments[index],
                     string.Join('/', segments),
@@ -588,6 +599,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static SafeFileHandle OpenBoundParent(
+        DarwinFileSystem.RootLease? native,
         string repositoryRoot,
         DocumentationScribeContextPhysicalIdentity rootIdentity,
         string repositoryPath,
@@ -602,7 +614,7 @@ internal static class DocumentationScribeContextStableFileReader
             throw new InvalidOperationException("context.internal.directory-chain");
         }
 
-        var current = OpenDirectory(repositoryRoot);
+        var current = native is null ? OpenDirectory(repositoryRoot) : Native(() => native.OpenRoot());
         try
         {
             InvokeObserver(
@@ -622,7 +634,7 @@ internal static class DocumentationScribeContextStableFileReader
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 checkpoint?.Invoke();
-                var spelling = InspectExactName(
+                var spelling = InspectExactName(native,
                     current,
                     segments[index],
                     cancellationToken,
@@ -636,7 +648,7 @@ internal static class DocumentationScribeContextStableFileReader
                     RequireSpelling(spelling, allowMissing: false);
                 }
 
-                SafeFileHandle? next = OpenDirectoryAfterInspection(
+                SafeFileHandle? next = OpenDirectoryAfterInspection(native,
                     current,
                     segments[index],
                     repositoryPath,
@@ -727,6 +739,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static DocumentationScribeContextPhysicalIdentity ReadRelativeFileIdentity(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle parent,
         string name,
         string repositoryPath,
@@ -736,7 +749,7 @@ internal static class DocumentationScribeContextStableFileReader
         Action<DocumentationScribeContextObservationEvent>? observer,
         DocumentationScribeContextObservationKind kind)
     {
-        using var stream = OpenRegularFileAfterInspection(
+        using var stream = OpenRegularFileAfterInspection(native,
             parent,
             name,
             repositoryPath,
@@ -755,6 +768,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static SafeFileHandle OpenDirectoryAfterInspection(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle parent,
         string name,
         string repositoryPath,
@@ -774,11 +788,13 @@ internal static class DocumentationScribeContextStableFileReader
             kind);
         try
         {
-            var handle = OpenDirectoryRelative(parent, name);
+            var handle = native is null
+                ? OpenDirectoryRelative(parent, name)
+                : Native(() => native.OpenDirectory(parent, name, cancellationToken, checkpoint));
             try
             {
                 RequireSpelling(
-                    InspectExactName(
+                    InspectExactName(native,
                         parent,
                         name,
                         cancellationToken,
@@ -800,7 +816,7 @@ internal static class DocumentationScribeContextStableFileReader
             when (exception.Failure == DocumentationScribeContextReadFailure.Stale)
         {
             RequireSpelling(
-                InspectExactName(
+                InspectExactName(native,
                     parent,
                     name,
                     cancellationToken,
@@ -815,6 +831,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static FileStream OpenRegularFileAfterInspection(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle parent,
         string name,
         string repositoryPath,
@@ -834,11 +851,13 @@ internal static class DocumentationScribeContextStableFileReader
             kind);
         try
         {
-            var stream = OpenRegularFileRelative(parent, name);
+            var stream = native is null
+                ? OpenRegularFileRelative(parent, name)
+                : Native(() => OpenNativeFile(native, parent, name, cancellationToken, checkpoint));
             try
             {
                 RequireSpelling(
-                    InspectExactName(
+                    InspectExactName(native,
                         parent,
                         name,
                         cancellationToken,
@@ -860,7 +879,7 @@ internal static class DocumentationScribeContextStableFileReader
             when (exception.Failure == DocumentationScribeContextReadFailure.Stale)
         {
             RequireSpelling(
-                InspectExactName(
+                InspectExactName(native,
                     parent,
                     name,
                     cancellationToken,
@@ -875,6 +894,7 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static NameInspection InspectExactName(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle parent,
         string expected,
         CancellationToken cancellationToken,
@@ -887,7 +907,7 @@ internal static class DocumentationScribeContextStableFileReader
     {
         var exact = 0;
         var folded = 0;
-        foreach (var name in EnumerateNames(parent, cancellationToken, checkpoint))
+        foreach (var name in EnumerateNames(native, parent, cancellationToken, checkpoint))
         {
             if (repositoryPath is not null)
             {
@@ -901,7 +921,10 @@ internal static class DocumentationScribeContextStableFileReader
                     kind);
             }
 
-            if (!string.Equals(name, expected, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(
+                    native is null ? name : name.Normalize(NormalizationForm.FormD),
+                    native is null ? expected : expected.Normalize(NormalizationForm.FormD),
+                    StringComparison.OrdinalIgnoreCase))
             {
                 continue;
             }
@@ -911,6 +934,11 @@ internal static class DocumentationScribeContextStableFileReader
             {
                 exact += 1;
             }
+        }
+
+        if (native is not null && exact == 0 && folded == 0)
+        {
+            _ = Native(() => native.Find(parent, expected, cancellationToken, checkpoint));
         }
 
         return new(exact, folded);
@@ -936,10 +964,16 @@ internal static class DocumentationScribeContextStableFileReader
     }
 
     private static IEnumerable<string> EnumerateNames(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle parent,
         CancellationToken cancellationToken,
         Action? checkpoint)
     {
+        if (native is not null)
+        {
+            return EnumerateNativeNames(native, parent, cancellationToken, checkpoint);
+        }
+
         if (OperatingSystem.IsWindows())
         {
             return EnumerateWindowsNames(parent, cancellationToken, checkpoint);
@@ -956,6 +990,7 @@ internal static class DocumentationScribeContextStableFileReader
     private sealed record NameInspection(int ExactCount, int FoldedCount);
 
     private static byte[] ReadAll(
+        DarwinFileSystem.RootLease? native,
         FileStream stream,
         int maximumBytes,
         bool acceptedBytes,
@@ -972,6 +1007,7 @@ internal static class DocumentationScribeContextStableFileReader
         {
             cancellationToken.ThrowIfCancellationRequested();
             checkpoint?.Invoke();
+            if (native is not null) Native(() => { native.Revalidate(cancellationToken, checkpoint); return true; });
             var read = stream.Read(chunk, 0, chunk.Length);
             if (read == 0)
             {
@@ -1323,6 +1359,16 @@ internal static class DocumentationScribeContextStableFileReader
 
     private static SafeFileHandle OpenDirectory(string path)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            return Native(() =>
+            {
+                var directory = DarwinFileSystem.OpenDirectory(path);
+                try { DarwinFileSystem.Qualify(directory); return directory; }
+                catch { directory.Dispose(); throw; }
+            });
+        }
+
         EnsureNoReparseComponents(path);
         SafeFileHandle handle;
         if (OperatingSystem.IsWindows())
@@ -1375,6 +1421,24 @@ internal static class DocumentationScribeContextStableFileReader
         SafeFileHandle handle,
         bool expectDirectory)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            var stat = Native(() => DarwinFileSystem.ReadStat(handle));
+            if ((stat.Mode & UnixFileTypeMask) != (expectDirectory ? UnixDirectory : UnixRegularFile)
+                || stat.ModificationTimeNanoseconds is < 0 or >= 1_000_000_000
+                || stat.ChangeTimeNanoseconds is < 0 or >= 1_000_000_000)
+            {
+                throw Unsafe();
+            }
+
+            return new(unchecked((uint)stat.Device), stat.Inode,
+                expectDirectory ? 0 : stat.Size, expectDirectory ? 0ul : stat.LinkCount,
+                expectDirectory, expectDirectory ? 0 : stat.ModificationTimeSeconds,
+                expectDirectory ? 0ul : (ulong)stat.ModificationTimeNanoseconds,
+                expectDirectory ? 0 : stat.ChangeTimeSeconds,
+                expectDirectory ? 0ul : (ulong)stat.ChangeTimeNanoseconds);
+        }
+
         if (OperatingSystem.IsWindows())
         {
             Marshal.SetLastPInvokeError(0);
@@ -1479,6 +1543,40 @@ internal static class DocumentationScribeContextStableFileReader
                 throw Unsafe();
             }
         }
+    }
+
+    private static DarwinFileSystem.RootLease? CreateNativeLease(string path) =>
+        DarwinFileSystem.IsSupported ? Native(() => new DarwinFileSystem.RootLease(path)) : null;
+
+    private static T Native<T>(Func<T> operation)
+    {
+        try { return operation(); }
+        catch (DarwinFileSystemException exception)
+        {
+            throw exception.Failure switch
+            {
+                DarwinFileSystemFailure.Stale => Stale(),
+                DarwinFileSystemFailure.HardLink => UnsafePhysicalIdentity(),
+                _ => Unsafe(),
+            };
+        }
+    }
+
+    private static FileStream OpenNativeFile(
+        DarwinFileSystem.RootLease native, SafeFileHandle parent, string name,
+        CancellationToken cancellationToken, Action? checkpoint)
+    {
+        var handle = native.OpenFile(parent, name, cancellationToken, checkpoint);
+        try { return new FileStream(handle, FileAccess.Read, 64 * 1024, isAsync: false); }
+        catch { handle.Dispose(); throw; }
+    }
+
+    private static IEnumerable<string> EnumerateNativeNames(
+        DarwinFileSystem.RootLease native, SafeFileHandle parent,
+        CancellationToken cancellationToken, Action? checkpoint)
+    {
+        using var enumerator = native.Enumerate(parent, cancellationToken, checkpoint).GetEnumerator();
+        while (Native(() => enumerator.MoveNext())) yield return enumerator.Current.Name;
     }
 
     private static DocumentationScribeContextReadException Unsafe() =>

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Security.Cryptography;
 using Microsoft.CodeAnalysis;
+using Microsoft.Win32.SafeHandles;
 
 namespace ContractScribe.Roslyn;
 
@@ -291,6 +292,8 @@ public sealed class DocumentationPatchRepositoryBaseline
                 return new DocumentationPatchCandidateRootValidation(false, null);
             }
 
+            if (DarwinFileSystem.IsSupported && !ValidateNativeLocation(candidate, allowAncestor: false))
+                return new DocumentationPatchCandidateRootValidation(false, null);
             var identity = DocumentationPatchBaselineFileSystem.ReadDirectoryIdentity(
                 candidate);
             var isDistinct = !SameDirectory(identity, RootIdentity)
@@ -334,6 +337,8 @@ public sealed class DocumentationPatchRepositoryBaseline
                 return new DocumentationPatchCandidateLocationValidation(false, null);
             }
 
+            if (DarwinFileSystem.IsSupported && !ValidateNativeLocation(parent, allowAncestor: true))
+                return new DocumentationPatchCandidateLocationValidation(false, null);
             var parentIdentity = DocumentationPatchBaselineFileSystem.ReadDirectoryIdentity(parent);
             if (SameDirectory(parentIdentity, RootIdentity)
                 || directoryIdentities.Values.Any(identity =>
@@ -352,6 +357,22 @@ public sealed class DocumentationPatchRepositoryBaseline
         {
             return new DocumentationPatchCandidateLocationValidation(false, null);
         }
+    }
+
+    private bool ValidateNativeLocation(string path, bool allowAncestor)
+    {
+        using var source = DarwinFileSystem.OpenDirectory(policy.PhysicalRoot);
+        if (DocumentationPatchBaselineFileSystem.ReadNativeDirectoryIdentity(source) != RootIdentity) return false;
+        using var destination = DarwinFileSystem.OpenDirectory(path);
+        DarwinFileSystem.Qualify(destination, requireOwnership: true);
+        var sourceBacking = DarwinFileSystem.ReadAncestry(source);
+        var destinationBacking = DarwinFileSystem.ReadAncestry(destination);
+        var valid = allowAncestor
+            ? !DarwinFileSystem.IsSameOrDescendant(sourceBacking, destinationBacking)
+            : !DarwinFileSystem.Overlaps(sourceBacking, destinationBacking);
+        return valid && DocumentationPatchBaselineFileSystem.ReadNativeDirectoryIdentity(source) == RootIdentity
+            && DarwinFileSystem.ReadAncestry(source).Projection == sourceBacking.Projection
+            && DarwinFileSystem.ReadAncestry(destination).Projection == destinationBacking.Projection;
     }
 
     private static bool DirectoryIdentitiesEqual(
@@ -691,7 +712,9 @@ internal static class DocumentationPatchRepositoryBaselineCapture
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var before = ObserveShape(policy, mode, cancellationToken);
+        using var native = DarwinFileSystem.IsSupported
+            ? DocumentationPatchBaselineFileSystem.Native(() => new DarwinFileSystem.RootLease(policy.PhysicalRoot)) : null;
+        var before = ObserveShape(policy, mode, cancellationToken, native);
         var entries = ImmutableArray.CreateBuilder<DocumentationPatchRepositoryBaselineEntry>();
         var identities = new HashSet<(ulong Volume, ulong FileId)>();
         foreach (var file in before.Files.OrderBy(file => file.RepositoryPath, StringComparer.Ordinal))
@@ -702,7 +725,9 @@ internal static class DocumentationPatchRepositoryBaselineCapture
                 file.ReadPath.Replace('/', Path.DirectorySeparatorChar));
             var read = DocumentationPatchBaselineFileSystem.ReadRegularFile(
                 fullPath,
-                cancellationToken);
+                cancellationToken,
+                native,
+                policy.PhysicalRoot);
             if (mode == DocumentationPatchRepositoryCaptureMode.Candidate
                 && (read.Identity.LinkCount != 1
                     || !identities.Add((read.Identity.Volume, read.Identity.FileId))))
@@ -718,7 +743,7 @@ internal static class DocumentationPatchRepositoryBaselineCapture
                 read.Identity));
         }
 
-        var after = ObserveShape(policy, mode, cancellationToken);
+        var after = ObserveShape(policy, mode, cancellationToken, native);
         if (before.RootIdentity != after.RootIdentity
             || !before.Files.SequenceEqual(after.Files)
             || !DirectoryIdentitiesEqual(before.DirectoryIdentities, after.DirectoryIdentities))
@@ -740,8 +765,11 @@ internal static class DocumentationPatchRepositoryBaselineCapture
     private static DocumentationPatchRepositoryShape ObserveShape(
         DocumentationPatchRepositoryPolicy policy,
         DocumentationPatchRepositoryCaptureMode mode,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        DarwinFileSystem.RootLease? native = null)
     {
+        if (native is not null)
+            return DocumentationPatchBaselineFileSystem.Native(() => ObserveNativeShape(policy, mode, cancellationToken, native));
         var files = new Dictionary<string, DocumentationPatchObservedFile>(
             DocumentationPatchRepositoryPolicy.PathComparer);
         var directories = new Dictionary<string, DocumentationPatchPhysicalIdentity>(
@@ -861,6 +889,100 @@ internal static class DocumentationPatchRepositoryBaselineCapture
             directories[string.Empty],
             files.Values.OrderBy(file => file.RepositoryPath, StringComparer.Ordinal).ToImmutableArray(),
             filteredDirectories);
+    }
+
+    private static DocumentationPatchRepositoryShape ObserveNativeShape(
+        DocumentationPatchRepositoryPolicy policy, DocumentationPatchRepositoryCaptureMode mode,
+        CancellationToken cancellationToken, DarwinFileSystem.RootLease native)
+    {
+        var files = new Dictionary<string, DocumentationPatchObservedFile>(DocumentationPatchRepositoryPolicy.PathComparer);
+        var directories = new Dictionary<string, DocumentationPatchPhysicalIdentity>(DocumentationPatchRepositoryPolicy.PathComparer);
+        var active = new Stack<(SafeFileHandle Handle, string Path, string RepositoryPath,
+            ImmutableHashSet<(ulong Volume, ulong FileId)> Ancestors, HashSet<string> Names,
+            IEnumerator<DarwinFileSystem.Entry> Entries)>();
+        Push(native.OpenRoot(), policy.PhysicalRoot, string.Empty,
+            ImmutableHashSet<(ulong Volume, ulong FileId)>.Empty);
+        try
+        {
+            while (active.TryPeek(out var node))
+            {
+                if (!node.Entries.MoveNext())
+                {
+                    active.Pop();
+                    node.Entries.Dispose();
+                    node.Handle.Dispose();
+                    continue;
+                }
+                var entry = node.Entries.Current;
+                if (!node.Names.Add(entry.Name.Normalize(System.Text.NormalizationForm.FormD)))
+                    throw DocumentationPatchBaselineException.Rejected();
+                var relative = DocumentationPatchRepositoryPolicy.NormalizeRepositoryPath(
+                    node.RepositoryPath.Length == 0 ? entry.Name : node.RepositoryPath + "/" + entry.Name);
+                if (relative == ".git" || relative.StartsWith(".git/", StringComparison.Ordinal)) continue;
+                var path = Path.Join(node.Path, entry.Name);
+                if (entry.Kind == 5)
+                {
+                    var isDirectory = Directory.Exists(path);
+                    if (mode == DocumentationPatchRepositoryCaptureMode.Candidate
+                        && (isDirectory || policy.IsGoverned(relative) || policy.HasProtectedDescendant(relative)))
+                        throw DocumentationPatchBaselineException.Rejected();
+                    if (mode == DocumentationPatchRepositoryCaptureMode.Resolution
+                        && (isDirectory || policy.IsGoverned(relative)))
+                    {
+                        var target = (isDirectory ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path))
+                            .ResolveLinkTarget(returnFinalTarget: true)
+                            ?? throw DocumentationPatchBaselineException.Rejected();
+                        var targetPath = Path.GetFullPath(target.FullName);
+                        if (!TryRepositoryPath(policy.PhysicalRoot, targetPath, out var sourceIdentity))
+                            throw DocumentationPatchBaselineException.Rejected();
+                        var readPath = DocumentationPatchRepositoryPolicy.NormalizeRepositoryPath(
+                            Path.GetRelativePath(policy.PhysicalRoot, targetPath));
+                        if (isDirectory)
+                            Push(native.OpenDirectoryPath(readPath, cancellationToken), targetPath, relative, node.Ancestors);
+                        else if (!files.TryAdd(relative, new(relative, readPath, sourceIdentity)))
+                            throw DocumentationPatchBaselineException.Rejected();
+                    }
+                    continue;
+                }
+                if (entry.Kind == 2)
+                    Push(native.OpenDirectory(node.Handle, entry.Name, cancellationToken, observation: entry),
+                        path, relative, node.Ancestors);
+                else if (policy.IsGoverned(relative)
+                    && (entry.Kind != 1 || !TryAddObservedFile(files, policy, relative, path)))
+                    throw DocumentationPatchBaselineException.Rejected();
+            }
+            native.Revalidate(cancellationToken);
+            var relevant = RelevantDirectories(files.Keys);
+            return new(directories[string.Empty],
+                files.Values.OrderBy(file => file.RepositoryPath, StringComparer.Ordinal).ToImmutableArray(),
+                directories.Where(pair => relevant.Contains(pair.Key)).ToImmutableDictionary(
+                    pair => pair.Key, pair => pair.Value, DocumentationPatchRepositoryPolicy.PathComparer));
+        }
+        finally
+        {
+            foreach (var node in active)
+            {
+                node.Entries.Dispose();
+                node.Handle.Dispose();
+            }
+        }
+
+        void Push(SafeFileHandle handle, string path, string repositoryPath,
+            ImmutableHashSet<(ulong Volume, ulong FileId)> ancestors)
+        {
+            try
+            {
+                native.Revalidate(cancellationToken);
+                var identity = DocumentationPatchBaselineFileSystem.ReadNativeDirectoryIdentity(handle);
+                var key = (identity.Volume, identity.FileId);
+                if (ancestors.Contains(key)) throw DocumentationPatchBaselineException.Rejected();
+                directories[repositoryPath] = identity;
+                active.Push((handle, path, repositoryPath, ancestors.Add(key),
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    native.Enumerate(handle, cancellationToken).GetEnumerator()));
+            }
+            catch { handle.Dispose(); throw; }
+        }
     }
 
     private static string PhysicalIdentity(string repositoryPath) =>

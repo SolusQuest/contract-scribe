@@ -406,7 +406,7 @@ public sealed partial class DocumentationScribeCompositionTests
         var source = await File.ReadAllBytesAsync(fixture.SourcePath);
         var input = PatchInput(fixture, campaign, store);
         var accepted = await DocumentationCampaignPatchExecutor.ExecuteAsync(input);
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             Assert.Equal(DocumentationCampaignOutcomeKind.HostFailure, accepted.Kind);
             AssertPublicationInvalid(GitHubPublicationRequestFactory.Create(

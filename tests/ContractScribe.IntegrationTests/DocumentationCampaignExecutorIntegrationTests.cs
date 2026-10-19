@@ -14,23 +14,23 @@ namespace ContractScribe.IntegrationTests;
 [Collection("Integration process lane 2")]
 public sealed class DocumentationCampaignExecutorIntegrationTests
 {
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public Task Real_M2_accepts_and_reconstructs_a_complete_campaign_candidate_on_Linux() =>
         DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchAcceptedIntegrationAsync();
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public Task Real_M2_closes_stop_causes_and_preserves_ambiguous_reservations_on_Linux() =>
         DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchFailureIntegrationAsync();
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public Task Real_M2_reduces_only_a_single_independent_rejection_on_Linux() =>
         DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchReductionIntegrationAsync();
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public Task Real_M2_closes_non_removable_rejection_and_host_failure_on_Linux() =>
         DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchClosedFailureIntegrationAsync();
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public Task Real_M2_recovers_settlement_crash_and_readback_vectors_on_Linux() =>
         DocumentationScribeEndToEndIntegrationTests.RunCampaignPatchSettlementRecoveryIntegrationAsync();
 }
@@ -39,11 +39,6 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 {
     internal static async Task RunCampaignPatchAcceptedIntegrationAsync()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await using var fixture = await EndToEndFixture.CreateAsync(
             additionalSources: AdditionalPatchSources());
         var campaign = CreatePatchCampaign(fixture);
@@ -106,11 +101,6 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     internal static async Task RunCampaignPatchFailureIntegrationAsync()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await using (var staleFixture = await EndToEndFixture.CreateAsync(
                          additionalSources: AdditionalPatchSources()))
         {
@@ -220,11 +210,6 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     internal static async Task RunCampaignPatchReductionIntegrationAsync()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await using var fixture = await EndToEndFixture.CreateAsync(
             additionalSources: RejectionPatchSources());
         var campaign = CreatePatchCampaign(fixture);
@@ -250,11 +235,6 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     internal static async Task RunCampaignPatchClosedFailureIntegrationAsync()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await using (var rejectionFixture = await EndToEndFixture.CreateAsync(
                          additionalSources: AdditionalPatchSources()))
         {
@@ -316,11 +296,6 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     internal static async Task RunCampaignPatchSettlementRecoveryIntegrationAsync()
     {
-        if (!OperatingSystem.IsLinux())
-        {
-            return;
-        }
-
         await VerifyAcceptedSettlementRecoveryAsync(SettlementFault.BeforeReplacement);
         await VerifyAcceptedSettlementRecoveryAsync(SettlementFault.AfterReplacement);
         await VerifyAcceptedSettlementRecoveryAsync(SettlementFault.BeforeExactReadback);

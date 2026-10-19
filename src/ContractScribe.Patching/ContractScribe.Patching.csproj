@@ -1,4 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <DefineConstants>$(DefineConstants);CONTRACTSCRIBE_PATCHING</DefineConstants>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Include="../ContractScribe.Roslyn/DarwinFileSystem.cs" Link="CandidateWorkspace/DarwinFileSystem.cs" />
+  </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="../ContractScribe.Core/ContractScribe.Core.csproj" />
     <ProjectReference Include="../ContractScribe.Roslyn/ContractScribe.Roslyn.csproj" />
