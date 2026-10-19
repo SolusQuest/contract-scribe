@@ -303,7 +303,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             campaign.PlanningInput, campaign.Plan, campaign.ExecutionCapability, "style.public-api.v1", campaign.StyleProjection,
             request.Bytes, store, new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), exchange, null,
             cancellationToken, CancellationToken.None, TimeProvider: clock, DeferredExchange: deferred, DispatchGuard: guard,
-            InvocationAllowance: allowance);
+            InvocationAllowance: allowance,
+            TargetAllowance: CampaignStateFactory.CreateInvocationTargetAllowance(store.Current.State,
+                new(store.Current.State.WorkItems.Any(work => work.PausedProviderAttempt is not null) ? 0 : 1)));
 
     private sealed class StopCauseExchange(DocumentationScribeRequest request, Action onSend, int output = 1)
         : IDocumentationScribeModelExchange

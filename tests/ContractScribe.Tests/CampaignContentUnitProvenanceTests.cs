@@ -1,12 +1,16 @@
 using System.Collections.Immutable;
+using System.Text.Json.Nodes;
+using ContractScribe.Agent.Prompting;
 using ContractScribe.Core;
 
 namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
-    [Fact]
-    public void Fresh_request_reconstruction_preserves_each_original_field_claim_and_exact_evidence_association()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Fresh_request_reconstruction_preserves_each_original_field_claim_and_exact_evidence_association(bool seedOmitted)
     {
         var scenario = CreateProposalScenario(costCurrency: "currency.usd");
         var work = scenario.Plan.WorkItems[0];
@@ -33,8 +37,31 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(3, proposal.ContentUnitProvenance.SelectMany(unit => unit.EvidenceReferenceIds).Distinct().Count());
         var fresh = CreateFreshContextExchange(work, scenario: scenario);
         Assert.NotEqual(exchange.Request.ArtifactSha256, fresh.Request.ArtifactSha256);
+        var freshRequest = fresh.Request;
+        if (seedOmitted)
+        {
+            var node = JsonNode.Parse(CanonicalJson.Serialize(new
+            {
+                freshRequest.ScribeRequestVersion,
+                freshRequest.Context,
+                freshRequest.Manifest,
+                freshRequest.ExecutableTargetIds,
+                freshRequest.ContextReferences,
+                freshRequest.EvidenceReferences,
+                freshRequest.EvidenceConflicts,
+                freshRequest.ToolPolicyId,
+                freshRequest.Limits,
+            }).AsSpan())!;
+            foreach (var component in node["manifest"]![0]!["target"]!["applicableComponents"]!.AsArray().Where(component => component!["name"] is null))
+                component!.AsObject().Remove("name");
+            node["evidenceReferences"] = new JsonArray();
+            node["manifest"]![0]!["evidenceReferenceIds"] = new JsonArray();
+            var parsedFresh = DocumentationScribeValidation.ParseRequest(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(node));
+            Assert.True(parsedFresh.IsValid, parsedFresh.Failure?.Code);
+            freshRequest = parsedFresh.Request!;
+        }
         var restored = CampaignStateFactory.RestoreTrustedSubmission(state, scenario.ExecutionAuthority,
-            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, fresh.Request,
+            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, freshRequest,
             fresh.Request.ExecutableTargetIds.Single(), CurrentEvidence(fresh));
         var original = Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(exchange.Result.Submissions).Result);
         var rebound = Assert.IsType<DocumentationScribeProposalTerminal>(restored.Result);
@@ -50,7 +77,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(completed.Artifact.State.LineageCharges, state.LineageCharges);
         var withoutParameterEvidence = CurrentEvidence(fresh).Where(reference => !reference.EvidenceReferenceId.StartsWith("evidence.parameter.", StringComparison.Ordinal)).ToImmutableArray();
         Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.RestoreTrustedSubmission(state, scenario.ExecutionAuthority,
-            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, fresh.Request,
+            "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, freshRequest,
             fresh.Request.ExecutableTargetIds.Single(), withoutParameterEvidence));
         var changed = proposal with
         {

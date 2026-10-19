@@ -1681,6 +1681,21 @@ public sealed partial class DocumentationScribeRuntimeTests
             "provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"),
             timeProvider ?? TimeProvider.System);
 
+    [Fact]
+    public async Task SDK_request_limit_records_the_spent_invocation_resource_before_returning_a_budget_stop()
+    {
+        var request = ActionSafetyRequest();
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json"), request), FinishResponse(request));
+        var scope = new DocumentationScribeExecutionScope(new(DocumentationScribeInvocationLimits.Create(
+            maximumProviderRequests: 1)), null, 0, 0);
+        var result = await CreateRuntime(exchange, EmptyRegistry()).RunAsync(request, Attempt(), Prompt(request), executionScope: scope);
+        Assert.Equal(DocumentationScribeFailureCode.Budget, FailureCode(result));
+        Assert.Single(result.Submissions);
+        Assert.Single(exchange.Requests);
+        Assert.True(scope.Allowance.HasCheckedStop);
+        Assert.Equal(DocumentationScribeInvocationStopReason.ProviderRequests, scope.Allowance.StopReason);
+    }
+
     [Theory]
     [InlineData(64)]
     [InlineData(128)]

@@ -903,7 +903,7 @@ public sealed partial class CampaignCliProcessTests
             if (evidence.GetProperty("executableTargetIds").GetArrayLength() > 1)
                 return CreateSharedResponse(body, batch: false, includeUsage, usageOutputTokens, summaryText, skip);
             if (evidence.GetProperty("progress").GetArrayLength() > 0)
-                return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), includeUsage: true, usageOutputTokens: 0, finish: true);
+                return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), includeUsage: true, usageOutputTokens: 0, finish: true, turn: messages.GetArrayLength());
             var targetId = evidence.GetProperty("executableTargetIds").EnumerateArray().Single().GetString();
             var member = evidence.GetProperty("manifest").EnumerateArray().Single(item => item.GetProperty("targetId").GetString() == targetId);
             JsonObject result;
@@ -922,10 +922,10 @@ public sealed partial class CampaignCliProcessTests
                 };
             }
             var payload = ScribeProtocolFixture.Submit(policy.RootElement, evidence, Encoding.UTF8.GetBytes(result.ToJsonString()));
-            return TerminalResponse(Encoding.UTF8.GetString(payload), includeUsage, usageOutputTokens);
+            return TerminalResponse(Encoding.UTF8.GetString(payload), includeUsage, usageOutputTokens, turn: messages.GetArrayLength());
         }
 
-        private static byte[] TerminalResponse(string terminal, bool includeUsage = false, int usageOutputTokens = 7, bool finish = false)
+        private static byte[] TerminalResponse(string terminal, bool includeUsage = false, int usageOutputTokens = 7, bool finish = false, int turn = 0)
         {
             var response = new
             {
@@ -943,7 +943,7 @@ public sealed partial class CampaignCliProcessTests
                             {
                                 new
                                 {
-                                    id = finish ? "call.finish" : "call.submit",
+                                    id = (finish ? "call.finish." : "call.submit.") + turn,
                                     type = "function",
                                     function = new
                                     {

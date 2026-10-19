@@ -63,6 +63,11 @@ public sealed partial class CampaignCliProcessTests
             ["tools"] = terminalFirst ? new JsonArray(terminal, reader) : new JsonArray(reader, terminal)
         };
         using var response = JsonDocument.Parse(ProposalLoopbackServer.CreateSharedResponse(JsonSerializer.SerializeToUtf8Bytes(wire)));
+        var firstCallId = response.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("tool_calls")[0].GetProperty("id").GetString();
+        messages.Add(new JsonObject { ["role"] = "tool", ["content"] = "{}" });
+        using var continued = JsonDocument.Parse(ProposalLoopbackServer.CreateSharedResponse(JsonSerializer.SerializeToUtf8Bytes(wire)));
+        var nextCallId = continued.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("tool_calls")[0].GetProperty("id").GetString();
+        Assert.NotEqual(firstCallId, nextCallId);
         var call = response.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("tool_calls")[0].GetProperty("function");
         using var arguments = JsonDocument.Parse(call.GetProperty("arguments").GetString()!);
         Assert.Equal(componentSkip ? "cs_terminal" : "alias.read", call.GetProperty("name").GetString());
@@ -167,7 +172,7 @@ public sealed partial class CampaignCliProcessTests
                 .Where(id => !done.Contains(id)).Select(id => facts.GetProperty("manifest").EnumerateArray()
                     .Single(member => member.GetProperty("targetId").GetString() == id)).ToArray();
             if (pending.Length == 0)
-                return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), true, 0, true);
+                return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), true, 0, true, messages.GetArrayLength());
             if (!batch) pending = pending.Take(1).ToArray();
             var references = facts.GetProperty("evidenceReferences").EnumerateArray().Select(item => item.Clone()).ToList();
             foreach (var message in messages.EnumerateArray().Where(message => message.GetProperty("role").GetString() == "tool"))
@@ -194,7 +199,7 @@ public sealed partial class CampaignCliProcessTests
                         role = "assistant", content = (string?)null, reasoning_content = "synthetic-shared-repository-read",
                         tool_calls = missing.Select((member, index) => new
                         {
-                            id = "call.read." + index, type = "function", function = new
+                            id = "call.read." + messages.GetArrayLength() + "." + index, type = "function", function = new
                             {
                                 name = tool.GetProperty("name").GetString(),
                                 arguments = JsonSerializer.Serialize(new { scopeId = member.GetProperty("sourceScopeId").GetString() }),
@@ -243,7 +248,7 @@ public sealed partial class CampaignCliProcessTests
                 ["scribeRequestSha256"] = policy.RootElement.GetProperty("artifactSha256").GetString(),
                 ["sequence"] = facts.GetProperty("nextSequence").GetInt32(),
                 ["items"] = items
-            }.ToJsonString(), includeUsage, usageOutputTokens);
+            }.ToJsonString(), includeUsage, usageOutputTokens, turn: messages.GetArrayLength());
         }
     }
 }

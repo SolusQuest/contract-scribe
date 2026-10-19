@@ -20,8 +20,14 @@ internal static partial class DocumentationScribeComposition
                 .Select(member => (member.WorkItemKey, state.WorkItems.Single(work => work.WorkItemKey == member.WorkItemKey).TrustedProposal?.Evidence
                     ?? member.Skip!.Evidence)).ToImmutableArray();
             if (!loaded.VerifyFreshness(cancellationToken)) throw new ArgumentException("campaign.scribe.progress-stale");
+            // Historical bootstrap evidence must be recaptured for the Host. Its
+            // original inclusion can differ from this request's one unresolved seed.
+            var currentEvidence = sources.SelectMany(source => CumulativeDocumentationPatchComposer.CaptureCurrentTargetEvidence(
+                selection.PrimaryAudit.Session, invocation.PlanningInput,
+                invocation.AcceptedPlan.WorkItems.Single(work => work.WorkItemKey == source.WorkItemKey).Targets.Single(),
+                cancellationToken)).ToImmutableArray();
             var fresh = CumulativeDocumentationPatchComposer.RebuildEvidence(selection.PrimaryAudit.Session, invocation.PlanningInput,
-                invocation.AcceptedPlan, sources, loaded.Contexts.SelectMany(context => context.Facts.Evidence).ToImmutableArray(), cancellationToken);
+                invocation.AcceptedPlan, sources, currentEvidence, cancellationToken);
             return CampaignStateFactory.RestoreScribeProgress(invocation, fresh);
         }
 

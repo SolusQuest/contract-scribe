@@ -119,35 +119,45 @@ internal static class CumulativeDocumentationPatchComposer
                 throw new ArgumentException("campaign.patch.target-current-authority-mismatch");
             }
 
-            var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
-                session.RepositorySession.RepositoryContextRef,
-                session.RepositorySession.InputIdentity,
-                planningInput.Snapshot.TargetProfile,
-                targetFact.SymbolRef,
-                source.Path,
-                source.RequestedDeclarationSpan.Start,
-                source.RequestedDeclarationSpan.End,
-                source.ContentSha256);
-            var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(session, selection);
-            if (bootstrap.Status is not (DocumentationScribeContextBootstrapStatus.Succeeded
-                    or DocumentationScribeContextBootstrapStatus.Incomplete)
-                || bootstrap.Context is not { } context
-                || context.Facts.RepositoryContextRef != session.RepositorySession.RepositoryContextRef
-                || !string.Equals(
-                    context.Facts.InputIdentity,
-                    session.RepositorySession.InputIdentity,
-                    StringComparison.Ordinal)
-                || context.Facts.TargetProfile != planningInput.Snapshot.TargetProfile
-                || context.Facts.SymbolRef != targetFact.SymbolRef
-                || !context.VerifyFreshness(cancellationToken))
-            {
-                throw new ArgumentException("campaign.patch.target-context-stale");
-            }
-
-            currentEvidence.AddRange(context.Facts.Evidence);
+            currentEvidence.AddRange(CaptureCurrentTargetEvidence(session, planningInput, targetFact, cancellationToken));
         }
 
         return currentEvidence.ToImmutable();
+    }
+
+    internal static ImmutableArray<DocumentationScribeEvidenceContextFact> CaptureCurrentTargetEvidence(
+        ClassifiedRepositorySession session, CampaignPlanningInput planningInput,
+        CampaignPlanningTargetFact targetFact, CancellationToken cancellationToken)
+    {
+        if (targetFact.Source is not CampaignPlanningRepositorySourceAuthority source)
+            throw new ArgumentException("campaign.patch.target-authority-invalid");
+        var selection = DocumentationScribeContextValidation.CreateBootstrapSelection(
+            session.RepositorySession.RepositoryContextRef,
+            session.RepositorySession.InputIdentity,
+            planningInput.Snapshot.TargetProfile,
+            targetFact.SymbolRef,
+            source.Path,
+            source.RequestedDeclarationSpan.Start,
+            source.RequestedDeclarationSpan.End,
+            source.ContentSha256);
+        var bootstrap = new DocumentationScribeContextBootstrapper().Bootstrap(session, selection, cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (bootstrap.Status is not (DocumentationScribeContextBootstrapStatus.Succeeded
+                or DocumentationScribeContextBootstrapStatus.Incomplete)
+            || bootstrap.Context is not { } context
+            || context.Facts.RepositoryContextRef != session.RepositorySession.RepositoryContextRef
+            || !string.Equals(
+                context.Facts.InputIdentity,
+                session.RepositorySession.InputIdentity,
+                StringComparison.Ordinal)
+            || context.Facts.TargetProfile != planningInput.Snapshot.TargetProfile
+            || context.Facts.SymbolRef != targetFact.SymbolRef
+            || !context.VerifyFreshness(cancellationToken))
+        {
+            throw new ArgumentException("campaign.patch.target-context-stale");
+        }
+
+        return context.Facts.Evidence;
     }
 
     internal static ImmutableArray<DocumentationScribeEvidenceReference> RebuildEvidence(

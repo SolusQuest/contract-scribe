@@ -159,7 +159,12 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
         }
         if (Result is null && RuntimeResult?.StopReason is CandidateStopReason.WorkUnitLimit
             or CandidateStopReason.SubmissionLimit or CandidateStopReason.ContinuationLimit)
+        {
+            // The SDK can stop at its bound before another reservation observes
+            // the spent product allowance. Retain that existing resource owner.
+            _ = scope.Allowance.CanBeginProviderWork();
             return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+        }
         if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.RepairLimit)
             return new DocumentationScribeTerminalReducer().CommitValidation(State, token, "scribe.repair.exhausted");
         if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.RuntimeLimit)
