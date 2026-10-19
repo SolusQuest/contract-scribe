@@ -71,7 +71,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             exchange.CompletedOutcomes.ToArray());
         Assert.Equal(original, File.ReadAllBytes(fixture.SourcePath));
         Assert.DoesNotContain(fixture.Root, outcome.ToString(), StringComparison.OrdinalIgnoreCase);
-        if (OperatingSystem.IsLinux())
+        if (OperatingSystem.IsLinux() || DarwinFileSystem.IsSupported)
         {
             Assert.Equal("PatchAccepted", outcome.Status);
             var candidate = outcome.AcceptedCandidate;
@@ -1051,7 +1051,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.Equal(3, exchange.RequestCount);
         Assert.NotNull(outcome.PatchRequest);
         Assert.Equal(original, await File.ReadAllBytesAsync(fixture.SourcePath));
-        if (OperatingSystem.IsLinux())
+        if (OperatingSystem.IsLinux() || DarwinFileSystem.IsSupported)
         {
             Assert.Equal("PatchAccepted", outcome.Status);
         }
@@ -1280,7 +1280,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 exchange);
             var patchRequest = outcome.PatchRequest;
             Assert.NotNull(patchRequest);
-            if (OperatingSystem.IsLinux())
+            if (OperatingSystem.IsLinux() || DarwinFileSystem.IsSupported)
             {
                 Assert.Equal("PatchAccepted", outcome.Status);
             }
