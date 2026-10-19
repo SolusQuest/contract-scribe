@@ -134,6 +134,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
         finally
         {
             await DrainAsync();
+            // Drain the bounded product observation/settlement, not an interrupted
+            // original Host callback: it may still have effects requiring reconciliation.
             try { await hostPending; }
             catch (OperationCanceledException) { }
             catch (ToolContractException) when (Result is not null) { }

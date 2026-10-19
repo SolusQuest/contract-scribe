@@ -149,6 +149,82 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Equal(DocumentationScribeFailureCode.Internal, Assert.IsType<DocumentationScribeFailureTerminal>(second.Stop).Code);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task Incremental_uncooperative_Host_receipt_is_bounded_and_late_completion_requires_reconciliation(
+        bool cancelled, bool lateFailure)
+    {
+        var request = IncrementalRequest(root => root["limits"]!["maximumElapsedMilliseconds"] = 1_000);
+        var ids = request.ExecutableTargetIds; var clock = new IncrementalDeadlineClock();
+        using var caller = new CancellationTokenSource(); var host = new PendingSubmissionHost();
+        var exchange = Script(SubmitBatch(request, 1, ids.Select(id => (id, IncrementalProposal(request, id))).ToArray()),
+            FinishConversation(request));
+        var session = DocumentationScribeExecution.Prepare(request, Attempt(), Prompt(request), EmptyRegistry(), exchange,
+            new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), clock, submissionHost: host);
+        var running = DocumentationScribeExecution.RunAsync(session, caller.Token);
+        try
+        {
+            await host.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            clock.Advance(999); Assert.False(running.IsCompleted);
+            if (cancelled) caller.Cancel(); else clock.Advance(1);
+            var result = await running.WaitAsync(TimeSpan.FromSeconds(2));
+            Assert.True(session.HostCompletion.IsCompleted);
+            if (cancelled) Assert.IsType<DocumentationScribeCancelledTerminal>(result.Stop);
+            else Assert.Equal(DocumentationScribeFailureCode.Timeout, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
+            Assert.Equal(DocumentationScribeAcknowledgementStage.DurablyRecorded, result.Submissions.Single(item => item.TargetId == ids[0]).Stage);
+            Assert.Equal(DocumentationScribeAcknowledgementStage.Received, result.Submissions.Single(item => item.TargetId == ids[1]).Stage);
+            Assert.Equal("remaining", DocumentationScribeValidation.GetCoverage(request, result).Single(item => item.TargetId == ids[2]).Status);
+            Assert.Single(exchange.Requests); Assert.Equal(2, host.Calls);
+            var bytes = DocumentationScribeRunResultWriter.Write(request, result);
+            var parsed = DocumentationScribeValidation.ParseRunResult(request, Attempt(), [], bytes.AsMemory());
+            Assert.True(parsed.IsValid);
+            await AssertUnreconciledRestore();
+            host.Complete(lateFailure);
+            await DocumentationScribeTaskObservation.ObserveLateAsync(host.Pending.Task);
+            await Task.Yield();
+            Assert.Equal(DocumentationScribeAcknowledgementStage.Received, session.State.Submissions[ids[1]].Stage);
+            Assert.Equal(bytes.ToArray(), DocumentationScribeRunResultWriter.Write(request, result).ToArray());
+            await AssertUnreconciledRestore();
+            Assert.Single(exchange.Requests); Assert.Equal(2, host.Calls);
+
+            async Task AssertUnreconciledRestore()
+            {
+                var restoredExchange = Script(FinishConversation(request));
+                var restored = await ExecuteIncremental(request, restoredExchange, EmptyRegistry(), host, parsed.Result);
+                Assert.Empty(restoredExchange.Requests); Assert.Equal(2, host.Calls);
+                Assert.Equal(DocumentationScribeFailureCode.Internal, Assert.IsType<DocumentationScribeFailureTerminal>(restored.Stop).Code);
+                Assert.Equal(DocumentationScribeAcknowledgementStage.Received, restored.Submissions.Single(item => item.TargetId == ids[1]).Stage);
+            }
+        }
+        finally
+        {
+            // The old implementation hangs until this original callback is released.
+            host.Complete(lateFailure);
+            await running.WaitAsync(TimeSpan.FromSeconds(10));
+        }
+    }
+
+    [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("42")]
+    [InlineData("\"scalar\"")]
+    [InlineData("true")]
+    public async Task Incremental_non_object_result_stop_returns_closed_shape_failure(string stopJson)
+    {
+        var request = IncrementalRequest();
+        var result = await ExecuteIncremental(request, Script(FinishConversation(request)), EmptyRegistry());
+        var root = JsonNode.Parse(DocumentationScribeRunResultWriter.Write(request, result).AsSpan())!.AsObject();
+        root["stop"] = JsonNode.Parse(stopJson);
+        var parsed = DocumentationScribeValidation.ParseRunResult(request, Attempt(), [], Encoding.UTF8.GetBytes(root.ToJsonString()));
+        Assert.False(parsed.IsValid);
+        Assert.Equal("scribe.result.invalid-shape", parsed.Failure!.Code);
+        Assert.Equal("/stop", parsed.Failure.Pointer);
+    }
+
     [Fact]
     public async Task Incremental_cancelled_prepared_restore_keeps_cancellation_priority_without_model_work()
     {
@@ -218,6 +294,29 @@ public sealed partial class DocumentationScribeRuntimeTests
             if (++Calls == 2) throw new IOException("synthetic-unknown-receipt-outcome");
             return ValueTask.FromResult<DocumentationScribeSubmissionAcknowledgement?>(new(submission.ScribeRequestSha256,
                 submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded));
+        }
+    }
+
+    private sealed class PendingSubmissionHost : IDocumentationScribeSubmissionHost
+    {
+        internal int Calls { get; private set; }
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource<DocumentationScribeSubmissionAcknowledgement?> Pending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private DocumentationScribeSubmissionAcknowledgement? lateAcknowledgement;
+        public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
+            DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
+        {
+            var acknowledgement = new DocumentationScribeSubmissionAcknowledgement(submission.ScribeRequestSha256,
+                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded);
+            if (++Calls == 1) return ValueTask.FromResult<DocumentationScribeSubmissionAcknowledgement?>(acknowledgement);
+            lateAcknowledgement = acknowledgement;
+            Entered.TrySetResult();
+            return new(Pending.Task); // Deliberately ignores cooperative cancellation.
+        }
+        internal void Complete(bool failure)
+        {
+            if (failure) Pending.TrySetException(new IOException("synthetic-late-receipt-failure"));
+            else Pending.TrySetResult(lateAcknowledgement);
         }
     }
 }

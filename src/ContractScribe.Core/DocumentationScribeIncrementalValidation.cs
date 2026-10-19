@@ -301,6 +301,7 @@ public static partial class DocumentationScribeValidation
                 { ExpectProperties(item, "/targetFailures", ["targetId", "validationCode"]); failures.Add(new(ReadIdentifier(item, "targetId", "/targetFailures"), ReadIdentifier(item, "validationCode", "/targetFailures"))); }
                 if (submissions.Count == 0 && !overlay.IsEmpty) throw Fail("invalid-evidence", "/dynamicEvidenceReferences");
                 var stopElement = root.GetProperty("stop");
+                if (stopElement.ValueKind != JsonValueKind.Object) throw Fail("invalid-shape", "/stop");
                 DocumentationScribeTerminal stop;
                 if (stopElement.TryGetProperty("kind", out var kind) && kind.ValueKind == JsonValueKind.String && kind.GetString() == "finished")
                 {

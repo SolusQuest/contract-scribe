@@ -150,10 +150,23 @@ internal sealed partial class DocumentationScribeSession
                         new(State.Request.ArtifactSha256, targetId, validation.ContentSha256, DocumentationScribeAcknowledgementStage.Received));
                     State.Submissions = State.Submissions.SetItem(targetId, received);
                     State.TargetFailures = State.TargetFailures.Remove(targetId);
-                    var acknowledgement = submissionHost is null
-                        ? new DocumentationScribeSubmissionAcknowledgement(State.Request.ArtifactSha256, targetId,
-                            validation.ContentSha256, DocumentationScribeAcknowledgementStage.Validated)
-                        : await submissionHost.AcknowledgeAsync(validation, linked.Token).ConfigureAwait(false);
+                    DocumentationScribeSubmissionAcknowledgement? acknowledgement;
+                    if (submissionHost is null)
+                        acknowledgement = new(State.Request.ArtifactSha256, targetId,
+                            validation.ContentSha256, DocumentationScribeAcknowledgementStage.Validated);
+                    else
+                    {
+                        var pending = submissionHost.AcknowledgeAsync(validation, linked.Token).AsTask();
+                        try { acknowledgement = await pending.WaitAsync(linked.Token).ConfigureAwait(false); }
+                        catch (OperationCanceledException)
+                        {
+                            // Stop observing under the original authority even if the Host ignores
+                            // cancellation. Its late effects require readback, never replay or mutation
+                            // of this received receipt after the product observation has settled.
+                            _ = DocumentationScribeTaskObservation.ObserveLateAsync(pending);
+                            throw;
+                        }
+                    }
                     if (acknowledgement is null) throw new InvalidOperationException("scribe.submission.host-unconfirmed");
                     // A correlated completed receipt remains a fact even if observation was just cancelled.
                     var accepted = DocumentationScribeValidation.AcknowledgeSubmission(validation, acknowledgement);
@@ -198,7 +211,8 @@ internal sealed partial class DocumentationScribeSession
             { Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token); return End(false); }
             catch (OperationCanceledException)
             {
-                if (!token.IsCancellationRequested) State.Scope.ObserveDeadline(permit);
+                if (!token.IsCancellationRequested && !State.CallerCancellation.IsCancellationRequested)
+                    State.Scope.ObserveDeadline(permit);
                 Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
                 return End(false);
             }
