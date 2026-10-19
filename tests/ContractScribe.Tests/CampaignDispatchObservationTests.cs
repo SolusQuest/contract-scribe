@@ -6,6 +6,88 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Theory]
+    [InlineData("providerRequests")]
+    [InlineData("inputTokens")]
+    [InlineData("cachedInputTokens")]
+    [InlineData("uncachedInputTokens")]
+    [InlineData("outputTokens")]
+    [InlineData("reasoningTokens")]
+    [InlineData("costMicrounits")]
+    [InlineData("activeElapsedMilliseconds")]
+    public async Task Rehashed_dispatch_charges_must_match_settlement_and_provider_lineage(string dimension)
+    {
+        var artifact = await RecordDispatchHistoryAsync(false);
+        // Change both row and lineage so a sum-only check cannot detect the defect.
+        AssertInvalidDispatchCharge(artifact, dimension, changeRow: true);
+        if (dimension != "activeElapsedMilliseconds")
+            AssertInvalidDispatchCharge(artifact, dimension, changeRow: false);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Dispatch_history_reconstructs_priced_and_unpriced_actual_producer_charges(bool priced)
+    {
+        var artifact = await RecordDispatchHistoryAsync(false, priced);
+        Assert.Equal(!priced, artifact.State.LineageCharges.HasUnpricedCostHistory);
+        var rows = artifact.State.DispatchObservations;
+        Assert.Equal(0, rows[0].Usage!.CostMicrounits);
+        Assert.Equal(0, rows[0].Charges!.CostMicrounits.TotalCharged);
+        Assert.Equal(priced, rows[1].Charges!.CostMicrounits.ConservativeUnobserved > 0);
+        Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+    }
+
+    private static void AssertInvalidDispatchCharge(CampaignCheckpointArtifact artifact, string dimension, bool changeRow)
+    {
+        var row = artifact.State.DispatchObservations[0];
+        var charges = row.Charges!;
+        var property = char.ToUpperInvariant(dimension[0]) + dimension[1..];
+        var chargeProperty = typeof(CampaignDispatchCharges).GetProperty(property)!;
+        var original = (CampaignChargeObservation)chargeProperty.GetValue(charges)!;
+        var changed = original with { Observed = (original.Observed ?? 0) + 1, TotalCharged = original.TotalCharged + 1 };
+        var changedCharges = charges with { };
+        chargeProperty.SetValue(changedCharges, changed);
+        var root = JsonNode.Parse(artifact.ExactUtf8Json.AsSpan())!;
+        if (changeRow)
+        {
+            row = row with { Charges = changedCharges };
+            row = row with { SettlementCommitmentSha256 = CampaignStateFactory.DispatchSettlementCommitment(row) };
+            var node = root["dispatchObservations"]![0]!;
+            node["charges"]![dimension]!["observed"] = changed.Observed;
+            node["charges"]![dimension]!["totalCharged"] = changed.TotalCharged;
+            node["settlementCommitmentSha256"] = row.SettlementCommitmentSha256;
+        }
+        var lineage = artifact.State.LineageCharges;
+        var lineageProperty = typeof(CampaignLineageCharges).GetProperty(property)!;
+        var oldTotal = (CampaignChargeObservation)lineageProperty.GetValue(lineage)!;
+        var newTotal = oldTotal with { Observed = (oldTotal.Observed ?? 0) + 1, TotalCharged = oldTotal.TotalCharged + 1 };
+        var changedLineage = lineage with { };
+        lineageProperty.SetValue(changedLineage, newTotal);
+        root["lineageCharges"]![dimension]!["observed"] = newTotal.Observed;
+        root["lineageCharges"]![dimension]!["totalCharged"] = newTotal.TotalCharged;
+        var bytes = System.Text.Encoding.UTF8.GetBytes(root.ToJsonString() + "\n");
+        // Parse has no caller-supplied digest. Acceptance additionally receives the
+        // recomputed digest, rather than failing merely on stale transport integrity.
+        var digest = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(bytes)).ToLowerInvariant();
+        var parsed = CampaignStateJson.Parse(bytes);
+        Assert.False(parsed.IsValid, $"Accepted rehashed {dimension}; changeRow={changeRow}, state={row.State}");
+        Assert.Equal(CampaignStateValidationCode.InvalidCorrelation, parsed.FailureCode);
+        Assert.NotEqual(CampaignCheckpointAcceptanceKind.Accepted, CampaignCheckpointAcceptance.AcceptCurrent(
+            CampaignCheckpointReadResult.Found(bytes, artifact.CheckpointRevision, digest)).Kind);
+        var basis = artifact.State;
+        var state = new CampaignCheckpointState(basis.ProductRevision, basis.CampaignLineage, basis.Snapshot,
+            basis.CheckpointRevision, basis.ConfiguredCeilings, changedLineage, basis.WorkItems, basis.Batch,
+            basis.ActiveReservation, basis.CandidateObservation, basis.CumulativeOutcome, basis.KnownCompletedOperations,
+            basis.TerminalOutcome, basis.Predecessor)
+        {
+            AcceptedCandidateOrigin = basis.AcceptedCandidateOrigin,
+            ScribeProgress = basis.ScribeProgress,
+            DispatchObservations = changeRow ? artifact.State.DispatchObservations.SetItem(0, row) : artifact.State.DispatchObservations,
+        };
+        Assert.Throws<CampaignStateValidationException>(() => CampaignStateJson.CreateArtifact(state));
+    }
+
     [Fact]
     public async Task Per_request_observations_distinguish_swapped_presence_with_equal_totals_and_survive_roundtrip()
     {
@@ -111,11 +193,17 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(interrupted ? 1 : 0, row.Charges!.ProviderRequests.TotalCharged);
         Assert.Equal(interrupted ? 1 : 0, row.Charges.ProviderRequests.ConservativeUnobserved);
         Assert.Equal(interrupted, row.ElapsedMilliseconds is null);
+        foreach (var dimension in new[] { "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens",
+            "outputTokens", "reasoningTokens", "costMicrounits", "activeElapsedMilliseconds" })
+            AssertInvalidDispatchCharge(completed, dimension, changeRow: true);
     }
 
-    private static async Task<CampaignCheckpointArtifact> RecordDispatchHistoryAsync(bool swapped)
+    private static async Task<CampaignCheckpointArtifact> RecordDispatchHistoryAsync(bool swapped, bool priced = true)
     {
-        var scenario = UnlimitedScenario();
+        var scenario = CreateProposalScenario(targetLimit: 1, maximumProviderRequests: null,
+            maximumInputTokens: null, maximumUncachedInputTokens: null, maximumOutputTokens: null,
+            maximumCostMicrounits: null, maximumElapsedMilliseconds: null, costEnforced: priced,
+            costRates: new CampaignCostRates(1_000_000, 2_000_000, 1_000_000, 3_000_000));
         var request = CreateScribeExchange(scenario.Plan.WorkItems[0], scenario: scenario).Request;
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var store = new TransitionCheckpointStore(initial);

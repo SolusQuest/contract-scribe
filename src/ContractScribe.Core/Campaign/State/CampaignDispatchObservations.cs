@@ -43,6 +43,8 @@ public static partial class CampaignStateFactory
     {
         Require(!state.DispatchObservations.IsDefault, CampaignStateValidationCode.InvalidShape);
         var ordinals = new Dictionary<(string Execution, string Work, DocumentationScribeAttemptId Attempt), long>();
+        var reconstructed = EmptyCharges();
+        var budget = state.ConfiguredCeilings.CampaignBudget;
         for (var index = 0; index < state.DispatchObservations.Length; index++)
         {
             var row = state.DispatchObservations[index];
@@ -76,6 +78,11 @@ public static partial class CampaignStateFactory
                 && exposure.CostMicrounits is >= 0 and <= CampaignStateContract.MaximumObservation,
                 CampaignStateValidationCode.InvalidBound);
             Require(DocumentationScribeInvocationAllowance.ValidUsage(row.Usage), CampaignStateValidationCode.InvalidBound);
+            Require(row.ConfigurationCommitmentSha256 == state.ConfiguredCeilings.CampaignConfigurationCommitmentSha256
+                && exposure.CostMicrounits == (budget.CostEnforced
+                    ? budget.CostRates!.ConservativeDispatchCost(exposure.CachedInputTokens, exposure.UncachedInputTokens, exposure.OutputTokens) : 0)
+                && (!budget.CostEnforced || row.Usage?.CurrencyId is not { } currency || currency == budget.CostCurrency),
+                CampaignStateValidationCode.InvalidCorrelation);
             if (row.State == CampaignDispatchObservationState.Reserved)
             {
                 Require(index == state.DispatchObservations.Length - 1
@@ -107,8 +114,12 @@ public static partial class CampaignStateFactory
                 ValidateCharge(row.Charges.ReasoningTokens);
                 ValidateCharge(row.Charges.CostMicrounits);
                 ValidateCharge(row.Charges.ActiveElapsedMilliseconds);
-                Require(row.Charges.ProviderRequests.TotalCharged == (row.State == CampaignDispatchObservationState.NotSent ? 0 : 1),
-                    CampaignStateValidationCode.InvalidCorrelation);
+                var next = CampaignBudgetAccounting.SettleDispatchCharges(reconstructed, budget, exposure,
+                    row.State == CampaignDispatchObservationState.Unknown ? null : row.State == CampaignDispatchObservationState.Settled,
+                    row.Usage, row.ElapsedMilliseconds);
+                var expected = CampaignStateReducer.DispatchChargeDelta(reconstructed, next);
+                Require(SameDispatchCharges(row.Charges, expected), CampaignStateValidationCode.InvalidCorrelation);
+                reconstructed = next;
             }
         }
         foreach (var work in state.WorkItems.Where(work => work.PausedProviderAttempt is not null))
@@ -120,16 +131,34 @@ public static partial class CampaignStateFactory
         if (state.ActiveReservation is CampaignProviderReservation claim)
             Require(ordinals.GetValueOrDefault((state.Snapshot.ExecutionCommitmentSha256, claim.WorkItemKey, claim.AttemptId))
                 == claim.LastDispatchOrdinal, CampaignStateValidationCode.InvalidCorrelation);
-        var settled = state.DispatchObservations.Where(row => row.Charges is not null).Select(row => row.Charges!).ToArray();
-        Require(settled.Sum(row => row.ProviderRequests.TotalCharged) == state.LineageCharges.ProviderRequests.TotalCharged
-            && settled.Sum(row => row.ProviderRequests.ConservativeUnobserved) == state.LineageCharges.ProviderRequests.ConservativeUnobserved
-            && settled.Sum(row => row.ProviderRequests.Observed ?? 0) == (state.LineageCharges.ProviderRequests.Observed ?? 0),
+        var lineage = state.LineageCharges;
+        Require(SameProviderCharges(CampaignStateReducer.DispatchChargeDelta(EmptyCharges(), reconstructed),
+                CampaignStateReducer.DispatchChargeDelta(EmptyCharges(), lineage))
+            && reconstructed.HasUnpricedCostHistory == lineage.HasUnpricedCostHistory
+            // Host and M2 own additional independent intervals; their elapsed
+            // charges are not reconstructible from provider history alone.
+            && reconstructed.ActiveElapsedMilliseconds.TotalCharged <= lineage.ActiveElapsedMilliseconds.TotalCharged
+            && (reconstructed.ActiveElapsedMilliseconds.Observed ?? 0) <= (lineage.ActiveElapsedMilliseconds.Observed ?? 0)
+            && reconstructed.ActiveElapsedMilliseconds.ConservativeUnobserved <= lineage.ActiveElapsedMilliseconds.ConservativeUnobserved,
             CampaignStateValidationCode.InvalidCorrelation);
         if (state.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch } dispatch)
             Require(state.DispatchObservations.Length > 0
                 && state.DispatchObservations[^1].State == CampaignDispatchObservationState.Reserved
                 && MatchesDispatch(state.DispatchObservations[^1], state, dispatch), CampaignStateValidationCode.InvalidCorrelation);
     }
+
+    private static bool SameCharge(CampaignChargeObservation left, CampaignChargeObservation right) =>
+        (left.Observed ?? 0) == (right.Observed ?? 0)
+        && left.ConservativeUnobserved == right.ConservativeUnobserved && left.TotalCharged == right.TotalCharged;
+
+    private static bool SameProviderCharges(CampaignDispatchCharges left, CampaignDispatchCharges right) =>
+        SameCharge(left.ProviderRequests, right.ProviderRequests) && SameCharge(left.InputTokens, right.InputTokens)
+        && SameCharge(left.CachedInputTokens, right.CachedInputTokens) && SameCharge(left.UncachedInputTokens, right.UncachedInputTokens)
+        && SameCharge(left.OutputTokens, right.OutputTokens) && SameCharge(left.ReasoningTokens, right.ReasoningTokens)
+        && SameCharge(left.CostMicrounits, right.CostMicrounits);
+
+    private static bool SameDispatchCharges(CampaignDispatchCharges left, CampaignDispatchCharges right) =>
+        SameProviderCharges(left, right) && SameCharge(left.ActiveElapsedMilliseconds, right.ActiveElapsedMilliseconds);
 
     private static bool MatchesDispatch(CampaignDispatchObservation row, CampaignCheckpointState state,
         CampaignProviderReservation claim) => row.ExecutionCommitmentSha256 == state.Snapshot.ExecutionCommitmentSha256
@@ -143,7 +172,7 @@ public static partial class CampaignStateFactory
 
 public static partial class CampaignStateReducer
 {
-    private static CampaignDispatchCharges DispatchChargeDelta(CampaignLineageCharges before, CampaignLineageCharges after)
+    internal static CampaignDispatchCharges DispatchChargeDelta(CampaignLineageCharges before, CampaignLineageCharges after)
     {
         static CampaignChargeObservation Delta(CampaignChargeObservation first, CampaignChargeObservation last) => new(
             last.Observed is { } observed ? checked(observed - (first.Observed ?? 0)) : null,
