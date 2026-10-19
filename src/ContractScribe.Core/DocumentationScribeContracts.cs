@@ -48,6 +48,7 @@ public enum DocumentationScribeContextReferenceKind
 
 public enum DocumentationScribeTerminalKind
 {
+    Finished,
     Proposal,
     Skip,
     Failure,
@@ -164,6 +165,7 @@ public static class DocumentationScribeVocabulary
 
     public static string GetId(DocumentationScribeTerminalKind value) => value switch
     {
+        DocumentationScribeTerminalKind.Finished => "finished",
         DocumentationScribeTerminalKind.Proposal => "proposal",
         DocumentationScribeTerminalKind.Skip => "skip",
         DocumentationScribeTerminalKind.Failure => "failure",
@@ -710,10 +712,11 @@ public sealed record DocumentationScribeRequest
 
     public bool HasExecutableTargets => !ExecutableTargetIds.IsEmpty;
 
-    // S1 validates one terminal for this member. S4 owns incremental selection.
+    // An explicit member view is used only by the shared per-target validator.
+    internal string? ValidationTargetId { get; init; }
     [JsonIgnore]
     public DocumentationScribeManifestTarget ExecutionTarget => HasExecutableTargets
-        ? Manifest.Single(item => item.TargetId == ExecutableTargetIds[0])
+        ? Manifest.Single(item => item.TargetId == (ValidationTargetId ?? ExecutableTargetIds[0]))
         : throw new InvalidOperationException("The manifest has no executable target.");
 
     [JsonIgnore]
@@ -958,6 +961,7 @@ public sealed record DocumentationScribeRunEnvelopeInput(
     ImmutableArray<DocumentationScribeDiagnosticInput> Diagnostics)
 {
     public int RestoredRetryableProviderFailures { get; init; }
+    public DocumentationScribeUsageCoverage? UsageCoverage { get; init; }
 }
 
 public sealed record DocumentationScribeRunEnvelope
@@ -969,7 +973,7 @@ public sealed record DocumentationScribeRunEnvelope
         string modelConfigurationId,
         string scribeProtocolId,
         string toolPolicyId,
-        string styleProfileId,
+        ImmutableArray<string> styleProfileIds,
         int attemptNumber,
         int restoredRetryableProviderFailures,
         int providerRequestCount,
@@ -979,7 +983,7 @@ public sealed record DocumentationScribeRunEnvelope
         DocumentationScribeUsageObservation? usage,
         DocumentationScribeCacheObservation? cache,
         DocumentationScribeCostObservation? cost,
-        ImmutableArray<DocumentationScribeDiagnostic> diagnostics)
+        ImmutableArray<DocumentationScribeDiagnostic> diagnostics, DocumentationScribeUsageCoverage? usageCoverage = null)
     {
         ScribeRequestSha256 = scribeRequestSha256;
         AttemptId = attemptId;
@@ -987,7 +991,7 @@ public sealed record DocumentationScribeRunEnvelope
         ModelConfigurationId = modelConfigurationId;
         ScribeProtocolId = scribeProtocolId;
         ToolPolicyId = toolPolicyId;
-        StyleProfileId = styleProfileId;
+        StyleProfileIds = styleProfileIds;
         AttemptNumber = attemptNumber;
         RestoredRetryableProviderFailures = restoredRetryableProviderFailures;
         ProviderRequestCount = providerRequestCount;
@@ -998,6 +1002,7 @@ public sealed record DocumentationScribeRunEnvelope
         Cache = cache;
         Cost = cost;
         Diagnostics = diagnostics;
+        UsageCoverage = usageCoverage;
     }
 
     public string ScribeRequestSha256 { get; }
@@ -1012,7 +1017,7 @@ public sealed record DocumentationScribeRunEnvelope
 
     public string ToolPolicyId { get; }
 
-    public string StyleProfileId { get; }
+    public ImmutableArray<string> StyleProfileIds { get; }
 
     public int AttemptNumber { get; }
 
@@ -1033,35 +1038,40 @@ public sealed record DocumentationScribeRunEnvelope
     public DocumentationScribeCostObservation? Cost { get; }
 
     public ImmutableArray<DocumentationScribeDiagnostic> Diagnostics { get; }
+    public DocumentationScribeUsageCoverage? UsageCoverage { get; }
 }
 
 public sealed record DocumentationScribeRunResult
 {
-    internal DocumentationScribeRunResult(
-        string scribeRequestSha256,
-        DocumentationScribeAttemptId attemptId,
+    internal DocumentationScribeRunResult(string scribeRequestSha256, DocumentationScribeAttemptId attemptId,
         ImmutableArray<DocumentationScribeEvidenceReference> dynamicEvidenceReferences,
-        DocumentationScribeTerminal terminal,
-        DocumentationScribeRunEnvelope runEnvelope)
+        DocumentationScribeTerminal stop, DocumentationScribeRunEnvelope runEnvelope,
+        ImmutableArray<DocumentationScribeTargetSubmission> submissions = default,
+        ImmutableArray<DocumentationScribeTargetFailure> targetFailures = default,
+        int repairCount = 0, int nextSequence = 1)
     {
         ScribeRequestSha256 = scribeRequestSha256;
         AttemptId = attemptId;
         DynamicEvidenceReferences = dynamicEvidenceReferences;
-        Terminal = terminal;
+        Stop = stop;
         RunEnvelope = runEnvelope;
+        Submissions = submissions.IsDefault ? [] : submissions;
+        TargetFailures = targetFailures.IsDefault ? [] : targetFailures;
+        RepairCount = repairCount;
+        NextSequence = nextSequence;
     }
 
     public int ScribeRunResultVersion => DocumentationScribeContract.Version;
-
     public string ScribeRequestSha256 { get; }
-
     public DocumentationScribeAttemptId AttemptId { get; }
-
     public ImmutableArray<DocumentationScribeEvidenceReference> DynamicEvidenceReferences { get; }
-
-    public DocumentationScribeTerminal Terminal { get; }
-
+    public ImmutableArray<DocumentationScribeTargetSubmission> Submissions { get; }
+    public ImmutableArray<DocumentationScribeTargetFailure> TargetFailures { get; }
+    public DocumentationScribeTerminal Stop { get; }
+    public int RepairCount { get; }
+    public int NextSequence { get; }
     public DocumentationScribeRunEnvelope RunEnvelope { get; }
+    public override string ToString() => nameof(DocumentationScribeRunResult);
 }
 
 public sealed class DocumentationScribeValidatedRunOutcome

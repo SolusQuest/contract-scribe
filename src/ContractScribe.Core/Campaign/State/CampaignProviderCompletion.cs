@@ -97,7 +97,7 @@ internal sealed class CampaignProviderCompletionRegistrar
         }
 
         return outcome is null
-            || outcome.RunResult.Terminal is DocumentationScribeProposalTerminal
+            || CampaignStateFactory.GetSingletonScribeSubmission(outcome.Request, outcome.RunResult)?.Result is DocumentationScribeProposalTerminal
                 && invocation.ValidateOutcome(outcome);
     }
 
@@ -108,7 +108,7 @@ internal sealed class CampaignProviderCompletionRegistrar
             return false;
         }
 
-        return outcome.RunResult.Terminal switch
+        return outcome.RunResult.Stop switch
         {
             DocumentationScribeCancelledTerminal => true,
             DocumentationScribeFailureTerminal

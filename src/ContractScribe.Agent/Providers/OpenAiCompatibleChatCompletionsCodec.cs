@@ -67,11 +67,12 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             }
 
             ValidateSchema(request.Terminal.SchemaJson);
+            operationToAlias.Add(request.Terminal.OperationId, TerminalAlias);
             var rounds = ReconstructRounds(request.CompletedToolExchanges, operationToAlias);
             var body = WriteBody(request, model, profile, orderedTools, operationToAlias, rounds);
             if (body.Length > DocumentationScribeBoundary.MaximumLogicalRequestUtf8Bytes)
             {
-                throw Unsupported();
+                throw new OpenAiCompatibleProtocolException(DocumentationScribeModelFailureCode.ContextLimit);
             }
 
             var projection = WriteProjection(request, orderedTools);
@@ -315,6 +316,15 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 throw Malformed(OpenAiCompatibleResponseCodecDisposition.FinishReasonInconsistent);
             }
 
+            if (request.Profile.ContinuationPolicy
+                    == OpenAiCompatibleContinuationPolicy.RequiredForToolCalls
+                && (!reasoningContentPresent || reasoningContentText is null))
+            {
+                throw MissingRequiredContinuation(request);
+            }
+
+            var continuation = new DocumentationScribeAssistantContinuation(contentPresent, contentText, reasoningContentText);
+
             if (terminalCount > 0)
             {
                 var terminal = calls[0];
@@ -326,17 +336,10 @@ internal static class OpenAiCompatibleChatCompletionsCodec
 
                 return Response(
                     [],
-                    [new DocumentationScribeModelTerminalSubmission(terminal.Arguments)],
+                    [new DocumentationScribeModelTerminalSubmission(terminal.Arguments, terminal.CallId)],
                     observations,
-                    continuation: null,
+                    continuation,
                     Observation(request, reasoningContentPresent && reasoningContentText is not null));
-            }
-
-            if (request.Profile.ContinuationPolicy
-                    == OpenAiCompatibleContinuationPolicy.RequiredForToolCalls
-                && (!reasoningContentPresent || reasoningContentText is null))
-            {
-                throw MissingRequiredContinuation(request);
             }
 
             if (calls.Count > request.OutputLimits.MaximumToolCalls)
@@ -361,10 +364,6 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                     call.Arguments));
             }
 
-            var continuation = new DocumentationScribeAssistantContinuation(
-                contentPresent,
-                contentText,
-                reasoningContentText);
             return Response(
                 normalized.ToImmutable(),
                 [],
@@ -477,7 +476,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 WriteTool(writer, aliases[tool.OperationId], tool.Description, tool.InputSchemaJson);
             }
 
-            WriteTool(writer, TerminalAlias, "Submit one structured terminal result.", request.Terminal.SchemaJson);
+            WriteTool(writer, TerminalAlias, "Submit target results or finish the selected conversation.", request.Terminal.SchemaJson);
             writer.WriteEndArray();
             writer.WritePropertyName("thinking");
             writer.WriteStartObject();

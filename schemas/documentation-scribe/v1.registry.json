@@ -5,6 +5,7 @@
   "terminalKinds": [
     "cancelled",
     "failure",
+    "finished",
     "proposal",
     "skip"
   ],
@@ -60,5 +61,29 @@
     "tool.outcome.incomplete",
     "tool.outcome.timed-out",
     "tool.outcome.unavailable"
+  ],
+  "targetResultKinds": [
+    "proposal",
+    "skip"
+  ],
+  "sessionStopKinds": [
+    "cancelled",
+    "failure",
+    "finished"
+  ],
+  "acknowledgementStages": [
+    "received",
+    "validated",
+    "durably-recorded",
+    "patch-accepted"
+  ],
+  "finishReasons": [
+    "completed",
+    "context",
+    "unresolved"
+  ],
+  "submissionKinds": [
+    "finish",
+    "submit"
   ]
 }

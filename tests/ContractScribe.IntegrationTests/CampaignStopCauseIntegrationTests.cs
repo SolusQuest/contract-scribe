@@ -1,3 +1,6 @@
+using System.Collections.Immutable;
+using System.Text;
+using System.Text.Json.Nodes;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Cli;
 using ContractScribe.Core;
@@ -6,6 +9,37 @@ namespace ContractScribe.IntegrationTests;
 
 public sealed partial class DocumentationScribeEndToEndIntegrationTests
 {
+    [Fact]
+    public async Task Current_campaign_stop_fixture_submits_then_finishes_through_the_actual_Runtime()
+    {
+        var root = JsonNode.Parse(await File.ReadAllBytesAsync(Path.Join(
+            ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.RepositoryRoot,
+            "tests", "fixtures", "documentation-scribe", "v1", "valid", "request.json")))!;
+        var member = root["manifest"]![0]!;
+        member["target"]!["applicableComponents"] = new JsonArray();
+        member["styleProfile"]!["componentPolicies"] = new JsonArray();
+        var reference = root["evidenceReferences"]!.AsArray().Single(item => item!["subject"]!["symbolRef"] is not null)!;
+        root["evidenceReferences"] = new JsonArray(reference.DeepClone());
+        member["evidenceReferenceIds"] = new JsonArray(reference["evidenceReferenceId"]!.GetValue<string>());
+        var request = Assert.IsType<DocumentationScribeRequest>(DocumentationScribeValidation.ParseRequest(
+            Encoding.UTF8.GetBytes(root.ToJsonString())).Request);
+        var prompt = new DocumentationScribePromptInput(
+            request.ContextReferences.Select(item => new DocumentationScribeContextContent(item.ContextReferenceId, item.Kind,
+                item.ContentSha256, item.IncludedUtf8ByteCount, item.IsTruncated, new string('c', item.IncludedUtf8ByteCount))).ToImmutableArray(),
+            request.EvidenceReferences.Select(item => new DocumentationScribeEvidenceContent(item.EvidenceReferenceId, item.Authority,
+                item.ContentSha256, item.IncludedUtf8ByteCount, item.IsTruncated, new string('e', item.IncludedUtf8ByteCount))).ToImmutableArray());
+        var sends = 0;
+        var runtime = new TestScribeExecution(new StopCauseExchange(request, () => sends++),
+            new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Build(),
+            new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"));
+        Assert.True(DocumentationScribeAttemptId.TryParse("scribe-attempt.0123456789abcdef0123456789abcdef", out var attempt));
+        var result = await runtime.RunAsync(request, attempt, prompt);
+        Assert.Equal(DocumentationScribeFinishReason.Completed, Assert.IsType<DocumentationScribeFinishedTerminal>(result.Stop).Reason);
+        Assert.IsType<DocumentationScribeProposalTerminal>(Assert.Single(result.Submissions).Result);
+        Assert.Equal(2, sends); Assert.Equal(2, result.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(1, result.RunEnvelope.Usage!.OutputTokens);
+    }
+
     [Theory]
     [InlineData("safety")]
     [InlineData("action")]
@@ -86,8 +120,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 request, StopCauseAllowance(fixture, freshClock), freshClock, exchange));
             Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, resumed.Kind);
             Assert.Equal(attempt, store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey).TrustedProposal!.HistoricalAttemptId);
-            Assert.Equal(1, sends);
-            Assert.Equal(1, store.Current.State.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(2, sends);
+            Assert.Equal(2, store.Current.State.LineageCharges.ProviderRequests.Observed);
         }
         else
         {
@@ -143,8 +177,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var result = await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store,
             request, allowance, clock, exchange));
         Assert.Null(store.Current.State.ActiveReservation);
-        Assert.Equal(1, sends);
-        Assert.Equal(1, store.Current.State.LineageCharges.ProviderRequests.Observed);
+        var firstRequests = cause == "elapsed" || nonelapsed ? 1 : 2;
+        Assert.Equal(firstRequests, sends);
+        Assert.Equal(firstRequests, store.Current.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(nonelapsed ? 8 : 1, store.Current.State.LineageCharges.OutputTokens.Observed);
         var finalWork = store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey);
         if (cause.StartsWith("elapsed", StringComparison.Ordinal))
@@ -163,8 +198,8 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 new StopCauseExchange(request.Request, () => sends++)));
             Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, resumed.Kind);
             Assert.Equal(paused.AttemptId, store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey).TrustedProposal!.HistoricalAttemptId);
-            Assert.Equal(2, sends);
-            Assert.Equal(2, store.Current.State.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(firstRequests + 2, sends);
+            Assert.Equal(firstRequests + 2, store.Current.State.LineageCharges.ProviderRequests.Observed);
         }
         else
         {
@@ -202,7 +237,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                 request, StopCauseAllowance(fixture, freshClock), freshClock, exchange));
             Assert.Equal(cause.EndsWith("budget", StringComparison.Ordinal)
                 ? DocumentationCampaignProposalOutcomeKind.BudgetExhausted : DocumentationCampaignProposalOutcomeKind.ProposalReady, replay.Kind);
-            Assert.Equal(1, sends);
+            Assert.Equal(firstRequests, sends);
             Assert.True(beforeReplay.AsSpan().SequenceEqual(store.Current.ExactUtf8Json.AsSpan()));
             if (cause.EndsWith("budget", StringComparison.Ordinal))
                 Assert.Equal(CampaignTerminalReason.Budget, store.Current.State.TerminalOutcome!.Reason);
@@ -276,8 +311,11 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             onSend();
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return ValueTask.FromResult(new DocumentationScribeModelResponse([],
+                    [new(ScribeProtocolFixture.Finish(modelRequest))], usage: new(0, 0, 0, 0)));
             return ValueTask.FromResult(new DocumentationScribeModelResponse([],
-                [new(CampaignProposalTerminal(request))], usage: new(0, output, 0, 0)));
+                [new(ScribeProtocolFixture.Submit(modelRequest, CampaignProposalTerminal(request)))], usage: new(0, output, 0, 0)));
         }
     }
 

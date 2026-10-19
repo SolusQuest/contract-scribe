@@ -44,21 +44,22 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             steps.Add(ScriptedDocumentationScribeStep.Return(new([], [], new(DocumentationScribeModelFailureCode.TransientUnavailable), usage: new(0, 0, 0, 0))));
             steps.Add(ScriptedDocumentationScribeStep.Return(first));
         }
-        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(Encoding.UTF8.GetBytes(
-            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}"))], usage: new(0, 0, 0, 0))));
+        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Submit(request, Encoding.UTF8.GetBytes(
+            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}")))], usage: new(0, 0, 0, 0))));
+        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(request))], usage: new(0, 0, 0, 0))));
         var exchange = new ScriptedDocumentationScribeModelExchange(steps.ToImmutableArray());
         var session = ToolSession(request, registry, exchange);
         var result = await session.RunAsync();
         Assert.Equal(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, Assert.Single(session.Requests[0].Tools).OperationId);
         AssertBoundReadSchema(request, Assert.Single(session.Requests[0].Tools).InputSchemaJson);
         Assert.Equal(badMember ? 0 : retry ? 2 : 1, port.Calls);
-        Assert.Equal(badMember ? 1 : retry ? 4 : 2, exchange.Requests.Length);
-        if (badMember) Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        Assert.Equal(badMember ? 1 : retry ? 5 : 3, exchange.Requests.Length);
+        if (badMember) Assert.DoesNotContain(result.Submissions, item => item.Stage >= DocumentationScribeAcknowledgementStage.Validated && item.Result is DocumentationScribeProposalTerminal);
         else
         {
-            Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
             Assert.Equal(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt,
-                Assert.Single(session.Requests[^1].CompletedToolExchanges).OperationId);
+                Assert.Single(session.Requests[^1].CompletedToolExchanges.Where(item => item.OperationId != DocumentationScribeBoundary.TerminalOperationId)).OperationId);
             if (retry) Assert.Empty(session.Requests[2].CompletedToolExchanges);
         }
     }
@@ -81,8 +82,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             failure: null, usage: new(0, 0, 0, 0), cache: null, cost: null,
             assistantContinuation: new("synthetic assistant", "synthetic opaque continuation"),
             continuationObservation: DocumentationScribeContinuationObservation.None);
-        var terminal = new DocumentationScribeModelResponse([], [new(Encoding.UTF8.GetBytes(
-            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}"))], usage: new(0, 0, 0, 0));
+        var terminal = new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Submit(fixture.Request, Encoding.UTF8.GetBytes(
+            "{\"kind\":\"skip\",\"reason\":\"scribe.skip.insufficient-evidence\",\"evidenceReferenceIds\":[]}")))], usage: new(0, 0, 0, 0));
         var steps = new List<ScriptedDocumentationScribeStep> { ScriptedDocumentationScribeStep.Return(first) };
         if (retry)
         {
@@ -90,6 +91,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             steps.Add(ScriptedDocumentationScribeStep.Return(first));
         }
         steps.Add(ScriptedDocumentationScribeStep.Return(terminal));
+        steps.Add(ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(fixture.Request))], usage: new(0, 0, 0, 0))));
         var scripted = new ScriptedDocumentationScribeModelExchange(steps.ToImmutableArray());
         var handler = new ScribeToolHttpHandler(async (message, token, number) =>
         {
@@ -119,13 +121,13 @@ public sealed partial class DocumentationScribeRepositoryToolTests
                         ["reasoning_content"] = "synthetic opaque continuation",
                         ["tool_calls"] = new JsonArray(new JsonObject
                         {
-                            ["id"] = number == 1 ? "call.read" : "call.terminal",
+                            ["id"] = number == 1 ? "call.read" : number == 2 ? "call.submit" : "call.finish",
                             ["type"] = "function",
                             ["function"] = new JsonObject
                             {
                                 ["name"] = number == 1 ? "cs_tool_000" : "cs_terminal",
                                 ["arguments"] = number == 1 ? "{\"scopeId\":\"context.instructions\",\"repositoryPath\":\"docs/guide.md\"}"
-                                    : Encoding.UTF8.GetString(terminal.TerminalSubmissions[0].TerminalUtf8Json.Span),
+                                    : number == 2 ? Encoding.UTF8.GetString(terminal.TerminalSubmissions[0].TerminalUtf8Json.Span) : Encoding.UTF8.GetString(ScribeResultFixture.Finish(fixture.Request)),
                             },
                         }),
                     },
@@ -147,7 +149,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         IDocumentationScribeModelExchange exchange = retry ? scripted : transport;
         var session = ToolSession(fixture.Request, registry, exchange);
         var result = await session.RunAsync();
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, result.Terminal.Kind);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(result.Submissions).Result.Kind);
         var completed = Assert.Single(session.Requests[1].CompletedToolExchanges);
         Assert.True(completed.ResultUtf8Json.Length > 16_384);
         // The actual CLI codec does not promote maintained-documentation ranges as target source evidence.
@@ -163,7 +165,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             Assert.Equal("call.read", Assert.Single(session.Requests[3].CompletedToolExchanges).CallId);
         }
         else Assert.Empty(result.DynamicEvidenceReferences);
-        if (!retry) Assert.Equal(2, handler.Count);
+        if (!retry) Assert.Equal(3, handler.Count);
     }
 
     [Fact]
@@ -185,7 +187,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(response)]);
         var session = ToolSession(fixture.Request, registry, exchange);
         var result = await session.RunAsync();
-        Assert.NotEqual(DocumentationScribeTerminalKind.Proposal, result.Terminal.Kind);
+        Assert.DoesNotContain(result.Submissions, item => item.Stage >= DocumentationScribeAcknowledgementStage.Validated && item.Result is DocumentationScribeProposalTerminal);
         Assert.Equal(0, entered);
         Assert.Single(exchange.Requests);
         Assert.Equal(0, session.State.Scope.Allowance.ToolCallCount);

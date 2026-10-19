@@ -83,16 +83,18 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.True(request.EvidenceReferences.Length <= 1);
         Assert.All(request.Manifest.Where(member => !all[member.Target.SymbolRef].M3Eligible), member => Assert.Null(member.StyleProfile));
         Assert.True(built.Selection.Matches(request));
-        var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(
-            """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0)))]);
+        var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Submit(request,
+            """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray()))], usage: new(0, 0, 0, 0))),
+            ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(request))], usage: new(0, 0, 0, 0, 0)))]);
         var outcome = await DocumentationScribeComposition.ExecuteAsync(built.Selection, built.RequestUtf8Json,
             fixture.AttemptId, null, RuntimeOptions(), exchange);
-        Assert.Equal(DocumentationScribeTerminalKind.Skip, outcome.RunResult!.Terminal.Kind);
-        var startup = Assert.Single(exchange.Requests);
+        Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(outcome.RunResult!.Submissions).Result.Kind);
+        Assert.Equal(2, exchange.Requests.Length);
+        var startup = exchange.Requests[0];
         using var targetData = JsonDocument.Parse(startup.Messages.Single(message => message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
         Assert.Equal(request.Manifest.Length, targetData.RootElement.GetProperty("manifest").GetArrayLength());
         Assert.True(startup.DeterministicUtf8.Length < 1_048_576);
-        Assert.Equal(1, outcome.RunResult.RunEnvelope.ProviderRequestCount);
+        Assert.Equal(2, outcome.RunResult.RunEnvelope.ProviderRequestCount);
         using var semanticSchema = JsonDocument.Parse(startup.Tools.Single(tool =>
             tool.OperationId == DocumentationScribeSemanticToolSelection.OperationId).InputSchemaJson);
         Assert.Equal(request.Manifest.Where(member => all[member.Target.SymbolRef].M3Eligible)
@@ -110,13 +112,14 @@ public sealed partial class DocumentationScribeCompositionTests
         {
             var semanticExchange = new ScriptedDocumentationScribeModelExchange([
                 ScriptedDocumentationScribeStep.Return(SemanticCall(request.ExecutionTarget.TargetId)),
-                ScriptedDocumentationScribeStep.Return(new([], [new(
-                    """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0))),
+                ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Submit(request,
+                    """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray()))], usage: new(0, 0, 0, 0))),
+                ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(request))], usage: new(0, 0, 0, 0, 0))),
             ]);
             var semanticOutcome = await DocumentationScribeComposition.ExecuteAsync(built.Selection, built.RequestUtf8Json,
                 fixture.AttemptId, null, RuntimeOptions(), semanticExchange);
-            Assert.Equal(DocumentationScribeTerminalKind.Skip, semanticOutcome.RunResult!.Terminal.Kind);
-            Assert.Equal(2, semanticExchange.Requests.Length);
+            Assert.Equal(DocumentationScribeTerminalKind.Skip, Assert.Single(semanticOutcome.RunResult!.Submissions).Result.Kind);
+            Assert.Equal(3, semanticExchange.Requests.Length);
             using var semanticResult = JsonDocument.Parse(Assert.Single(semanticExchange.Requests[1].CompletedToolExchanges).ResultUtf8Json);
             var declaration = semanticResult.RootElement.GetProperty("page").GetProperty("core")
                 .GetProperty("declaration").GetProperty("fact");
@@ -131,15 +134,22 @@ public sealed partial class DocumentationScribeCompositionTests
                 var rejected = await DocumentationScribeComposition.ExecuteAsync(built.Selection, built.RequestUtf8Json,
                     fixture.AttemptId, null, RuntimeOptions(), forged);
                 Assert.Equal(DocumentationScribeFailureCode.ToolProtocol,
-                    Assert.IsType<DocumentationScribeFailureTerminal>(rejected.RunResult!.Terminal).Code);
+                    Assert.IsType<DocumentationScribeFailureTerminal>(rejected.RunResult!.Stop).Code);
                 Assert.Single(forged.Requests);
             }
             var singleton = CampaignScribeRequestBuilder.BuildManifest(bundle, [method], [method.SymbolRef], policy, config, default);
-            var singleExchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(new([], [new(
-                """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray())], usage: new(0, 0, 0, 0)))]);
-            await DocumentationScribeComposition.ExecuteAsync(singleton.Selection, singleton.RequestUtf8Json,
+            var singletonRequest = DocumentationScribeValidation.ParseRequest(singleton.RequestUtf8Json).Request!;
+            var singleExchange = new ScriptedDocumentationScribeModelExchange([
+                ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Submit(singletonRequest,
+                    """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray()))], usage: new(0, 0, 0, 0))),
+                ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(singletonRequest))], usage: new(0, 0, 0, 0, 0))),
+            ]);
+            var singletonOutcome = await DocumentationScribeComposition.ExecuteAsync(singleton.Selection, singleton.RequestUtf8Json,
                 fixture.AttemptId, null, RuntimeOptions(), singleExchange);
-            var singleStartup = Assert.Single(singleExchange.Requests);
+            Assert.IsType<DocumentationScribeSkipTerminal>(Assert.Single(singletonOutcome.RunResult!.Submissions).Result);
+            Assert.IsType<DocumentationScribeFinishedTerminal>(singletonOutcome.RunResult.Stop);
+            Assert.Equal(2, singleExchange.Requests.Length);
+            var singleStartup = singleExchange.Requests[0];
             Assert.Equal(startup.Messages.Take(3).Select(message => message.Content), singleStartup.Messages.Take(3).Select(message => message.Content));
             Assert.NotEqual(string.Join("\n", startup.Tools.Select(tool => tool.InputSchemaJson)),
                 string.Join("\n", singleStartup.Tools.Select(tool => tool.InputSchemaJson)));

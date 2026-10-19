@@ -3,13 +3,6 @@
   "scribeRequestSha256": "c55ee60c5b6425c3bf7329ea3e013d8bbd4581c41af7b828c12e1fe86058d67e",
   "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
   "dynamicEvidenceReferences": [],
-  "terminal": {
-    "kind": "skip",
-    "reason": "scribe.skip.insufficient-evidence",
-    "evidenceReferenceIds": [
-      "evidence.summary"
-    ]
-  },
   "runEnvelope": {
     "scribeRequestSha256": "c55ee60c5b6425c3bf7329ea3e013d8bbd4581c41af7b828c12e1fe86058d67e",
     "attemptId": "scribe-attempt.0123456789abcdef0123456789abcdef",
@@ -17,13 +10,44 @@
     "modelConfigurationId": "model.synthetic.v1",
     "scribeProtocolId": "scribe-protocol.v1",
     "toolPolicyId": "tool-policy.read-only.v1",
-    "styleProfileId": "style.public-api.v1",
     "attemptNumber": 1,
     "restoredRetryableProviderFailures": 0,
     "providerRequestCount": 1,
     "toolRoundCount": 0,
     "toolCallCount": 0,
     "elapsedMilliseconds": 900,
-    "diagnostics": []
-  }
+    "diagnostics": [],
+    "styleProfileIds": [
+      "style.public-api.v1"
+    ]
+  },
+  "submissions": [
+    {
+      "targetId": "target.selected",
+      "contentSha256": "2fb952bca1b4520949a45d4c88029d34c064dc37bfb03fbfcdf928a3adee0999",
+      "stage": "validated",
+      "result": {
+        "kind": "skip",
+        "reason": "scribe.skip.insufficient-evidence",
+        "evidenceReferenceIds": [
+          "evidence.summary"
+        ]
+      }
+    }
+  ],
+  "targetFailures": [],
+  "stop": {
+    "kind": "finished",
+    "reason": "unresolved"
+  },
+  "repairCount": 0,
+  "nextSequence": 2,
+  "coverage": [
+    {
+      "targetId": "target.selected",
+      "auditOutcome": "audit.outcome.violation",
+      "status": "skipped",
+      "stage": "validated"
+    }
+  ]
 }

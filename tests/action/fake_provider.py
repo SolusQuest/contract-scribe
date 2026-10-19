@@ -3,9 +3,8 @@
 
 Port of ProposalLoopbackServer (CampaignCliProcessTests.cs) to stdlib-only
 Python. Scenarios:
-  proposal         emit a terminal proposal derived from the request's
-                   target-evidence message (the real admission path)
-  skip             emit the insufficient-evidence terminal skip
+  proposal         submit a proposal from the current manifest, then finish
+  skip             submit an insufficient-evidence skip, then finish
   hang             accept the connection and never respond (cancellation legs)
 
 Writes <ready-file> {"endpoint": "http://127.0.0.1:P/v1/chat/completions"}
@@ -20,48 +19,50 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
-def terminal_response(terminal_json):
+def terminal_response(payload):
+    finish = payload["kind"] == "finish"
     body = {"choices": [{"index": 0, "message": {
-        "role": "assistant",
-        "tool_calls": [{"id": "call.terminal", "type": "function",
+        "role": "assistant", "content": None,
+        "reasoning_content": "synthetic-action-continuation",
+        "tool_calls": [{"id": "call.finish" if finish else "call.submit", "type": "function",
                         "function": {"name": "cs_terminal",
-                                     "arguments": terminal_json}}]},
-        "finish_reason": "tool_calls"}]}
+                                     "arguments": json.dumps(payload)}}]},
+        "finish_reason": "tool_calls"}],
+        "usage": {"prompt_tokens": 0 if finish else 31,
+                  "prompt_cache_hit_tokens": 0 if finish else 29,
+                  "prompt_cache_miss_tokens": 0 if finish else 2,
+                  "completion_tokens": 0 if finish else 7}}
     return json.dumps(body).encode()
 
 
-SKIP = terminal_response(
-    '{"kind":"skip","reason":"scribe.skip.insufficient-evidence",'
-    '"evidenceReferenceIds":[]}')
-
-
-def proposal_response(wire):
-    evidence = None
-    for message in wire.get("messages", []):
-        content = message.get("content")
-        if not content:
-            continue
-        try:
-            parsed = json.loads(content)
-        except json.JSONDecodeError:
-            continue
-        if parsed.get("authority") == "target-evidence":
-            evidence = parsed
-            break
-    if evidence is None:
+def proposal_response(wire, force_skip=False):
+    policy = json.loads(wire["messages"][3]["content"])
+    evidence = json.loads(wire["messages"][4]["content"])
+    if evidence["authority"] != "target-evidence":
         raise ValueError("target-evidence missing")
-    reference = next(r["evidenceReferenceId"] for r in
+    if evidence["progress"]:
+        return terminal_response({"kind": "finish",
+                                  "scribeRequestSha256": policy["artifactSha256"]})
+    target_id, = evidence["executableTargetIds"]
+    member = next(m for m in evidence["manifest"] if m["targetId"] == target_id)
+    reference = next(r for r in
                      evidence["evidenceReferences"]
-                     if "symbolRef" in r.get("subject", {}))
-    if evidence.get("applicableComponents"):
-        return SKIP
-    unit = {"kind": "content.summary",
-            "lines": ["Documents the selected contract."],
-            "claimCategoryId": "claim.behavior",
-            "evidenceReferenceIds": [reference]}
-    terminal = {"kind": "proposal", "target": evidence["terminalTarget"],
-                "contentUnits": [unit]}
-    return terminal_response(json.dumps(terminal))
+                     if r["evidenceReferenceId"] in member["evidenceReferenceIds"]
+                     and "symbolRef" in r.get("subject", {}))
+    if force_skip or member["applicableComponents"]:
+        result = {"kind": "skip", "reason": "scribe.skip.insufficient-evidence",
+                  "evidenceReferenceIds": []}
+    else:
+        unit = {"kind": "content.summary",
+                "lines": ["Documents the selected contract."],
+                "claimCategoryId": reference["claimCategoryIds"][0],
+                "evidenceReferenceIds": [reference["evidenceReferenceId"]]}
+        result = {"kind": "proposal", "target": member["proposalTarget"],
+                  "contentUnits": [unit]}
+    return terminal_response({"kind": "submit",
+                              "scribeRequestSha256": policy["artifactSha256"],
+                              "sequence": evidence["nextSequence"],
+                              "items": [{"targetId": target_id, "result": result}]})
 
 
 def serve(scenario, ready_file, log_file):
@@ -90,8 +91,7 @@ def serve(scenario, ready_file, log_file):
                     time.sleep(3600)
             try:
                 wire = json.loads(body.decode("utf-8"))
-                response = SKIP if scenario == "skip" \
-                    else proposal_response(wire)
+                response = proposal_response(wire, force_skip=scenario == "skip")
             except (ValueError, KeyError, StopIteration, TypeError):
                 self.send_error(400, "Unsupported synthetic request")
                 return

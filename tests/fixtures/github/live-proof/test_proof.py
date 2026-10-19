@@ -138,7 +138,7 @@ class GateTests(unittest.TestCase):
     def test_offline_checkout_assertion_and_product_baseline_use_exact_pr_head(self):
         document = workflow_document((proof.SOURCE / WORKFLOW).read_bytes())
         job = document['jobs']['offline']
-        self.assertEqual({'contents': 'read'}, job['permissions'])
+        self.assertEqual({'contents': 'read', 'packages': 'read'}, job['permissions'])
         steps = job['steps']
         checkout = next(step for step in steps if step.get('uses', '').startswith('actions/checkout@'))
         expected = '${{ github.event.pull_request.head.sha }}'
@@ -147,11 +147,19 @@ class GateTests(unittest.TestCase):
         assertion = next(step for step in steps if step.get('name') == 'Assert exact PR head before building')
         self.assertEqual(expected, assertion['env']['EXPECTED_SHA'])
         self.assertEqual('bash', assertion['shell'])
+        restore = next(step for step in steps if step.get('name') == 'Restore the normal CLI')
+        credentials = 'NuGetPackageSourceCredentials_solusagent'
+        self.assertEqual('dotnet restore src/ContractScribe.Cli/ContractScribe.Cli.csproj', restore['run'])
+        self.assertEqual('Username=${{ github.actor }};Password=${{ github.token }};ValidAuthenticationTypes=Basic',
+                         restore['env'][credentials])
+        self.assertEqual([restore], [step for step in steps if credentials in step.get('env', {})])
         build = next(step for step in steps if 'dotnet build ' in step.get('run', ''))
+        self.assertIn('src/ContractScribe.Cli/ContractScribe.Cli.csproj --configuration Release --no-restore', build['run'])
         test = next(step for step in steps if 'M5_TEST_PRODUCT_SHA' in step.get('env', {}))
         self.assertEqual(expected, test['env']['M5_TEST_PRODUCT_SHA'])
         self.assertLess(steps.index(checkout), steps.index(assertion))
-        self.assertLess(steps.index(assertion), steps.index(build))
+        self.assertLess(steps.index(assertion), steps.index(restore))
+        self.assertLess(steps.index(restore), steps.index(build))
         self.assertLess(steps.index(build), steps.index(test))
         if sys.platform != 'linux':
             return  # The hosted Linux job also executes its actual bash assertion below.

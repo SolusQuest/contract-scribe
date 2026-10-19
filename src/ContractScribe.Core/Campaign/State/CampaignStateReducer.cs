@@ -175,7 +175,7 @@ public sealed class CampaignProviderInvocationAuthority
         && claim.OperationKind == CampaignProviderOperationKind.Host
         && claim.CurrentExecutionSettledProviderRequests == outcome.RunResult.RunEnvelope.ProviderRequestCount
         && RestoredRetryableProviderFailures == outcome.RunResult.RunEnvelope.RestoredRetryableProviderFailures
-        && (outcome.RunResult.Terminal is not DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Provider } failure
+        && (outcome.RunResult.Stop is not DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Provider } failure
             || (failure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
                 ? claim.RetryProgress.LastDisposition == CampaignProviderDispatchDisposition.RetryableFailure
                     && claim.RetryProgress.RetryableFailureCount >= Request.Limits.MaximumAttempts
@@ -527,7 +527,8 @@ public static partial class CampaignStateReducer
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             }
 
-            var terminal = ordinaryOutcome.RunResult.Terminal;
+            var terminal = CampaignStateFactory.GetSingletonScribeSubmission(ordinaryOutcome.Request, ordinaryOutcome.RunResult)?.Result
+                ?? ordinaryOutcome.RunResult.Stop;
             CampaignTrustedProposal? trustedProposal = null;
             var proposalAdmission = CampaignTrustedProposalAdmissionKind.Admitted;
             if (terminal is DocumentationScribeProposalTerminal)
@@ -703,7 +704,7 @@ public static partial class CampaignStateReducer
         }
         else
         {
-            if (outcome.RunResult.Terminal is not DocumentationScribeProposalTerminal)
+            if (CampaignStateFactory.GetSingletonScribeSubmission(outcome.Request, outcome.RunResult)?.Result is not DocumentationScribeProposalTerminal)
             {
                 return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
             }
@@ -1692,9 +1693,10 @@ public static partial class CampaignStateReducer
         DocumentationScribeValidatedRunOutcome outcome,
         string workItemKey)
     {
-        var terminal = outcome.RunResult.Terminal;
+        var terminal = CampaignStateFactory.GetSingletonScribeSubmission(outcome.Request, outcome.RunResult)?.Result ?? outcome.RunResult.Stop;
         var code = terminal switch
         {
+            DocumentationScribeFinishedTerminal => CampaignWorkOutcomeCode.ValidationFailure,
             DocumentationScribeSkipTerminal { Reason: DocumentationScribeSkipReason.InsufficientEvidence } =>
                 CampaignWorkOutcomeCode.InsufficientEvidence,
             DocumentationScribeSkipTerminal => CampaignWorkOutcomeCode.UnsupportedDomain,

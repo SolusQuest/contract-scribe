@@ -906,9 +906,11 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return ValueTask.FromResult(SyntheticResponse([], [new(ScribeProtocolFixture.Finish(modelRequest))]));
             return ValueTask.FromResult(SyntheticResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(CampaignProposalTerminal(request))]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeProtocolFixture.Submit(modelRequest, CampaignProposalTerminal(request)))]));
         }
     }
 

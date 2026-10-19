@@ -58,7 +58,7 @@ Ordinary product operations sort by ordinal product ID and map request-locally t
 
 The full JSON body vector contains a fixed synthetic model and the exact RunPolicy content, including artifact identity, attempt identity/number, context, style, and limits. The separately hashed product-correctness projection excludes model, endpoint, credential, HTTP headers, aliases, timestamps, transport-generated request IDs, and the separately held provider-request counter. Changing caller configuration therefore cannot change product correctness.
 
-Every network request is `POST` to the exact configured endpoint over exact HTTP/1.1. It emits `Content-Type: application/json; charset=utf-8`, `Accept: application/json`, optional caller-owned bearer authorization, no custom User-Agent, and no trace headers. BCL-generated Host and Content-Length are transport facts outside the product projection. The terminal function uses fixed description `Submit one structured terminal result.`.
+Every network request is `POST` to the exact configured endpoint over exact HTTP/1.1. It emits `Content-Type: application/json; charset=utf-8`, `Accept: application/json`, optional caller-owned bearer authorization, no custom User-Agent, and no trace headers. BCL-generated Host and Content-Length are transport facts outside the product projection. The terminal function uses fixed description `Submit target results or finish the selected conversation.`. Incremental submit and finish use the same alias and normalization boundary. Each accepted submission is reconstructed with its original call ID/arguments and exact opaque continuation followed by the actual correlated Host acknowledgement. Required continuation applies to submission and finish as well as reads.
 
 ## Closed capability and security subset
 
@@ -77,7 +77,7 @@ Redirect following, compressed responses, HTTP/2 or HTTP/3, proxies, HTTP-date r
 
 The focused `DocumentationScribeProviderTransportTests.Selection_probe_preserves_the_complete_product_path` test is the executable decision gate. It exercises five messages, two tools plus terminal, a first tool call, its canonical result, a terminal response, and direct usage/cache observations through the pure selected codec before the socket-owning exchange is added. The test also verifies a stable full-wire digest and a caller-isolated product-projection digest.
 
-The probe first passed with:
+The original #107 probe first passed with:
 
 ```text
 dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --configuration Release --no-restore --filter FullyQualifiedName~DocumentationScribeProviderTransportTests
@@ -86,7 +86,7 @@ dotnet test tests/ContractScribe.Tests/ContractScribe.Tests.csproj --configurati
 - full fixed-input generic non-thinking wire SHA-256: `68781078e22df92791bdc62253fe1437f684ba8af78dd8373d7d70d7a98eeda2`;
 - caller-isolated product projection SHA-256: `d97a87532f0c1776bd07324fbeeadfd146d4968b9c0e81b1c0dfdf4e1edcf0d8`.
 
-The vector retained every required field without a provider branch, hidden field, or unstable ordering, so the direct BCL selection passed its implementation gate.
+The original vector retained every required field without a provider branch, hidden field, or unstable ordering, so the direct BCL selection passed its implementation gate. Those hashes remain historical #107 evidence. The current S4 vector uses the revised function description and an explicit finish payload: its initial wire hash is `29675790cf310575bff27be45a7749efe2027c6285eca7e3cf065795a2e539e8` and its product projection remains `d97a87532f0c1776bd07324fbeeadfd146d4968b9c0e81b1c0dfdf4e1edcf0d8`. The executable known-answer test owns the current vector; this update makes no additional live-provider compatibility claim.
 
 The same selection and production-handler policy tests were then invoked from an uncommitted test launcher with `RuntimeFrameworkVersion=10.0.2` and roll-forward disabled:
 

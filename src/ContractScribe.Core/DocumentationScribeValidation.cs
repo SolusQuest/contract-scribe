@@ -6,7 +6,7 @@ using System.Xml;
 
 namespace ContractScribe.Core;
 
-public static class DocumentationScribeValidation
+public static partial class DocumentationScribeValidation
 {
     private const int MaximumDiagnosticPropertyNameLength = 64;
 
@@ -276,194 +276,17 @@ public static class DocumentationScribeValidation
         value is not null && IsRepositoryRelativePathValue(value);
 
     public static DocumentationScribeResultParseResult ParseRunResult(
-        DocumentationScribeRequest request,
-        DocumentationScribeAttemptId expectedAttemptId,
+        DocumentationScribeRequest request, DocumentationScribeAttemptId expectedAttemptId,
         ImmutableArray<DocumentationScribeEvidenceReference> expectedDynamicEvidenceReferences,
-        ReadOnlyMemory<byte> utf8Json)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        if (!request.HasExecutableTargets)
-        {
-            return new DocumentationScribeResultParseResult(
-                null, new DocumentationScribeResultValidationFailure("scribe.result.invalid-correlation", "/terminal"));
-        }
-
-        if (expectedDynamicEvidenceReferences.IsDefault)
-        {
-            throw new ArgumentException(
-                "Expected dynamic evidence must be initialized.",
-                nameof(expectedDynamicEvidenceReferences));
-        }
-
-        if (string.IsNullOrEmpty(expectedAttemptId.Value))
-        {
-            throw new ArgumentException("A validated attempt identity is required.", nameof(expectedAttemptId));
-        }
-
-        var rawFailure = TryParseArtifact(
-            utf8Json,
-            "scribe.result",
-            "scribeRunResultVersion",
-            out var document);
-        if (rawFailure is not null)
-        {
-            return new DocumentationScribeResultParseResult(
-                null,
-                new DocumentationScribeResultValidationFailure(rawFailure.Code, rawFailure.Pointer));
-        }
-
-        using (document)
-        {
-            try
-            {
-                var root = document!.RootElement;
-                ExpectProperties(
-                    root,
-                    string.Empty,
-                    [
-                        "scribeRunResultVersion",
-                        "scribeRequestSha256",
-                        "attemptId",
-                        "dynamicEvidenceReferences",
-                        "terminal",
-                        "runEnvelope",
-                    ]);
-
-                var requestSha256 = ReadSha256(root, "scribeRequestSha256", string.Empty);
-                var attemptId = ParseAttemptId(ReadString(root, "attemptId", string.Empty, 64), "/attemptId");
-                if (!string.Equals(requestSha256, request.ArtifactSha256, StringComparison.Ordinal))
-                {
-                    throw Fail("invalid-correlation", "/scribeRequestSha256");
-                }
-
-                if (attemptId != expectedAttemptId)
-                {
-                    throw Fail("invalid-correlation", "/attemptId");
-                }
-
-                var dynamicEvidenceReferences = ParseEvidenceReferences(
-                    root.GetProperty("dynamicEvidenceReferences"),
-                    "/dynamicEvidenceReferences",
-                    request.Context.RepositoryContextRef,
-                    request.Manifest);
-                ValidateDynamicEvidenceOverlay(
-                    request,
-                    dynamicEvidenceReferences,
-                    expectedDynamicEvidenceReferences);
-                var effectiveRequest = WithEvidenceReferences(
-                    request,
-                    request.EvidenceReferences.AddRange(dynamicEvidenceReferences));
-                var terminal = ParseTerminal(root.GetProperty("terminal"), "/terminal", effectiveRequest);
-                if (dynamicEvidenceReferences.Length > 0
-                    && terminal.Kind is DocumentationScribeTerminalKind.Failure
-                        or DocumentationScribeTerminalKind.Cancelled)
-                {
-                    throw Fail("invalid-evidence", "/dynamicEvidenceReferences");
-                }
-
-                var envelope = ParseRunEnvelope(
-                    root.GetProperty("runEnvelope"),
-                    "/runEnvelope",
-                    request,
-                    expectedAttemptId,
-                    terminal);
-                ValidateProviderFailureMatrixForParse(request, terminal, envelope);
-
-                return new DocumentationScribeResultParseResult(
-                    new DocumentationScribeRunResult(
-                        requestSha256,
-                        attemptId,
-                        dynamicEvidenceReferences,
-                        terminal,
-                        envelope),
-                    null);
-            }
-            catch (ContractFailure failure)
-            {
-                return new DocumentationScribeResultParseResult(
-                    null,
-                    new DocumentationScribeResultValidationFailure(
-                        "scribe.result." + failure.Category,
-                        failure.Pointer));
-            }
-        }
-    }
+        ReadOnlyMemory<byte> utf8Json) =>
+        ParseIncrementalRunResult(request, expectedAttemptId, expectedDynamicEvidenceReferences, utf8Json);
 
     public static DocumentationScribeValidatedRunOutcome BindValidatedRunOutcome(
-        DocumentationScribeRequest request,
-        DocumentationScribeAttemptId expectedAttemptId,
+        DocumentationScribeRequest request, DocumentationScribeAttemptId expectedAttemptId,
         DocumentationScribeRunResult runResult)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(runResult);
-        if (string.IsNullOrEmpty(expectedAttemptId.Value))
-        {
-            throw new ArgumentException("A validated attempt identity is required.", nameof(expectedAttemptId));
-        }
-
-        var envelope = runResult.RunEnvelope;
-        if (!string.Equals(runResult.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
-            || runResult.AttemptId != expectedAttemptId
-            || !string.Equals(envelope.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
-            || envelope.AttemptId != expectedAttemptId
-            || !string.Equals(envelope.ToolPolicyId, request.ToolPolicyId, StringComparison.Ordinal)
-            || !string.Equals(envelope.StyleProfileId, request.ExecutionStyleProfile.StyleProfileId, StringComparison.Ordinal))
-        {
-            throw new ArgumentException("The run result is not correlated to the parsed request and attempt.", nameof(runResult));
-        }
-
-        if (runResult.DynamicEvidenceReferences.IsDefault
-            || runResult.DynamicEvidenceReferences.Length > 0
-                && runResult.Terminal.Kind is DocumentationScribeTerminalKind.Failure
-                    or DocumentationScribeTerminalKind.Cancelled)
-        {
-            throw new ArgumentException("The run result has an invalid trusted evidence overlay.", nameof(runResult));
-        }
-
-        if (runResult.Terminal is DocumentationScribeProposalTerminal proposal
-            && (proposal.Target.RepositoryContextRef != request.Context.RepositoryContextRef
-                || proposal.Target.SymbolRef != request.ExecutionTarget.Target.SymbolRef
-                || proposal.Target.SourceLocator != request.ExecutionTarget.Target.SourceLocator
-                || !string.Equals(proposal.Target.SourceSha256, request.ExecutionTarget.Target.SourceSha256, StringComparison.Ordinal)))
-        {
-            throw new ArgumentException("The proposal target is not correlated to the parsed request.", nameof(runResult));
-        }
-
-        _ = CreateRunEnvelope(
-            request,
-            expectedAttemptId,
-            new DocumentationScribeRunEnvelopeInput(
-                envelope.ProviderConfigurationId,
-                envelope.ModelConfigurationId,
-                envelope.ScribeProtocolId,
-                envelope.AttemptNumber,
-                envelope.ProviderRequestCount,
-                envelope.ToolRoundCount,
-                envelope.ToolCallCount,
-                envelope.ElapsedMilliseconds,
-                envelope.Usage is null
-                    ? null
-                    : new DocumentationScribeUsageObservationInput(
-                        envelope.Usage.InputTokens,
-                        envelope.Usage.OutputTokens,
-                        envelope.Usage.CachedInputTokens,
-                        envelope.Usage.UncachedInputTokens,
-                        envelope.Usage.ReasoningTokens),
-                envelope.Cache,
-                envelope.Cost is null
-                    ? null
-                    : new DocumentationScribeCostObservationInput(
-                        envelope.Cost.CurrencyId,
-                        envelope.Cost.AmountMicrounits),
-                envelope.Diagnostics.Select(diagnostic => new DocumentationScribeDiagnosticInput(
-                    diagnostic.Code,
-                    diagnostic.Stage,
-                    diagnostic.ReferenceId,
-                    diagnostic.ValidationCode)).ToImmutableArray())
-            { RestoredRetryableProviderFailures = envelope.RestoredRetryableProviderFailures },
-            runResult.Terminal);
-
-        return new DocumentationScribeValidatedRunOutcome(request, runResult);
+        ValidateIncrementalResult(request, expectedAttemptId, runResult);
+        return new(request, runResult);
     }
 
     public static DocumentationScribeRunResult CreateFailureResult(
@@ -515,62 +338,26 @@ public static class DocumentationScribeValidation
             envelope);
     }
 
-    public static DocumentationScribeRunResult CreateSkipResult(
-        DocumentationScribeRequest request,
-        DocumentationScribeAttemptId attemptId,
-        DocumentationScribeSkipReason reason,
-        IEnumerable<string> evidenceReferenceIds,
+    public static DocumentationScribeRunResult CreateSingletonSkipResult(
+        DocumentationScribeRequest request, DocumentationScribeAttemptId attemptId,
+        DocumentationScribeSkipReason reason, IEnumerable<string> evidenceReferenceIds,
         DocumentationScribeRunEnvelopeInput envelope)
     {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(evidenceReferenceIds);
-        if (!Enum.IsDefined(reason))
+        if (request.ExecutableTargetIds.Length != 1)
+            throw new ArgumentException("An explicit singleton selection is required.", nameof(request));
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
-            throw new ArgumentOutOfRangeException(nameof(reason));
-        }
-
-        var ids = evidenceReferenceIds.ToImmutableArray();
-        if (ids.Length > request.ExecutionStyleProfile.MaximumEvidenceRefsPerUnit
-            || !IsStrictlyIncreasing(ids)
-            || ids.Any(id => !request.EvidenceReferences.Any(reference =>
-                string.Equals(reference.EvidenceReferenceId, id, StringComparison.Ordinal)
-                && reference.Subject.ParentSymbolRef == request.ExecutionTarget.Target.SymbolRef)))
-        {
-            throw new ArgumentException("Evidence references are not valid for the parsed request.", nameof(evidenceReferenceIds));
-        }
-
-        return CreateRuntimeResult(
-            request,
-            attemptId,
-            [],
-            new DocumentationScribeSkipTerminal(reason, ids),
-            envelope);
-    }
-
-    public static DocumentationScribeRunResult CreateResultFromValidatedTerminal(
-        DocumentationScribeRequest request,
-        DocumentationScribeAttemptId attemptId,
-        DocumentationScribeRunResult validatedResult,
-        DocumentationScribeRunEnvelopeInput envelope)
-    {
-        ArgumentNullException.ThrowIfNull(request);
-        ArgumentNullException.ThrowIfNull(validatedResult);
-        if (!string.Equals(validatedResult.ScribeRequestSha256, request.ArtifactSha256, StringComparison.Ordinal)
-            || validatedResult.AttemptId != attemptId
-            || validatedResult.Terminal.Kind is not (DocumentationScribeTerminalKind.Proposal
-                or DocumentationScribeTerminalKind.Skip))
-        {
-            throw new ArgumentException(
-                "The validated terminal is not correlated to the supplied request and attempt.",
-                nameof(validatedResult));
-        }
-
-        return CreateRuntimeResult(
-            request,
-            attemptId,
-            validatedResult.DynamicEvidenceReferences,
-            validatedResult.Terminal,
-            envelope);
+            kind = "skip",
+            reason = DocumentationScribeVocabulary.GetId(reason),
+            evidenceReferenceIds,
+        });
+        var parsed = ValidateTargetSubmission(request, request.ExecutableTargetIds[0], [], bytes);
+        if (parsed.Submission is not { } validated)
+            throw new ArgumentException("Invalid skip content.", nameof(evidenceReferenceIds));
+        var accepted = AcknowledgeSubmission(validated, new(request.ArtifactSha256, validated.TargetId,
+            validated.ContentSha256, DocumentationScribeAcknowledgementStage.Validated));
+        return CreateSessionResult(request, attemptId, new DocumentationScribeFinishedTerminal(DocumentationScribeFinishReason.Unresolved),
+            envelope, [accepted], [], 0, 2);
     }
 
     private static DocumentationScribeRunResult CreateRuntimeResult(
@@ -736,6 +523,7 @@ public static class DocumentationScribeValidation
                 diagnostic.ValidationCode));
         }
 
+        ValidateUsageCoverage(input.UsageCoverage, input.ProviderRequestCount, usage, input.Cache, cost);
         return new DocumentationScribeRunEnvelope(
             request.ArtifactSha256,
             attemptId,
@@ -743,7 +531,7 @@ public static class DocumentationScribeValidation
             input.ModelConfigurationId,
             input.ScribeProtocolId,
             request.ToolPolicyId,
-            request.ExecutionStyleProfile.StyleProfileId,
+            GetStyleProfileIds(request),
             input.AttemptNumber,
             input.RestoredRetryableProviderFailures,
             input.ProviderRequestCount,
@@ -753,7 +541,7 @@ public static class DocumentationScribeValidation
             usage,
             input.Cache,
             cost,
-            diagnostics.ToImmutable());
+            diagnostics.ToImmutable(), input.UsageCoverage);
     }
 
     private static bool IsFactoryDiagnosticValid(DocumentationScribeDiagnosticInput diagnostic)
@@ -1484,7 +1272,8 @@ public static class DocumentationScribeValidation
             evidenceReferences,
             request.EvidenceConflicts,
             request.ToolPolicyId,
-            request.Limits);
+            request.Limits)
+        { ValidationTargetId = request.ValidationTargetId };
 
     internal static bool EvidenceReferenceEquivalent(
         DocumentationScribeEvidenceReference left,
@@ -1734,7 +1523,7 @@ public static class DocumentationScribeValidation
         if (providerFailure.ProviderFinalDisposition == DocumentationScribeProviderFinalDisposition.Retryable
             && envelope.AttemptNumber != request.Limits.MaximumAttempts)
         {
-            throw Fail("invalid-correlation", "/terminal/providerFinalDisposition");
+            throw Fail("invalid-correlation", "/stop/providerFinalDisposition");
         }
     }
 
@@ -2040,7 +1829,7 @@ public static class DocumentationScribeValidation
                 "modelConfigurationId",
                 "scribeProtocolId",
                 "toolPolicyId",
-                "styleProfileId",
+                "styleProfileIds",
                 "attemptNumber",
                 "restoredRetryableProviderFailures",
                 "providerRequestCount",
@@ -2049,7 +1838,7 @@ public static class DocumentationScribeValidation
                 "elapsedMilliseconds",
                 "diagnostics",
             ],
-            ["usage", "cacheObservation", "cost"]);
+            ["usage", "cacheObservation", "cost", "usageCoverage"]);
 
         var requestSha = ReadSha256(element, "scribeRequestSha256", pointer);
         var attemptId = ParseAttemptId(ReadString(element, "attemptId", pointer, 64), pointer + "/attemptId");
@@ -2067,15 +1856,15 @@ public static class DocumentationScribeValidation
         var modelId = ReadIdentifier(element, "modelConfigurationId", pointer);
         var protocolId = ReadIdentifier(element, "scribeProtocolId", pointer);
         var toolPolicyId = ReadIdentifier(element, "toolPolicyId", pointer);
-        var styleProfileId = ReadIdentifier(element, "styleProfileId", pointer);
+        var styleProfileIds = ParseIdentifierArray(element.GetProperty("styleProfileIds"), pointer + "/styleProfileIds", DocumentationScribeContract.MaximumManifestTargets);
         if (!string.Equals(toolPolicyId, request.ToolPolicyId, StringComparison.Ordinal))
         {
             throw Fail("invalid-correlation", pointer + "/toolPolicyId");
         }
 
-        if (!string.Equals(styleProfileId, request.ExecutionStyleProfile.StyleProfileId, StringComparison.Ordinal))
+        if (!styleProfileIds.SequenceEqual(GetStyleProfileIds(request), StringComparer.Ordinal))
         {
-            throw Fail("invalid-correlation", pointer + "/styleProfileId");
+            throw Fail("invalid-correlation", pointer + "/styleProfileIds");
         }
 
         var attemptNumber = ReadBoundedInt(
@@ -2144,6 +1933,10 @@ public static class DocumentationScribeValidation
             : null;
         var diagnostics = ParseDiagnostics(element.GetProperty("diagnostics"), pointer + "/diagnostics");
 
+        var usageCoverage = element.TryGetProperty("usageCoverage", out var coverageElement)
+            ? ParseUsageCoverage(coverageElement, pointer + "/usageCoverage", providerRequestCount) : null;
+        try { ValidateUsageCoverage(usageCoverage, providerRequestCount, usage, cache, cost); }
+        catch (ArgumentException) { throw Fail("invalid-correlation", pointer + "/usageCoverage"); }
         return new DocumentationScribeRunEnvelope(
             requestSha,
             attemptId,
@@ -2151,7 +1944,7 @@ public static class DocumentationScribeValidation
             modelId,
             protocolId,
             toolPolicyId,
-            styleProfileId,
+            styleProfileIds,
             attemptNumber,
             restoredFailures,
             providerRequestCount,
@@ -2161,7 +1954,7 @@ public static class DocumentationScribeValidation
             usage,
             cache,
             cost,
-            diagnostics);
+            diagnostics, usageCoverage);
     }
 
     private static DocumentationScribeUsageObservation ParseUsage(
@@ -2536,7 +2329,7 @@ public static class DocumentationScribeValidation
     private static RawFailure? TryParseArtifact(
         ReadOnlyMemory<byte> utf8Json,
         string prefix,
-        string versionProperty,
+        string? versionProperty,
         out JsonDocument? document)
     {
         document = null;
@@ -2591,6 +2384,8 @@ public static class DocumentationScribeValidation
             document = null;
             return new RawFailure(prefix + ".invalid-shape", string.Empty);
         }
+
+        if (versionProperty is null) return null;
 
         if (!document.RootElement.TryGetProperty(versionProperty, out var version)
             || version.ValueKind != JsonValueKind.Number

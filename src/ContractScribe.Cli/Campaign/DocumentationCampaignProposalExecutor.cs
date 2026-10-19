@@ -298,8 +298,9 @@ internal static class DocumentationCampaignProposalExecutor
         }
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
-        var proposalResult = prepared.CompletionAuthority?.Outcome?.RunResult.Terminal
-            is DocumentationScribeProposalTerminal;
+        var proposalResult = prepared.CompletionAuthority?.Outcome is { } completedOutcome
+            && CampaignStateFactory.GetSingletonScribeSubmission(completedOutcome.Request, completedOutcome.RunResult)?.Result
+                is DocumentationScribeProposalTerminal;
         CampaignProcessBoundaryHooks.Reach(proposalResult
             ? CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeProposalTransition
             : CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeClosedTransition);

@@ -249,9 +249,9 @@ public sealed partial class DocumentationScribeCompositionTests
             outcome.Code + " writes=" + store.SuccessfulReplaceCount + " sends=" + observing.RequestCount);
         Assert.Equal("campaign.proposal.ready", outcome.Code);
         Assert.NotNull(outcome.TrustedProposal);
-        Assert.Equal(1, observing.RequestCount);
+        Assert.Equal(2, observing.RequestCount);
         Assert.True(observing.SawPersistedReservation);
-        Assert.Equal(7, store.SuccessfulReplaceCount);
+        Assert.Equal(11, store.SuccessfulReplaceCount);
         Assert.Equal(outcome.Artifact!.Sha256, store.Current!.Sha256);
         Assert.True(outcome.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
             store.Current.ExactUtf8Json.AsSpan()));
@@ -263,7 +263,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, replay.Kind);
         Assert.Equal("campaign.proposal.replay", replay.Code);
         Assert.Equal(0, replayExchange.RequestCount);
-        Assert.Equal(7, store.SuccessfulReplaceCount);
+        Assert.Equal(11, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -338,7 +338,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(1, binds);
-        Assert.Equal(7, store.SuccessfulReplaceCount);
+        Assert.Equal(11, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -492,8 +492,8 @@ public sealed partial class DocumentationScribeCompositionTests
         var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
-        Assert.Equal(1, exchange.RequestCount);
-        Assert.Equal(7, store.SuccessfulReplaceCount);
+        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(11, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -540,7 +540,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     RuntimeOptions()));
 
             Assert.Equal(DocumentationCampaignProposalOutcomeKind.TerminalStop, outcome.Kind);
-            Assert.Equal(7, store.SuccessfulReplaceCount);
+            Assert.Equal(11, store.SuccessfulReplaceCount);
             Assert.Null(store.Current!.State.ActiveReservation);
             var closed = Assert.Single(store.Current.State.WorkItems,
                 item => item.Status == CampaignWorkStatus.Closed
@@ -609,14 +609,14 @@ public sealed partial class DocumentationScribeCompositionTests
                 timeProvider: new SequencedTimeProvider(0)));
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, invalid.Kind);
-        Assert.Equal(1, invalidExchange.RequestCount);
-        Assert.Equal(7, invalidStore.SuccessfulReplaceCount);
+        Assert.Equal(2, invalidExchange.RequestCount);
+        Assert.Equal(11, invalidStore.SuccessfulReplaceCount);
         Assert.Null(invalidStore.Current!.State.ActiveReservation);
         Assert.Equal(0, invalidStore.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var conflictStore = new MemoryCampaignStore(initial)
         {
-            ReportedReplaceAttempt = 7,
+            ReportedReplaceAttempt = 11,
             ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
         };
         var conflictExchange = new CountingProposalExchange(fixture.Request);
@@ -625,8 +625,8 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, conflict.Kind);
         Assert.Equal("campaign.settlement.conflict", conflict.Code);
-        Assert.Equal(1, conflictExchange.RequestCount);
-        Assert.Equal(6, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(2, conflictExchange.RequestCount);
+        Assert.Equal(10, conflictStore.SuccessfulReplaceCount);
         Assert.IsType<CampaignProviderReservation>(conflictStore.Current!.State.ActiveReservation);
     }
 
@@ -678,7 +678,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 timeProvider: clock));
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, observed.Kind);
-        Assert.Equal(50_000, observedStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        Assert.Equal(100_000, observedStore.Current!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var overflowStore = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
         var overflowExchange = new CountingProposalExchange(fixture.Request);
@@ -709,8 +709,8 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.Input(fixture, store, exchange, RuntimeOptions()));
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
-        Assert.Equal(2, exchange.RequestCount);
-        Assert.Equal(2, store.Current!.State.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal(3, exchange.RequestCount);
+        Assert.Equal(3, store.Current!.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(1, Assert.Single(store.Current.State.WorkItems,
             item => item.Status == CampaignWorkStatus.ProposalComplete).OuterAttemptCount);
     }
@@ -737,7 +737,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(0, store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
         Assert.True(store.Current.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved > 0);
         Assert.True(store.Current.State.LineageCharges.ProviderRequests.Observed > 0);
-        Assert.Equal(9, store.SuccessfulReplaceCount);
+        Assert.Equal(13, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -825,9 +825,11 @@ public sealed partial class DocumentationScribeCompositionTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return ValueTask.FromResult(new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Finish(modelRequest))], usage: new(0, 0, 0, 0, 0)));
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(modelRequest, ProposalTerminal(request)))], usage: new(0, 0, 0, 0, 0)));
         }
     }
 
@@ -838,7 +840,8 @@ public sealed partial class DocumentationScribeCompositionTests
             CancellationToken cancellationToken) =>
             ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId)
+                    ? ScribeResultFixture.Finish(request) : ScribeResultFixture.Submit(request, SkipTerminal()))], usage: new(0, 0, 0, 0, 0)));
     }
 
     private sealed class ProviderFailureExchange : IDocumentationScribeModelExchange
@@ -860,8 +863,9 @@ public sealed partial class DocumentationScribeCompositionTests
             CancellationToken cancellationToken) =>
             ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())],
-                usage: usage));
+                [new DocumentationScribeModelTerminalSubmission(request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId)
+                    ? ScribeResultFixture.Finish(request) : ScribeResultFixture.Submit(request, SkipTerminal()))],
+                usage: request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId) ? new(0, 0, 0, 0, 0) : usage));
     }
 
     private sealed class DelayedSkipExchange : IDocumentationScribeModelExchange
@@ -873,7 +877,8 @@ public sealed partial class DocumentationScribeCompositionTests
             await Task.Delay(Timeout.Infinite, cancellationToken);
             return new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]);
+                [new DocumentationScribeModelTerminalSubmission(request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId)
+                    ? ScribeResultFixture.Finish(request) : ScribeResultFixture.Submit(request, SkipTerminal()))], usage: new(0, 0, 0, 0, 0));
         }
     }
 
@@ -900,7 +905,7 @@ public sealed partial class DocumentationScribeCompositionTests
                     "call.conflict",
                     DocumentationScribeRepositoryToolOperationIds.SearchText,
                     "{}"u8.ToArray())],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(request, SkipTerminal()))], usage: new(0, 0, 0, 0, 0)));
     }
 
     private sealed class CountingExchange : IDocumentationScribeModelExchange
@@ -914,7 +919,7 @@ public sealed partial class DocumentationScribeCompositionTests
             RequestCount++;
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(SkipTerminal())]));
+                [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(request, SkipTerminal()))], usage: new(0, 0, 0, 0, 0)));
         }
     }
 
@@ -973,11 +978,16 @@ public sealed partial class DocumentationScribeCompositionTests
                     [], usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
             }
 
+            if (RequestCount == 3)
+            {
+                Assert.Equal(2, modelRequest.CompletedToolExchanges.Length);
+                return ValueTask.FromResult(new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Finish(modelRequest))], usage: new(0, 0, 0, 0, 0)));
+            }
             Assert.Equal(2, RequestCount);
             Assert.Single(modelRequest.CompletedToolExchanges);
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))],
+                [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(modelRequest, ProposalTerminal(request)))],
                 usage: new DocumentationScribeModelUsage(0, 0, 0, 0)));
         }
     }
@@ -1029,6 +1039,8 @@ public sealed partial class DocumentationScribeCompositionTests
             DocumentationScribeModelRequest modelRequest,
             CancellationToken cancellationToken)
         {
+            if (modelRequest.CompletedToolExchanges.Any(item => item.OperationId == modelRequest.Terminal.OperationId))
+                return new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Finish(modelRequest))]);
             await File.AppendAllTextAsync(
                 sourcePath,
                 Environment.NewLine,
@@ -1036,7 +1048,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 cancellationToken);
             return new DocumentationScribeModelResponse(
                 [],
-                [new DocumentationScribeModelTerminalSubmission(ProposalTerminal(request))]);
+                [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(modelRequest, ProposalTerminal(request)))], usage: new(0, 0, 0, 0, 0));
         }
     }
 
