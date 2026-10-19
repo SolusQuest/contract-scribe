@@ -270,6 +270,11 @@ jobs:
           }
 
   integration_http_loss:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        lane: [0, 1, 2]
     permissions:
       contents: read
       packages: read
@@ -321,9 +326,9 @@ jobs:
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
-          --filter "FullyQualifiedName=ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes"
+          --filter "FullyQualifiedName=ContractScribe.Roslyn.IntegrationTests.GitHubProposalHttpLoss${{ matrix.lane }}Tests.Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes"
           --logger "console;verbosity=normal"
-          --logger "trx;LogFilePrefix=integration-http-loss-${{ runner.os }}"
+          --logger "trx;LogFilePrefix=integration-http-loss-${{ matrix.lane }}-${{ runner.os }}"
           --results-directory TestResults/ci/integration-http-loss
       - name: Require complete http mutation response-loss tests
         id: integration_test_count
@@ -382,7 +387,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: integration-http-loss-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          name: integration-http-loss-${{ matrix.lane }}-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: TestResults/ci/integration-http-loss/*.trx
           if-no-files-found: error
       - name: Aggregate http mutation response-loss outcomes
@@ -450,7 +455,7 @@ jobs:
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
-          --filter "FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.&FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.Every_actual_HTTP_mutation_response_loss_is_reconciled_by_fresh_CLI_processes"
+          --filter "FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests."
           --logger "console;verbosity=normal"
           --logger "trx;LogFilePrefix=integration-github-proposal-${{ runner.os }}"
           --results-directory TestResults/ci/integration-github-proposal
@@ -579,7 +584,7 @@ jobs:
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
-          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests."
+          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalHttpLoss"
           --logger "console;verbosity=normal"
           --logger "trx;LogFilePrefix=integration-other-${{ runner.os }}"
           --results-directory TestResults/ci/integration-other
@@ -1754,7 +1759,10 @@ jobs:
           [ "$OUTCOME" = github-proposal.replayed ]
           test ! -e "$RUNNER_TEMP/cs-state/checkpoint.json"
           test ! -s fakes/github-failures.log
-          ! grep -q 'POST /repos/Owner/repo/pulls' fakes/github.log
+          if grep -q 'POST /repos/Owner/repo/pulls' fakes/github.log; then
+            echo 'Replay unexpectedly attempted PR creation.' >&2
+            exit 1
+          fi
           WORK="$RUNNER_TEMP/invocation-cases" bash action-src/tests/action-workflows/verify-examples.sh
       - name: Upload consumer diagnostics
         if: always()
