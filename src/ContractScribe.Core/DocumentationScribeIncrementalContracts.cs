@@ -53,6 +53,11 @@ public interface IDocumentationScribeSubmissionHost
 {
     ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
         DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken);
+
+    /// <summary>Confirms completed batch, rejection or finish progress before another model request.</summary>
+    /// <remarks>The original Host permit and its deadline also bound this call. Uncertain effects require readback.</remarks>
+    ValueTask<DocumentationScribeProgressAcknowledgement?> ObserveProgressAsync(
+        DocumentationScribeProgressNotification progress, CancellationToken cancellationToken);
 }
 
 public sealed class DocumentationScribeTargetSubmission

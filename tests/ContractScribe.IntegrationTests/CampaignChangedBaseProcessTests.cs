@@ -535,11 +535,26 @@ public sealed class CampaignChangedBaseProcessTests
             "reordered-plan" => new[] { "M:Fixture.App.Alpha", "M:Fixture.App.Zulu" },
             _ => new[] { "M:Fixture.App.Run" },
         };
-        Assert.Equal(expectedDocumentationIds, evidence.Select(item => item
-            .GetProperty("manifest")[0].GetProperty("proposalTarget")
+        var initialEvidence = Assert.Single(evidence);
+        Assert.Single(initialEvidence.GetProperty("evidenceReferences").EnumerateArray());
+        var currentTargets = initialEvidence.GetProperty("manifest").EnumerateArray()
+            .Select(member => member.GetProperty("proposalTarget")).ToArray();
+        Assert.Equal(expectedDocumentationIds, currentTargets.Select(target => target
             .GetProperty("symbolRef")
             .GetProperty("documentationCommentId")
             .GetString()));
+
+        foreach (var target in currentTargets)
+        {
+            var source = target.GetProperty("sourceCommitment");
+            var locator = source.GetProperty("locator").GetProperty("repository");
+            Assert.Equal(initialEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget")
+                .GetProperty("repositoryContextRef").GetString(), target.GetProperty("repositoryContextRef").GetString());
+            Assert.Equal(64, source.GetProperty("contentSha256").GetString()!.Length);
+            Assert.False(string.IsNullOrWhiteSpace(locator.GetProperty("path").GetString()));
+            Assert.True(locator.GetProperty("span").GetProperty("end").GetInt32()
+                > locator.GetProperty("span").GetProperty("start").GetInt32());
+        }
 
         var baselineTarget = baselineEvidence.GetProperty("manifest")[0].GetProperty("proposalTarget");
         foreach (var item in evidence)

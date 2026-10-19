@@ -20,7 +20,7 @@ public sealed partial class CampaignCliProcessTests
             var configurationPath = Path.Join(outside, "consumer.json");
             await WriteConsumerLayerAsync(configurationPath, server.Endpoint);
             var layer = JsonNode.Parse(await File.ReadAllTextAsync(configurationPath))!;
-            layer["budgets"] = new JsonObject { ["campaign"] = new JsonObject { ["maximumProviderRequests"] = 128 } };
+            layer["budgets"] = new JsonObject { ["campaign"] = new JsonObject { ["maximumProviderRequests"] = 1 } };
             await File.WriteAllTextAsync(configurationPath, layer.ToJsonString());
             await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
             var stateDirectory = Path.Join(outside, "state");
@@ -69,7 +69,8 @@ public sealed partial class CampaignCliProcessTests
                                         work.Disposition.Kind == CampaignPlanningDispositionKind.Executable ? CampaignWorkStatus.Planned : CampaignWorkStatus.Closed,
                                         null, work.Disposition.Kind == CampaignPlanningDispositionKind.Terminal
                                             ? new CampaignWorkClosedOutcome(CampaignWorkOutcomeStage.Planning, CampaignWorkOutcomeCode.PlanningTerminal,
-                                                null, null, null, null, null, null, work.WorkItemKey) : null)), plan.Batch);
+                                                null, null, null, null, null, null, work.WorkItemKey) : null)), plan.Batch,
+            dispatchObservations: reference.DispatchObservations, scribeProgress: reference.ScribeProgress);
                             artifact = CampaignStateJson.CreateArtifact(state);
                             var work = plan.WorkItems.Single(item => item.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
                             request = DocumentationScribeValidation.ParseRequest(CampaignScribeRequestBuilder.Build(bundle, work, policy, configuration, token)).Request;
@@ -135,7 +136,8 @@ public sealed partial class CampaignCliProcessTests
                 retryKey, baseline.Request, CampaignStateFactory.CreateInvocationTargetAllowance(baselineRetry.State, new(1)), CampaignInvocationTestPolicy.Create(baseline.Request.Limits));
             Assert.Equal(CampaignTransitionKind.Applied, closedRetry.Kind);
             Assert.Equal(2, closedRetry.Artifact.State.LineageCharges.OuterInvocations);
-            var reservationGrowth = valid.Artifact.ExactUtf8Json.Length - baseline.Artifact.ExactUtf8Json.Length;
+            var reservationGrowth = ProviderCapacityLoadedReservation(baseline.Artifact, baseline.Request).ExactUtf8Json.Length
+                - baseline.Artifact.ExactUtf8Json.Length;
             var boundedCompletionGrowth = CampaignStateReducer.ValidateProviderSettlementCapacity(valid.Artifact.State)
                 - baseline.Artifact.ExactUtf8Json.Length;
             growth = CampaignStateContract.MaximumArtifactUtf8Bytes - reservationGrowth - baseline.Artifact.ExactUtf8Json.Length;
@@ -208,13 +210,25 @@ public sealed partial class CampaignCliProcessTests
             var finalRejected = Supersede(baseline.Artifact);
             Assert.Equal(CampaignTransitionFailure.CheckpointCapacity, finalRejected.Failure);
             Assert.Equal(baseline.Artifact.ExactUtf8Json, finalRejected.Artifact.ExactUtf8Json);
-            var exhaustedCharges = baseline.Artifact.State.LineageCharges with
+            // Exhaustion retains a real per-dispatch scalar history in the current shape.
+            var historyState = baselineRetry.State;
+            var historyWork = historyState.WorkItems.Single(item => item.OuterAttemptCount == 1);
+            var zeroCharge = new CampaignChargeObservation(0, 0, 0);
+            var rowCharges = new CampaignDispatchCharges(new(1, 0, 1), zeroCharge, zeroCharge, zeroCharge, zeroCharge, zeroCharge, zeroCharge, zeroCharge);
+            var observation = new CampaignDispatchObservation(historyState.Snapshot.ExecutionCommitmentSha256,
+                historyState.Batch.Identity, historyState.ConfiguredCeilings.CampaignConfigurationCommitmentSha256,
+                historyWork.WorkItemKey, historyWork.ClosedOutcome!.AttemptId!.Value, baseline.Request.ArtifactSha256,
+                1, 1, 1, 1, new string('7', 64), new(1, 2, 1, 1, 0, 1) { CachedInputTokens = 1 },
+                CampaignDispatchObservationState.Settled, DocumentationScribeDispatchDisposition.Success,
+                new(0, 0, 0, 0, 0), DocumentationScribeCacheObservation.NotReported, 0, 0, rowCharges, null);
+            observation = observation with { SettlementCommitmentSha256 = CampaignStateFactory.DispatchSettlementCommitment(observation) };
+            var exhaustedCharges = historyState.LineageCharges with
             {
-                ProviderRequests = new(0, baseline.Artifact.State.ConfiguredCeilings.CampaignBudget.MaximumProviderRequests!.Value,
-                    baseline.Artifact.State.ConfiguredCeilings.CampaignBudget.MaximumProviderRequests!.Value),
+                ProviderRequests = new(1, 0, 1),
+                HasUnpricedCostHistory = true,
             };
             var exhaustedPredecessor = CampaignStateJson.CreateArtifact(ProviderCapacityCopy(
-                baseline.Artifact.State, baseline.Artifact.State.WorkItems, exhaustedCharges));
+                historyState, historyState.WorkItems, exhaustedCharges, [observation], 1));
             var exhaustedSuccessor = Supersede(exhaustedPredecessor);
             Assert.True(exhaustedSuccessor.Kind == CampaignTransitionKind.Applied, exhaustedSuccessor.Failure.ToString());
             Assert.Equal(exhaustedCharges, exhaustedSuccessor.Artifact.State.LineageCharges);
@@ -291,11 +305,13 @@ public sealed partial class CampaignCliProcessTests
     }
 
     private static CampaignCheckpointState ProviderCapacityCopy(CampaignCheckpointState state,
-        ImmutableArray<CampaignWorkItemState> workItems, CampaignLineageCharges charges) =>
+        ImmutableArray<CampaignWorkItemState> workItems, CampaignLineageCharges charges,
+        ImmutableArray<CampaignDispatchObservation>? observations = null, long? revision = null) =>
         CampaignStateFactory.CreateValidated(state.ProductRevision, state.CampaignLineage, state.Snapshot,
-            state.CheckpointRevision, state.ConfiguredCeilings, charges, workItems, state.Batch,
+            revision ?? state.CheckpointRevision, state.ConfiguredCeilings, charges, workItems, state.Batch,
             state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
-            state.TerminalOutcome, state.Predecessor);
+            state.TerminalOutcome, state.Predecessor,
+            dispatchObservations: observations ?? state.DispatchObservations, scribeProgress: state.ScribeProgress);
 
     private static CampaignCheckpointArtifact ProviderCapacityLoadedReservation(CampaignCheckpointArtifact initial,
         DocumentationScribeRequest request)
@@ -313,6 +329,7 @@ public sealed partial class CampaignCliProcessTests
             new CampaignProviderReservation(work.WorkItemKey, request.ArtifactSha256, attempt, budget.Exposure!)
             { ExecutionStartRevision = state.CheckpointRevision + 1, CurrentOperationOrdinal = 1 },
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
-            state.TerminalOutcome, state.Predecessor));
+            state.TerminalOutcome, state.Predecessor,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress));
     }
 }

@@ -34,7 +34,11 @@ public sealed class CampaignInvocationTargetAllowance
         Snapshot = state.Snapshot;
         BatchIdentity = state.Batch.Identity;
         WorkItemKeys = workItemKeys;
-        RecoveryWorkItemKey = (state.ActiveReservation as CampaignProviderReservation)?.WorkItemKey;
+        RecoveryWorkItemKey = (state.ActiveReservation as CampaignProviderReservation)?.WorkItemKey
+            ?? (state.ScribeProgress?.Session is { Ended: false } session
+                && state.WorkItems.Any(work => work.WorkItemKey == session.AnchorWorkItemKey && work.PausedProviderAttempt is not null)
+                && workItemKeys.Any(key => state.WorkItems.Single(work => work.WorkItemKey == key).Status == CampaignWorkStatus.Planned)
+                    ? session.AnchorWorkItemKey : null);
     }
 
     internal CampaignStateSnapshotAuthority Snapshot { get; }

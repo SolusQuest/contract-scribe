@@ -7,6 +7,55 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class CampaignCliProcessTests
 {
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_single_executable_member_reaches_M2_after_one_shared_request_and_restores_without_regeneration(bool includeUsage)
+    {
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
+        await using var fixture = await LoaderFixture.CreateAsync();
+        await SetSingleWorkItemSourceAsync(fixture.Root);
+        await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
+        var sourcePath = Path.Join(fixture.Root, "App", "App.cs");
+        var original = await File.ReadAllBytesAsync(sourcePath);
+        await using var server = new ProposalLoopbackServer(includeUsage: includeUsage);
+        var outside = CreatePrivateDirectory("contract-scribe-single-resource-stop");
+        try
+        {
+            var configuration = Path.Join(outside, "consumer.json");
+            await WriteConsumerLayerAsync(configuration, server.Endpoint);
+            var layer = JsonNode.Parse(await File.ReadAllTextAsync(configuration))!;
+            layer["budgets"] = new JsonObject
+            {
+                ["invocation"] = new JsonObject { ["maximumProviderRequests"] = 1 },
+                ["campaign"] = new JsonObject { ["maximumCandidatesPerBlock"] = 3 },
+            };
+            await File.WriteAllTextAsync(configuration, layer.ToJsonString());
+            var directory = Path.Join(outside, "state");
+            Directory.CreateDirectory(directory);
+            File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var path = Path.Join(directory, "checkpoint.json");
+            var started = await RunAsync(Args("start", fixture.Root, path, configuration, "snapshot.single-stop"), TimeSpan.FromMinutes(3));
+            AssertControlledCampaign(started, "single-resource-stop");
+            var saved = CampaignStateJson.Parse(await File.ReadAllBytesAsync(path)).Artifact!.State;
+            Assert.Equal(CampaignWorkStatus.Accepted, Assert.Single(saved.WorkItems).Status);
+            Assert.Single(saved.CandidateObservation!.AcceptedWorkItemKeys);
+            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(1, saved.LineageCharges.ProviderRequests.Observed);
+            Assert.Equal(includeUsage, saved.DispatchObservations[0].Usage is not null);
+            var resumed = await RunAsync(Args("resume", fixture.Root, path, configuration, "snapshot.single-stop"), TimeSpan.FromMinutes(3));
+            AssertControlledCampaign(resumed, "single-resource-stop-resume");
+            var final = CampaignStateJson.Parse(await File.ReadAllBytesAsync(path)).Artifact!.State;
+            Assert.Equal(CampaignWorkStatus.Accepted, Assert.Single(final.WorkItems).Status);
+            Assert.Equal(saved.LineageCharges.ProviderRequests, final.LineageCharges.ProviderRequests);
+            Assert.Equal(saved.LineageCharges.InputTokens, final.LineageCharges.InputTokens);
+            Assert.Equal(saved.LineageCharges.OutputTokens, final.LineageCharges.OutputTokens);
+            Assert.Equal(1, server.RequestCount);
+            Assert.Equal(original, await File.ReadAllBytesAsync(sourcePath));
+        }
+        finally { Directory.Delete(outside, recursive: true); }
+    }
+
     [Theory]
     [InlineData(true, 1)]
     [InlineData(false, 1)]

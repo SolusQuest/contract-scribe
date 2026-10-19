@@ -504,6 +504,8 @@ public sealed partial class DocumentationScribeCompositionTests
         removeObservation ? null : observation ?? basis.CandidateObservation, cumulative ?? basis.CumulativeOutcome,
         basis.KnownCompletedOperations, terminal, basis.Predecessor)
         {
+            DispatchObservations = basis.DispatchObservations,
+            ScribeProgress = basis.ScribeProgress,
             AcceptedCandidateOrigin = removeObservation ? null : basis.AcceptedCandidateOrigin is { } origin
             && revision > basis.CheckpointRevision
                 ? origin with { CheckpointSha256 = origin.CheckpointSha256 ?? CampaignStateJson.CreateArtifact(basis).Sha256 }

@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.Cli;
 using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
@@ -10,10 +11,53 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Structural_partial_stop_hands_off_only_the_independently_validated_candidate(bool patchTimeout)
+    {
+        await using var fixture = await Fixture.CreateAsync(twoWorks: true);
+        var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        layer["budgets"]!["invocation"]!["maximumProviderRequests"] = 64;
+        layer["budgets"]!["campaign"]!["maximumBlocks"] = 1;
+        fixture.Publication["policy"]!["maximumDocumentationBlocks"] = 1;
+        if (patchTimeout)
+            layer["planning"] = new JsonObject { ["maximumPatchElapsedMilliseconds"] = 1 };
+        await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString());
+        var result = await fixture.Run("start");
+        var checkpoint = fixture.Checkpoint();
+        Assert.Contains(checkpoint.State.WorkItems, work => work.ClosedOutcome?.Code == CampaignWorkOutcomeCode.CompletedOverBound);
+        Assert.True(checkpoint.State.CumulativeOutcome is not null, result.Stdout + result.Stderr);
+        Assert.Equal(CampaignTerminalKind.Exhausted, checkpoint.State.TerminalOutcome!.Kind);
+        Assert.Equal(CampaignTerminalReason.Budget, checkpoint.State.TerminalOutcome.Reason);
+        Assert.Null(checkpoint.State.ActiveReservation);
+        if (patchTimeout)
+        {
+            Assert.NotEqual(0, result.ExitCode);
+            Assert.Equal(0, fixture.GitHub.Mutations);
+            Assert.Equal(CampaignCumulativeOutcomeKind.Timeout, checkpoint.State.CumulativeOutcome!.Kind);
+            Assert.Null(checkpoint.State.CandidateObservation);
+        }
+        else
+        {
+            AssertResult(result, 0, "published");
+            Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, checkpoint.State.CumulativeOutcome!.Kind);
+            Assert.Single(checkpoint.State.CandidateObservation!.AcceptedWorkItemKeys);
+            Assert.Single(checkpoint.State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
+            var writes = fixture.GitHub.Mutations;
+            var sends = fixture.Provider.RequestCount;
+            AssertResult(await fixture.Run("resume"), 0, "replayed");
+            Assert.Equal(writes, fixture.GitHub.Mutations);
+            Assert.Equal(sends, fixture.Provider.RequestCount);
+            Assert.Equal(CampaignTerminalKind.Exhausted, fixture.Checkpoint().State.TerminalOutcome!.Kind);
+        }
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Nonremovable_mixed_append_rejection_preserves_failure_without_publication()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true, rejectNewPath: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();

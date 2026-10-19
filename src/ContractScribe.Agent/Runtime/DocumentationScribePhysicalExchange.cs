@@ -57,7 +57,8 @@ internal static class DocumentationScribePhysicalExchange
                 usage?.InputTokens, usage?.CachedInputTokens, usage?.UncachedInputTokens,
                 usage?.OutputTokens, usage?.ReasoningTokens, cost?.CurrencyId, cost?.AmountMicrounits);
             var settlement = new DocumentationScribeDispatchSettlement(disposition, observed,
-                response?.Failure?.RetryAfterMilliseconds ?? 0);
+                response?.Failure?.RetryAfterMilliseconds ?? 0,
+                response?.Cache ?? DocumentationScribeCacheObservation.NotReported);
             if (!await scope.SettleProviderAsync(permit, settlement, CancellationToken.None).ConfigureAwait(false))
                 throw new InvalidOperationException("scribe.dispatch.settlement-unconfirmed");
         }

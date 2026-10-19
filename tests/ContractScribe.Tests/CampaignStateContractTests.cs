@@ -24,7 +24,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("296443a42c911aac65b3a6ed3f7fc623458e23bb3e1e219c11f99c4e7dc113cb", artifact.Sha256);
+        Assert.Equal("7e740fbb2a0f357d6fa79d63aa7d234512dd8597f88d5df555fe805806d82474", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }
@@ -319,7 +319,8 @@ public sealed partial class CampaignStateContractTests
             reserved.LineageCharges,
             reserved.WorkItems,
             reserved.Batch,
-            ProviderReservation(work.WorkItemKey, original));
+            ProviderReservation(work.WorkItemKey, original),
+            dispatchObservations: reserved.DispatchObservations, scribeProgress: reserved.ScribeProgress);
         AssertInvalidCorrelation(() => AdmitProposal(scenario, snapshotChanged, work, original));
 
         var nonProposal = CreateNonProposalExchange(work, scenario: scenario);
@@ -2992,7 +2993,8 @@ public sealed partial class CampaignStateContractTests
                 applied.Artifact.State.LineageCharges,
                 rebound,
             applied.Artifact.State.Batch,
-                cumulativeOutcome: applied.Artifact.State.CumulativeOutcome));
+                cumulativeOutcome: applied.Artifact.State.CumulativeOutcome,
+            dispatchObservations: applied.Artifact.State.DispatchObservations, scribeProgress: applied.Artifact.State.ScribeProgress));
         Assert.Equal(CampaignStateValidationCode.InvalidCorrelation, exception.Code);
         Assert.Empty(typeof(CampaignAcceptedCheckpoint).GetConstructors());
         Assert.Empty(typeof(CampaignCheckpointAcceptanceResult).GetConstructors());
@@ -4181,7 +4183,8 @@ public sealed partial class CampaignStateContractTests
             scenario.InitialState.ConfiguredCeilings,
             scenario.InitialState.LineageCharges,
             OverBound(),
-            scenario.InitialState.Batch));
+            scenario.InitialState.Batch,
+            dispatchObservations: scenario.InitialState.DispatchObservations, scribeProgress: scenario.InitialState.ScribeProgress));
         Assert.Equal(CampaignStateContract.MaximumWorkItems + 1, enumerated);
     }
 
@@ -4956,6 +4959,17 @@ public sealed partial class CampaignStateContractTests
         requestNode["context"]!["inputIdentity"] = inputIdentity;
         SetSymbol(requestNode["manifest"]![0]!["target"]!["symbolRef"]!, target.SymbolRef);
         SetSource(requestNode["manifest"]![0]!["target"]!["sourceCommitment"]!, source);
+        if (target.GroupingAuthority is { } grouping)
+            requestNode["manifest"]![0]!["grouping"] = new JsonObject
+            {
+                ["projectIdentity"] = grouping.ProjectIdentity,
+                ["containingTypeSymbolRef"] = new JsonObject
+                {
+                    ["compilationContextRef"] = target.SymbolRef.CompilationContextRef,
+                    ["documentationCommentId"] = grouping.ContainingTypeDocumentationCommentId,
+                },
+                ["memberFamilySha256"] = grouping.MemberFamilySha256,
+            };
         var evidenceIdSuffix = work.WorkItemKey[^8..];
         var evidenceIdMap = requestNode["evidenceReferences"]!
             .AsArray()
@@ -5164,9 +5178,9 @@ public sealed partial class CampaignStateContractTests
             }, scenario: scenario);
     }
 
-    private static ScribeExchange CreateNonProposalExchange(CampaignPlanningWorkItem work, ProposalScenario? scenario = null)
+    private static ScribeExchange CreateNonProposalExchange(CampaignPlanningWorkItem work, ProposalScenario? scenario = null, bool freshContext = false)
     {
-        var proposalExchange = CreateScribeExchange(work, scenario: scenario);
+        var proposalExchange = freshContext ? CreateFreshContextExchange(work, scenario: scenario) : CreateScribeExchange(work, scenario: scenario);
         var resultNode = ReadJsonFixture("documentation-scribe", "v1", "valid", "skip-result.json");
         resultNode["scribeRequestSha256"] = proposalExchange.Request.ArtifactSha256;
         resultNode["attemptId"] = proposalExchange.Result.AttemptId.Value;
@@ -5221,13 +5235,11 @@ public sealed partial class CampaignStateContractTests
             new CampaignProviderReservationExposure(0, 0, 0, 0, 0, 0))
         {
             ExecutionStartRevision = 1,
-            CurrentOperationOrdinal = 2L * exchange.Result.RunEnvelope.ProviderRequestCount + 1,
-            LastDispatchOrdinal = exchange.Result.RunEnvelope.ProviderRequestCount,
-            CurrentExecutionSettledProviderRequests = exchange.Result.RunEnvelope.ProviderRequestCount,
+            // This fixture supplies proposal-construction authority only; it performs no
+            // physical sends. Accounting/completion tests use SettleSyntheticDispatches.
+            CurrentOperationOrdinal = 1,
             HostPhase = CampaignProviderHostPhase.Retirement,
-            RetryProgress = exchange.Result.RunEnvelope.ProviderRequestCount == 0 ? CampaignProviderRetryProgress.Empty
-                : new(0, CampaignProviderDispatchDisposition.Success, exchange.Result.RunEnvelope.ProviderRequestCount,
-                    new string('0', 64), new string('0', 64), 0),
+            RetryProgress = CampaignProviderRetryProgress.Empty,
         };
 
     private static ImmutableArray<DocumentationScribeEvidenceReference> CurrentEvidence(
@@ -5540,7 +5552,8 @@ public sealed partial class CampaignStateContractTests
             cumulativeOutcome,
             basis.KnownCompletedOperations,
             basis.TerminalOutcome,
-            basis.Predecessor);
+            basis.Predecessor,
+            dispatchObservations: basis.DispatchObservations, scribeProgress: basis.ScribeProgress);
 
     private static ImmutableArray<CampaignWorkItemState> ReplaceWork(
         CampaignCheckpointState state,

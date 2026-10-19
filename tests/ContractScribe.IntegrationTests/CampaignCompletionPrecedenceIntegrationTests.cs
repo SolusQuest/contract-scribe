@@ -35,6 +35,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             PostflightHostFault = completion == "host",
             FirePostflightTimer = completion == "timeout",
         };
+        using var postflight = ObserveMemberPostflight(() => { }, clock.EnterPostflight);
         var allowance = StopCauseAllowance(fixture, clock, elapsed: lifetime ? 900000 : 1000,
             hostElapsed: completion == "timeout" ? 500 : null);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
@@ -60,10 +61,10 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var result = await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store,
             request, allowance, clock, exchange: null, deferred: () => { credentials++; return exchange; }, cancellationToken: caller.Token));
         Assert.True(clock.SawPostflight);
-        Assert.Equal(2, sends);
+        Assert.Equal(1, sends);
         Assert.Equal(1, credentials);
         Assert.Null(store.Current.State.ActiveReservation);
-        Assert.Equal(2, store.Current.State.LineageCharges.ProviderRequests.Observed);
+        Assert.Equal(1, store.Current.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(0, store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
         Assert.Equal(1, store.Current.State.LineageCharges.OutputTokens.Observed);
         Assert.Equal(0, store.Current.State.LineageCharges.OutputTokens.ConservativeUnobserved);
@@ -107,7 +108,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     nextRequest, StopCauseAllowance(fixture, nextClock), nextClock, exchange: null,
                     deferred: () => { credentials++; return exchange; }));
                 Assert.Equal(DocumentationCampaignProposalOutcomeKind.BudgetExhausted, fenced.Kind);
-                Assert.Equal(2, sends);
+                Assert.Equal(1, sends);
                 Assert.Equal(1, credentials);
             }
         }
@@ -119,7 +120,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store,
             request, StopCauseAllowance(fixture, freshClock), freshClock, exchange: null,
             deferred: () => { credentials++; return exchange; }));
-        Assert.Equal(2, sends);
+        Assert.Equal(1, sends);
         Assert.Equal(1, credentials);
         Assert.True(before.AsSpan().SequenceEqual(store.Current.ExactUtf8Json.AsSpan()));
         Assert.Equal(CampaignWorkStatus.Closed, store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey).Status);
@@ -136,6 +137,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
         var clock = new CompletionPrecedenceClock(() => store.Current.State)
         { PostflightElapsed = boundary == "postflight" ? 1000 : 0 };
+        using var postflight = ObserveMemberPostflight(() => { }, clock.EnterPostflight);
         var allowance = StopCauseAllowance(fixture, clock, elapsed: 1000);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
@@ -149,7 +151,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.Null(store.Current.State.TerminalOutcome);
         Assert.Null(store.Current.State.ActiveReservation);
         var paused = Assert.IsType<CampaignPausedProviderAttempt>(store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey).PausedProviderAttempt);
-        var firstRequests = boundary == "runtime" ? 1 : 2;
+        const int firstRequests = 1;
         Assert.Equal(firstRequests, store.Current.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(1000, store.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
         var freshClock = new CompletionPrecedenceClock(() => store.Current.State);
@@ -174,26 +176,32 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         internal bool SawPostflight { get; private set; }
         public override long TimestampFrequency => 1000;
         internal void Advance(int value) => timestamp += value;
-        public override long GetTimestamp()
+        private TimerCallback? terminalTimer;
+        private object? terminalTimerState;
+        public override long GetTimestamp() => timestamp;
+        internal void EnterPostflight()
         {
-            if (!postflightStarted && current().ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.Postflight })
+            if (postflightStarted) return;
+            postflightStarted = true;
+            SawPostflight = true;
+            timestamp += PostflightElapsed;
+            OnPostflight?.Invoke();
+            if (PostflightHostFault) throw new InvalidOperationException("synthetic postflight clock failure");
+            if (FirePostflightTimer)
             {
-                postflightStarted = true;
-                SawPostflight = true;
-                timestamp += PostflightElapsed;
-                OnPostflight?.Invoke();
-                if (PostflightHostFault) throw new InvalidOperationException("synthetic postflight clock failure");
+                FirePostflightTimer = false;
+                Assert.NotNull(terminalTimer);
+                timestamp += 1000;
+                OnPostflightTimer?.Invoke();
+                terminalTimer(terminalTimerState);
             }
-            return timestamp;
         }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            if (FirePostflightTimer && current().ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.Postflight })
+            if (current().ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission })
             {
-                FirePostflightTimer = false;
-                timestamp += 1000;
-                OnPostflightTimer?.Invoke();
-                callback(state);
+                terminalTimer = callback;
+                terminalTimerState = state;
             }
             return new NoopTimer();
         }

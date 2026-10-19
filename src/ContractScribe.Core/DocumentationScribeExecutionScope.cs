@@ -17,7 +17,8 @@ public sealed record DocumentationScribeDispatchDescriptor(
 
 public sealed record DocumentationScribeDispatchSettlement(
     DocumentationScribeDispatchDisposition Disposition, DocumentationScribeDispatchUsage? Usage,
-    int RetryAfterMilliseconds = 0);
+    int RetryAfterMilliseconds = 0,
+    DocumentationScribeCacheObservation Cache = DocumentationScribeCacheObservation.NotReported);
 
 public sealed record DocumentationScribeHostAdmission(
     int MaximumMilliseconds, DocumentationScribeDeadlineOwner DeadlineOwner);
@@ -66,16 +67,18 @@ public sealed class DocumentationScribeExecutionScope
 {
     private readonly IDocumentationScribeExecutionOperations? operations;
     private DocumentationScribeHostPermit? host;
+    internal DocumentationScribeDeadlineOwner? CurrentHostDeadlineOwner => host?.DeadlineOwner;
     private DocumentationScribeInvocationProviderPermit? provider;
     private int failed;
     private int operationGrant;
     internal DocumentationScribeExecutionScope(DocumentationScribeInvocationAllowance allowance,
         IDocumentationScribeExecutionOperations? operations, int restoredFailures, int pendingRetryAfter)
     {
-        Allowance = allowance; this.operations = operations;
+        Allowance = allowance; MaximumTargets = allowance.Limits.MaximumTargets; this.operations = operations;
         RestoredRetryableProviderFailures = restoredFailures; PendingRetryAfterMilliseconds = pendingRetryAfter;
     }
     public DocumentationScribeInvocationAllowance Allowance { get; }
+    public int MaximumTargets { get; private init; }
     public int RestoredRetryableProviderFailures { get; }
     public int PendingRetryAfterMilliseconds { get; private set; }
     public int PhysicalProviderRequestCount { get; private set; }
@@ -84,7 +87,9 @@ public sealed class DocumentationScribeExecutionScope
         && Allowance.StopReason == DocumentationScribeInvocationStopReason.Elapsed;
     public bool SettledLifetimeBudgetExceeded { get; private set; }
     public bool LifetimeAdmissionDenied { get; private set; }
-    public bool ResourceBudgetReached => LifetimeDeadlineReached || LifetimeAdmissionDenied || SettledLifetimeBudgetExceeded
+    public bool CheckpointCapacityReached { get; private set; }
+    internal void ObserveCheckpointCapacity() => CheckpointCapacityReached = true;
+    public bool ResourceBudgetReached => CheckpointCapacityReached || LifetimeDeadlineReached || LifetimeAdmissionDenied || SettledLifetimeBudgetExceeded
         || Allowance.IsCampaignScope && Allowance.HasCheckedStop;
     internal void ObserveSettledLifetimeBudgetExhaustion() => SettledLifetimeBudgetExceeded = true;
     internal void ObserveLifetimeAdmissionDenial() => LifetimeAdmissionDenied = true;
@@ -118,7 +123,8 @@ public sealed class DocumentationScribeExecutionScope
         if (!allowance.IsCampaignScope || !authority.BindInvocationAllowance(allowance))
             throw new InvalidOperationException("scribe.scope.invalid-authority");
         var progress = ((CampaignProviderReservation)authority.AcceptedCheckpoint.Artifact.State.ActiveReservation!).RetryProgress;
-        return new(allowance, operations, authority.RestoredRetryableProviderFailures, progress.PendingRetryAfterMilliseconds);
+        return new(allowance, operations, authority.RestoredRetryableProviderFailures, progress.PendingRetryAfterMilliseconds)
+        { MaximumTargets = authority.Request.ExecutableTargetIds.Length };
     }
     public async ValueTask<DocumentationScribeInvocationProviderPermit?> ReserveProviderAsync(
         DocumentationScribeDispatchDescriptor descriptor, CancellationToken cancellationToken)
@@ -142,7 +148,7 @@ public sealed class DocumentationScribeExecutionScope
     public async ValueTask<bool> SettleProviderAsync(DocumentationScribeInvocationProviderPermit permit,
         DocumentationScribeDispatchSettlement settlement, CancellationToken cancellationToken)
     {
-        if (!ReferenceEquals(provider, permit) || !Enum.IsDefined(settlement.Disposition)
+        if (!ReferenceEquals(provider, permit) || !Enum.IsDefined(settlement.Disposition) || !Enum.IsDefined(settlement.Cache)
             || !DocumentationScribeInvocationAllowance.ValidUsage(settlement.Usage)
             || settlement.RetryAfterMilliseconds is < 0 or > 300_000) return false;
         if (operations is not null && !await operations.SettleProviderAsync(permit, settlement, cancellationToken).ConfigureAwait(false))

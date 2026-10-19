@@ -118,6 +118,8 @@ public sealed partial class CampaignStateContractTests
             completion, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+        boundedCompletionBytes = Math.Max(boundedCompletionBytes,
+            CampaignStateReducer.ValidateProviderSettlementCapacity(invocation.AcceptedCheckpoint.Artifact.State));
         Assert.True(completed.Artifact.ExactUtf8Json.Length <= boundedCompletionBytes);
         var restored = CampaignStateJson.Parse(completed.Artifact.ExactUtf8Json.AsMemory()).Artifact!.State;
         Assert.Equal(settlement.Charges, restored.LineageCharges);
@@ -164,6 +166,8 @@ public sealed partial class CampaignStateContractTests
         var completed = CampaignStateReducer.CompleteProviderInvocation(invocation.AcceptedCheckpoint.Artifact, completion!, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
         Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
+        boundedCompletionBytes = Math.Max(boundedCompletionBytes,
+            CampaignStateReducer.ValidateProviderSettlementCapacity(invocation.AcceptedCheckpoint.Artifact.State));
         Assert.True(completed.Artifact.ExactUtf8Json.Length <= boundedCompletionBytes);
         var restored = CampaignStateJson.Parse(completed.Artifact.ExactUtf8Json.AsMemory()).Artifact!.State;
         var reason = expected switch
@@ -207,6 +211,7 @@ public sealed partial class CampaignStateContractTests
         var batch = new CampaignFixedBatch(basis.Snapshot.ExecutionCommitmentSha256, 1, targets.ToImmutable(), selected);
         return CampaignStateFactory.CreateValidated(basis.ProductRevision, basis.CampaignLineage, basis.Snapshot,
             0, basis.ConfiguredCeilings, basis.LineageCharges, works, batch,
-            terminalOutcome: deferredOwners == 0 ? new(CampaignTerminalKind.Complete, CampaignTerminalReason.Unresolved) : null);
+            terminalOutcome: deferredOwners == 0 ? new(CampaignTerminalKind.Complete, CampaignTerminalReason.Unresolved) : null,
+            dispatchObservations: basis.DispatchObservations, scribeProgress: basis.ScribeProgress);
     }
 }

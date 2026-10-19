@@ -107,6 +107,14 @@ Malformed, oversized, incorrectly encoded, duplicate-property, unsupported-versi
 
 Only an accepted result may be handed to the GitHub adapter.
 
+## Campaign composition and recovery
+
+The campaign Host accepts independently validated proposal/skip members incrementally under one shared Scribe attempt. A durable proposal is generated content awaiting M2; only `accepted` work belongs to a validated candidate. Publication and main completion remain separate GitHub facts. The Agent receives immutable receipt/progress acknowledgements and has no checkpoint-store, source writer or candidate capability.
+
+The cumulative composer reconstructs one complete M2 request from all accepted and proposal-complete blocks in the original batch, rederiving current source, component and evidence authority. It uses the existing isolated candidate engine for same-file declarations and canonical partial-method owners. Per-field claim/evidence metadata accompanies the sole generated body in each patch block; no source bytes, candidate bytes or conversation is stored. A compatible fresh process can reconstruct the whole candidate without calling the provider. The original checkout remains unchanged.
+
+A proven single independently invalid block may close through the existing narrow reduction and leave its valid siblings reconstructible. Multiple invalid blocks, shared-owner conflicts and global cumulative failures refuse aggregate publication; they cannot choose an arbitrary subset. Projection-capacity stops close only the over-bound completed result by commitment, preserve earlier durable siblings, and pass those siblings through independent cumulative M2 validation. A proven accepted subset can use the existing publication handoff and fresh accepted-only reconstruction while its structural budget terminal continues to prohibit provider work; ordinary exhaustion and unaccepted/global-failed M2 outcomes cannot use that exception. Cancellation and crash retain unpublished progress for the original fixed manifest.
+
 ## Relationship to later stages
 
 M2 is fully deterministic and provider-independent. M3 consumes it as the only path from a structured proposal to source changes. M4 applies campaign budgets before and after rendering. M5 publishes only accepted patch results.

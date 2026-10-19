@@ -45,6 +45,8 @@ public sealed partial class CampaignStateContractTests
         Assert.True(invocation.TryBeginDispatch(out _));
         var elapsed = exchange.Result.RunEnvelope.ElapsedMilliseconds;
         var completion = OrdinaryCompletion(invocation, outcome, elapsed);
+        // Each physical reservation now reserves its own bounded history settlement.
+        upperBytes = Math.Max(upperBytes, CampaignStateReducer.ValidateProviderSettlementCapacity(invocation.AcceptedCheckpoint.Artifact.State));
         var settlement = CampaignBudgetAccounting.SettleProviderInvocation(invocation.AcceptedCheckpoint.Artifact.State, outcome, elapsed);
         var completed = CampaignStateReducer.CompleteProviderInvocation(completion.Invocation.AcceptedCheckpoint.Artifact, completion,
             scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);

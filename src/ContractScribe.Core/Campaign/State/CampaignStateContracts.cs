@@ -259,7 +259,8 @@ public sealed record CampaignTrustedProposal(
     ImmutableArray<CampaignEvidenceProjection> Evidence,
     string StyleProfileCommitmentSha256,
     string ToolPolicyId,
-    string ProposalCommitmentSha256);
+    string ProposalCommitmentSha256,
+    ImmutableArray<CampaignContentUnitProvenance> ContentUnitProvenance);
 
 public sealed record CampaignWorkClosedOutcome
 {
@@ -648,6 +649,8 @@ public sealed record CampaignCheckpointState
     public CampaignCandidateObservation? CandidateObservation { get; }
     public CampaignCumulativeOutcome? CumulativeOutcome { get; }
     public ImmutableArray<CampaignKnownCompletedOperation> KnownCompletedOperations { get; }
+    public CampaignScribeProgress? ScribeProgress { get; internal init; }
+    public ImmutableArray<CampaignDispatchObservation> DispatchObservations { get; internal init; } = [];
     public CampaignTerminalOutcome? TerminalOutcome { get; }
     public CampaignPredecessorSummary? Predecessor { get; }
 }

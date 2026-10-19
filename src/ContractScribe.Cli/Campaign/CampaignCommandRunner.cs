@@ -301,6 +301,17 @@ internal static class CampaignCommandRunner
                 return Terminal(preflight.Operation, "state", AcceptanceOutcome(recovered.Kind), current);
             current = recovered.AcceptedCheckpoint;
         }
+        if (preflight.Operation == CampaignOperation.Resume && current.Artifact.State.TerminalOutcome?.Kind == CampaignTerminalKind.Cancelled
+            && current.Artifact.State.ScribeProgress?.Members.Any(member => member.ContentSha256 is not null) == true)
+        {
+            var resume = CampaignStateReducer.ResumeCancelledScribeProgress(current, execution,
+                configuration.ScribeRequest.StyleProfileTemplate.StyleProfileId, configuration.ScribeRequest.StyleProfileTemplate.ExactProjection,
+                bundle.Session.InputIdentity, planning, plan);
+            var resumed = await CampaignCheckpointAcceptance.AcceptAsync(store, resume, settlementCancellation.Token).ConfigureAwait(false);
+            if (resumed.Kind != CampaignCheckpointAcceptanceKind.Accepted || resumed.AcceptedCheckpoint is null)
+                return Terminal(preflight.Operation, "state", AcceptanceOutcome(resumed.Kind), current);
+            current = resumed.AcceptedCheckpoint;
+        }
         var invocationAllowance = new DocumentationScribeInvocationAllowance(configuration.Budgets.Invocation);
         var targetAllowance = CampaignStateFactory.CreateInvocationTargetAllowance(current.Artifact.State, targetLimit);
         var reconstructPriorAccepted = continuation is null && current.Artifact.State.CandidateObservation is not null;
@@ -337,7 +348,9 @@ internal static class CampaignCommandRunner
                 return Terminal(preflight.Operation, "campaign", "campaign.cancelled", current);
             if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Timeout })
                 return Terminal(preflight.Operation, "campaign", "campaign.timeout", current);
-            if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted })
+            if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted }
+                && !(continuation?.ReconstructAccepted(stateNow) == true
+                    && DocumentationCampaignOutcome.CanUsePartialCandidate(stateNow)))
                 return Terminal(preflight.Operation, "campaign", "campaign.budget-exhausted", current);
 
             if (continuation?.PersistedStop(stateNow) is { } persistedStop) return persistedStop;
@@ -374,7 +387,8 @@ internal static class CampaignCommandRunner
                     DocumentationCampaignOutcomeKind.Accepted or DocumentationCampaignOutcomeKind.Reconstructed)
                 {
                     if (patched.Artifact?.State.TerminalOutcome is { } stopped
-                        && stopped.Kind != CampaignTerminalKind.Complete)
+                        && stopped.Kind != CampaignTerminalKind.Complete
+                        && !DocumentationCampaignOutcome.CanUsePartialCandidate(patched.Artifact.State))
                         return Terminal(preflight.Operation, "campaign", stopped.Kind switch
                         {
                             CampaignTerminalKind.Cancelled => "campaign.cancelled",
@@ -448,8 +462,14 @@ internal static class CampaignCommandRunner
             ReadOnlyMemory<byte> request;
             try
             {
-                request = CampaignScribeRequestBuilder.Build(
-                    bundle, next, policy, configuration, cancellationToken);
+                var executable = CampaignScribeRequestBuilder.ExecutableMembers(stateNow, plan, targetAllowance);
+                var bootstrap = executable.First(symbol => stateNow.WorkItems.Single(work => work.WorkItemKey ==
+                    stateNow.Batch.CompleteTargets.Single(target => target.SymbolRef == symbol).WorkItemKey) is var work
+                    && (work.Status == CampaignWorkStatus.Planned || work.ClosedOutcome is
+                    { Code: CampaignWorkOutcomeCode.ProviderFailure, ProviderDisposition: CampaignProviderFinalDisposition.Retryable }));
+                request = CampaignScribeRequestBuilder.BuildManifest(bundle,
+                    CampaignScribeRequestBuilder.SelectedMembers(stateNow, plan),
+                    executable, policy, configuration, cancellationToken, bootstrap).RequestUtf8Json;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -515,12 +535,16 @@ internal static class CampaignCommandRunner
         CampaignCheckpointState state,
         CampaignWorkPlan plan,
         CampaignInvocationTargetAllowance allowance) =>
-        (allowance.RecoveryWorkItemKey is { } recovery ? new[] { recovery } : [])
+        (state.ScribeProgress?.Session is { Ended: false } session
+            && state.WorkItems.Any(work => work.WorkItemKey == session.AnchorWorkItemKey && work.PausedProviderAttempt is not null)
+            && allowance.WorkItemKeys.Any(key => state.WorkItems.Single(work => work.WorkItemKey == key).Status == CampaignWorkStatus.Planned)
+                ? new[] { session.AnchorWorkItemKey } : allowance.RecoveryWorkItemKey is { } recovery ? new[] { recovery } : [])
             .Concat(allowance.WorkItemKeys).Distinct(StringComparer.Ordinal)
             .Where(key => CampaignStateFactory.AllowsTarget(state, key, allowance))
             .Select(key => (First: state.WorkItems.Single(work => work.WorkItemKey == key),
                 Second: plan.WorkItems.Single(work => work.WorkItemKey == key)))
-            .Where(pair => pair.First.Status == CampaignWorkStatus.Planned
+            .Where(pair => pair.First.Status == CampaignWorkStatus.Planned || pair.First.PausedProviderAttempt is not null
+                    && state.ScribeProgress?.Session is { Ended: false } activeSession && activeSession.AnchorWorkItemKey == pair.First.WorkItemKey
                 || pair.First.Status == CampaignWorkStatus.Closed
                 && pair.First.ClosedOutcome is
                 {

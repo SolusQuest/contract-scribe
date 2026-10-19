@@ -29,13 +29,34 @@ internal static class CampaignScribeRequestBuilder
         return BuildManifest(bundle, work.Targets, [target.SymbolRef], policy, configuration, cancellationToken).RequestUtf8Json;
     }
 
+    internal static ImmutableArray<CampaignPlanningTargetFact> SelectedMembers(CampaignCheckpointState state, CampaignWorkPlan plan) =>
+        state.Batch.SelectedTargetKeys.Select(key => state.Batch.CompleteTargets.Single(target => target.TargetKey == key))
+            .Select(target => plan.WorkItems.Single(work => work.WorkItemKey == target.WorkItemKey).Targets.Single(fact => fact.SymbolRef == target.SymbolRef))
+            .ToImmutableArray();
+
+    internal static ImmutableArray<SymbolRef> ExecutableMembers(CampaignCheckpointState state, CampaignWorkPlan plan,
+        CampaignInvocationTargetAllowance allowance) => SelectedMembers(state, plan).Where(target =>
+        {
+            var batchTarget = state.Batch.CompleteTargets.Single(item => item.SymbolRef == target.SymbolRef);
+            var work = state.WorkItems.Single(item => item.WorkItemKey == batchTarget.WorkItemKey);
+            var prior = state.ScribeProgress?.Members.SingleOrDefault(item => item.WorkItemKey == work.WorkItemKey);
+            return batchTarget.Dispatchable && (prior?.ContentSha256 is not null
+                    && (work.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted
+                        || prior.Skip is not null && work.Status == CampaignWorkStatus.Closed)
+                || CampaignStateFactory.AllowsTarget(state, work.WorkItemKey, allowance)
+                    && work.AttemptDisposition == CampaignAttemptDisposition.Open
+                    && (work.Status == CampaignWorkStatus.Planned || work.ClosedOutcome is
+                    { Code: CampaignWorkOutcomeCode.ProviderFailure, ProviderDisposition: CampaignProviderFinalDisposition.Retryable }));
+        }).Select(target => target.SymbolRef).ToImmutableArray();
+
     internal static BuiltDocumentationScribeManifest BuildManifest(
         ProductionRepositorySessionBundle bundle,
         ImmutableArray<CampaignPlanningTargetFact> selected,
         ImmutableArray<SymbolRef> executableSymbols,
         CampaignPlanningExecutionPolicy policy,
         CampaignConfigurationDocument configuration,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SymbolRef? bootstrapSymbol = null)
     {
         ArgumentNullException.ThrowIfNull(bundle);
         ArgumentNullException.ThrowIfNull(policy);
@@ -58,7 +79,7 @@ internal static class CampaignScribeRequestBuilder
             var accepted = bootstrapSelections[index];
             var source = target.Source as CampaignPlanningRepositorySourceAuthority
                 ?? throw new InvalidOperationException("campaign.request.target-invalid");
-            var seed = !executableSymbols.IsEmpty && target.SymbolRef == executableSymbols[0];
+            var seed = !executableSymbols.IsEmpty && target.SymbolRef == (bootstrapSymbol ?? executableSymbols[0]);
             var l = accepted.Limits;
             var bootstrapLimits = DocumentationScribeContextValidation.CreateLimits(l.MaximumInstructionFiles,
                 l.MaximumInstructionDepth, l.MaximumInstructionFileUtf8Bytes, l.MaximumDeclarationReferences,

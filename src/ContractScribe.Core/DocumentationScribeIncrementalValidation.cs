@@ -47,6 +47,12 @@ public static partial class DocumentationScribeValidation
         }
     }
 
+    internal static string CreateSkipContentSha256(DocumentationScribeSkipReason reason, ImmutableArray<string> evidenceReferenceIds)
+    {
+        var value = JsonSerializer.SerializeToElement(new { evidenceReferenceIds, kind = "skip", reason = DocumentationScribeVocabulary.GetId(reason) });
+        return Convert.ToHexString(SHA256.HashData(NormalizeSubmissionJson(value).AsSpan())).ToLowerInvariant();
+    }
+
     public static DocumentationScribeTargetSubmission AcknowledgeSubmission(
         DocumentationScribeValidatedSubmission validation, DocumentationScribeSubmissionAcknowledgement acknowledgement)
     {

@@ -83,6 +83,11 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
             return;
         }
+        if (State.RepairCount >= DocumentationScribeValidation.MaximumInvalidSubmissions)
+        {
+            Result = new DocumentationScribeTerminalReducer().CommitValidation(State, token, "scribe.repair.exhausted");
+            return;
+        }
         if (restoredProgress is not null && request.ExecutableTargetIds.All(State.RestoredClosedTargets.Contains))
         {
             Result = State.CreateFinished();
@@ -102,7 +107,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
         State.CallerCancellation = token;
         var scope = State.Scope;
         Result ??= new DocumentationScribeTerminalReducer().TryCommitPriority(State, token);
-        if (Result is null && (scope.Allowance.Limits.MaximumTargets == 0 || !scope.Allowance.CanBeginProviderWork()))
+        if (Result is null && (scope.MaximumTargets == 0 || !scope.Allowance.CanBeginProviderWork()))
             Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
         if (Result is not null)
         {
@@ -154,7 +159,12 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
         }
         if (Result is null && RuntimeResult?.StopReason is CandidateStopReason.WorkUnitLimit
             or CandidateStopReason.SubmissionLimit or CandidateStopReason.ContinuationLimit)
+        {
+            // The SDK can stop at its bound before another reservation observes
+            // the spent product allowance. Retain that existing resource owner.
+            _ = scope.Allowance.CanBeginProviderWork();
             return new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Budget);
+        }
         if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.RepairLimit)
             return new DocumentationScribeTerminalReducer().CommitValidation(State, token, "scribe.repair.exhausted");
         if (Result is null && RuntimeResult?.StopReason == CandidateStopReason.RuntimeLimit)

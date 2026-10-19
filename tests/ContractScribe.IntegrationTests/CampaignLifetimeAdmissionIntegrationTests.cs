@@ -135,6 +135,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
         var clock = new CompletionPrecedenceClock(() => store.Current.State)
         { FirePostflightTimer = cause == "host-timeout" };
+        using var postflight = ObserveMemberPostflight(() => { }, clock.EnterPostflight);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
         var sends = 0;
@@ -149,13 +150,13 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.Equal(cause == "prepare" ? CampaignWorkOutcomeCode.ValidationFailure : CampaignWorkOutcomeCode.Timeout,
             closed.ClosedOutcome!.Code);
         Assert.Null(store.Current.State.ActiveReservation);
-        Assert.Equal(cause == "host-timeout" ? 2 : 1, sends);
+        Assert.Equal(1, sends);
         if (cause == "host-timeout") Assert.Equal(CampaignTerminalReason.Deadline, store.Current.State.TerminalOutcome!.Reason);
         campaign = await ChangeStopCauseCapAsync(fixture, campaign, store, 2000);
         var before = store.Current.ExactUtf8Json;
         await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store, request,
             StopCauseAllowance(fixture, clock), clock, exchange));
-        Assert.Equal(cause == "host-timeout" ? 2 : 1, sends);
+        Assert.Equal(1, sends);
         Assert.True(before.AsSpan().SequenceEqual(store.Current.ExactUtf8Json.AsSpan()));
     }
 

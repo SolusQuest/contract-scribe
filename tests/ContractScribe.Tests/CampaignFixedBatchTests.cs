@@ -243,7 +243,8 @@ public sealed partial class CampaignStateContractTests
             scenario.InitialState.CampaignLineage, scenario.InitialState.Snapshot, 0,
             scenario.InitialState.ConfiguredCeilings, scenario.InitialState.LineageCharges,
             scenario.InitialState.WorkItems.Select(work => work.WorkItemKey == deferred.WorkItemKey
-                ? work with { OuterAttemptCount = 1 } : work), scenario.InitialState.Batch));
+                ? work with { OuterAttemptCount = 1 } : work), scenario.InitialState.Batch,
+            dispatchObservations: scenario.InitialState.DispatchObservations, scribeProgress: scenario.InitialState.ScribeProgress));
     }
 
     [Fact]

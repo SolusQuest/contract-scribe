@@ -829,7 +829,8 @@ public sealed class CampaignCheckpointStoreProcessTests
             state.LineageCharges,
             state.WorkItems,
             state.Batch,
-            terminalOutcome: null));
+            terminalOutcome: null,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress));
     }
 
     private static string RequireWorkerValue(string name) =>

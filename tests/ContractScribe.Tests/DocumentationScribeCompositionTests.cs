@@ -251,7 +251,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.NotNull(outcome.TrustedProposal);
         Assert.Equal(2, observing.RequestCount);
         Assert.True(observing.SawPersistedReservation);
-        Assert.Equal(11, store.SuccessfulReplaceCount);
+        Assert.Equal(13, store.SuccessfulReplaceCount);
         Assert.Equal(outcome.Artifact!.Sha256, store.Current!.Sha256);
         Assert.True(outcome.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
             store.Current.ExactUtf8Json.AsSpan()));
@@ -263,7 +263,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, replay.Kind);
         Assert.Equal("campaign.proposal.replay", replay.Code);
         Assert.Equal(0, replayExchange.RequestCount);
-        Assert.Equal(11, store.SuccessfulReplaceCount);
+        Assert.Equal(13, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -338,7 +338,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(1, binds);
-        Assert.Equal(11, store.SuccessfulReplaceCount);
+        Assert.Equal(13, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -493,7 +493,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(2, exchange.RequestCount);
-        Assert.Equal(11, store.SuccessfulReplaceCount);
+        Assert.Equal(13, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -539,8 +539,9 @@ public sealed partial class DocumentationScribeCompositionTests
                     new MutatingProposalExchange(fixture.Request, fixture.SourcePath),
                     RuntimeOptions()));
 
-            Assert.Equal(DocumentationCampaignProposalOutcomeKind.TerminalStop, outcome.Kind);
-            Assert.Equal(11, store.SuccessfulReplaceCount);
+            Assert.True(outcome.Kind == DocumentationCampaignProposalOutcomeKind.TerminalStop,
+                outcome.Code + " writes=" + store.SuccessfulReplaceCount);
+            Assert.Equal(store.Current!.CheckpointRevision, store.SuccessfulReplaceCount);
             Assert.Null(store.Current!.State.ActiveReservation);
             var closed = Assert.Single(store.Current.State.WorkItems,
                 item => item.Status == CampaignWorkStatus.Closed
@@ -610,13 +611,14 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, invalid.Kind);
         Assert.Equal(2, invalidExchange.RequestCount);
-        Assert.Equal(11, invalidStore.SuccessfulReplaceCount);
+        Assert.Equal(13, invalidStore.SuccessfulReplaceCount);
         Assert.Null(invalidStore.Current!.State.ActiveReservation);
         Assert.Equal(0, invalidStore.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
         var conflictStore = new MemoryCampaignStore(initial)
         {
-            ReportedReplaceAttempt = 11,
+            RejectedTransition = (before, after) => before.State.ActiveReservation is CampaignProviderReservation
+                && after.State.ActiveReservation is null,
             ReportedReplaceKind = CampaignCheckpointWriteKind.CurrentMismatch,
         };
         var conflictExchange = new CountingProposalExchange(fixture.Request);
@@ -626,7 +628,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, conflict.Kind);
         Assert.Equal("campaign.settlement.conflict", conflict.Code);
         Assert.Equal(2, conflictExchange.RequestCount);
-        Assert.Equal(10, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(12, conflictStore.SuccessfulReplaceCount);
         Assert.IsType<CampaignProviderReservation>(conflictStore.Current!.State.ActiveReservation);
     }
 
@@ -737,7 +739,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(0, store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
         Assert.True(store.Current.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved > 0);
         Assert.True(store.Current.State.LineageCharges.ProviderRequests.Observed > 0);
-        Assert.Equal(13, store.SuccessfulReplaceCount);
+        Assert.Equal(15, store.SuccessfulReplaceCount);
     }
 
     [Fact]
@@ -1936,7 +1938,7 @@ public sealed partial class DocumentationScribeCompositionTests
         internal int SuccessfulReplaceCount { get; private set; }
         internal CampaignCheckpointWriteKind? NextReportedReplaceKind { get; init; }
         internal bool ApplyNextReplaceBeforeReporting { get; init; }
-        internal int? ReportedReplaceAttempt { get; init; }
+        internal Func<CampaignCheckpointArtifact, CampaignCheckpointArtifact, bool>? RejectedTransition { get; init; }
         internal bool? FailPhysicalSettlement { get; init; }
         internal CampaignCheckpointWriteKind? ReportedReplaceKind { get; init; }
         internal Action<int>? AfterSuccessfulReplace { get; init; }
@@ -1999,8 +2001,7 @@ public sealed partial class DocumentationScribeCompositionTests
                         CampaignCheckpointWriteKind.CurrentMismatch));
                 }
 
-                var reportedAttempt = ReportedReplaceAttempt
-                    ?? (NextReportedReplaceKind is null ? null : 1);
+                var reportedAttempt = NextReportedReplaceKind is null ? (int?)null : 1;
                 var reportedKind = ReportedReplaceKind ?? NextReportedReplaceKind;
                 var successor = Parse(exactUtf8Json);
                 if (!physicalFaultReported && FailPhysicalSettlement is { } settlement
@@ -2013,7 +2014,8 @@ public sealed partial class DocumentationScribeCompositionTests
                     reportedAttempt = replaceAttempt;
                     reportedKind = CampaignCheckpointWriteKind.CurrentMismatch;
                 }
-                if (reportedAttempt == replaceAttempt && reportedKind is { } reported)
+                if ((reportedAttempt == replaceAttempt || RejectedTransition?.Invoke(current, successor) == true)
+                    && reportedKind is { } reported)
                 {
                     if (ApplyNextReplaceBeforeReporting)
                     {

@@ -19,6 +19,9 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         Scope = DocumentationScribeExecutionScope.ForCampaign(invocation, allowance, this);
     }
     internal DocumentationScribeExecutionScope Scope { get; }
+    internal bool CheckpointCapacityStop { get; private set; }
+    internal bool ProjectionCapacityStop { get; private set; }
+    internal void ObserveProjectionCapacity() => ProjectionCapacityStop = true;
     internal bool LifetimeStop { get; private set; }
     internal bool Conflict { get; private set; }
     internal bool LifetimeElapsedExhausted => CampaignBudgetAccounting.RemainingLifetimeElapsed(
@@ -101,19 +104,43 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         return await AcceptProgressAsync(CampaignStateReducer.AdvanceHostOperation(invocation, operation,
             ElapsedAt(boundary), 0, completing: true), boundary).ConfigureAwait(false);
     }
-    private async ValueTask<bool> AcceptProgressAsync(CampaignTransitionResult transition, long boundary)
+    internal async ValueTask<bool> AcceptHostProgressAsync(CampaignTransitionResult transition, CancellationToken cancellationToken)
+    {
+        if (cancellationToken.IsCancellationRequested) return false;
+        if (guard is not null && !guard()) { Conflict = true; return false; }
+        if (transition.Kind != CampaignTransitionKind.Unchanged)
+            return await AcceptProgressAsync(transition, operationStartedAt, cancellationToken).ConfigureAwait(false);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+        using var bounded = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, cancellationToken, deadline.Token);
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, bounded.Token).ConfigureAwait(false);
+        var valid = !cancellationToken.IsCancellationRequested
+            && (invocation.LifecycleAvailable || invocation.DispatchStarted)
+            && accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted
+            && accepted.Artifact?.Sha256 == invocation.AcceptedCheckpoint.Artifact.Sha256;
+        Conflict |= !valid;
+        return valid;
+    }
+
+    private async ValueTask<bool> AcceptProgressAsync(CampaignTransitionResult transition, long boundary,
+        CancellationToken cancellationToken = default)
     {
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
+            if (transition.Failure == CampaignTransitionFailure.CheckpointCapacity)
+            {
+                CheckpointCapacityStop = true;
+                Scope.ObserveCheckpointCapacity();
+                return false;
+            }
             LifetimeStop |= Scope.LifetimeAdmissionDenied;
             Conflict |= transition.Failure != CampaignTransitionFailure.BudgetExhausted
                 || !(Scope.LifetimeAdmissionDenied || Scope.Allowance.HasCheckedStop);
             return false;
         }
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
-        using var boundedSettlement = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, deadline.Token);
+        using var boundedSettlement = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, deadline.Token, cancellationToken);
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token).ConfigureAwait(false);
-        if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
+        if (cancellationToken.IsCancellationRequested || accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
             || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
         { Conflict = true; return false; }
         operationStartedAt = boundary;

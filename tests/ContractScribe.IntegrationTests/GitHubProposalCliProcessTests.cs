@@ -295,7 +295,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 required ? CampaignCliProcessTests.RequiredPolicy : CampaignCliProcessTests.OptionalPolicy);
             var outside = Path.Join(Path.GetTempPath(), "contract-scribe-github-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(outside);
-            if (OperatingSystem.IsLinux()) File.SetUnixFileMode(outside, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) File.SetUnixFileMode(outside, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var provider = new CampaignCliProcessTests.ProposalLoopbackServer();
             var source = await File.ReadAllBytesAsync(Path.Join(repository.Root, "App", "App.cs"));
             var governed = new Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)>(StringComparer.Ordinal);
@@ -304,7 +304,7 @@ public sealed partial class GitHubProposalCliProcessTests
                     && (path.EndsWith(".cs", StringComparison.Ordinal) || path.EndsWith(".csproj", StringComparison.Ordinal)
                         || Path.GetFileName(path) == "policy.json")))
                 governed.Add(Path.GetRelativePath(repository.Root, path).Replace('\\', '/'),
-                    (await File.ReadAllBytesAsync(path), OperatingSystem.IsLinux() ? File.GetUnixFileMode(path) : null));
+                    (await File.ReadAllBytesAsync(path), (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) ? File.GetUnixFileMode(path) : null));
             var github = new GitHubProposalLoopbackServer(governed.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes));
             var configuration = Path.Join(outside, "layer.json");
             await File.WriteAllTextAsync(configuration, JsonSerializer.Serialize(new
@@ -319,6 +319,9 @@ public sealed partial class GitHubProposalCliProcessTests
                 budgets = new
                 {
                     campaign = new { maximumCandidatesPerBlock = 30, maximumElapsedMilliseconds = 3_600_000 },
+                    // Keep both original members, but publish only the first durable
+                    // proposal before an explicitly authorized append invocation.
+                    invocation = new { maximumProviderRequests = twoWorks ? 1 : 64 },
                 },
             }), new UTF8Encoding(false, true));
             var publication = new JsonObject

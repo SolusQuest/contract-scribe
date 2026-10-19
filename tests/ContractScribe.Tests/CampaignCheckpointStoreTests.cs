@@ -1657,7 +1657,8 @@ public sealed class CampaignCheckpointStoreTests
             state.LineageCharges,
             state.WorkItems,
             state.Batch,
-            terminalOutcome: null));
+            terminalOutcome: null,
+            dispatchObservations: state.DispatchObservations, scribeProgress: state.ScribeProgress));
     }
 
     private static bool IsSupportedStorePlatform() =>

@@ -112,6 +112,24 @@ public sealed class CampaignProviderInvocationAuthority
     internal CampaignPlanningInput PlanningInput { get; }
     internal CampaignWorkPlan AcceptedPlan { get; }
     internal DocumentationScribeRequest Request { get; }
+    private readonly Dictionary<string, string> restoredReceipts = new(StringComparer.Ordinal);
+    internal bool RestoredReceiptMatches(string targetId, string contentSha256) => restoredReceipts.GetValueOrDefault(targetId) == contentSha256;
+    internal void RecordRestoredReceipt(DocumentationScribeValidatedSubmission submission) => restoredReceipts.Add(submission.TargetId, submission.ContentSha256);
+    internal CampaignScribeHostRejection? HostRejection { get; private set; }
+    internal bool TryRecordHostRejection(DocumentationScribeValidatedSubmission submission, CampaignProviderCompletionKind kind)
+    {
+        if (!(LifecycleAvailable || DispatchStarted) || InvocationAllowance is null
+            || AcceptedCheckpoint.Artifact.State.ActiveReservation is not CampaignProviderReservation
+            { OperationKind: CampaignProviderOperationKind.Host, HostPhase: CampaignProviderHostPhase.TerminalSubmission } claim
+            || claim.ExecutionStartRevision != ExecutionStartRevision || claim.AttemptId != AttemptId
+            || claim.ScribeRequestSha256 != ScribeRequestSha256 || submission.ScribeRequestSha256 != ScribeRequestSha256
+            || !Request.ExecutableTargetIds.Contains(submission.TargetId, StringComparer.Ordinal)
+            || !Enum.IsDefined(kind) || kind == CampaignProviderCompletionKind.Ordinary) return false;
+        var fact = new CampaignScribeHostRejection(submission.TargetId, submission.ContentSha256, kind);
+        if (HostRejection is not null) return HostRejection == fact;
+        HostRejection = fact;
+        return true;
+    }
     internal bool DispatchStarted => executionStartCheckpoint.ReservationLifecycle.IsDispatchStarted;
     internal bool LifecycleAvailable => executionStartCheckpoint.ReservationLifecycle.IsAvailable;
 
@@ -198,7 +216,7 @@ public sealed class CampaignProviderInvocationAuthority
 
     internal bool AdvanceAcceptedProgress(CampaignTransitionResult transition, CampaignAcceptedCheckpoint accepted)
     {
-        if (transition.Kind != CampaignTransitionKind.Applied
+        if (!(LifecycleAvailable || DispatchStarted) || transition.Kind != CampaignTransitionKind.Applied
             || transition.Predecessor.Sha256 != AcceptedCheckpoint.Artifact.Sha256
             || accepted.Artifact.Sha256 != transition.Artifact.Sha256
             || accepted.Artifact.CheckpointRevision != transition.Artifact.CheckpointRevision
@@ -272,15 +290,22 @@ public static partial class CampaignStateReducer
             throw new ArgumentException("The accepted provider reservation does not authorize this invocation.");
         }
 
-        _ = CampaignStateFactory.ValidateProviderRequestAuthority(
-            artifact.State,
-            executionCapability,
-            styleConfigurationId,
-            validatedStyleConfigurationProjection,
-            planningInput,
-            acceptedPlan,
-            reservation.WorkItemKey,
-            request);
+        try
+        {
+            _ = CampaignStateFactory.ValidateProviderRequestAuthority(
+                artifact.State,
+                executionCapability,
+                styleConfigurationId,
+                validatedStyleConfigurationProjection,
+                planningInput,
+                acceptedPlan,
+                reservation.WorkItemKey,
+                request);
+        }
+        catch (CampaignStateValidationException exception)
+        {
+            throw new ArgumentException("The accepted provider reservation does not match the current request authority.", nameof(request), exception);
+        }
         var work = artifact.State.WorkItems.Single(item =>
             string.Equals(item.WorkItemKey, reservation.WorkItemKey, StringComparison.Ordinal));
         if (CampaignStateFactory.CreateScribeAttemptId(
@@ -382,6 +407,9 @@ public static partial class CampaignStateReducer
                 return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
             }
 
+            if (!RequestTargetsAllowed(state, request, targetAllowance))
+                return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
+
             var patchContext = new DocumentationPatchContext(
                 request.Context.RepositoryContextRef,
                 request.Context.InputIdentity,
@@ -424,7 +452,7 @@ public static partial class CampaignStateReducer
             }
 
             var reserved = CreateProviderReservationState(state, executionCapability.Projection,
-                work, request.ArtifactSha256, budget);
+                work, request.ArtifactSha256, budget, request);
             var transition = Applied(predecessor, reserved.State, reserved.AttemptId);
             ValidateProviderSettlementCapacity(transition.Artifact.State);
             return transition;
@@ -482,7 +510,8 @@ public static partial class CampaignStateReducer
             || reservation.AttemptId != invocationAuthority.AttemptId
             || !string.Equals(reservation.ScribeRequestSha256, invocationAuthority.ScribeRequestSha256, StringComparison.Ordinal)
             || !string.Equals(reservation.WorkItemKey,
-                state.WorkItems.SingleOrDefault(item => item.Status == CampaignWorkStatus.Planned
+                state.WorkItems.SingleOrDefault(item => (item.Status == CampaignWorkStatus.Planned
+                        || state.ScribeProgress?.Members.Any(member => member.WorkItemKey == item.WorkItemKey && member.ContentSha256 is not null) == true)
                     && string.Equals(item.WorkItemKey, reservation.WorkItemKey, StringComparison.Ordinal))?.WorkItemKey,
                 StringComparison.Ordinal))
         {
@@ -508,6 +537,12 @@ public static partial class CampaignStateReducer
                     reservation,
                     simultaneousStop);
             }
+
+            if (state.ScribeProgress is { } recorded
+                && (recorded.LastProgressSha256 is not null || outcome!.Request.Manifest.Length > 1
+                    || invocationAuthority.HostRejection is not null
+                    || outcome.RunResult.Submissions.Any(item => item.Stage >= DocumentationScribeAcknowledgementStage.DurablyRecorded)))
+                return CompleteRecordedScribeProgress(predecessor, completionAuthority, reservation);
 
             var ordinaryOutcome = outcome!;
             var envelope = ordinaryOutcome.RunResult.RunEnvelope;
@@ -810,15 +845,45 @@ public static partial class CampaignStateReducer
             return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
         try
         {
-            if (CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
-                executionCapability.Projection, workItemKey, work.OuterAttemptCount) != work.ClosedOutcome.AttemptId)
+            var previousAttempt = state.ScribeProgress?.Members.SingleOrDefault(member => member.WorkItemKey == workItemKey)?.AttemptId
+                ?? CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
+                    executionCapability.Projection, workItemKey, work.OuterAttemptCount);
+            if (previousAttempt != work.ClosedOutcome.AttemptId)
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             if (work.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget)
                 return SuppressAtAttemptLimit(predecessor, workItemKey, state.LineageCharges);
-            var items = state.WorkItems.Select(item => item.WorkItemKey == workItemKey
+            var executableKeys = request.ExecutableTargetIds.Select(id => state.Batch.CompleteTargets.Single(target =>
+                target.SymbolRef == request.Manifest.Single(member => member.TargetId == id).Target.SymbolRef).WorkItemKey)
+                .ToHashSet(StringComparer.Ordinal);
+            var retryMembers = state.WorkItems.Where(item => executableKeys.Contains(item.WorkItemKey) && item is
+            {
+                Status: CampaignWorkStatus.Closed, ClosedOutcome.Code: CampaignWorkOutcomeCode.ProviderFailure,
+                ClosedOutcome.ProviderDisposition: CampaignProviderFinalDisposition.Retryable
+            }).ToImmutableArray();
+            foreach (var item in retryMembers)
+            {
+                var memberAttempt = state.ScribeProgress?.Members.SingleOrDefault(member => member.WorkItemKey == item.WorkItemKey)?.AttemptId
+                    ?? CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
+                        executionCapability.Projection, item.WorkItemKey, item.OuterAttemptCount);
+                if (item.AttemptDisposition != CampaignAttemptDisposition.Open
+                    || item.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget
+                    || !CampaignStateFactory.AllowsTarget(state, item.WorkItemKey, targetAllowance)
+                    || memberAttempt != item.ClosedOutcome!.AttemptId)
+                    throw CampaignStateFactory.Fail(CampaignStateValidationCode.InvalidCorrelation, "The retry member is not admissible.");
+            }
+            var retriedKeys = retryMembers.Select(item => item.WorkItemKey).ToHashSet(StringComparer.Ordinal);
+            var items = state.WorkItems.Select(item => retriedKeys.Contains(item.WorkItemKey)
                 ? item with { Status = CampaignWorkStatus.Planned, ClosedOutcome = null } : item).ToImmutableArray();
+            var progress = state.ScribeProgress;
+            if (progress is not null)
+            {
+                var retryIds = progress.Members.Where(member => retriedKeys.Contains(member.WorkItemKey))
+                    .Select(member => member.TargetId).ToHashSet(StringComparer.Ordinal);
+                progress = progress with { TargetFailures = progress.TargetFailures.Where(failure => !retryIds.Contains(failure.TargetId)).ToImmutableArray() };
+            }
             var prepared = CampaignStateJson.CreateArtifact(CreateState(state, state.CheckpointRevision,
-                state.LineageCharges, items, null, state.CandidateObservation, state.CumulativeOutcome, null, state.Predecessor));
+                state.LineageCharges, items, null, state.CandidateObservation, state.CumulativeOutcome, null, state.Predecessor,
+                scribeProgress: progress));
             var admission = AdmitProviderInvocation(prepared, executionCapability, styleConfigurationId,
                 validatedStyleConfigurationProjection, planningInput, acceptedPlan, workItemKey, request,
                 targetAllowance, invocationAllowance);
@@ -1441,7 +1506,8 @@ public static partial class CampaignStateReducer
                 state.Snapshot, NextRevision(state.CheckpointRevision), ceilings, charges, state.ActiveReservation is CampaignProviderReservation provider
                     ? PreservePausedAttempt(state.WorkItems, provider) : state.WorkItems,
                 state.Batch, activeReservation: null, state.CandidateObservation, state.CumulativeOutcome,
-                state.KnownCompletedOperations, terminal, state.Predecessor);
+                state.KnownCompletedOperations, terminal, state.Predecessor,
+                RetireDispatchObservation(state, charges), state.ScribeProgress);
             var transition = Applied(predecessor, successor);
             ValidateInitialProviderReservationCapacity(transition.Artifact.State);
             return state.ActiveReservation is null ? transition
@@ -1545,7 +1611,8 @@ public static partial class CampaignStateReducer
                 template.WorkItems,
                 template.Batch,
                 terminalOutcome: template.TerminalOutcome,
-                predecessor: summary));
+                predecessor: summary,
+                dispatchObservations: RetireDispatchObservation(state, charges)));
             // Carried charges and the predecessor summary belong to the final admission
             // shape; an empty-charge template cannot decide whether provider work fits.
             ValidateInitialProviderReservationCapacity(transition.Artifact.State);
@@ -1586,6 +1653,12 @@ public static partial class CampaignStateReducer
             CampaignWorkStatus.Closed,
             null,
             reduction.ClosedOutcome);
+        if (state.ScribeProgress?.Session is { Ended: false } session && session.AnchorWorkItemKey == reduction.WorkItemKey)
+        {
+            var paused = state.WorkItems.Single(work => work.WorkItemKey == reduction.WorkItemKey).PausedProviderAttempt;
+            workItems = workItems.Select(work => work.WorkItemKey == reduction.WorkItemKey
+                ? work with { PausedProviderAttempt = paused } : work).ToImmutableArray();
+        }
         var settlement = CampaignBudgetAccounting.SettlePatchInvocation(state, activeElapsedMilliseconds);
         if (settlement.Kind == CampaignBudgetDecisionKind.Invalid)
         {
@@ -1691,9 +1764,9 @@ public static partial class CampaignStateReducer
 
     private static CampaignWorkClosedOutcome CreateClosedScribeOutcome(
         DocumentationScribeValidatedRunOutcome outcome,
-        string workItemKey)
+        string workItemKey, DocumentationScribeTerminal? terminalOverride = null)
     {
-        var terminal = CampaignStateFactory.GetSingletonScribeSubmission(outcome.Request, outcome.RunResult)?.Result ?? outcome.RunResult.Stop;
+        var terminal = terminalOverride ?? CampaignStateFactory.GetSingletonScribeSubmission(outcome.Request, outcome.RunResult)?.Result ?? outcome.RunResult.Stop;
         var code = terminal switch
         {
             DocumentationScribeFinishedTerminal => CampaignWorkOutcomeCode.ValidationFailure,
@@ -1895,6 +1968,8 @@ public static partial class CampaignStateReducer
             new CampaignTerminalOutcome(CampaignTerminalKind.Superseded, CampaignTerminalReason.AllWorkClosed), state.Predecessor)
         {
             AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
+            DispatchObservations = state.DispatchObservations,
+            ScribeProgress = state.ScribeProgress,
         };
         var maximumSize = CampaignStateJson.ValidateEncodedSize(upper);
         var progress = new CampaignProviderRetryProgress(DocumentationScribeContract.MaximumAttempts,
@@ -1918,7 +1993,7 @@ public static partial class CampaignStateReducer
         var activeUpper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
             Maximum, state.ConfiguredCeilings, charges, state.WorkItems, state.Batch, maximumClaim,
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations, null, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin };
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
         maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(activeUpper));
         var pausedItems = state.WorkItems.Select(item => item.WorkItemKey == reservation.WorkItemKey ? item with
         {
@@ -1927,7 +2002,7 @@ public static partial class CampaignStateReducer
         var pausedUpper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
             Maximum, state.ConfiguredCeilings, charges, pausedItems, state.Batch, null,
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations, null, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin };
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
         maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(pausedUpper));
         var recovered = new CampaignWorkClosedOutcome(CampaignWorkOutcomeStage.Scribe, CampaignWorkOutcomeCode.ProviderFailure,
             CampaignProviderFinalDisposition.Retryable, reservation.ScribeRequestSha256, reservation.AttemptId,
@@ -1941,12 +2016,65 @@ public static partial class CampaignStateReducer
             Maximum, state.ConfiguredCeilings, charges, recoveredItems, state.Batch, null,
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             upper.TerminalOutcome, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin };
-        return Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(recoveredUpper));
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
+        maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(recoveredUpper));
+        maximumSize = checked(maximumSize + CampaignStateJson.MeasureDispatchSettlementGrowth(state)
+            + MeasureScribeCompletionGrowth(state));
+        if (maximumSize > CampaignStateContract.MaximumArtifactUtf8Bytes)
+            throw CampaignStateFactory.Fail(CampaignStateValidationCode.DocumentTooLarge,
+                "The reserved dispatch settlement cannot fit the checkpoint byte ceiling.");
+        return maximumSize;
+    }
+
+    private static long MeasureScribeCompletionGrowth(CampaignCheckpointState state)
+    {
+        if (state.ScribeProgress is not { Session: { } session } progress) return 0;
+        var admitted = session.AdmittedWorkItemKeys.ToHashSet(StringComparer.Ordinal);
+        var members = state.WorkItems.Select(work => progress.Members.SingleOrDefault(member => member.WorkItemKey == work.WorkItemKey)
+            ?? (admitted.Contains(work.WorkItemKey) ? new CampaignScribeMemberProgress(work.WorkItemKey,
+                new string('a', DocumentationScribeContract.MaximumIdentifierScalars), int.MaxValue, session.AnchorWorkItemKey,
+                int.MaxValue, session.AttemptId, new string('0', 64), new string('0', 64), null) : null))
+            .OfType<CampaignScribeMemberProgress>().ToImmutableArray();
+        var maximumProgress = progress with
+        {
+            RepairCount = DocumentationScribeValidation.MaximumInvalidSubmissions,
+            NextSequence = int.MaxValue,
+            LastProgressSha256 = new string('0', 64),
+            LastProgressRequestSha256 = new string('0', 64),
+            LastProgressAttemptId = session.AttemptId,
+            Members = members,
+            TargetFailures = members.Where(member => member.ContentSha256 is null || !progress.Members.Contains(member))
+                .Select(member => new DocumentationScribeTargetFailure(member.TargetId, new string('a', 128))).ToImmutableArray(),
+        };
+        var items = state.WorkItems.Select(work => !admitted.Contains(work.WorkItemKey)
+                || work.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted
+                || progress.Members.Any(member => member.WorkItemKey == work.WorkItemKey && member.ContentSha256 is not null)
+            ? work : work with
+            {
+                OuterAttemptCount = int.MaxValue,
+                Status = CampaignWorkStatus.Closed,
+                TrustedProposal = null,
+                ClosedOutcome = new(CampaignWorkOutcomeStage.Scribe, CampaignWorkOutcomeCode.ProviderFailure,
+                    CampaignProviderFinalDisposition.Retryable, new string('0', 64), session.AttemptId, null, null, null, work.WorkItemKey)
+                {
+                    ScribeCompletionSource = CampaignScribeCompletionSource.RecoveredDispatchFailure,
+                    AcceptedDispatchFailureCommitmentSha256 = new string('0', 64),
+                },
+            }).ToImmutableArray();
+        // Encoding only: all admitted members can finish or fail in one returned
+        // batch. Reserve their closed scalar progress before a provider effect;
+        // generated bodies remain separately conditional on fitting admission.
+        var upper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
+            state.CheckpointRevision, state.ConfiguredCeilings, state.LineageCharges, items, state.Batch,
+            state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
+            state.TerminalOutcome, state.Predecessor)
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = maximumProgress };
+        return Math.Max(0, CampaignStateJson.ValidateEncodedSize(upper) - CampaignStateJson.ValidateEncodedSize(state));
     }
 
     private static CampaignCheckpointState CreateResumedProviderReservationState(
-        CampaignCheckpointState state, CampaignWorkItemState work, CampaignProviderReservationExposure exposure, string requestSha256)
+        CampaignCheckpointState state, CampaignWorkItemState work, CampaignProviderReservationExposure exposure, string requestSha256,
+        DocumentationScribeRequest? request = null)
     {
         var paused = work.PausedProviderAttempt!;
         var claim = new CampaignProviderReservation(work.WorkItemKey, requestSha256, paused.AttemptId, exposure)
@@ -1959,8 +2087,20 @@ public static partial class CampaignStateReducer
         };
         var items = state.WorkItems.Select(item => item.WorkItemKey == work.WorkItemKey
             ? item with { PausedProviderAttempt = null } : item).ToImmutableArray();
+        var progress = state.ScribeProgress;
+        if (progress?.Session is { } session && request is not null)
+            progress = progress with
+            {
+                Session = session with
+                {
+                    AdmittedWorkItemKeys = request.ExecutableTargetIds.Select(id =>
+                        state.Batch.CompleteTargets.Single(target => target.SymbolRef == request.Manifest.Single(member => member.TargetId == id).Target.SymbolRef).WorkItemKey)
+                        .ToImmutableArray(),
+                    Ended = false,
+                },
+            };
         return CreateState(state, NextRevision(state.CheckpointRevision), state.LineageCharges, items, claim,
-            state.CandidateObservation, state.CumulativeOutcome, state.TerminalOutcome, state.Predecessor);
+            state.CandidateObservation, state.CumulativeOutcome, state.TerminalOutcome, state.Predecessor, scribeProgress: progress);
     }
 
     private static (CampaignCheckpointState State, DocumentationScribeAttemptId AttemptId) CreateProviderReservationState(
@@ -1968,7 +2108,8 @@ public static partial class CampaignStateReducer
         CampaignScribeExecutionAuthority executionAuthority,
         CampaignWorkItemState work,
         string requestSha256,
-        CampaignProviderBudgetDecision budget)
+        CampaignProviderBudgetDecision budget,
+        DocumentationScribeRequest? request = null)
     {
         var ordinal = checked(work.OuterAttemptCount + 1);
         var attemptId = CampaignStateFactory.CreateScribeAttemptId(
@@ -1978,7 +2119,8 @@ public static partial class CampaignStateReducer
         return (CreateState(state, NextRevision(state.CheckpointRevision), budget.Charges!, workItems,
             new CampaignProviderReservation(work.WorkItemKey, requestSha256, attemptId, budget.Exposure!)
             { ExecutionStartRevision = NextRevision(state.CheckpointRevision), CurrentOperationOrdinal = 1 },
-            state.CandidateObservation, state.CumulativeOutcome, state.TerminalOutcome, state.Predecessor), attemptId);
+            state.CandidateObservation, state.CumulativeOutcome, state.TerminalOutcome, state.Predecessor,
+            scribeProgress: StartScribeSession(state, work.WorkItemKey, ordinal, attemptId, requestSha256, request)), attemptId);
     }
 
     private static CampaignCheckpointState CreateState(
@@ -1991,8 +2133,23 @@ public static partial class CampaignStateReducer
         CampaignCumulativeOutcome? cumulative,
         CampaignTerminalOutcome? terminal,
         CampaignPredecessorSummary? predecessor,
-        ImmutableArray<CampaignKnownCompletedOperation>? knownCompletedOperations = null) =>
-        CampaignStateFactory.CreateValidated(
+        ImmutableArray<CampaignKnownCompletedOperation>? knownCompletedOperations = null,
+        ImmutableArray<CampaignDispatchObservation>? dispatchObservations = null,
+        CampaignScribeProgress? scribeProgress = null)
+    {
+        var progress = scribeProgress ?? basis.ScribeProgress;
+        var selected = basis.Batch.SelectedTargetKeys.ToHashSet(StringComparer.Ordinal);
+        if (reservation is not CampaignProviderReservation && progress?.Session is { } session
+            && !basis.Batch.CompleteTargets.Where(target => target.Dispatchable && selected.Contains(target.TargetKey)).Any(target =>
+                workItems.Single(work => work.WorkItemKey == target.WorkItemKey) is { AttemptDisposition: CampaignAttemptDisposition.Open } work
+                    && (work.Status == CampaignWorkStatus.Planned || work.ClosedOutcome is
+                    { Code: CampaignWorkOutcomeCode.ProviderFailure, ProviderDisposition: CampaignProviderFinalDisposition.Retryable })))
+        {
+            progress = progress with { Session = session with { Ended = true } };
+            workItems = workItems.Select(work => work.WorkItemKey == session.AnchorWorkItemKey
+                ? work with { PausedProviderAttempt = null } : work).ToImmutableArray();
+        }
+        return CampaignStateFactory.CreateValidated(
             basis.ProductRevision,
             basis.CampaignLineage,
             basis.Snapshot,
@@ -2006,7 +2163,12 @@ public static partial class CampaignStateReducer
             cumulative,
             knownCompletedOperations ?? basis.KnownCompletedOperations,
             terminal,
-            predecessor);
+            predecessor,
+            dispatchObservations ?? (basis.ActiveReservation is CampaignProviderReservation
+            { OperationKind: CampaignProviderOperationKind.Dispatch } && reservation is null
+                ? RetireDispatchObservation(basis, charges) : basis.DispatchObservations),
+            progress);
+    }
 
     private static ImmutableArray<CampaignWorkItemState> ReplaceWork(
         ImmutableArray<CampaignWorkItemState> workItems,

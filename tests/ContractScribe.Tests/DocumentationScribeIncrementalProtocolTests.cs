@@ -287,6 +287,10 @@ public sealed partial class DocumentationScribeRuntimeTests
 
     private sealed class InterruptedSubmissionHost : IDocumentationScribeSubmissionHost
     {
+        public ValueTask<DocumentationScribeProgressAcknowledgement?> ObserveProgressAsync(
+            DocumentationScribeProgressNotification progress, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<DocumentationScribeProgressAcknowledgement?>(new(progress.ProgressSha256));
+
         internal int Calls { get; private set; }
         public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
             DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
@@ -299,6 +303,10 @@ public sealed partial class DocumentationScribeRuntimeTests
 
     private sealed class PendingSubmissionHost : IDocumentationScribeSubmissionHost
     {
+        public ValueTask<DocumentationScribeProgressAcknowledgement?> ObserveProgressAsync(
+            DocumentationScribeProgressNotification progress, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<DocumentationScribeProgressAcknowledgement?>(new(progress.ProgressSha256));
+
         internal int Calls { get; private set; }
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource<DocumentationScribeSubmissionAcknowledgement?> Pending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

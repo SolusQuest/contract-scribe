@@ -15,6 +15,7 @@ internal enum DocumentationScribeCompositionStatus
 {
     PreflightRejected,
     ProposalReady,
+    SessionProgressReady,
     ProposalSkipped,
     ProposalRejected,
     PatchAccepted,
@@ -341,7 +342,7 @@ internal sealed class DocumentationScribeSelectedAudit
     public override string ToString() => nameof(DocumentationScribeSelectedAudit);
 }
 
-internal static class DocumentationScribeComposition
+internal static partial class DocumentationScribeComposition
 {
     private static DocumentationScribeTargetSubmission? SelectedSubmission(DocumentationScribeValidatedRunOutcome? outcome)
     {
@@ -478,7 +479,8 @@ internal static class DocumentationScribeComposition
         DocumentationScribeRuntimeOptions runtimeOptions,
         IDocumentationScribeModelExchange exchange,
         CancellationToken cancellationToken = default,
-        DocumentationScribeExecutionScope? executionScope = null, CampaignScribeExecutionCoordinator? coordinator = null)
+        DocumentationScribeExecutionScope? executionScope = null, CampaignScribeExecutionCoordinator? coordinator = null,
+        CampaignProviderInvocationAuthority? campaignInvocation = null)
     {
         ArgumentNullException.ThrowIfNull(manifestSelection);
         ArgumentNullException.ThrowIfNull(runtimeOptions);
@@ -538,8 +540,12 @@ internal static class DocumentationScribeComposition
                 preflight.ManifestContext!,
                 preflight.Repository!,
                 preflight.RepositoryScopes);
+            if ((coordinator is null) != (campaignInvocation is null)) return RejectPrepared("scribe.preflight.campaign-authority-mismatch");
+            var campaignHost = coordinator is null ? null : new CampaignScribeSubmissionHost(campaignInvocation!, coordinator,
+                manifestSelection, loaded, configuredAgentEntrypoint, cancellationToken);
             var run = await DocumentationScribeExecution.RunAsync(request, attemptId, prompt, registry, exchange,
-                runtimeOptions, executionScope?.Allowance.Clock ?? TimeProvider.System, cancellationToken, executionScope).ConfigureAwait(false);
+                runtimeOptions, executionScope?.Allowance.Clock ?? TimeProvider.System, cancellationToken, executionScope,
+                submissionHost: campaignHost, restoredProgress: campaignHost?.RestoreProgress(preflightCancellation?.Token ?? cancellationToken)).ConfigureAwait(false);
             DocumentationScribeValidatedRunOutcome bound;
             try
             {
@@ -550,6 +556,20 @@ internal static class DocumentationScribeComposition
                 return CreatePrepared(
                     DocumentationScribeCompositionStatus.ProposalRejected,
                     "scribe.proposal.correlation-invalid");
+            }
+
+            if (campaignHost is not null)
+            {
+                var status = run.Stop switch
+                {
+                    DocumentationScribeCancelledTerminal => DocumentationScribeCompositionStatus.Cancelled,
+                    DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget } => DocumentationScribeCompositionStatus.BudgetExhausted,
+                    DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Timeout } => DocumentationScribeCompositionStatus.Timeout,
+                    DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Provider } => DocumentationScribeCompositionStatus.ProviderFailure,
+                    DocumentationScribeFailureTerminal => DocumentationScribeCompositionStatus.RuntimeFailure,
+                    _ => DocumentationScribeCompositionStatus.SessionProgressReady,
+                };
+                return CreatePrepared(status, "scribe.session.progress", bound);
             }
 
             return await AuthorizeProposalAsync(
@@ -633,7 +653,7 @@ internal static class DocumentationScribeComposition
             configuredAgentEntrypoint,
             runtimeOptions,
             exchange,
-            cancellationToken, coordinator.Scope, coordinator).ConfigureAwait(false);
+            cancellationToken, coordinator.Scope, coordinator, invocation).ConfigureAwait(false);
         double elapsed;
         try
         {
@@ -657,11 +677,12 @@ internal static class DocumentationScribeComposition
 
         var m3 = owned.M3Outcome;
         var resourceOwner = owned.ResourceStopOwner;
-        // A checked Runtime budget stop has no independent final completion fact.
-        // Proposal-shaped postflight failures do: their typed result must reach Core.
-        if (resourceOwner is null && owned.Status == DocumentationScribeCompositionStatus.BudgetExhausted
-            && (m3 is null || SelectedSubmission(m3)?.Result is not DocumentationScribeProposalTerminal
-                && m3.RunResult.Stop is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }))
+        // Incrementally durable members remain M2 work after a checked Runtime
+        // resource stop, including when only one member is executable. A
+        // non-Budget terminal still retains its independent completion fact.
+        if (invocation.HostRejection is not null) resourceOwner = null;
+        if (invocation.HostRejection is null && resourceOwner is null && owned.Status == DocumentationScribeCompositionStatus.BudgetExhausted
+            && (m3 is null || m3.RunResult.Stop is DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget }))
         {
             if (coordinator.Scope.LifetimeDeadlineReached || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded
                 || m3 is null && coordinator.LifetimeElapsedExhausted)
@@ -689,28 +710,14 @@ internal static class DocumentationScribeComposition
             }
         }
 
-        var kind = SelectedSubmission(m3)?.Result is not DocumentationScribeProposalTerminal
-            ? CampaignProviderCompletionKind.Ordinary
-            : owned.Status switch
-            {
-                DocumentationScribeCompositionStatus.ProposalReady => CampaignProviderCompletionKind.Ordinary,
-                DocumentationScribeCompositionStatus.Cancelled => CampaignProviderCompletionKind.CallerCancelled,
-                DocumentationScribeCompositionStatus.Timeout => CampaignProviderCompletionKind.Timeout,
-                DocumentationScribeCompositionStatus.BudgetExhausted => CampaignProviderCompletionKind.BudgetExhausted,
-                DocumentationScribeCompositionStatus.RuntimeFailure => CampaignProviderCompletionKind.HostFailure,
-                _ => CampaignProviderCompletionKind.ProposalInvalid,
-            };
-        if (m3 is null)
+        var kind = m3 is not null ? CampaignProviderCompletionKind.Ordinary : owned.Status switch
         {
-            kind = owned.Status switch
-            {
-                DocumentationScribeCompositionStatus.RuntimeFailure => CampaignProviderCompletionKind.HostFailure,
-                DocumentationScribeCompositionStatus.Cancelled => CampaignProviderCompletionKind.CallerCancelled,
-                DocumentationScribeCompositionStatus.Timeout => CampaignProviderCompletionKind.Timeout,
-                DocumentationScribeCompositionStatus.BudgetExhausted => CampaignProviderCompletionKind.BudgetExhausted,
-                _ => CampaignProviderCompletionKind.ProposalInvalid,
-            };
-        }
+            DocumentationScribeCompositionStatus.RuntimeFailure => CampaignProviderCompletionKind.HostFailure,
+            DocumentationScribeCompositionStatus.Cancelled => CampaignProviderCompletionKind.CallerCancelled,
+            DocumentationScribeCompositionStatus.Timeout => CampaignProviderCompletionKind.Timeout,
+            DocumentationScribeCompositionStatus.BudgetExhausted => CampaignProviderCompletionKind.BudgetExhausted,
+            _ => CampaignProviderCompletionKind.ProposalInvalid,
+        };
 
         long? hostElapsed = m3 is null ? null : coordinator.CurrentElapsed;
         return registrar.TryRegister(kind, m3, hostElapsed, out var authority)

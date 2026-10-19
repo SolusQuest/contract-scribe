@@ -315,6 +315,10 @@ public sealed partial class DocumentationScribeRuntimeTests
 
     private sealed class IncrementalHost(Action? onReceipt = null, bool foreign = false) : IDocumentationScribeSubmissionHost
     {
+        public ValueTask<DocumentationScribeProgressAcknowledgement?> ObserveProgressAsync(
+            DocumentationScribeProgressNotification progress, CancellationToken cancellationToken) =>
+            ValueTask.FromResult<DocumentationScribeProgressAcknowledgement?>(new(progress.ProgressSha256));
+
         internal int Calls { get; private set; }
         public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
             DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)

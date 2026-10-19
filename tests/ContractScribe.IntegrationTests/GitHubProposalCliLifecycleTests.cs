@@ -58,10 +58,10 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    [Fact]
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Policy_change_holds_the_verified_predecessor_with_its_generation_and_no_attempted_operation_id()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         await ConfigureAppend(fixture);
