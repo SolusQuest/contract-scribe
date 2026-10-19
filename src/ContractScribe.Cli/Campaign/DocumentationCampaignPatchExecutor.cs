@@ -517,8 +517,9 @@ internal static class DocumentationCampaignPatchExecutor
         var acceptedCount = state.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted);
         if (state.TerminalOutcome is { } terminal)
         {
-            if (terminal.Kind == CampaignTerminalKind.Complete
-                && terminal.Reason is CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved
+            if ((terminal.Kind == CampaignTerminalKind.Complete
+                    && terminal.Reason is CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved
+                    || DocumentationCampaignOutcome.CanUsePartialCandidate(state))
                 && proposalCount == 0
                 && acceptedCount > 0)
             {

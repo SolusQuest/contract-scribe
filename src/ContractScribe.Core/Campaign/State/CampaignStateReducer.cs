@@ -852,10 +852,38 @@ public static partial class CampaignStateReducer
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             if (work.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget)
                 return SuppressAtAttemptLimit(predecessor, workItemKey, state.LineageCharges);
-            var items = state.WorkItems.Select(item => item.WorkItemKey == workItemKey
+            var executableKeys = request.ExecutableTargetIds.Select(id => state.Batch.CompleteTargets.Single(target =>
+                target.SymbolRef == request.Manifest.Single(member => member.TargetId == id).Target.SymbolRef).WorkItemKey)
+                .ToHashSet(StringComparer.Ordinal);
+            var retryMembers = state.WorkItems.Where(item => executableKeys.Contains(item.WorkItemKey) && item is
+            {
+                Status: CampaignWorkStatus.Closed, ClosedOutcome.Code: CampaignWorkOutcomeCode.ProviderFailure,
+                ClosedOutcome.ProviderDisposition: CampaignProviderFinalDisposition.Retryable
+            }).ToImmutableArray();
+            foreach (var item in retryMembers)
+            {
+                var memberAttempt = state.ScribeProgress?.Members.SingleOrDefault(member => member.WorkItemKey == item.WorkItemKey)?.AttemptId
+                    ?? CampaignStateFactory.CreateScribeAttemptId(state.Snapshot.ExecutionCommitmentSha256,
+                        executionCapability.Projection, item.WorkItemKey, item.OuterAttemptCount);
+                if (item.AttemptDisposition != CampaignAttemptDisposition.Open
+                    || item.OuterAttemptCount >= state.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget
+                    || !CampaignStateFactory.AllowsTarget(state, item.WorkItemKey, targetAllowance)
+                    || memberAttempt != item.ClosedOutcome!.AttemptId)
+                    throw CampaignStateFactory.Fail(CampaignStateValidationCode.InvalidCorrelation, "The retry member is not admissible.");
+            }
+            var retriedKeys = retryMembers.Select(item => item.WorkItemKey).ToHashSet(StringComparer.Ordinal);
+            var items = state.WorkItems.Select(item => retriedKeys.Contains(item.WorkItemKey)
                 ? item with { Status = CampaignWorkStatus.Planned, ClosedOutcome = null } : item).ToImmutableArray();
+            var progress = state.ScribeProgress;
+            if (progress is not null)
+            {
+                var retryIds = progress.Members.Where(member => retriedKeys.Contains(member.WorkItemKey))
+                    .Select(member => member.TargetId).ToHashSet(StringComparer.Ordinal);
+                progress = progress with { TargetFailures = progress.TargetFailures.Where(failure => !retryIds.Contains(failure.TargetId)).ToImmutableArray() };
+            }
             var prepared = CampaignStateJson.CreateArtifact(CreateState(state, state.CheckpointRevision,
-                state.LineageCharges, items, null, state.CandidateObservation, state.CumulativeOutcome, null, state.Predecessor));
+                state.LineageCharges, items, null, state.CandidateObservation, state.CumulativeOutcome, null, state.Predecessor,
+                scribeProgress: progress));
             var admission = AdmitProviderInvocation(prepared, executionCapability, styleConfigurationId,
                 validatedStyleConfigurationProjection, planningInput, acceptedPlan, workItemKey, request,
                 targetAllowance, invocationAllowance);

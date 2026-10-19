@@ -54,6 +54,16 @@ internal sealed record DocumentationCampaignOutcome
 
     internal CampaignCheckpointAcceptanceKind? CheckpointFailure { get; }
 
+    internal static bool CanUsePartialCandidate(CampaignCheckpointState state) =>
+        state.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted, Reason: CampaignTerminalReason.Budget }
+        && state.ActiveReservation is null && state.CumulativeOutcome?.Kind == CampaignCumulativeOutcomeKind.Accepted
+        && state.CandidateObservation is not null && state.KnownCompletedOperations.IsEmpty
+        && state.WorkItems.Any(work => work.ClosedOutcome is
+        { Stage: CampaignWorkOutcomeStage.Scribe, Code: CampaignWorkOutcomeCode.CompletedOverBound }
+            && state.ScribeProgress?.Members.Any(member => member.WorkItemKey == work.WorkItemKey && member.ContentSha256 is null) == true)
+        && CampaignBudgetAccounting.FitsSettledBudget(state.LineageCharges, state.ConfiguredCeilings.CampaignBudget)
+        && CampaignBudgetAccounting.RemainingLifetimeElapsed(state.LineageCharges, state.ConfiguredCeilings.CampaignBudget) > 0;
+
     public override string ToString() =>
         $"{nameof(DocumentationCampaignOutcome)} {{ Kind = {Kind}, Code = {Code}, HasArtifact = {Artifact is not null}, HasCandidate = {AcceptedCandidate is not null} }}";
 }

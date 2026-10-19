@@ -348,7 +348,9 @@ internal static class CampaignCommandRunner
                 return Terminal(preflight.Operation, "campaign", "campaign.cancelled", current);
             if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Timeout })
                 return Terminal(preflight.Operation, "campaign", "campaign.timeout", current);
-            if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted })
+            if (stateNow.TerminalOutcome is { Kind: CampaignTerminalKind.Exhausted }
+                && !(continuation?.ReconstructAccepted(stateNow) == true
+                    && DocumentationCampaignOutcome.CanUsePartialCandidate(stateNow)))
                 return Terminal(preflight.Operation, "campaign", "campaign.budget-exhausted", current);
 
             if (continuation?.PersistedStop(stateNow) is { } persistedStop) return persistedStop;
@@ -385,7 +387,8 @@ internal static class CampaignCommandRunner
                     DocumentationCampaignOutcomeKind.Accepted or DocumentationCampaignOutcomeKind.Reconstructed)
                 {
                     if (patched.Artifact?.State.TerminalOutcome is { } stopped
-                        && stopped.Kind != CampaignTerminalKind.Complete)
+                        && stopped.Kind != CampaignTerminalKind.Complete
+                        && !DocumentationCampaignOutcome.CanUsePartialCandidate(patched.Artifact.State))
                         return Terminal(preflight.Operation, "campaign", stopped.Kind switch
                         {
                             CampaignTerminalKind.Cancelled => "campaign.cancelled",
