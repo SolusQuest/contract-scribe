@@ -108,7 +108,7 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
             files);
         try
         {
-            using var native = NativeFileSystem.IsSupported ? new NativeFileSystem.RootLease(rootPath) : null;
+            using var native = NativeFileSystem.IsSupported ? new NativeFileSystem.RootLease(rootPath, requirePrivateDirectories: true) : null;
             observer?.Invoke(DocumentationPatchApplicationStage.CandidateRootCreated, rootPath);
             var originalIdentities = baseline.Entries
                 .Select(entry => (
@@ -249,7 +249,7 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         CancellationToken cancellationToken,
         Action? beforeTerminalPass = null)
     {
-        using var native = NativeFileSystem.IsSupported ? new NativeFileSystem.RootLease(rootPath) : null;
+        using var native = NativeFileSystem.IsSupported ? new NativeFileSystem.RootLease(rootPath, requirePrivateDirectories: true) : null;
         var retainedReads = new List<CandidateFileReadLease>(files.Count);
         var retainedDirectories = new Dictionary<string, CandidateDirectoryLease>(PathComparer);
         try

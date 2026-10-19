@@ -64,6 +64,44 @@ public sealed class DocumentationPatchValidationTests
         finally { Directory.Delete(sibling); }
     }
 
+    [MacArm64Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    public void Native_candidate_permission_change_rejects_before_the_first_payload_write()
+    {
+        const string source = "namespace N; public class C { public void M() { } }";
+        using var fixture = ValidationFixture.Create(source, DocumentationPatchRepositoryEncoding.Utf8);
+        string? candidateRoot = null;
+        var writes = 0;
+        var builder = new ContractScribe.Patching.DocumentationPatchCandidateWorkspaceBuilder((stage, path) =>
+        {
+            if (stage == DocumentationPatchApplicationStage.CandidateRootCreated)
+            {
+                candidateRoot = path;
+                File.SetUnixFileMode(path!, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute
+                    | UnixFileMode.GroupRead | UnixFileMode.GroupWrite | UnixFileMode.GroupExecute
+                    | UnixFileMode.OtherRead | UnixFileMode.OtherWrite | UnixFileMode.OtherExecute);
+            }
+            if (stage == DocumentationPatchApplicationStage.CandidateEntryWritten) writes++;
+        });
+        try
+        {
+            Assert.ThrowsAny<IOException>(() => builder.Build(fixture.Baseline,
+                new Dictionary<string, byte[]>(), CancellationToken.None));
+            Assert.NotNull(candidateRoot);
+            Assert.Equal(0, writes);
+            Assert.Equal(source, File.ReadAllText(Path.Join(fixture.Root, "Sample.cs")));
+        }
+        finally
+        {
+            if (candidateRoot is not null && Directory.Exists(candidateRoot))
+            {
+                // This test changed only its own fresh directory's mode.
+                File.SetUnixFileMode(candidateRoot, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+                Directory.Delete(candidateRoot, recursive: true);
+            }
+        }
+    }
+
     [Theory]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8, "\n")]
     [InlineData(DocumentationPatchRepositoryEncoding.Utf8Bom, "\r\n")]

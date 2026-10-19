@@ -293,15 +293,18 @@ internal static class DarwinFileSystem
         private readonly string selectedPath;
         private readonly Pin root;
         private readonly string rootVolumeUuid;
+        private readonly bool requirePrivateDirectories;
         private bool disposed;
 
-        internal RootLease(string path)
+        internal RootLease(string path, bool requirePrivateDirectories = false)
         {
+            this.requirePrivateDirectories = requirePrivateDirectories;
             selectedPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
             var handle = DarwinFileSystem.OpenDirectory(selectedPath);
             try
             {
-                Qualify(handle);
+                Qualify(handle, requireOwnership: requirePrivateDirectories);
+                if (requirePrivateDirectories) RequirePrivate(handle, directory: true);
                 rootVolumeUuid = ReadAncestry(handle).VolumeUuid;
                 var mount = ReadMountStatus(handle);
                 if (mount > 1) throw Failure();
@@ -335,6 +338,11 @@ internal static class DarwinFileSystem
                 if (!SameObject(ReadEntry(rebound), pin.Identity) || PhysicalPath(rebound) != pin.Path
                     || ReadVolumeUuid(rebound) != rootVolumeUuid || ReadMountStatus(rebound) != pin.Mount)
                     throw Failure(DarwinFileSystemFailure.Stale);
+                if (requirePrivateDirectories)
+                {
+                    RequirePrivate(pin.Handle, directory: true);
+                    RequirePrivate(rebound, directory: true);
+                }
             }
         }
 
@@ -475,6 +483,7 @@ internal static class DarwinFileSystem
                 var stat = ReadStat(handle);
                 if ((stat.Mode & 0xf000) != (directory ? 0x4000 : 0x8000)) throw Failure();
                 if (!directory && stat.LinkCount != 1) throw Failure(DarwinFileSystemFailure.HardLink);
+                if (requirePrivateDirectories) RequirePrivate(handle, directory);
                 var actual = ReadEntry(handle);
                 var fs = ReadFileSystem(handle);
                 if (!SameObject(actual, entry) || (actual.Flags & Firmlink) != 0

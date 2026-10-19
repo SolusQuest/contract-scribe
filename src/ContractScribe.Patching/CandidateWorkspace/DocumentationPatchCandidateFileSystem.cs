@@ -134,6 +134,7 @@ internal static class DocumentationPatchCandidateFileSystem
         if (validateLocation is not null && (!validateLocation()
             || ReadIdentity(parent, expectDirectory: true) != expectedParent))
             throw new IOException("The candidate location changed before creation.");
+        if (DarwinFileSystem.IsSupported) DarwinFileSystem.RequireNoAcl(parent);
         var created = MkdirAt(
             checked((int)parent.DangerousGetHandle()),
             leafName,
@@ -180,6 +181,7 @@ internal static class DocumentationPatchCandidateFileSystem
             throw new PlatformNotSupportedException();
         }
 
+        if (DarwinFileSystem.IsSupported) DarwinFileSystem.RequirePrivate(parent, directory: true);
         var handle = new SafeFileHandle(
             (IntPtr)OpenAt(
                 checked((int)parent.DangerousGetHandle()),

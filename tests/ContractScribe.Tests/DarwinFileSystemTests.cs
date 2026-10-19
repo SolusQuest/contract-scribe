@@ -236,7 +236,8 @@ public sealed class DarwinFileSystemTests
     {
         var start = new ProcessStartInfo("/bin/sh")
         {
-            UseShellExecute = false, RedirectStandardInput = true,
+            UseShellExecute = false,
+            RedirectStandardInput = true,
         };
         start.ArgumentList.Add("-c");
         start.ArgumentList.Add("exec -a '' /bin/sleep 30");
