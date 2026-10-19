@@ -49,6 +49,8 @@
   {"hook":"proposal.retry-wait.in-replacement","scenario":"retry-wait"},
   {"hook":"proposal.retry-wait.after-replacement-before-readback","scenario":"retry-wait"},
   {"hook":"proposal.retry-wait.after-readback","scenario":"retry-wait"},
+  {"hook":"proposal.scribe-member.before-postflight","scenario":"accepted"},
+  {"hook":"proposal.scribe-member.postflight-admitted","scenario":"accepted"},
   {"hook":"proposal.scribe-member.in-replacement","scenario":"accepted"},
   {"hook":"proposal.scribe-member.after-replacement-before-readback","scenario":"accepted"},
   {"hook":"proposal.scribe-member.after-readback","scenario":"accepted"},

@@ -13,7 +13,7 @@ public static partial class CampaignStateJson
         writer.WriteNumber("nextSequence", progress.NextSequence);
         writer.WriteString("lastProgressSha256", progress.LastProgressSha256);
         writer.WriteString("lastProgressRequestSha256", progress.LastProgressRequestSha256);
-        writer.WriteString("lastProgressAttemptId", progress.LastProgressAttemptId?.Value);
+        writer.WriteString("lastProgressAttemptId", progress.LastProgressAttemptId is { } observedAttempt ? observedAttempt.Value : null);
         writer.WriteBoolean("lastProgressStopped", progress.LastProgressStopped);
         writer.WriteBoolean("lastProgressFinished", progress.LastProgressFinished);
         writer.WritePropertyName("targetFailures"); writer.WriteStartArray();

@@ -901,7 +901,7 @@ public sealed partial class CampaignCliProcessTests
             using var targets = JsonDocument.Parse(messages[4].GetProperty("content").GetString()!);
             var evidence = targets.RootElement;
             if (evidence.GetProperty("executableTargetIds").GetArrayLength() > 1)
-                return CreateSharedResponse(body, batch: false, includeUsage, usageOutputTokens, summaryText);
+                return CreateSharedResponse(body, batch: false, includeUsage, usageOutputTokens, summaryText, skip);
             if (evidence.GetProperty("progress").GetArrayLength() > 0)
                 return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), includeUsage: true, usageOutputTokens: 0, finish: true);
             var targetId = evidence.GetProperty("executableTargetIds").EnumerateArray().Single().GetString();

@@ -41,6 +41,8 @@ internal static class CampaignProcessBoundaryHooks
     internal const string PhysicalSettlementAfterReadback = "proposal.physical-settlement.after-readback";
     internal const string RetryWaitAfterReadback = "proposal.retry-wait.after-readback";
     internal const string ScribeMemberAfterReadback = "proposal.scribe-member.after-readback";
+    internal const string ScribeMemberBeforePostflight = "proposal.scribe-member.before-postflight";
+    internal const string ScribeMemberPostflightAdmitted = "proposal.scribe-member.postflight-admitted";
     internal const string ScribeProgressAfterReadback = "proposal.scribe-progress.after-readback";
     internal const string ScribeMemberReplacementScope = "proposal.scribe-member";
     internal const string ScribeProgressReplacementScope = "proposal.scribe-progress";
@@ -62,6 +64,8 @@ internal static class CampaignProcessBoundaryHooks
         PhysicalSettlementAfterReadback,
         RetryWaitAfterReadback,
         ScribeMemberAfterReadback,
+        ScribeMemberBeforePostflight,
+        ScribeMemberPostflightAdmitted,
         ScribeProgressAfterReadback,
         ScribeMemberReplacementScope + "." + InReplacement,
         ScribeMemberReplacementScope + "." + AfterReplacementBeforeReadback,

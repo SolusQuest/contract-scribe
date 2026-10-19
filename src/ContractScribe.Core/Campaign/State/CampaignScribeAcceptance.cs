@@ -142,6 +142,10 @@ public static partial class CampaignStateReducer
             foreach (var receipt in notification.Receipts)
             {
                 var member = progress.Members.SingleOrDefault(item => item.TargetId == receipt.TargetId);
+                // Stopped Received observations record an attempted but unconfirmed
+                // Host result. They never create accepted content or a durable receipt.
+                if (notification.Stopped && receipt.Stage == DocumentationScribeAcknowledgementStage.Received
+                    && member is { ContentSha256: null }) continue;
                 if (member?.ContentSha256 is null || receipt.Stage < DocumentationScribeAcknowledgementStage.DurablyRecorded
                     || !(member.ContentSha256 == receipt.ContentSha256 && member.ScribeRequestSha256 == notification.ScribeRequestSha256
                         || invocation.RestoredReceiptMatches(receipt.TargetId, receipt.ContentSha256)))

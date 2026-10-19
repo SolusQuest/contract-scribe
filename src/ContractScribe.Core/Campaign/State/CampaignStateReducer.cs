@@ -115,6 +115,21 @@ public sealed class CampaignProviderInvocationAuthority
     private readonly Dictionary<string, string> restoredReceipts = new(StringComparer.Ordinal);
     internal bool RestoredReceiptMatches(string targetId, string contentSha256) => restoredReceipts.GetValueOrDefault(targetId) == contentSha256;
     internal void RecordRestoredReceipt(DocumentationScribeValidatedSubmission submission) => restoredReceipts.Add(submission.TargetId, submission.ContentSha256);
+    internal CampaignScribeHostRejection? HostRejection { get; private set; }
+    internal bool TryRecordHostRejection(DocumentationScribeValidatedSubmission submission, CampaignProviderCompletionKind kind)
+    {
+        if (!(LifecycleAvailable || DispatchStarted) || InvocationAllowance is null
+            || AcceptedCheckpoint.Artifact.State.ActiveReservation is not CampaignProviderReservation
+            { OperationKind: CampaignProviderOperationKind.Host, HostPhase: CampaignProviderHostPhase.TerminalSubmission } claim
+            || claim.ExecutionStartRevision != ExecutionStartRevision || claim.AttemptId != AttemptId
+            || claim.ScribeRequestSha256 != ScribeRequestSha256 || submission.ScribeRequestSha256 != ScribeRequestSha256
+            || !Request.ExecutableTargetIds.Contains(submission.TargetId, StringComparer.Ordinal)
+            || !Enum.IsDefined(kind) || kind == CampaignProviderCompletionKind.Ordinary) return false;
+        var fact = new CampaignScribeHostRejection(submission.TargetId, submission.ContentSha256, kind);
+        if (HostRejection is not null) return HostRejection == fact;
+        HostRejection = fact;
+        return true;
+    }
     internal bool DispatchStarted => executionStartCheckpoint.ReservationLifecycle.IsDispatchStarted;
     internal bool LifecycleAvailable => executionStartCheckpoint.ReservationLifecycle.IsAvailable;
 

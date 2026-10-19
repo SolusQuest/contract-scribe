@@ -158,6 +158,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             PostflightElapsed = cause == "elapsed-postflight" ? 1000 : 0,
             FirePostflightTimer = cause.EndsWith("deadline", StringComparison.Ordinal)
         };
+        using var postflight = ObserveMemberPostflight(clock.BeforePostflight, clock.EnterPostflight);
         var allowance = StopCauseAllowance(fixture, clock, output: nonelapsed ? 7 : null);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
@@ -177,7 +178,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var result = await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store,
             request, allowance, clock, exchange));
         Assert.Null(store.Current.State.ActiveReservation);
-        var firstRequests = cause == "elapsed" || nonelapsed ? 1 : 2;
+        var firstRequests = cause == "remaining" ? 2 : 1;
         Assert.Equal(firstRequests, sends);
         Assert.Equal(firstRequests, store.Current.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(nonelapsed ? 8 : 1, store.Current.State.LineageCharges.OutputTokens.Observed);
@@ -319,10 +320,24 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         }
     }
 
+    private static IDisposable ObserveMemberPostflight(Action before, Action admitted)
+    {
+        var owner = new AsyncLocal<bool> { Value = true };
+        return CampaignProcessBoundaryHooks.Register(name =>
+        {
+            if (!owner.Value) return;
+            if (name == CampaignProcessBoundaryHooks.ScribeMemberBeforePostflight) before();
+            if (name == CampaignProcessBoundaryHooks.ScribeMemberPostflightAdmitted) admitted();
+        });
+    }
+
     private sealed class StopCauseClock(Func<CampaignCheckpointState> current) : TimeProvider
     {
         private long timestamp;
-        private int terminalReads;
+        private bool beforePostflight;
+        private TimerCallback? terminalTimer;
+        private object? terminalTimerState;
+        private long terminalTimerMilliseconds;
         internal int TerminalElapsed { get; init; }
         internal int PostflightElapsed { get; init; }
         private bool advancedPostflight;
@@ -331,23 +346,35 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         internal bool SawPostflight { get; private set; }
         public override long TimestampFrequency => 1000;
         internal void Advance(int value) => timestamp += value;
-        public override long GetTimestamp()
+        public override long GetTimestamp() => timestamp;
+        internal void BeforePostflight()
         {
-            if (current().ActiveReservation is CampaignProviderReservation claim)
+            if (beforePostflight) return;
+            beforePostflight = true;
+            timestamp += TerminalElapsed;
+        }
+        internal void EnterPostflight()
+        {
+            if (advancedPostflight) return;
+            advancedPostflight = true;
+            SawPostflight = true;
+            timestamp += PostflightElapsed;
+            if (FirePostflightTimer)
             {
-                SawPostflight |= claim.HostPhase == CampaignProviderHostPhase.Postflight;
-                if (claim.HostPhase == CampaignProviderHostPhase.Postflight && !advancedPostflight)
-                { advancedPostflight = true; timestamp += PostflightElapsed; }
-                // Advance at the mandatory terminal host settlement, after terminal validation has returned.
-                if (claim.HostPhase == CampaignProviderHostPhase.TerminalSubmission && ++terminalReads == 5)
-                    timestamp += TerminalElapsed;
+                FirePostflightTimer = false;
+                Assert.NotNull(terminalTimer);
+                timestamp += terminalTimerMilliseconds;
+                terminalTimer(terminalTimerState);
             }
-            return timestamp;
         }
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            if (FirePostflightTimer && current().ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.Postflight })
-            { FirePostflightTimer = false; timestamp += (long)dueTime.TotalMilliseconds; callback(state); }
+            if (current().ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission })
+            {
+                terminalTimer = callback;
+                terminalTimerState = state;
+                terminalTimerMilliseconds = (long)dueTime.TotalMilliseconds;
+            }
             if (FireNextTimer) { FireNextTimer = false; callback(state); }
             return new NoopTimer();
         }

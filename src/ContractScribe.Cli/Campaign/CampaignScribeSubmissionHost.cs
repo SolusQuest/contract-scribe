@@ -8,7 +8,7 @@ internal static partial class DocumentationScribeComposition
 {
     private sealed class CampaignScribeSubmissionHost(CampaignProviderInvocationAuthority invocation,
         CampaignScribeExecutionCoordinator coordinator, DocumentationScribeManifestSelection selection,
-        DocumentationScribeLoadedManifestContext loaded, string? configuredAgentEntrypoint)
+        DocumentationScribeLoadedManifestContext loaded, string? configuredAgentEntrypoint, CancellationToken callerCancellation)
         : IDocumentationScribeSubmissionHost
     {
         internal DocumentationScribeRunResult? RestoreProgress(CancellationToken cancellationToken)
@@ -28,16 +28,47 @@ internal static partial class DocumentationScribeComposition
         public async ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
             DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
         {
-            cancellationToken.ThrowIfCancellationRequested();
             var member = invocation.Request.Manifest.Single(item => item.TargetId == submission.TargetId);
             var audit = selection.Members.Single(item => item.Audit.Target.SymbolRef == member.Target.SymbolRef).Audit;
             var view = invocation.Request with { ValidationTargetId = submission.TargetId };
+            var deadlineOwner = coordinator.Scope.CurrentHostDeadlineOwner ?? DocumentationScribeDeadlineOwner.HostOperation;
             // Reuse the current postflight under the original TerminalSubmission permit.
             // This prepares no model context and obtains no nested Host/send authority.
-            var postflight = await PreflightAsync(audit, view, invocation.AttemptId, configuredAgentEntrypoint,
-                cancellationToken, coordinator.Scope, selection, prepareModelContext: false).ConfigureAwait(false);
-            if (postflight.Failure is not null || postflight.ManifestContext is null || !loaded.VerifyFreshness(cancellationToken)
-                || coordinator.CurrentRemaining <= 0) return null;
+            PreflightResult postflight;
+            try
+            {
+                CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ScribeMemberBeforePostflight);
+                cancellationToken.ThrowIfCancellationRequested();
+                if (coordinator.CurrentRemaining <= 0 || coordinator.Scope.Allowance.RemainingMilliseconds <= 0)
+                {
+                    coordinator.Scope.ObserveDeadline(deadlineOwner);
+                    return null;
+                }
+                CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ScribeMemberPostflightAdmitted);
+                postflight = await PreflightAsync(audit, view, invocation.AttemptId, configuredAgentEntrypoint,
+                    cancellationToken, coordinator.Scope, selection, prepareModelContext: false).ConfigureAwait(false);
+                if (postflight.Failure is { } failure)
+                {
+                    if (failure.Kind == PreflightFailureKind.Cancelled) return Cancelled();
+                    return Rejected(failure.Kind switch
+                    {
+                        PreflightFailureKind.Rejected => CampaignProviderCompletionKind.ProposalInvalid,
+                        PreflightFailureKind.BudgetExhausted => CampaignProviderCompletionKind.BudgetExhausted,
+                        PreflightFailureKind.TimedOut => CampaignProviderCompletionKind.Timeout,
+                        _ => CampaignProviderCompletionKind.HostFailure,
+                    });
+                }
+                if (postflight.ManifestContext is null || !loaded.VerifyFreshness(cancellationToken))
+                    return Rejected(CampaignProviderCompletionKind.ProposalInvalid);
+                if (coordinator.CurrentRemaining <= 0 || coordinator.Scope.Allowance.RemainingMilliseconds <= 0)
+                {
+                    coordinator.Scope.ObserveDeadline(deadlineOwner);
+                    return null;
+                }
+            }
+            catch (OperationCanceledException) { return Cancelled(); }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            { return Rejected(CampaignProviderCompletionKind.HostFailure); }
             var transition = CampaignStateReducer.AcceptScribeSubmission(invocation, submission);
             if (transition.Kind == CampaignTransitionKind.Rejected)
             {
@@ -60,23 +91,41 @@ internal static partial class DocumentationScribeComposition
             }
             var evidence = work.TrustedProposal?.Evidence
                 ?? transition.Artifact.State.ScribeProgress!.Members.Single(item => item.WorkItemKey == workKey).Skip!.Evidence;
-            var fresh = CumulativeDocumentationPatchComposer.RebuildEvidence(audit.Session, invocation.PlanningInput,
-                invocation.AcceptedPlan, [(workKey, evidence)],
-                postflight.ManifestContext.Contexts.SelectMany(context => context.Facts.Evidence).ToImmutableArray(), cancellationToken);
-            if (work.TrustedProposal is not null)
+            try
             {
-                var restored = CampaignStateFactory.RestoreTrustedSubmission(transition.Artifact.State, invocation.ExecutionCapability,
-                    invocation.StyleConfigurationId, invocation.ValidatedStyleConfigurationProjection, invocation.PlanningInput,
-                    invocation.AcceptedPlan, invocation.Request, submission.TargetId, fresh);
-                if (restored.ContentSha256 != submission.ContentSha256) return null;
+                var fresh = CumulativeDocumentationPatchComposer.RebuildEvidence(audit.Session, invocation.PlanningInput,
+                    invocation.AcceptedPlan, [(workKey, evidence)],
+                    postflight.ManifestContext.Contexts.SelectMany(context => context.Facts.Evidence).ToImmutableArray(), cancellationToken);
+                if (work.TrustedProposal is not null)
+                {
+                    var restored = CampaignStateFactory.RestoreTrustedSubmission(transition.Artifact.State, invocation.ExecutionCapability,
+                        invocation.StyleConfigurationId, invocation.ValidatedStyleConfigurationProjection, invocation.PlanningInput,
+                        invocation.AcceptedPlan, invocation.Request, submission.TargetId, fresh);
+                    if (restored.ContentSha256 != submission.ContentSha256) return Rejected(CampaignProviderCompletionKind.ProposalInvalid);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
             }
-            cancellationToken.ThrowIfCancellationRequested();
+            catch (OperationCanceledException) { return Cancelled(); }
+            catch (ArgumentException) { return Rejected(CampaignProviderCompletionKind.ProposalInvalid); }
             using var replacement = CampaignProcessBoundaryHooks.EnterReplacementScope(
                 CampaignProcessBoundaryHooks.ScribeMemberReplacementScope);
             if (!await coordinator.AcceptHostProgressAsync(transition, cancellationToken).ConfigureAwait(false)) return null;
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ScribeMemberAfterReadback);
             return new(submission.ScribeRequestSha256, submission.TargetId, submission.ContentSha256,
                 DocumentationScribeAcknowledgementStage.DurablyRecorded);
+
+            DocumentationScribeSubmissionAcknowledgement? Rejected(CampaignProviderCompletionKind kind)
+            {
+                _ = invocation.TryRecordHostRejection(submission, kind);
+                return null;
+            }
+            DocumentationScribeSubmissionAcknowledgement? Cancelled()
+            {
+                if (callerCancellation.IsCancellationRequested) return Rejected(CampaignProviderCompletionKind.CallerCancelled);
+                if (deadlineOwner == DocumentationScribeDeadlineOwner.HostOperation) return Rejected(CampaignProviderCompletionKind.Timeout);
+                coordinator.Scope.ObserveDeadline(deadlineOwner);
+                return null;
+            }
         }
 
         public async ValueTask<DocumentationScribeProgressAcknowledgement?> ObserveProgressAsync(

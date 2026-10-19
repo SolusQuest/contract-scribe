@@ -67,6 +67,7 @@ public sealed class DocumentationScribeExecutionScope
 {
     private readonly IDocumentationScribeExecutionOperations? operations;
     private DocumentationScribeHostPermit? host;
+    internal DocumentationScribeDeadlineOwner? CurrentHostDeadlineOwner => host?.DeadlineOwner;
     private DocumentationScribeInvocationProviderPermit? provider;
     private int failed;
     private int operationGrant;

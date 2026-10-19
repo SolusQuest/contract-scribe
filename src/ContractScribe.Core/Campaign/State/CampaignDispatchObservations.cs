@@ -111,11 +111,11 @@ public static partial class CampaignStateFactory
                     CampaignStateValidationCode.InvalidCorrelation);
             }
         }
-        foreach (var work in state.WorkItems)
+        foreach (var work in state.WorkItems.Where(work => work.PausedProviderAttempt is not null))
         {
-            if (work.PausedProviderAttempt is { } paused)
-                Require(ordinals.GetValueOrDefault((state.Snapshot.ExecutionCommitmentSha256, work.WorkItemKey, paused.AttemptId))
-                    == paused.LastDispatchOrdinal, CampaignStateValidationCode.InvalidCorrelation);
+            var paused = work.PausedProviderAttempt!;
+            Require(ordinals.GetValueOrDefault((state.Snapshot.ExecutionCommitmentSha256, work.WorkItemKey, paused.AttemptId))
+                == paused.LastDispatchOrdinal, CampaignStateValidationCode.InvalidCorrelation);
         }
         if (state.ActiveReservation is CampaignProviderReservation claim)
             Require(ordinals.GetValueOrDefault((state.Snapshot.ExecutionCommitmentSha256, claim.WorkItemKey, claim.AttemptId))

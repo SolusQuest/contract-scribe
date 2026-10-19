@@ -9,6 +9,68 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class CampaignCliProcessTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void Shared_loopback_selects_scoped_reads_or_component_skips_among_terminal_schemas(bool terminalFirst, bool componentSkip)
+    {
+        var reader = new JsonObject
+        {
+            ["type"] = "function",
+            ["function"] = new JsonObject
+            {
+                ["name"] = "alias.read",
+                ["parameters"] = new JsonObject
+                {
+                    ["properties"] = new JsonObject
+                    { ["scopeId"] = new JsonObject(), ["startLine"] = new JsonObject() }
+                },
+            }
+        };
+        var terminal = new JsonObject
+        {
+            ["type"] = "function",
+            ["function"] = new JsonObject
+            {
+                ["name"] = "cs_terminal",
+                ["parameters"] = new JsonObject { ["oneOf"] = new JsonArray(new JsonObject()) },
+            }
+        };
+        var facts = new JsonObject
+        {
+            ["executableTargetIds"] = new JsonArray("target.first"),
+            ["progress"] = new JsonArray(),
+            ["restoredClosedTargetIds"] = new JsonArray(),
+            ["evidenceReferences"] = new JsonArray(),
+            ["nextSequence"] = 1,
+            ["manifest"] = new JsonArray(new JsonObject
+            {
+                ["targetId"] = "target.first",
+                ["sourceScopeId"] = "target.first",
+                ["applicableComponents"] = componentSkip ? new JsonArray(new JsonObject
+                { ["kind"] = "component.parameter", ["identity"] = "parameter/0", ["name"] = "value" }) : new JsonArray()
+            }),
+        };
+        var messages = new JsonArray(Enumerable.Range(0, 3).Select(_ => (JsonNode)new JsonObject
+        { ["role"] = "system", ["content"] = "synthetic" }).ToArray());
+        messages.Add(new JsonObject { ["role"] = "user", ["content"] = new JsonObject { ["artifactSha256"] = new string('a', 64) }.ToJsonString() });
+        messages.Add(new JsonObject { ["role"] = "user", ["content"] = facts.ToJsonString() });
+        var wire = new JsonObject
+        {
+            ["messages"] = messages,
+            ["tools"] = terminalFirst ? new JsonArray(terminal, reader) : new JsonArray(reader, terminal)
+        };
+        using var response = JsonDocument.Parse(ProposalLoopbackServer.CreateSharedResponse(JsonSerializer.SerializeToUtf8Bytes(wire)));
+        var call = response.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("tool_calls")[0].GetProperty("function");
+        using var arguments = JsonDocument.Parse(call.GetProperty("arguments").GetString()!);
+        Assert.Equal(componentSkip ? "cs_terminal" : "alias.read", call.GetProperty("name").GetString());
+        if (componentSkip)
+            Assert.Equal("skip", arguments.RootElement.GetProperty("items")[0].GetProperty("result").GetProperty("kind").GetString());
+        else Assert.Equal("target.first", arguments.RootElement.GetProperty("scopeId").GetString());
+    }
+
     [Fact]
     public async Task Shared_accepted_members_reconstruct_in_a_fresh_process_without_regeneration_or_historical_recharge()
     {
@@ -91,8 +153,8 @@ public sealed partial class CampaignCliProcessTests
 
     internal sealed partial class ProposalLoopbackServer
     {
-        private static byte[] CreateSharedResponse(byte[] body, bool batch = true, bool includeUsage = true,
-            int usageOutputTokens = 7, string? summaryText = null)
+        internal static byte[] CreateSharedResponse(byte[] body, bool batch = true, bool includeUsage = true,
+            int usageOutputTokens = 7, string? summaryText = null, bool skipAll = false)
         {
             using var wire = JsonDocument.Parse(body);
             var messages = wire.RootElement.GetProperty("messages");
@@ -118,11 +180,13 @@ public sealed partial class CampaignCliProcessTests
                     reference.GetProperty("subject").TryGetProperty("symbolRef", out var symbol)
                     && JsonNode.DeepEquals(JsonNode.Parse(symbol.GetRawText()), JsonNode.Parse(member.GetProperty("symbolRef").GetRawText())))
                 .Cast<JsonElement?>().FirstOrDefault();
-            var missing = pending.Where(member => Evidence(member) is null).ToArray();
+            var missing = pending.Where(member => !skipAll && member.GetProperty("applicableComponents").GetArrayLength() == 0
+                && Evidence(member) is null).ToArray();
             if (missing.Length > 0)
             {
                 var tool = wire.RootElement.GetProperty("tools").EnumerateArray().Select(item => item.GetProperty("function"))
-                    .Single(item => item.GetProperty("parameters").GetProperty("properties").TryGetProperty("startLine", out _));
+                    .Single(item => item.GetProperty("parameters").TryGetProperty("properties", out var properties)
+                        && properties.TryGetProperty("startLine", out _));
                 var response = JsonSerializer.SerializeToNode(new
                 {
                     choices = new[] { new { index = 0, message = new
@@ -145,6 +209,20 @@ public sealed partial class CampaignCliProcessTests
             var items = new JsonArray();
             foreach (var member in pending)
             {
+                if (skipAll || member.GetProperty("applicableComponents").GetArrayLength() > 0)
+                {
+                    items.Add(new JsonObject
+                    {
+                        ["targetId"] = member.GetProperty("targetId").GetString(),
+                        ["result"] = new JsonObject
+                        {
+                            ["kind"] = "skip",
+                            ["reason"] = "scribe.skip.insufficient-evidence",
+                            ["evidenceReferenceIds"] = new JsonArray()
+                        }
+                    });
+                    continue;
+                }
                 var reference = Evidence(member)!.Value;
                 var unit = ContentUnit("content.summary", null, null, reference.GetProperty("evidenceReferenceId").GetString()!, summaryText);
                 unit["claimCategoryId"] = reference.GetProperty("claimCategoryIds")[0].GetString();

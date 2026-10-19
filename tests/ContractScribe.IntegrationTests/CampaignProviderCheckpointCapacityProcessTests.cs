@@ -136,7 +136,8 @@ public sealed partial class CampaignCliProcessTests
                 retryKey, baseline.Request, CampaignStateFactory.CreateInvocationTargetAllowance(baselineRetry.State, new(1)), CampaignInvocationTestPolicy.Create(baseline.Request.Limits));
             Assert.Equal(CampaignTransitionKind.Applied, closedRetry.Kind);
             Assert.Equal(2, closedRetry.Artifact.State.LineageCharges.OuterInvocations);
-            var reservationGrowth = valid.Artifact.ExactUtf8Json.Length - baseline.Artifact.ExactUtf8Json.Length;
+            var reservationGrowth = ProviderCapacityLoadedReservation(baseline.Artifact, baseline.Request).ExactUtf8Json.Length
+                - baseline.Artifact.ExactUtf8Json.Length;
             var boundedCompletionGrowth = CampaignStateReducer.ValidateProviderSettlementCapacity(valid.Artifact.State)
                 - baseline.Artifact.ExactUtf8Json.Length;
             growth = CampaignStateContract.MaximumArtifactUtf8Bytes - reservationGrowth - baseline.Artifact.ExactUtf8Json.Length;

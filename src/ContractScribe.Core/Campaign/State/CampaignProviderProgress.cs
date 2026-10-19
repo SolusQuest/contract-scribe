@@ -205,7 +205,10 @@ public static partial class CampaignStateReducer
             var state = predecessor.State;
             var charges = CampaignBudgetAccounting.SettleHostInterval(state.LineageCharges, elapsed, claim.Exposure.ElapsedMilliseconds);
             var items = PreservePausedAttempt(state.WorkItems, claim);
-            var terminal = lifetimeStop || !CampaignBudgetAccounting.FitsSettledBudget(charges, state.ConfiguredCeilings.CampaignBudget)
+            var fits = CampaignBudgetAccounting.FitsSettledBudget(charges, state.ConfiguredCeilings.CampaignBudget);
+            var canValidateReturnedProposals = fits && items.Any(work => work.Status == CampaignWorkStatus.ProposalComplete)
+                && CampaignBudgetAccounting.RemainingLifetimeElapsed(charges, state.ConfiguredCeilings.CampaignBudget) > 0;
+            var terminal = lifetimeStop && !canValidateReturnedProposals || !fits
                 ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap)
                 : projectionCapacityStop && !items.Any(work => work.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
                     ? new CampaignTerminalOutcome(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget) : state.TerminalOutcome;

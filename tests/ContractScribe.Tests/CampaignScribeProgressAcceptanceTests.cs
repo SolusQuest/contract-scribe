@@ -9,15 +9,25 @@ namespace ContractScribe.Tests;
 public sealed partial class CampaignStateContractTests
 {
     [Theory]
-    [InlineData(false, false, false, false)]
-    [InlineData(true, false, false, false)]
-    [InlineData(false, true, false, false)]
-    [InlineData(true, true, false, false)]
-    [InlineData(false, false, true, false)]
-    [InlineData(false, false, false, true)]
-    public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, bool projectionCapacity)
+    [InlineData(false, false, false, false, null, null)]
+    [InlineData(true, false, false, false, null, null)]
+    [InlineData(false, true, false, false, null, null)]
+    [InlineData(true, true, false, false, null, null)]
+    [InlineData(false, false, true, false, null, null)]
+    [InlineData(false, false, false, true, null, null)]
+    [InlineData(false, false, true, false, "ProposalInvalid", null)]
+    [InlineData(false, false, true, false, "BudgetExhausted", null)]
+    [InlineData(false, false, true, false, "Timeout", null)]
+    [InlineData(false, false, true, false, "HostFailure", null)]
+    [InlineData(false, false, true, false, "CallerCancelled", null)]
+    [InlineData(false, false, true, false, "ShutdownCancelled", null)]
+    [InlineData(false, false, false, false, null, "equality")]
+    [InlineData(false, false, false, false, null, "overrun")]
+    [InlineData(false, false, false, false, null, "elapsed")]
+    public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, bool projectionCapacity, string? hostRejection, string? pauseBoundary)
     {
-        var scenario = CreateProposalScenario(targetLimit: 2, maximumElapsedMilliseconds: null, maximumBlocks: projectionCapacity ? 1 : 100);
+        var scenario = CreateProposalScenario(targetLimit: 2, maximumElapsedMilliseconds: pauseBoundary == "elapsed" || hostRejection is not null ? 1000 : null,
+            maximumProviderRequests: pauseBoundary == "equality" ? 1 : 100, maximumOutputTokens: pauseBoundary == "overrun" ? 7 : 100000, maximumBlocks: projectionCapacity ? 1 : 100);
         var exchanges = scenario.Plan.WorkItems.Select(work => skipSecond && work == scenario.Plan.WorkItems[1]
             ? CreateNonProposalExchange(work, scenario) : CreateScribeExchange(work, scenario: scenario)).ToArray();
         var first = exchanges[0].Request;
@@ -41,14 +51,21 @@ public sealed partial class CampaignStateContractTests
         });
         var nodeRequest = JsonNode.Parse(bytes.AsSpan())!;
         foreach (var memberNode in nodeRequest["manifest"]!.AsArray())
-            foreach (var component in memberNode!["target"]!["applicableComponents"]!.AsArray())
-                if (component!["name"] is null) component.AsObject().Remove("name");
+            foreach (var component in memberNode!["target"]!["applicableComponents"]!.AsArray().Where(component => component!["name"] is null))
+                component!.AsObject().Remove("name");
         var parsedRequest = DocumentationScribeValidation.ParseRequest(System.Text.Encoding.UTF8.GetBytes(nodeRequest.ToJsonString()));
         Assert.True(parsedRequest.IsValid, parsedRequest.Failure?.Code + " " + parsedRequest.Failure?.Pointer);
         var request = parsedRequest.Request!;
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
         var store = new TransitionCheckpointStore(initial);
-        var allowance = CampaignInvocationTestPolicy.Create(request.Limits, new C4CampaignClock());
+        var allowance = pauseBoundary == "overrun" ? new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
+            maximumProviderRequests: request.Limits.MaximumProviderRequests, maximumToolCalls: request.Limits.MaximumToolCalls,
+            maximumCachedInputTokens: request.Limits.MaximumInputTokens / 2,
+            maximumUncachedInputTokens: Math.Min(request.Limits.MaximumUncachedInputTokens, request.Limits.MaximumInputTokens / 2),
+            maximumOutputTokens: request.Limits.MaximumOutputTokens, maximumRequestOutputTokens: 7,
+            maximumElapsedMilliseconds: request.Limits.MaximumElapsedMilliseconds,
+            maximumRequestElapsedMilliseconds: Math.Min(300000, request.Limits.MaximumElapsedMilliseconds)), new C4CampaignClock())
+            : CampaignInvocationTestPolicy.Create(request.Limits, new C4CampaignClock());
         var admitted = CampaignStateReducer.AdmitProviderInvocation(initial, scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection,
             scenario.Input, scenario.Plan, scenario.Plan.WorkItems[0].WorkItemKey, request,
             CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(2)), allowance);
@@ -59,11 +76,11 @@ public sealed partial class CampaignStateContractTests
         var coordinator = new CampaignScribeExecutionCoordinator(invocation, allowance, store, default, null, 0);
         Assert.True(invocation.TryBeginDispatch(out var attempt));
         var physical = await coordinator.Scope.ReserveProviderAsync(new(Sha256("one shared physical request"), 1, 1,
-            request.Limits.MaximumOutputTokens), default);
+            pauseBoundary == "overrun" ? 7 : request.Limits.MaximumOutputTokens), default);
         Assert.NotNull(physical);
         Assert.True(coordinator.Scope.BeginPhysicalDispatch(physical));
         Assert.True(await coordinator.Scope.SettleProviderAsync(physical,
-            new(DocumentationScribeDispatchDisposition.Success, new(0, 0, 0, 0, 0)), default));
+            new(DocumentationScribeDispatchDisposition.Success, new(0, 0, 0, pauseBoundary == "overrun" ? 8 : 0, 0)), default));
         var charges = invocation.AcceptedCheckpoint.Artifact.State.LineageCharges;
         var permit = await coordinator.Scope.BeginHostAsync(DocumentationScribeHostOperation.TerminalSubmission, default);
         Assert.NotNull(permit); Assert.True(permit.TryBeginOperation());
@@ -76,9 +93,25 @@ public sealed partial class CampaignStateContractTests
             Assert.NotNull(validation.Submission);
             if (unconfirmedHost && index == 0)
             {
+                var rejectedKind = hostRejection is null ? (CampaignProviderCompletionKind?)null
+                    : Enum.Parse<CampaignProviderCompletionKind>(hostRejection);
+                if (rejectedKind is { } kind)
+                {
+                    Assert.True(invocation.TryRecordHostRejection(validation.Submission, kind));
+                    Assert.True(invocation.TryRecordHostRejection(validation.Submission, kind));
+                    Assert.False(invocation.TryRecordHostRejection(validation.Submission, CampaignProviderCompletionKind.Ordinary));
+                    Assert.False(invocation.TryRecordHostRejection(validation.Submission,
+                        kind == CampaignProviderCompletionKind.Timeout ? CampaignProviderCompletionKind.HostFailure : CampaignProviderCompletionKind.Timeout));
+                }
                 receipts.Add(DocumentationScribeValidation.AcknowledgeSubmission(validation.Submission,
                     new(request.ArtifactSha256, members[index].TargetId, validation.Submission.ContentSha256,
                         DocumentationScribeAcknowledgementStage.Received)));
+                var stoppedProgress = DocumentationScribeValidation.CreateProgressNotification(request, attempt, 0, 1,
+                    members.Select(member => member.TargetId), receipts, [], true);
+                var observedStop = CampaignStateReducer.AcceptScribeProgress(invocation, stoppedProgress);
+                Assert.Equal(CampaignTransitionKind.Applied, observedStop.Kind);
+                Assert.True(await coordinator.AcceptHostProgressAsync(observedStop, default));
+                Assert.Null(invocation.AcceptedCheckpoint.Artifact.State.ScribeProgress!.Members[0].ContentSha256);
                 Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
                 var execution = scenario.ExecutionAuthority.Projection;
                 var result = DocumentationScribeValidation.CreateSessionResult(request, attempt,
@@ -88,12 +121,33 @@ public sealed partial class CampaignStateContractTests
                 var outcome = DocumentationScribeValidation.BindValidatedRunOutcome(request, attempt, result);
                 var registrar = invocation.TryCreateCompletionRegistrar();
                 Assert.NotNull(registrar);
-                Assert.True(registrar.TryRegister(CampaignProviderCompletionKind.Ordinary, outcome, 0, out var completion));
+                Assert.True(registrar.TryRegister(CampaignProviderCompletionKind.Ordinary, outcome, hostRejection is null ? 0 : 1001, out var completion));
                 var completed = CampaignStateReducer.CompleteProviderInvocation(invocation.AcceptedCheckpoint.Artifact, completion!,
                     scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan);
                 Assert.Equal(CampaignTransitionKind.Applied, completed.Kind);
                 Assert.Equal(CampaignWorkStatus.ProposalComplete, completed.Artifact.State.WorkItems[1].Status);
-                Assert.Equal(CampaignWorkOutcomeCode.InternalFailure, completed.Artifact.State.WorkItems[0].ClosedOutcome!.Code);
+                Assert.Equal(rejectedKind switch
+                {
+                    CampaignProviderCompletionKind.ProposalInvalid => CampaignWorkOutcomeCode.ValidationFailure,
+                    CampaignProviderCompletionKind.BudgetExhausted => CampaignWorkOutcomeCode.BudgetExhausted,
+                    CampaignProviderCompletionKind.Timeout => CampaignWorkOutcomeCode.Timeout,
+                    CampaignProviderCompletionKind.CallerCancelled => CampaignWorkOutcomeCode.CancelledByCaller,
+                    CampaignProviderCompletionKind.ShutdownCancelled => CampaignWorkOutcomeCode.CancelledByShutdown,
+                    _ => CampaignWorkOutcomeCode.InternalFailure,
+                }, completed.Artifact.State.WorkItems[0].ClosedOutcome!.Code);
+                if (rejectedKind is { } consumedKind)
+                {
+                    Assert.False(invocation.TryRecordHostRejection(validation.Submission, consumedKind));
+                    Assert.Equal(1001, completed.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+                    Assert.Equal(consumedKind switch
+                    {
+                        CampaignProviderCompletionKind.ProposalInvalid => CampaignTerminalReason.LifetimeCap,
+                        CampaignProviderCompletionKind.BudgetExhausted => CampaignTerminalReason.Budget,
+                        CampaignProviderCompletionKind.Timeout => CampaignTerminalReason.Deadline,
+                        CampaignProviderCompletionKind.CallerCancelled => CampaignTerminalReason.Caller,
+                        _ => CampaignTerminalReason.Host,
+                    }, completed.Artifact.State.TerminalOutcome!.Reason);
+                }
                 Assert.Null(completed.Artifact.State.WorkItems[0].TrustedProposal);
                 Assert.Equal(charges.ProviderRequests, completed.Artifact.State.LineageCharges.ProviderRequests);
                 Assert.Equal(charges.InputTokens, completed.Artifact.State.LineageCharges.InputTokens);
@@ -104,6 +158,21 @@ public sealed partial class CampaignStateContractTests
             Assert.Equal(CampaignTransitionKind.Applied, transition.Kind);
             Assert.True(await coordinator.AcceptHostProgressAsync(transition, default));
             var state = invocation.AcceptedCheckpoint.Artifact.State;
+            if (pauseBoundary is not null)
+            {
+                Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
+                var paused = CampaignStateReducer.PauseProviderInvocation(invocation,
+                    pauseBoundary == "elapsed" ? 1000 : 0, lifetimeStop: true);
+                Assert.Equal(CampaignTransitionKind.Applied, paused.Kind);
+                Assert.Equal(CampaignWorkStatus.ProposalComplete, paused.Artifact.State.WorkItems[1].Status);
+                Assert.Null(paused.Artifact.State.ActiveReservation);
+                Assert.Equal(charges.ProviderRequests, paused.Artifact.State.LineageCharges.ProviderRequests);
+                Assert.Equal(charges.OutputTokens, paused.Artifact.State.LineageCharges.OutputTokens);
+                if (pauseBoundary == "equality") Assert.Null(paused.Artifact.State.TerminalOutcome);
+                else Assert.Equal(CampaignTerminalReason.LifetimeCap, paused.Artifact.State.TerminalOutcome!.Reason);
+                Assert.True(CampaignStateJson.Parse(paused.Artifact.ExactUtf8Json.AsMemory()).IsValid);
+                return;
+            }
             if (projectionCapacity && index == 0)
             {
                 Assert.Equal(CampaignWorkOutcomeCode.CompletedOverBound, state.WorkItems[0].ClosedOutcome!.Code);
@@ -152,8 +221,8 @@ public sealed partial class CampaignStateContractTests
                     .Replace(oldRequest.Context.RepositoryContextRef.Value, freshContext, StringComparison.Ordinal));
                 var freshNode = JsonNode.Parse(freshBytes)!;
                 foreach (var memberNode in freshNode["manifest"]!.AsArray())
-                    foreach (var component in memberNode!["target"]!["applicableComponents"]!.AsArray())
-                        if (component!["name"] is null) component.AsObject().Remove("name");
+                    foreach (var component in memberNode!["target"]!["applicableComponents"]!.AsArray().Where(component => component!["name"] is null))
+                        component!.AsObject().Remove("name");
                 request = DocumentationScribeValidation.ParseRequest(System.Text.Encoding.UTF8.GetBytes(freshNode.ToJsonString())).Request!;
                 allowance = CampaignInvocationTestPolicy.Create(request.Limits, new C4CampaignClock());
                 var resumed = CampaignStateReducer.RetryProviderInvocation(retired.Artifact!, retired.AcceptedCheckpoint!,
@@ -201,6 +270,8 @@ public sealed partial class CampaignStateContractTests
         var restored = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
         Assert.True(restored.IsValid, restored.FailureCode?.ToString());
         var saved = restored.Artifact!.State;
+        Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateCurrentTrustedProposalAuthority(saved,
+            saved.WorkItems[0] with { OuterAttemptCount = saved.WorkItems[0].OuterAttemptCount + 1 }, scenario.Plan.WorkItems[0]));
         Assert.Equal(1, saved.ScribeProgress!.RepairCount);
         Assert.Equal(2, saved.ScribeProgress.NextSequence);
         Assert.Equal(2, saved.ScribeProgress.Members.Length);

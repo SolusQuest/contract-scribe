@@ -2,6 +2,9 @@ using System.Collections.Immutable;
 
 namespace ContractScribe.Core;
 
+/// <summary>A current Host completion fact, private to its original invocation; it grants no receipt or write.</summary>
+internal sealed record CampaignScribeHostRejection(string TargetId, string ContentSha256, CampaignProviderCompletionKind Kind);
+
 public static partial class CampaignStateReducer
 {
     private static CampaignTransitionResult CompleteRecordedScribeProgress(CampaignCheckpointArtifact predecessor,
@@ -11,6 +14,7 @@ public static partial class CampaignStateReducer
         var invocation = completion.Invocation;
         var outcome = completion.Outcome!;
         var progress = state.ScribeProgress!;
+        var hostRejection = invocation.HostRejection;
         if (progress.Session is not { Ended: false } session || session.AttemptId != invocation.AttemptId
             || !invocation.ValidateOutcome(outcome))
             return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
@@ -39,6 +43,24 @@ public static partial class CampaignStateReducer
             var key = state.Batch.CompleteTargets.Single(candidate => candidate.SymbolRef == target.Target.SymbolRef).WorkItemKey;
             var started = StartScribeMember(state with { ScribeProgress = progress }, invocation.Request, key, receipt.TargetId, progress, items);
             items = started.Items; progress = started.Progress;
+        }
+        if (hostRejection is not null)
+        {
+            var receipt = outcome.RunResult.Submissions.SingleOrDefault(receipt => receipt.TargetId == hostRejection.TargetId);
+            if (receipt?.Stage != DocumentationScribeAcknowledgementStage.Received || receipt.ContentSha256 != hostRejection.ContentSha256)
+                return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
+            var member = progress.Members.Single(member => member.TargetId == hostRejection.TargetId);
+            DocumentationScribeTerminal hostStop = hostRejection.Kind switch
+            {
+                CampaignProviderCompletionKind.ProposalInvalid => new DocumentationScribeFailureTerminal(DocumentationScribeFailureCode.Validation, null),
+                CampaignProviderCompletionKind.BudgetExhausted => new DocumentationScribeFailureTerminal(DocumentationScribeFailureCode.Budget, null),
+                CampaignProviderCompletionKind.Timeout => new DocumentationScribeFailureTerminal(DocumentationScribeFailureCode.Timeout, null),
+                CampaignProviderCompletionKind.CallerCancelled => new DocumentationScribeCancelledTerminal(DocumentationScribeCancellationCode.Caller),
+                CampaignProviderCompletionKind.ShutdownCancelled => new DocumentationScribeCancelledTerminal(DocumentationScribeCancellationCode.Shutdown),
+                _ => new DocumentationScribeFailureTerminal(DocumentationScribeFailureCode.Internal, null),
+            };
+            items = ReplaceWork(items, member.WorkItemKey, CampaignWorkStatus.Closed, null,
+                CreateClosedScribeOutcome(outcome, member.WorkItemKey, hostStop));
         }
         var failed = stopped is DocumentationScribeFailureTerminal;
         if (failed)
@@ -70,20 +92,28 @@ public static partial class CampaignStateReducer
         var pending = state.Batch.CompleteTargets.Where(target => selected.Contains(target.TargetKey) && target.Dispatchable)
             .Any(target => items.Single(item => item.WorkItemKey == target.WorkItemKey) is
             { AttemptDisposition: CampaignAttemptDisposition.Open, Status: CampaignWorkStatus.Planned });
-        var continuing = !failed && pending;
-        if (continuing || stopped is DocumentationScribeCancelledTerminal)
+        var continuing = hostRejection is null && !failed && pending;
+        if (continuing || stopped is DocumentationScribeCancelledTerminal && hostRejection is null)
             items = PreservePausedAttempt(items, claim);
-        CampaignTerminalOutcome? terminal = stopped switch
+        CampaignTerminalOutcome? terminal = hostRejection?.Kind switch
         {
-            DocumentationScribeCancelledTerminal { Code: DocumentationScribeCancellationCode.Caller } => new(CampaignTerminalKind.Cancelled, CampaignTerminalReason.Caller),
-            DocumentationScribeCancelledTerminal => new(CampaignTerminalKind.Failed, CampaignTerminalReason.Host),
-            DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Timeout } => new(CampaignTerminalKind.Timeout, CampaignTerminalReason.Deadline),
-            DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget } => new(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
-            _ => CompleteWhenResolved(state.Batch, items),
+            CampaignProviderCompletionKind.BudgetExhausted => new(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
+            CampaignProviderCompletionKind.Timeout => new(CampaignTerminalKind.Timeout, CampaignTerminalReason.Deadline),
+            CampaignProviderCompletionKind.HostFailure or CampaignProviderCompletionKind.ShutdownCancelled => new(CampaignTerminalKind.Failed, CampaignTerminalReason.Host),
+            CampaignProviderCompletionKind.CallerCancelled => new(CampaignTerminalKind.Cancelled, CampaignTerminalReason.Caller),
+            CampaignProviderCompletionKind.ProposalInvalid => CompleteWhenResolved(state.Batch, items),
+            _ => stopped switch
+            {
+                DocumentationScribeCancelledTerminal { Code: DocumentationScribeCancellationCode.Caller } => new(CampaignTerminalKind.Cancelled, CampaignTerminalReason.Caller),
+                DocumentationScribeCancelledTerminal => new(CampaignTerminalKind.Failed, CampaignTerminalReason.Host),
+                DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Timeout } => new(CampaignTerminalKind.Timeout, CampaignTerminalReason.Deadline),
+                DocumentationScribeFailureTerminal { Code: DocumentationScribeFailureCode.Budget } => new(CampaignTerminalKind.Exhausted, CampaignTerminalReason.Budget),
+                _ => CompleteWhenResolved(state.Batch, items),
+            },
         };
         if (settlement.Kind == CampaignBudgetDecisionKind.Exhausted && terminal is null or { Kind: CampaignTerminalKind.Complete })
             terminal = new(CampaignTerminalKind.Exhausted, CampaignTerminalReason.LifetimeCap);
-        progress = progress with { Session = session with { Ended = !continuing && stopped is not DocumentationScribeCancelledTerminal } };
+        progress = progress with { Session = session with { Ended = !continuing && (hostRejection is not null || stopped is not DocumentationScribeCancelledTerminal) } };
         var transition = Applied(predecessor, CreateState(state, NextRevision(state.CheckpointRevision), settlement.Charges,
             items, null, state.CandidateObservation, state.CumulativeOutcome, terminal, state.Predecessor, scribeProgress: progress));
         return completion.TryConsume() && invocation.TryCompleteLifecycle(invocation.DispatchStarted)

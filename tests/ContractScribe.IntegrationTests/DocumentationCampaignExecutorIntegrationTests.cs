@@ -500,8 +500,37 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.NotNull(accepted.Artifact);
         var state = accepted.Artifact.State;
         var targets = CampaignStateFactory.CreateInvocationTargetAllowance(state, new(Math.Min(proposalCount, state.Batch.SelectedTargetKeys.Length)));
-        var selected = CampaignScribeRequestBuilder.SelectedMembers(state, campaign.Plan);
         var executable = CampaignScribeRequestBuilder.ExecutableMembers(state, campaign.Plan, targets).ToHashSet();
+        var shared = ComposePatchCampaignRequest(campaign, executable.ToImmutableArray());
+        var bytes = shared.Bytes;
+        var request = shared.Request;
+        var allowance = new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
+            maximumProviderRequests: fixture.Request.Limits.MaximumProviderRequests,
+            maximumToolCalls: fixture.Request.Limits.MaximumToolCalls,
+            maximumCachedInputTokens: fixture.Request.Limits.MaximumInputTokens - fixture.Request.Limits.MaximumUncachedInputTokens,
+            maximumUncachedInputTokens: fixture.Request.Limits.MaximumUncachedInputTokens,
+            maximumOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
+            maximumRequestOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
+            maximumRequestElapsedMilliseconds: fixture.Request.Limits.MaximumElapsedMilliseconds));
+        var exchange = new CampaignProposalExchange(request);
+        var proposal = await DocumentationCampaignProposalExecutor.ExecuteAsync(new(fixture.Classified, fixture.Observations,
+            campaign.Policy, campaign.AuditInputs, campaign.Audit, campaign.PlanningInput, campaign.Plan, campaign.ExecutionCapability,
+            "style.public-api.v1", campaign.StyleProjection, bytes, store,
+            new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), exchange,
+            ConfiguredAgentEntrypoint: null, CancellationToken.None, CancellationToken.None,
+            TargetAllowance: targets, InvocationAllowance: allowance));
+        Assert.True(proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady, proposal.Kind + ":" + proposal.Code);
+        Assert.Equal(executable.Count, proposal.Artifact!.State.WorkItems.Count(work => work.Status == CampaignWorkStatus.ProposalComplete));
+        Assert.Equal(1, proposal.Artifact.State.LineageCharges.OuterInvocations);
+        Assert.Equal(2, exchange.RequestCount);
+        Assert.Equal(2, proposal.Artifact.State.DispatchObservations.Length);
+        Assert.All(proposal.Artifact.State.ScribeProgress!.Members, member => Assert.NotNull(member.ContentSha256));
+    }
+
+    private static PatchCampaignRequest ComposePatchCampaignRequest(PatchCampaign campaign, ImmutableArray<SymbolRef> executableSymbols)
+    {
+        var selected = CampaignScribeRequestBuilder.SelectedMembers(campaign.InitialState, campaign.Plan);
+        var executable = executableSymbols.ToHashSet();
         var roots = selected.Select(target => JsonNode.Parse(campaign.Requests[target.SymbolRef].Bytes.Span)!.AsObject()).ToArray();
         var root = roots[0].DeepClone().AsObject();
         var manifest = new JsonArray(); var ids = new JsonArray();
@@ -509,7 +538,10 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var evidence = new Dictionary<string, JsonNode>(StringComparer.Ordinal);
         for (var index = 0; index < roots.Length; index++)
         {
-            var member = roots[index]["manifest"]![0]!.DeepClone();
+            var source = campaign.Requests[selected[index].SymbolRef].Request;
+            var position = source.Manifest.Select((member, position) => (member, position))
+                .Single(pair => pair.member.Target.SymbolRef == selected[index].SymbolRef).position;
+            var member = roots[index]["manifest"]![position]!.DeepClone();
             var id = "target." + CampaignSha(Encoding.UTF8.GetBytes(selected[index].SymbolRef.DocumentationCommentId));
             member["targetId"] = id;
             manifest.Add(member);
@@ -533,28 +565,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var bytes = JsonSerializer.SerializeToUtf8Bytes(root);
         var parsed = DocumentationScribeValidation.ParseRequest(bytes);
         Assert.True(parsed.IsValid, parsed.Failure?.Code + ":" + parsed.Failure?.Pointer);
-        var request = parsed.Request!;
-        var allowance = new DocumentationScribeInvocationAllowance(DocumentationScribeInvocationLimits.Create(
-            maximumProviderRequests: fixture.Request.Limits.MaximumProviderRequests,
-            maximumToolCalls: fixture.Request.Limits.MaximumToolCalls,
-            maximumCachedInputTokens: fixture.Request.Limits.MaximumInputTokens - fixture.Request.Limits.MaximumUncachedInputTokens,
-            maximumUncachedInputTokens: fixture.Request.Limits.MaximumUncachedInputTokens,
-            maximumOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
-            maximumRequestOutputTokens: fixture.Request.Limits.MaximumOutputTokens,
-            maximumRequestElapsedMilliseconds: fixture.Request.Limits.MaximumElapsedMilliseconds));
-        var exchange = new CampaignProposalExchange(request);
-        var proposal = await DocumentationCampaignProposalExecutor.ExecuteAsync(new(fixture.Classified, fixture.Observations,
-            campaign.Policy, campaign.AuditInputs, campaign.Audit, campaign.PlanningInput, campaign.Plan, campaign.ExecutionCapability,
-            "style.public-api.v1", campaign.StyleProjection, bytes, store,
-            new("provider.synthetic.v1", "model.synthetic.v1", "scribe-protocol.v1"), exchange,
-            ConfiguredAgentEntrypoint: null, CancellationToken.None, CancellationToken.None,
-            TargetAllowance: targets, InvocationAllowance: allowance));
-        Assert.True(proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady, proposal.Kind + ":" + proposal.Code);
-        Assert.Equal(executable.Count, proposal.Artifact!.State.WorkItems.Count(work => work.Status == CampaignWorkStatus.ProposalComplete));
-        Assert.Equal(1, proposal.Artifact.State.LineageCharges.OuterInvocations);
-        Assert.Equal(2, exchange.RequestCount);
-        Assert.Equal(2, proposal.Artifact.State.DispatchObservations.Length);
-        Assert.All(proposal.Artifact.State.ScribeProgress!.Members, member => Assert.NotNull(member.ContentSha256));
+        return new(bytes, parsed.Request!);
     }
 
     private static Dictionary<string, string> AdditionalPatchSources() =>
@@ -763,7 +774,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             fixture.Session.InputIdentity,
             planning,
             plan);
-        return new PatchCampaign(
+        var campaign = new PatchCampaign(
             policy,
             auditInputs,
             audit,
@@ -774,6 +785,11 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             m2Projection,
             initial,
             requests.ToImmutable());
+        return campaign with
+        {
+            Requests = requests.Keys.ToImmutableDictionary(symbol => symbol,
+            symbol => ComposePatchCampaignRequest(campaign, [symbol]))
+        };
     }
 
     private static DocumentationCampaignPatchInput PatchInput(

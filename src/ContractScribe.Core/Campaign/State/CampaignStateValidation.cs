@@ -18,7 +18,7 @@ public static partial class CampaignStateFactory
     internal static DocumentationScribeTargetSubmission? GetSingletonScribeSubmission(
         DocumentationScribeRequest request, DocumentationScribeRunResult result)
     {
-        // S5 owns aggregate campaign acceptance. This consumer remains an explicit singleton Host.
+        // Ordinary singleton projection is separate from incremental campaign acceptance.
         if (request.Manifest.Length != 1 || request.ExecutableTargetIds.Length != 1) return null;
         var targetId = request.ExecutableTargetIds[0];
         return result.Submissions.SingleOrDefault(item => item.TargetId == targetId
@@ -588,6 +588,7 @@ public static partial class CampaignStateFactory
             || target.StyleProfile is null
             || expectedEditKind is null
             || expectedAttempt is null
+            || memberBinding is { ContentSha256: not null } && memberBinding.OuterAttemptOrdinal != stateWork.OuterAttemptCount
             || proposal.HistoricalAttemptId != expectedAttempt.Value
             || !string.Equals(proposal.PatchBlock.BlockId, stateWork.WorkItemKey, StringComparison.Ordinal)
             || proposal.PatchBlock.SymbolRef != target.SymbolRef
