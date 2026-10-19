@@ -196,6 +196,7 @@ internal static class DocumentationPatchCandidateFileSystem
         {
             if (DarwinFileSystem.IsSupported) DarwinFileSystem.RequirePrivate(handle, directory: false);
             _ = ReadIdentity(handle, expectDirectory: false);
+            native?.RetainFileAncestors(handle, parent);
             return new FileStream(handle, FileAccess.ReadWrite, 64 * 1024, isAsync: false);
         }
         catch

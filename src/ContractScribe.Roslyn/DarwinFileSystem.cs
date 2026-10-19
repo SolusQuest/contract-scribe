@@ -290,6 +290,10 @@ internal static class DarwinFileSystem
         private sealed record Pin(SafeFileHandle Handle, Entry Identity, string Path, uint Mount, Pin? Parent, string? Name);
         private readonly List<Pin> pins = [];
         private readonly Dictionary<SafeFileHandle, Pin> bindings = [];
+        // A stream may outlive its traversal wrapper. Its original ancestors,
+        // including those of explicit first-pass candidate files, stay pinned.
+        private readonly Dictionary<SafeFileHandle, Pin> fileBindings = [];
+        private readonly Dictionary<string, Entry> observations = new(StringComparer.Ordinal);
         private readonly string selectedPath;
         private readonly Pin root;
         private readonly string rootVolumeUuid;
@@ -310,6 +314,7 @@ internal static class DarwinFileSystem
                 if (mount > 1) throw Failure();
                 root = new Pin(handle, ReadEntry(handle), PhysicalPath(handle), mount, null, null);
                 pins.Add(root);
+                observations.Add(root.Path, root.Identity);
             }
             catch { handle.Dispose(); throw; }
         }
@@ -325,6 +330,7 @@ internal static class DarwinFileSystem
         internal void Revalidate(CancellationToken cancellationToken = default, Action? checkpoint = null)
         {
             ObjectDisposedException.ThrowIf(disposed, this);
+            ReleaseCompletedBranches();
             foreach (var pin in pins)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -344,6 +350,36 @@ internal static class DarwinFileSystem
                     RequirePrivate(rebound, directory: true);
                 }
             }
+        }
+
+        private void ReleaseCompletedBranches()
+        {
+            foreach (var handle in bindings.Keys.Where(handle => handle.IsClosed).ToArray())
+                bindings.Remove(handle);
+            foreach (var handle in fileBindings.Keys.Where(handle => handle.IsClosed).ToArray())
+                fileBindings.Remove(handle);
+            var required = new HashSet<Pin>(ReferenceEqualityComparer.Instance) { root };
+            foreach (var active in bindings.Values.Concat(fileBindings.Values))
+                for (Pin? pin = active; pin is not null && required.Add(pin); pin = pin.Parent) { }
+            for (var index = pins.Count - 1; index >= 0; index--)
+            {
+                if (required.Contains(pins[index])) continue;
+                pins[index].Handle.Dispose();
+                pins.RemoveAt(index);
+            }
+        }
+
+        internal void RetainFileAncestors(SafeFileHandle file, SafeFileHandle parent)
+        {
+            var parentPin = Binding(parent);
+            Revalidate();
+            var entry = ReadEntry(file);
+            if (entry.Kind != 1 || entry.Device != root.Identity.Device
+                || entry.FileSystem != root.Identity.FileSystem || entry.ParentInode != parentPin.Identity.Inode
+                || (entry.Flags & Firmlink) != 0 || ReadStat(file).LinkCount != 1
+                || PhysicalPath(file) != Path.Join(parentPin.Path, entry.Name)) throw Failure();
+            if (requirePrivateDirectories) RequirePrivate(file, directory: false);
+            fileBindings.Add(file, parentPin);
         }
 
         internal IEnumerable<Entry> Enumerate(
@@ -424,7 +460,15 @@ internal static class DarwinFileSystem
                 var parentPin = Binding(parent);
                 if (pin is null)
                 {
-                    pin = new Pin(Duplicate(handle), ReadEntry(handle), PhysicalPath(handle), 0, parentPin, name);
+                    var identity = ReadEntry(handle);
+                    var path = PhysicalPath(handle);
+                    // Qualified APFS IDs are non-recycled. Keep the original
+                    // observation without keeping a descriptor for a completed
+                    // branch; reopening its path must still reject substitution.
+                    if (observations.TryGetValue(path, out var original) && !SameObject(identity, original))
+                        throw Failure(DarwinFileSystemFailure.Stale);
+                    observations.TryAdd(path, identity);
+                    pin = new Pin(Duplicate(handle), identity, path, 0, parentPin, name);
                     pins.Add(pin);
                 }
                 else if (pin.Parent != parentPin || pin.Name != name) throw Failure();
@@ -493,6 +537,7 @@ internal static class DarwinFileSystem
                     throw Failure(DarwinFileSystemFailure.Stale);
                 if (PhysicalPath(handle) != Path.Join(parentPin.Path, name)) throw Failure();
                 Revalidate(cancellationToken, checkpoint);
+                if (!directory) fileBindings.Add(handle, parentPin);
                 return handle;
             }
             catch { handle.Dispose(); throw; }
@@ -511,6 +556,8 @@ internal static class DarwinFileSystem
             foreach (var pin in pins.AsEnumerable().Reverse()) pin.Handle.Dispose();
             pins.Clear();
             bindings.Clear();
+            fileBindings.Clear();
+            observations.Clear();
         }
     }
 

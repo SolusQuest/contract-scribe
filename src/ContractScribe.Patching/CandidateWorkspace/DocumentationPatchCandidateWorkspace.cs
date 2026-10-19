@@ -314,7 +314,7 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
     {
         if (native is not null)
             return CaptureNativeCandidatePass(parentPath, parentIdentity, rootName, rootPath,
-                directories, files, requireExpectedBytes, cancellationToken, retainedReads, native);
+                directories, files, requireExpectedBytes, cancellationToken, retainedReads, retainedDirectories, native);
         if (!directories.TryGetValue(string.Empty, out var rootIdentity))
         {
             throw new IOException("The candidate root identity is unavailable.");
@@ -488,6 +488,7 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         IReadOnlyDictionary<string, CandidateIdentity> directories,
         IReadOnlyDictionary<string, CandidateWorkspaceFile> files, bool requireExpectedBytes,
         CancellationToken cancellationToken, ICollection<CandidateFileReadLease>? retainedReads,
+        IDictionary<string, CandidateDirectoryLease>? retainedDirectories,
         NativeFileSystem.RootLease native)
     {
         _ = DocumentationPatchCandidateFileSystem.ReadOwnedDirectoryIdentity(
@@ -495,48 +496,46 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
         var observedFiles = new HashSet<string>(PathComparer);
         var observedDirectories = new HashSet<string>(PathComparer);
         var captured = ImmutableArray.CreateBuilder<CandidateWorkspaceFile>(files.Count);
-        var pending = new Stack<(SafeFileHandle Handle, string Path)>();
-        pending.Push((native.OpenRoot(), string.Empty));
+        var active = new Stack<(SafeFileHandle Handle, string Path, HashSet<string> Names,
+            IEnumerator<NativeFileSystem.Entry> Entries)>();
+        Push(native.OpenRoot(), string.Empty);
         try
         {
-            while (pending.TryPop(out var node))
+            while (active.TryPeek(out var node))
             {
-                using var directory = node.Handle;
-                native.Revalidate(cancellationToken);
-                NativeFileSystem.RequirePrivate(directory, directory: true);
-                if (!directories.TryGetValue(node.Path, out var expectedDirectory)
-                    || !observedDirectories.Add(node.Path)
-                    || DocumentationPatchCandidateFileSystem.ReadNativeIdentity(directory, true) != expectedDirectory)
-                    throw new IOException("The candidate directory identity changed.");
-                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var entry in native.Enumerate(directory, cancellationToken))
+                if (!node.Entries.MoveNext())
                 {
-                    if (!names.Add(entry.Name.Normalize(System.Text.NormalizationForm.FormD)))
-                        throw new IOException("The candidate contains ambiguous names.");
-                    var relative = ValidateRepositoryPath(node.Path.Length == 0 ? entry.Name : node.Path + "/" + entry.Name);
-                    if (entry.Kind == 2)
-                    {
-                        if (!directories.ContainsKey(relative)) throw new IOException("The candidate directory set changed.");
-                        pending.Push((native.OpenDirectory(directory, entry.Name, cancellationToken, observation: entry), relative));
-                        continue;
-                    }
-                    if (entry.Kind != 1 || !files.TryGetValue(relative, out var expectedFile)
-                        || !observedFiles.Add(relative)) throw new IOException("The candidate file set changed.");
-                    var read = DocumentationPatchCandidateFileSystem.ReadNativeFile(native, directory, entry,
-                        expectedFile.Identity, cancellationToken);
-                    var retained = false;
-                    try
-                    {
-                        using var confirmed = DocumentationPatchCandidateFileSystem.ReadNativeFile(native, directory, entry,
-                            expectedFile.Identity, cancellationToken);
-                        if (!read.Bytes.AsSpan().SequenceEqual(confirmed.Bytes)
-                            || requireExpectedBytes && !read.Bytes.AsSpan().SequenceEqual(expectedFile.Bytes.AsSpan()))
-                            throw new IOException("The candidate file bytes changed.");
-                        captured.Add(new(relative, ImmutableArray.CreateRange(read.Bytes), read.Identity));
-                        if (retainedReads is not null) { retainedReads.Add(read); retained = true; }
-                    }
-                    finally { if (!retained) read.Dispose(); }
+                    active.Pop();
+                    node.Entries.Dispose();
+                    node.Handle.Dispose();
+                    continue;
                 }
+                var entry = node.Entries.Current;
+                if (!node.Names.Add(entry.Name.Normalize(System.Text.NormalizationForm.FormD)))
+                    throw new IOException("The candidate contains ambiguous names.");
+                var relative = ValidateRepositoryPath(node.Path.Length == 0 ? entry.Name : node.Path + "/" + entry.Name);
+                if (entry.Kind == 2)
+                {
+                    if (!directories.ContainsKey(relative)) throw new IOException("The candidate directory set changed.");
+                    Push(native.OpenDirectory(node.Handle, entry.Name, cancellationToken, observation: entry), relative);
+                    continue;
+                }
+                if (entry.Kind != 1 || !files.TryGetValue(relative, out var expectedFile)
+                    || !observedFiles.Add(relative)) throw new IOException("The candidate file set changed.");
+                var read = DocumentationPatchCandidateFileSystem.ReadNativeFile(native, node.Handle, entry,
+                    expectedFile.Identity, cancellationToken);
+                var retained = false;
+                try
+                {
+                    using var confirmed = DocumentationPatchCandidateFileSystem.ReadNativeFile(native, node.Handle, entry,
+                        expectedFile.Identity, cancellationToken);
+                    if (!read.Bytes.AsSpan().SequenceEqual(confirmed.Bytes)
+                        || requireExpectedBytes && !read.Bytes.AsSpan().SequenceEqual(expectedFile.Bytes.AsSpan()))
+                        throw new IOException("The candidate file bytes changed.");
+                    captured.Add(new(relative, ImmutableArray.CreateRange(read.Bytes), read.Identity));
+                    if (retainedReads is not null) { retainedReads.Add(read); retained = true; }
+                }
+                finally { if (!retained) read.Dispose(); }
             }
             native.Revalidate(cancellationToken);
             if (observedFiles.Count != files.Count || observedDirectories.Count != directories.Count)
@@ -545,7 +544,33 @@ internal sealed class DocumentationPatchCandidateWorkspaceBuilder
                 parentPath, parentIdentity, rootName, directories[string.Empty]);
             return captured.OrderBy(file => file.RepositoryPath, StringComparer.Ordinal).ToImmutableArray();
         }
-        finally { foreach (var node in pending) node.Handle.Dispose(); }
+        finally
+        {
+            foreach (var node in active)
+            {
+                node.Entries.Dispose();
+                node.Handle.Dispose();
+            }
+        }
+
+        void Push(SafeFileHandle handle, string path)
+        {
+            try
+            {
+                native.Revalidate(cancellationToken);
+                NativeFileSystem.RequirePrivate(handle, directory: true);
+                if (!directories.TryGetValue(path, out var expectedDirectory)
+                    || !observedDirectories.Add(path)
+                    || DocumentationPatchCandidateFileSystem.ReadNativeIdentity(handle, true) != expectedDirectory)
+                    throw new IOException("The candidate directory identity changed.");
+                if (retainedDirectories is not null)
+                    RetainDirectory(retainedDirectories, path, new CandidateDirectoryLease(
+                        expectedDirectory, NativeFileSystem.Duplicate(handle)));
+                active.Push((handle, path, new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    native.Enumerate(handle, cancellationToken).GetEnumerator()));
+            }
+            catch { handle.Dispose(); throw; }
+        }
     }
 
     private static void RetainDirectory(

@@ -18,6 +18,20 @@ namespace ContractScribe.IntegrationTests;
 public sealed class DocumentationPatchApplicationTests
 {
     [ContractScribe.TestSupport.NativeFileSystemFact]
+    public void Wide_unprotected_directory_tree_preserves_the_actual_baseline_rebind()
+    {
+        using var fixture = ApplicationFixture.Create(
+            "namespace N; public class C { public void M() { } }",
+            DocumentationPatchRepositoryEncoding.Utf8,
+            allowedOutputRoots: ["unrelated"]);
+        for (var index = 0; index < 512; index++)
+            Directory.CreateDirectory(Path.Join(fixture.Root, "unrelated", index.ToString("D4")));
+        var capture = fixture.ClassifiedSession.RepositorySession.CaptureDocumentationPatchRepositoryBaseline();
+        var baseline = Assert.IsType<DocumentationPatchRepositoryBaseline>(capture.Baseline);
+        Assert.Equal(DocumentationPatchRepositoryRebindStatus.Unchanged, baseline.Rebind().Status);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task RealLoaderPreservesRepositoryRolesAndLinkedLogicalPathsThroughE1()
     {
         await using var fixture = await LoaderFixture.CreateAsync();

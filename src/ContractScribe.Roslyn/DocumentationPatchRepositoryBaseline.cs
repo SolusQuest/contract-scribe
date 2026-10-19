@@ -897,65 +897,59 @@ internal static class DocumentationPatchRepositoryBaselineCapture
     {
         var files = new Dictionary<string, DocumentationPatchObservedFile>(DocumentationPatchRepositoryPolicy.PathComparer);
         var directories = new Dictionary<string, DocumentationPatchPhysicalIdentity>(DocumentationPatchRepositoryPolicy.PathComparer);
-        var pending = new Stack<(SafeFileHandle Handle, string Path, string RepositoryPath,
-            ImmutableHashSet<(ulong Volume, ulong FileId)> Ancestors)>();
-        pending.Push((native.OpenRoot(), policy.PhysicalRoot, string.Empty,
-            ImmutableHashSet<(ulong Volume, ulong FileId)>.Empty));
+        var active = new Stack<(SafeFileHandle Handle, string Path, string RepositoryPath,
+            ImmutableHashSet<(ulong Volume, ulong FileId)> Ancestors, HashSet<string> Names,
+            IEnumerator<DarwinFileSystem.Entry> Entries)>();
+        Push(native.OpenRoot(), policy.PhysicalRoot, string.Empty,
+            ImmutableHashSet<(ulong Volume, ulong FileId)>.Empty);
         try
         {
-            while (pending.TryPop(out var node))
+            while (active.TryPeek(out var node))
             {
-                using var directory = node.Handle;
-                native.Revalidate(cancellationToken);
-                var identity = DocumentationPatchBaselineFileSystem.ReadNativeDirectoryIdentity(directory);
-                var key = (identity.Volume, identity.FileId);
-                if (node.Ancestors.Contains(key)) throw DocumentationPatchBaselineException.Rejected();
-                var ancestors = node.Ancestors.Add(key);
-                directories[node.RepositoryPath] = identity;
-                var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                foreach (var entry in native.Enumerate(directory, cancellationToken))
+                if (!node.Entries.MoveNext())
                 {
-                    if (!names.Add(entry.Name.Normalize(System.Text.NormalizationForm.FormD)))
-                        throw DocumentationPatchBaselineException.Rejected();
-                    var relative = DocumentationPatchRepositoryPolicy.NormalizeRepositoryPath(
-                        node.RepositoryPath.Length == 0 ? entry.Name : node.RepositoryPath + "/" + entry.Name);
-                    if (relative == ".git" || relative.StartsWith(".git/", StringComparison.Ordinal)) continue;
-                    var path = Path.Join(node.Path, entry.Name);
-                    if (entry.Kind == 5)
-                    {
-                        var isDirectory = Directory.Exists(path);
-                        if (mode == DocumentationPatchRepositoryCaptureMode.Candidate
-                            && (isDirectory || policy.IsGoverned(relative) || policy.HasProtectedDescendant(relative)))
-                            throw DocumentationPatchBaselineException.Rejected();
-                        if (mode == DocumentationPatchRepositoryCaptureMode.Resolution
-                            && (isDirectory || policy.IsGoverned(relative)))
-                        {
-                            var target = (isDirectory ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path))
-                                .ResolveLinkTarget(returnFinalTarget: true)
-                                ?? throw DocumentationPatchBaselineException.Rejected();
-                            var targetPath = Path.GetFullPath(target.FullName);
-                            if (!TryRepositoryPath(policy.PhysicalRoot, targetPath, out var sourceIdentity))
-                                throw DocumentationPatchBaselineException.Rejected();
-                            var readPath = DocumentationPatchRepositoryPolicy.NormalizeRepositoryPath(
-                                Path.GetRelativePath(policy.PhysicalRoot, targetPath));
-                            if (isDirectory)
-                                pending.Push((native.OpenDirectoryPath(readPath, cancellationToken), targetPath, relative, ancestors));
-                            else if (!files.TryAdd(relative, new(relative, readPath, sourceIdentity)))
-                                throw DocumentationPatchBaselineException.Rejected();
-                        }
-                        continue;
-                    }
-                    if (entry.Kind == 2)
-                    {
-                        var child = native.OpenDirectory(directory, entry.Name, cancellationToken, observation: entry);
-                        pending.Push((child, path, relative, ancestors));
-                    }
-                    else if (policy.IsGoverned(relative))
-                    {
-                        if (entry.Kind != 1 || !TryAddObservedFile(files, policy, relative, path))
-                            throw DocumentationPatchBaselineException.Rejected();
-                    }
+                    active.Pop();
+                    node.Entries.Dispose();
+                    node.Handle.Dispose();
+                    continue;
                 }
+                var entry = node.Entries.Current;
+                if (!node.Names.Add(entry.Name.Normalize(System.Text.NormalizationForm.FormD)))
+                    throw DocumentationPatchBaselineException.Rejected();
+                var relative = DocumentationPatchRepositoryPolicy.NormalizeRepositoryPath(
+                    node.RepositoryPath.Length == 0 ? entry.Name : node.RepositoryPath + "/" + entry.Name);
+                if (relative == ".git" || relative.StartsWith(".git/", StringComparison.Ordinal)) continue;
+                var path = Path.Join(node.Path, entry.Name);
+                if (entry.Kind == 5)
+                {
+                    var isDirectory = Directory.Exists(path);
+                    if (mode == DocumentationPatchRepositoryCaptureMode.Candidate
+                        && (isDirectory || policy.IsGoverned(relative) || policy.HasProtectedDescendant(relative)))
+                        throw DocumentationPatchBaselineException.Rejected();
+                    if (mode == DocumentationPatchRepositoryCaptureMode.Resolution
+                        && (isDirectory || policy.IsGoverned(relative)))
+                    {
+                        var target = (isDirectory ? (FileSystemInfo)new DirectoryInfo(path) : new FileInfo(path))
+                            .ResolveLinkTarget(returnFinalTarget: true)
+                            ?? throw DocumentationPatchBaselineException.Rejected();
+                        var targetPath = Path.GetFullPath(target.FullName);
+                        if (!TryRepositoryPath(policy.PhysicalRoot, targetPath, out var sourceIdentity))
+                            throw DocumentationPatchBaselineException.Rejected();
+                        var readPath = DocumentationPatchRepositoryPolicy.NormalizeRepositoryPath(
+                            Path.GetRelativePath(policy.PhysicalRoot, targetPath));
+                        if (isDirectory)
+                            Push(native.OpenDirectoryPath(readPath, cancellationToken), targetPath, relative, node.Ancestors);
+                        else if (!files.TryAdd(relative, new(relative, readPath, sourceIdentity)))
+                            throw DocumentationPatchBaselineException.Rejected();
+                    }
+                    continue;
+                }
+                if (entry.Kind == 2)
+                    Push(native.OpenDirectory(node.Handle, entry.Name, cancellationToken, observation: entry),
+                        path, relative, node.Ancestors);
+                else if (policy.IsGoverned(relative)
+                    && (entry.Kind != 1 || !TryAddObservedFile(files, policy, relative, path)))
+                    throw DocumentationPatchBaselineException.Rejected();
             }
             native.Revalidate(cancellationToken);
             var relevant = RelevantDirectories(files.Keys);
@@ -966,7 +960,28 @@ internal static class DocumentationPatchRepositoryBaselineCapture
         }
         finally
         {
-            foreach (var node in pending) node.Handle.Dispose();
+            foreach (var node in active)
+            {
+                node.Entries.Dispose();
+                node.Handle.Dispose();
+            }
+        }
+
+        void Push(SafeFileHandle handle, string path, string repositoryPath,
+            ImmutableHashSet<(ulong Volume, ulong FileId)> ancestors)
+        {
+            try
+            {
+                native.Revalidate(cancellationToken);
+                var identity = DocumentationPatchBaselineFileSystem.ReadNativeDirectoryIdentity(handle);
+                var key = (identity.Volume, identity.FileId);
+                if (ancestors.Contains(key)) throw DocumentationPatchBaselineException.Rejected();
+                directories[repositoryPath] = identity;
+                active.Push((handle, path, repositoryPath, ancestors.Add(key),
+                    new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+                    native.Enumerate(handle, cancellationToken).GetEnumerator()));
+            }
+            catch { handle.Dispose(); throw; }
         }
     }
 

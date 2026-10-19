@@ -24,6 +24,120 @@ internal sealed class CaseSensitiveNamesTheoryAttribute : TheoryAttribute
 public sealed class DarwinFileSystemTests
 {
     [MacArm64Fact]
+    public async Task Baseline_and_completed_sibling_traversal_fit_an_isolated_descriptor_budget()
+    {
+        using var fixture = new Fixture();
+        File.WriteAllText(Path.Join(fixture.Root, "Sample.cs"), "namespace Fixture; public class Source { }\n");
+        for (var index = 0; index < 512; index++)
+            Directory.CreateDirectory(Path.Join(fixture.Root, "unrelated", index.ToString("D4")));
+        var repository = new DirectoryInfo(AppContext.BaseDirectory);
+        while (repository is not null && !File.Exists(Path.Join(repository.FullName, "ContractScribe.slnx")))
+            repository = repository.Parent;
+        Assert.NotNull(repository);
+        var configuration = new DirectoryInfo(AppContext.BaseDirectory).Parent!.Name;
+        var probe = Path.Join(repository.FullName, "tests", "ContractScribe.LoaderProbe", "bin",
+            configuration, "net10.0", "ContractScribe.LoaderProbe.dll");
+        Assert.True(File.Exists(probe));
+        using var process = Process.Start(new ProcessStartInfo
+        {
+            FileName = Environment.GetEnvironmentVariable("DOTNET_HOST_PATH") ?? "dotnet",
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            ArgumentList = { probe, "native-directory-budget", fixture.Root },
+        });
+        Assert.NotNull(process);
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(1));
+            Assert.True(process.ExitCode == 0, $"exit={process.ExitCode}; {await stderr}; {await stdout}");
+            using var result = System.Text.Json.JsonDocument.Parse(await stdout);
+            Assert.True(result.RootElement.GetProperty("bounded").GetBoolean());
+            Assert.Equal(512, result.RootElement.GetProperty("visited").GetInt32());
+            Assert.True(result.RootElement.GetProperty("unchanged").GetBoolean());
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+        }
+    }
+
+    [MacArm64Fact]
+    public void Live_file_keeps_original_ancestors_after_directory_wrappers_close()
+    {
+        using var fixture = new Fixture();
+        using var authority = new DarwinFileSystem.RootLease(fixture.Root);
+        using var root = authority.OpenRoot();
+        using var child = authority.OpenDirectory(root, "child", CancellationToken.None);
+        using var file = authority.OpenFile(child, "file.txt", CancellationToken.None);
+        child.Dispose();
+        root.Dispose();
+        Directory.Move(Path.Join(fixture.Root, "child"), Path.Join(fixture.Root, "moved"));
+        Directory.CreateDirectory(Path.Join(fixture.Root, "child"));
+        var failure = Assert.Throws<DarwinFileSystemException>(() => authority.Revalidate());
+        Assert.Equal(DarwinFileSystemFailure.Stale, failure.Failure);
+    }
+
+    [MacArm64Fact]
+    public void Reopening_a_completed_original_path_rejects_a_replacement_before_enumeration()
+    {
+        using var fixture = new Fixture();
+        using var authority = new DarwinFileSystem.RootLease(fixture.Root);
+        using var root = authority.OpenRoot();
+        using (authority.OpenDirectory(root, "child", CancellationToken.None)) { }
+        authority.Revalidate();
+        Directory.Move(Path.Join(fixture.Root, "child"), Path.Join(fixture.Root, "moved"));
+        Directory.CreateDirectory(Path.Join(fixture.Root, "child"));
+        var failure = Assert.Throws<DarwinFileSystemException>(() =>
+            authority.OpenDirectory(root, "child", CancellationToken.None));
+        Assert.Equal(DarwinFileSystemFailure.Stale, failure.Failure);
+    }
+
+    [MacArm64Fact]
+    public void Retired_unrelated_branch_rename_does_not_invalidate_an_authorized_read()
+    {
+        using var fixture = new Fixture();
+        Directory.CreateDirectory(Path.Join(fixture.Root, "unrelated"));
+        using var authority = new DarwinFileSystem.RootLease(fixture.Root);
+        using var root = authority.OpenRoot();
+        using (authority.OpenDirectory(root, "unrelated", CancellationToken.None)) { }
+        authority.Revalidate();
+        Directory.Move(Path.Join(fixture.Root, "unrelated"), Path.Join(fixture.Root, "renamed"));
+        using var child = authority.OpenDirectory(root, "child", CancellationToken.None);
+        using var file = authority.OpenFile(child, "file.txt", CancellationToken.None);
+        using var stream = new FileStream(file, FileAccess.Read);
+        using var reader = new StreamReader(stream);
+        Assert.Equal("authorized", reader.ReadToEnd());
+    }
+
+    [MacArm64Fact]
+    [System.Runtime.Versioning.SupportedOSPlatform("macos")]
+    public void Created_file_keeps_private_parent_checks_until_the_stream_closes()
+    {
+        using var fixture = new Fixture();
+        var privateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        File.SetUnixFileMode(fixture.Root, privateMode);
+        File.SetUnixFileMode(Path.Join(fixture.Root, "child"), privateMode);
+        using var authority = new DarwinFileSystem.RootLease(fixture.Root, requirePrivateDirectories: true);
+        using var root = authority.OpenRoot();
+        using var child = authority.OpenDirectory(root, "child", CancellationToken.None);
+        using var file = DarwinFileSystem.OpenAt(child, "created.txt", DarwinFileSystem.ReadWrite
+            | DarwinFileSystem.Create | DarwinFileSystem.Exclusive | DarwinFileSystem.CloseOnExec
+            | DarwinFileSystem.NoFollowAny | DarwinFileSystem.Beneath, 0x180);
+        authority.RetainFileAncestors(file, child);
+        child.Dispose();
+        File.SetUnixFileMode(Path.Join(fixture.Root, "child"), privateMode | UnixFileMode.OtherWrite);
+        Assert.Throws<DarwinFileSystemException>(() => authority.Revalidate());
+        Assert.Equal(0, DarwinFileSystem.ReadStat(file).Size);
+    }
+
+    [MacArm64Fact]
     public void Retained_file_and_independent_directory_streams_use_the_authorized_objects()
     {
         using var fixture = new Fixture();

@@ -8,6 +8,11 @@ using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
+if (args is ["native-directory-budget", var budgetRoot])
+{
+    return NativeDirectoryBudgetProbe.Run(budgetRoot);
+}
+
 if (args is ["emit-streams", var streamMarker])
 {
     Console.Out.Write($"{streamMarker}-child-out");
