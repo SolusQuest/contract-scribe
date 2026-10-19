@@ -33,19 +33,39 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(!priced, artifact.State.LineageCharges.HasUnpricedCostHistory);
         var rows = artifact.State.DispatchObservations;
         Assert.Equal(0, rows[0].Usage!.CostMicrounits);
+        Assert.Equal(0, rows[0].Charges!.CostMicrounits.Observed);
         Assert.Equal(0, rows[0].Charges!.CostMicrounits.TotalCharged);
         Assert.Equal(priced, rows[1].Charges!.CostMicrounits.ConservativeUnobserved > 0);
-        Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+        var parsed = CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory());
+        Assert.True(parsed.IsValid);
+        Assert.Equal(0, parsed.Artifact!.State.DispatchObservations[0].Charges!.CostMicrounits.Observed);
     }
 
-    private static void AssertInvalidDispatchCharge(CampaignCheckpointArtifact artifact, string dimension, bool changeRow)
+    [Theory]
+    [InlineData("cachedInputTokens", true)]
+    [InlineData("cachedInputTokens", false)]
+    [InlineData("reasoningTokens", true)]
+    [InlineData("reasoningTokens", false)]
+    [InlineData("costMicrounits", true)]
+    [InlineData("costMicrounits", false)]
+    [InlineData("activeElapsedMilliseconds", true)]
+    public async Task Rehashed_known_zero_charge_observation_cannot_be_replaced_by_null(string dimension, bool changeRow)
+    {
+        var artifact = await RecordDispatchHistoryAsync(false);
+        AssertInvalidDispatchCharge(artifact, dimension, changeRow, removeObserved: true);
+    }
+
+    private static void AssertInvalidDispatchCharge(CampaignCheckpointArtifact artifact, string dimension, bool changeRow,
+        bool removeObserved = false)
     {
         var row = artifact.State.DispatchObservations[0];
         var charges = row.Charges!;
         var property = char.ToUpperInvariant(dimension[0]) + dimension[1..];
         var chargeProperty = typeof(CampaignDispatchCharges).GetProperty(property)!;
         var original = (CampaignChargeObservation)chargeProperty.GetValue(charges)!;
-        var changed = original with { Observed = (original.Observed ?? 0) + 1, TotalCharged = original.TotalCharged + 1 };
+        if (removeObserved) Assert.Equal(0, original.Observed);
+        var changed = removeObserved ? original with { Observed = null }
+            : original with { Observed = (original.Observed ?? 0) + 1, TotalCharged = original.TotalCharged + 1 };
         var changedCharges = charges with { };
         chargeProperty.SetValue(changedCharges, changed);
         var root = JsonNode.Parse(artifact.ExactUtf8Json.AsSpan())!;
@@ -61,7 +81,13 @@ public sealed partial class CampaignStateContractTests
         var lineage = artifact.State.LineageCharges;
         var lineageProperty = typeof(CampaignLineageCharges).GetProperty(property)!;
         var oldTotal = (CampaignChargeObservation)lineageProperty.GetValue(lineage)!;
-        var newTotal = oldTotal with { Observed = (oldTotal.Observed ?? 0) + 1, TotalCharged = oldTotal.TotalCharged + 1 };
+        var newTotal = oldTotal;
+        if (!removeObserved || !changeRow)
+        {
+            if (removeObserved) Assert.Equal(0, oldTotal.Observed);
+            newTotal = removeObserved ? oldTotal with { Observed = null }
+                : oldTotal with { Observed = (oldTotal.Observed ?? 0) + 1, TotalCharged = oldTotal.TotalCharged + 1 };
+        }
         var changedLineage = lineage with { };
         lineageProperty.SetValue(changedLineage, newTotal);
         root["lineageCharges"]![dimension]!["observed"] = newTotal.Observed;
@@ -195,7 +221,10 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(interrupted, row.ElapsedMilliseconds is null);
         foreach (var dimension in new[] { "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens",
             "outputTokens", "reasoningTokens", "costMicrounits", "activeElapsedMilliseconds" })
+        {
             AssertInvalidDispatchCharge(completed, dimension, changeRow: true);
+            AssertInvalidDispatchCharge(completed, dimension, changeRow: true, removeObserved: true);
+        }
     }
 
     private static async Task<CampaignCheckpointArtifact> RecordDispatchHistoryAsync(bool swapped, bool priced = true)

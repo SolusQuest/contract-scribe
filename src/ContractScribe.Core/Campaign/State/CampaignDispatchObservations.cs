@@ -148,7 +148,7 @@ public static partial class CampaignStateFactory
     }
 
     private static bool SameCharge(CampaignChargeObservation left, CampaignChargeObservation right) =>
-        (left.Observed ?? 0) == (right.Observed ?? 0)
+        left.Observed == right.Observed
         && left.ConservativeUnobserved == right.ConservativeUnobserved && left.TotalCharged == right.TotalCharged;
 
     private static bool SameProviderCharges(CampaignDispatchCharges left, CampaignDispatchCharges right) =>
