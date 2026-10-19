@@ -96,7 +96,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Null(DocumentationScribeComposition.ConsumePreparedOutcome(
             fixture.SelectedAudit, budget).PatchRequest);
 
-        var timeoutBytes = WithLimit(fixture.RequestBytes, "maximumElapsedMilliseconds", 1);
+        var timeoutBytes = WithLimit(fixture.RequestBytes, "maximumElapsedMilliseconds", 250);
         var timeout = await DocumentationScribeComposition.PrepareAsync(
             fixture.SelectedAudit,
             timeoutBytes,
@@ -876,7 +876,7 @@ public sealed partial class DocumentationScribeCompositionTests
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
-            await Task.Delay(20, cancellationToken);
+            await Task.Delay(Timeout.Infinite, cancellationToken);
             return new DocumentationScribeModelResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(request.CompletedToolExchanges.Any(item => item.OperationId == request.Terminal.OperationId)

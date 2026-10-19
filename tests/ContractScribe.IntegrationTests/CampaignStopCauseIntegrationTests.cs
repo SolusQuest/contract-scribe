@@ -50,7 +50,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     [InlineData("lifetime-caller")]
     public async Task Campaign_zero_send_preflight_stops_keep_their_authoritative_owner(string owner)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await EndToEndFixture.CreateAsync(additionalSources: AdditionalPatchSources());
         var campaign = StopCauseCampaign(fixture, owner.StartsWith("lifetime", StringComparison.Ordinal) ? 1000 : null);
         var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
@@ -147,7 +147,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     [InlineData("nonelapsed-proposal", true)]
     public async Task Campaign_returned_proposal_requires_authorized_postflight_and_preserves_stop_cause(string cause, bool clear)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await EndToEndFixture.CreateAsync(additionalSources: AdditionalPatchSources());
         var nonelapsed = cause.StartsWith("nonelapsed", StringComparison.Ordinal);
         var campaign = StopCauseCampaign(fixture, nonelapsed || cause == "host-deadline" ? null : 1000, nonelapsed ? 7 : null);

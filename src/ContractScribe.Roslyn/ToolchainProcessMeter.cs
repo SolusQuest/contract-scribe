@@ -28,7 +28,7 @@ internal sealed class ToolchainProcessMeter : IDisposable
     {
         using var current = Process.GetCurrentProcess();
         rootProcessId = current.Id;
-        rootStartIdentity = current.StartTime.ToUniversalTime().Ticks;
+        rootStartIdentity = ReadProcessStartIdentity(current);
         this.snapshot = snapshot ?? CaptureProcessSnapshot;
         protectedEntryPointHashes = new Dictionary<string, string>(
             OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
@@ -246,8 +246,9 @@ internal sealed class ToolchainProcessMeter : IDisposable
                         ? ReadWindowsParentProcessId(process)
                         : OperatingSystem.IsLinux()
                             ? ReadLinuxParentProcessId(process.Id)
-                            : 0;
-                    var startIdentity = process.StartTime.ToUniversalTime().Ticks;
+                            : DarwinFileSystem.IsSupported
+                                ? DarwinProcessObservation.ReadIdentity(process.Id).ParentProcessId : 0;
+                    var startIdentity = ReadProcessStartIdentity(process);
                     var imageName = process.ProcessName;
                     result.Add(new ProcessNode(
                         process.Id,
@@ -275,7 +276,7 @@ internal sealed class ToolchainProcessMeter : IDisposable
             try
             {
                 using var process = Process.GetProcessById(node.ProcessId);
-                if (process.StartTime.ToUniversalTime().Ticks != node.StartIdentity)
+                if (ReadProcessStartIdentity(process) != node.StartIdentity)
                 {
                     continue;
                 }
@@ -299,7 +300,7 @@ internal sealed class ToolchainProcessMeter : IDisposable
                 try
                 {
                     using var current = Process.GetProcessById(node.ProcessId);
-                    if (current.StartTime.ToUniversalTime().Ticks == node.StartIdentity)
+                    if (ReadProcessStartIdentity(current) == node.StartIdentity)
                     {
                         continue;
                     }
@@ -367,6 +368,10 @@ internal sealed class ToolchainProcessMeter : IDisposable
         or FormatException
         or OverflowException;
 
+    internal static long ReadProcessStartIdentity(Process process) => DarwinFileSystem.IsSupported
+        ? DarwinProcessObservation.ReadIdentity(process.Id).StartIdentity
+        : process.StartTime.ToUniversalTime().Ticks;
+
     private static int ReadWindowsParentProcessId(Process process)
     {
         var status = NtQueryInformationProcess(
@@ -396,6 +401,9 @@ internal sealed class ToolchainProcessMeter : IDisposable
 
     private static IReadOnlyList<string> GetCommandLineArguments(Process process)
     {
+        if (DarwinFileSystem.IsSupported)
+            return DarwinProcessObservation.ReadOwnedArguments(process.Id, ReadProcessStartIdentity(process),
+                Environment.ProcessId);
         if (OperatingSystem.IsLinux())
         {
             var bytes = File.ReadAllBytes($"/proc/{process.Id}/cmdline");

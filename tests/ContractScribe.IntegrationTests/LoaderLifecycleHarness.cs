@@ -903,6 +903,11 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
     private static bool IsExpectedBuildHostProcess(Process process, string expectedPath)
     {
+        if (DarwinFileSystem.IsSupported)
+            return DarwinProcessObservation.ReadOwnedArguments(process.Id,
+                    StableProcessStartIdentity.Read(process), Environment.ProcessId)
+                .Any(argument => Path.IsPathFullyQualified(argument)
+                    && string.Equals(Path.GetFullPath(argument), Path.GetFullPath(expectedPath), StringComparison.Ordinal));
         if (!OperatingSystem.IsWindows())
         {
             var commandLine = File.ReadAllBytes($"/proc/{process.Id}/cmdline");
@@ -942,6 +947,8 @@ internal sealed class LoaderLifecycleHarness : IAsyncDisposable
 
     private static int? ParentProcessId(int processId)
     {
+        if (DarwinFileSystem.IsSupported)
+            return DarwinProcessObservation.ReadIdentity(processId).ParentProcessId;
         if (!OperatingSystem.IsWindows())
         {
             var stat = File.ReadAllText($"/proc/{processId}/stat");

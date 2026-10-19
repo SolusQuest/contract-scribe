@@ -10,7 +10,7 @@ public sealed partial class CampaignCliProcessTests
     [Fact]
     public async Task Production_provider_proposal_capacity_persists_observed_settlement_and_bounded_result()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await LoaderFixture.CreateAsync();
         var generatedLine = new string('\u754c', 1000);
         await using var server = new ProposalLoopbackServer(summaryText: generatedLine + "\n" + generatedLine, includeUsage: true);

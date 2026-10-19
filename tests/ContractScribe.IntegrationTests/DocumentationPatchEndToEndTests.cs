@@ -23,7 +23,7 @@ public sealed class DocumentationPatchEndToEndTests
             enableNoOutputToOutputGenerator: false,
             enableSelfObservingGenerator: true,
             enableStableGeneratorDiagnostic: true);
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             Assert.Equal(2, fixture.Repository.Projects.Count);
             Assert.All(fixture.Repository.Projects, project =>
@@ -116,7 +116,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public async Task DocumentationSensitiveAndNoOutputToOutputGeneratorsFailClosed()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -148,7 +148,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public async Task NewGeneratorErrorWithoutGeneratedSourceChangeFailsClosed()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -176,7 +176,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public async Task RequestWideGeneratorFailureMarksEveryResolvedTargetInvalid()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -207,7 +207,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public async Task AdditionalFileSensitiveGeneratorChangeFailsClosed()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -306,7 +306,7 @@ public sealed class DocumentationPatchEndToEndTests
         string documentationCommentId,
         int declarationReferenceIndex)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -397,7 +397,7 @@ public sealed class DocumentationPatchEndToEndTests
     public void FinalEngineRejectsDelimitedDocumentationWithoutEscapingTheResultBoundary(
         string documentation)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -457,7 +457,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void PositionShiftedUnresolvedDeclarationRemainsAccepted()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -479,7 +479,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void AcceptedExecutionReturnsImmutableBytesReleasesStagingAndPublicReplayIsStale()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -542,7 +542,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void CandidateMutationAtTerminalCaptureReturnsCandidateStateAndNoCapability()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -582,7 +582,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void StableCandidatePremodificationAfterE1HandoffReturnsCandidateState()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -774,7 +774,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void OriginalMutationBeforeE1SealReturnsRepositoryStateAndCleansCandidate()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -811,7 +811,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void OriginalMutationImmediatelyBeforeCommitReturnsRepositoryState()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -844,7 +844,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void SimultaneousCandidateAndRepositoryMutationGivesRepositoryStatePrecedence()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -900,7 +900,7 @@ public sealed class DocumentationPatchEndToEndTests
     public void CandidateInventoryIdentityAndTopologyChangesReturnCandidateState(
         string mutation)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -951,7 +951,7 @@ public sealed class DocumentationPatchEndToEndTests
         string topology,
         string stageName)
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -1004,7 +1004,7 @@ public sealed class DocumentationPatchEndToEndTests
     [Fact]
     public void BoundedOriginalTopologyRejectionWinsOverCandidateMismatch()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported)
         {
             return;
         }

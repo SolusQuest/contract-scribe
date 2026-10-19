@@ -519,7 +519,7 @@ public sealed class ProductionAuditHostTests
             var rootNode = new ToolchainProcessMeter.ProcessNode(
                 current.Id,
                 0,
-                current.StartTime.ToUniversalTime().Ticks,
+                ToolchainProcessMeter.ReadProcessStartIdentity(current),
                 current.ProcessName,
                 current.MainModule?.FileName,
                 [],
@@ -564,7 +564,7 @@ public sealed class ProductionAuditHostTests
             new(
                 current.Id,
                 0,
-                current.StartTime.ToUniversalTime().Ticks,
+                ToolchainProcessMeter.ReadProcessStartIdentity(current),
                 current.ProcessName,
                 current.MainModule?.FileName,
                 [],
@@ -590,7 +590,7 @@ public sealed class ProductionAuditHostTests
         var rootNode = new ToolchainProcessMeter.ProcessNode(
             current.Id,
             0,
-            current.StartTime.ToUniversalTime().Ticks,
+            ToolchainProcessMeter.ReadProcessStartIdentity(current),
             current.ProcessName,
             current.MainModule?.FileName,
             [],

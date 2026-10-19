@@ -25,7 +25,7 @@ public sealed partial class CampaignCliProcessTests
             await File.WriteAllTextAsync(Path.Join(fixture.Root, "policy.json"), RequiredPolicy);
             var stateDirectory = Path.Join(outside, "state");
             Directory.CreateDirectory(stateDirectory);
-            if (OperatingSystem.IsLinux()) File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
             var statePath = Path.Join(stateDirectory, "checkpoint.json");
             var sourcePath = Path.Join(fixture.Root, "App", "App.cs");
             CampaignPreflightResult Preflight(CampaignOperation operation, string snapshot, string? path = null) => CampaignPreflight.Run(
@@ -235,7 +235,7 @@ public sealed partial class CampaignCliProcessTests
             Assert.Null(exhaustedSuccessor.Artifact.State.ActiveReservation);
             Assert.True(exhaustedSuccessor.Artifact.ExactUtf8Json.Length < CampaignStateContract.MaximumArtifactUtf8Bytes);
 
-            if (!OperatingSystem.IsLinux()) return;
+            if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
             await File.WriteAllTextAsync(sourcePath, nearSource, new UTF8Encoding(false, true));
             var credentialReads = 0;
             string? Credential(string _) { credentialReads++; throw new InvalidOperationException("Capacity admission cannot read credentials."); }

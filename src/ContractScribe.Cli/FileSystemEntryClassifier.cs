@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
+using ContractScribe.Roslyn;
 
 namespace ContractScribe.Cli;
 
@@ -33,6 +34,17 @@ internal static class FileSystemEntryClassifier
     public static FileSystemEntryKind Classify(string path)
     {
         ArgumentException.ThrowIfNullOrEmpty(path);
+        if (DarwinFileSystem.IsSupported)
+        {
+            if (DarwinFileSystem.ReadPathStat(path, out var status) != 0) return HandleUnixFailure(path);
+            return (status.Mode & UnixFileTypeMask) switch
+            {
+                UnixRegularFile => FileSystemEntryKind.RegularFile,
+                UnixDirectory => FileSystemEntryKind.Directory,
+                UnixSymbolicLink => FileSystemEntryKind.Link,
+                _ => FileSystemEntryKind.Other,
+            };
+        }
         return OperatingSystem.IsWindows()
             ? ClassifyWindows(path)
             : OperatingSystem.IsLinux()

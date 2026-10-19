@@ -272,7 +272,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         var accepted = await DocumentationCampaignPatchExecutor.ExecuteAsync(input);
 
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             Assert.Equal(DocumentationCampaignOutcomeKind.HostFailure, accepted.Kind);
             Assert.Null(accepted.AcceptedCandidate);
@@ -435,7 +435,7 @@ public sealed partial class DocumentationScribeCompositionTests
         var stale = await DocumentationCampaignPatchExecutor.ExecuteAsync(
             PatchInput(staleFixture, staleCampaign, staleStore, patchEngine: staleEngine));
         Assert.Equal(
-            OperatingSystem.IsLinux()
+            (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
                 ? DocumentationCampaignOutcomeKind.Stale
                 : DocumentationCampaignOutcomeKind.HostFailure,
             stale.Kind);
@@ -674,7 +674,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
     internal static async Task RunCampaignPatchPostExecutionCrashAsync()
     {
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }
@@ -747,7 +747,7 @@ public sealed partial class DocumentationScribeCompositionTests
             unrepresentableClock,
             unrepresentableClock.GetTimestamp()));
 
-        if (!OperatingSystem.IsLinux())
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
         {
             return;
         }

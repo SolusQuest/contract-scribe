@@ -1,5 +1,6 @@
 using System.Collections.Immutable;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Win32.SafeHandles;
 
 namespace ContractScribe.Roslyn;
@@ -57,13 +58,15 @@ internal static class DocumentationScribeRepositoryDirectoryReader
         Action chargeEntry,
         Action<DocumentationScribeRepositoryToolCheckpoint>? observer = null)
     {
+        using var native = DarwinFileSystem.IsSupported
+            ? Native(() => new DarwinFileSystem.RootLease(repositoryRoot)) : null;
         var segments = Segments(repositoryPath);
-        var before = ObserveChain(repositoryRoot, rootIdentity, segments, cancellationToken, checkpoint, chargeEntry);
+        var before = ObserveChain(native, repositoryRoot, rootIdentity, segments, cancellationToken, checkpoint, chargeEntry);
         observer?.Invoke(DocumentationScribeRepositoryToolCheckpoint.AfterDirectoryPreObservation);
         checkpoint();
 
         ImmutableArray<DocumentationScribeRepositoryDirectoryEntry> entries;
-        using (var directory = OpenBoundDirectory(
+        using (var directory = OpenBoundDirectory(native,
                    repositoryRoot,
                    rootIdentity,
                    repositoryPath,
@@ -74,10 +77,10 @@ internal static class DocumentationScribeRepositoryDirectoryReader
                    chargeEntry,
                    observer))
         {
-            entries = ReadEntries(directory, cancellationToken, checkpoint, chargeEntry);
+            entries = ReadEntries(native, directory, cancellationToken, checkpoint, chargeEntry);
             observer?.Invoke(DocumentationScribeRepositoryToolCheckpoint.AfterInitialDirectorySnapshot);
             checkpoint();
-            var repeated = ReadEntries(directory, cancellationToken, checkpoint, chargeEntry);
+            var repeated = ReadEntries(native, directory, cancellationToken, checkpoint, chargeEntry);
             observer?.Invoke(DocumentationScribeRepositoryToolCheckpoint.AfterRepeatedDirectorySnapshot);
             checkpoint();
             if (!entries.SequenceEqual(repeated))
@@ -86,7 +89,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
             }
         }
 
-        var after = ObserveChain(repositoryRoot, rootIdentity, segments, cancellationToken, checkpoint, chargeEntry);
+        var after = ObserveChain(native, repositoryRoot, rootIdentity, segments, cancellationToken, checkpoint, chargeEntry);
         if (!before.SequenceEqual(after))
         {
             throw Stale();
@@ -119,6 +122,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
     }
 
     private static ImmutableArray<DocumentationScribeContextPhysicalIdentity> ObserveChain(
+        DarwinFileSystem.RootLease? native,
         string repositoryRoot,
         DocumentationScribeContextPhysicalIdentity rootIdentity,
         string[] segments,
@@ -127,7 +131,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
         Action chargeEntry)
     {
         var identities = ImmutableArray.CreateBuilder<DocumentationScribeContextPhysicalIdentity>();
-        var current = OpenRoot(repositoryRoot);
+        var current = native is null ? OpenRoot(repositoryRoot) : Native(() => native.OpenRoot());
         try
         {
             var identity = ReadIdentity(current);
@@ -141,8 +145,9 @@ internal static class DocumentationScribeRepositoryDirectoryReader
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 checkpoint();
-                RequireExactName(current, segment, cancellationToken, checkpoint, chargeEntry);
-                var next = OpenRelative(current, segment, requireDirectory: true);
+                RequireExactName(native, current, segment, cancellationToken, checkpoint, chargeEntry);
+                var next = native is null ? OpenRelative(current, segment, requireDirectory: true)
+                    : Native(() => native.OpenDirectory(current, segment, cancellationToken, checkpoint));
                 current.Dispose();
                 current = next;
                 identities.Add(ReadIdentity(current));
@@ -157,6 +162,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
     }
 
     private static SafeFileHandle OpenBoundDirectory(
+        DarwinFileSystem.RootLease? native,
         string repositoryRoot,
         DocumentationScribeContextPhysicalIdentity rootIdentity,
         string repositoryPath,
@@ -172,7 +178,7 @@ internal static class DocumentationScribeRepositoryDirectoryReader
             throw new InvalidOperationException("repository.internal.directory-chain");
         }
 
-        var current = OpenRoot(repositoryRoot);
+        var current = native is null ? OpenRoot(repositoryRoot) : Native(() => native.OpenRoot());
         try
         {
             var identity = ReadIdentity(current);
@@ -185,11 +191,12 @@ internal static class DocumentationScribeRepositoryDirectoryReader
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 checkpoint();
-                RequireExactName(current, segments[index], cancellationToken, checkpoint, chargeEntry);
-                var next = OpenRelative(current, segments[index], requireDirectory: true);
+                RequireExactName(native, current, segments[index], cancellationToken, checkpoint, chargeEntry);
+                var next = native is null ? OpenRelative(current, segments[index], requireDirectory: true)
+                    : Native(() => native.OpenDirectory(current, segments[index], cancellationToken, checkpoint));
                 observer?.Invoke(DocumentationScribeRepositoryToolCheckpoint.AfterBoundDirectoryOpen);
                 checkpoint();
-                RequireExactName(current, segments[index], cancellationToken, checkpoint, chargeEntry);
+                RequireExactName(native, current, segments[index], cancellationToken, checkpoint, chargeEntry);
                 var nextIdentity = ReadIdentity(next);
                 if (nextIdentity != expected[index + 1])
                 {
@@ -217,11 +224,28 @@ internal static class DocumentationScribeRepositoryDirectoryReader
     }
 
     private static ImmutableArray<DocumentationScribeRepositoryDirectoryEntry> ReadEntries(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle directory,
         CancellationToken cancellationToken,
         Action checkpoint,
         Action chargeEntry)
     {
+        if (native is not null)
+        {
+            var observed = ImmutableArray.CreateBuilder<DocumentationScribeRepositoryDirectoryEntry>();
+            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using var enumerator = native.Enumerate(directory, cancellationToken, checkpoint, chargeEntry).GetEnumerator();
+            while (Native(() => enumerator.MoveNext()))
+            {
+                var entry = enumerator.Current;
+                if (!names.Add(entry.Name.Normalize(NormalizationForm.FormD))) throw Unsafe();
+                using var child = Native(() => native.OpenMetadataChild(directory, entry, cancellationToken, checkpoint));
+                observed.Add(new(entry.Name, ReadIdentity(child)));
+            }
+
+            return observed.OrderBy(entry => entry.Name, StringComparer.Ordinal).ToImmutableArray();
+        }
+
         var entries = ImmutableArray.CreateBuilder<DocumentationScribeRepositoryDirectoryEntry>();
         var spellings = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         foreach (var name in EnumerateNames(directory, cancellationToken, checkpoint))
@@ -242,12 +266,20 @@ internal static class DocumentationScribeRepositoryDirectoryReader
     }
 
     private static void RequireExactName(
+        DarwinFileSystem.RootLease? native,
         SafeFileHandle directory,
         string expected,
         CancellationToken cancellationToken,
         Action checkpoint,
         Action chargeEntry)
     {
+        if (native is not null)
+        {
+            if (Native(() => native.Find(directory, expected, cancellationToken, checkpoint, chargeEntry)) is null)
+                throw Stale();
+            return;
+        }
+
         var exact = 0;
         var folded = 0;
         foreach (var name in EnumerateNames(directory, cancellationToken, checkpoint))
@@ -568,6 +600,22 @@ internal static class DocumentationScribeRepositoryDirectoryReader
 
     private static DocumentationScribeContextPhysicalIdentity ReadIdentity(SafeFileHandle handle)
     {
+        if (DarwinFileSystem.IsSupported)
+        {
+            var stat = Native(() => DarwinFileSystem.ReadStat(handle));
+            var kind = stat.Mode & UnixFileTypeMask;
+            if (kind is not UnixRegularFile and not UnixDirectory
+                || stat.ModificationTimeNanoseconds is < 0 or >= 1_000_000_000
+                || stat.ChangeTimeNanoseconds is < 0 or >= 1_000_000_000) throw Unsafe();
+            var directory = kind == UnixDirectory;
+            return new(unchecked((uint)stat.Device), stat.Inode,
+                directory ? 0 : stat.Size, directory ? 0ul : stat.LinkCount, directory,
+                directory ? 0 : stat.ModificationTimeSeconds,
+                directory ? 0ul : (ulong)stat.ModificationTimeNanoseconds,
+                directory ? 0 : stat.ChangeTimeSeconds,
+                directory ? 0ul : (ulong)stat.ChangeTimeNanoseconds);
+        }
+
         if (OperatingSystem.IsWindows())
         {
             Marshal.SetLastPInvokeError(0);
@@ -604,6 +652,15 @@ internal static class DocumentationScribeRepositoryDirectoryReader
 
     private static long WindowsFileTime(System.Runtime.InteropServices.ComTypes.FILETIME value) =>
         unchecked(((long)(uint)value.dwHighDateTime << 32) | (uint)value.dwLowDateTime);
+
+    private static T Native<T>(Func<T> operation)
+    {
+        try { return operation(); }
+        catch (DarwinFileSystemException exception)
+        {
+            throw exception.Failure == DarwinFileSystemFailure.Stale ? Stale() : Unsafe();
+        }
+    }
 
     private static DocumentationScribeContextReadException Unsafe() => new(DocumentationScribeContextReadFailure.Unsafe, "context.unsafe.repository-object");
     private static DocumentationScribeContextReadException Stale() => new(DocumentationScribeContextReadFailure.Stale, "context.stale.repository-object");

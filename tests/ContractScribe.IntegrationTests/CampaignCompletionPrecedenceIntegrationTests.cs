@@ -23,7 +23,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     public async Task Campaign_registered_postflight_completion_keeps_closed_fact_when_resource_also_stops(
         string completion, string resource, bool clear)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await EndToEndFixture.CreateAsync(additionalSources: AdditionalPatchSources());
         var lifetime = resource.StartsWith("lifetime", StringComparison.Ordinal);
         var elapsed = resource == "lifetime-over" ? 1001 : 1000;
@@ -131,7 +131,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     [InlineData("postflight")]
     public async Task Campaign_resource_induced_budget_before_authoritative_completion_keeps_same_attempt(string boundary)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await EndToEndFixture.CreateAsync(additionalSources: AdditionalPatchSources());
         var campaign = StopCauseCampaign(fixture, null);
         var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
