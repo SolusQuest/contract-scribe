@@ -319,6 +319,9 @@ public sealed partial class GitHubProposalCliProcessTests
                 budgets = new
                 {
                     campaign = new { maximumCandidatesPerBlock = 30, maximumElapsedMilliseconds = 3_600_000 },
+                    // Keep both original members, but publish only the first durable
+                    // proposal before an explicitly authorized append invocation.
+                    invocation = new { maximumProviderRequests = twoWorks ? 1 : 64 },
                 },
             }), new UTF8Encoding(false, true));
             var publication = new JsonObject

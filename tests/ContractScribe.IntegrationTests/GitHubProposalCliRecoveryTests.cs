@@ -212,7 +212,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (OperatingSystem.IsLinux()) File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite);
     }
 
-    private static Task ConfigureAppend(Fixture fixture)
+    private static async Task ConfigureAppend(Fixture fixture)
     {
         var previous = fixture.GitHub.Coordination();
         fixture.Publication["operationId"] = "operation.append";
@@ -231,6 +231,9 @@ public sealed partial class GitHubProposalCliProcessTests
                 ["candidateFileSha256"] = file["candidateSha256"]!.DeepClone(),
             }).ToArray()),
         };
-        return Task.CompletedTask;
+        var path = Assert.IsType<string>(fixture.Configuration);
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(path))!;
+        configuration["budgets"]!["invocation"]!["maximumProviderRequests"] = 64;
+        await File.WriteAllTextAsync(path, configuration.ToJsonString());
     }
 }
