@@ -30,7 +30,8 @@ internal static class ChangedBaseCampaignReconciler
         CampaignPlanningInput successorPlanningInput,
         CampaignWorkPlan successorPlan,
         Func<bool> configurationRevalidator,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        bool allowCorrectnessChanges = false)
     {
         ArgumentNullException.ThrowIfNull(predecessor);
         ArgumentNullException.ThrowIfNull(store);
@@ -58,7 +59,10 @@ internal static class ChangedBaseCampaignReconciler
                 return new(ChangedBaseCampaignReconciliationKind.InvalidConfiguration, predecessor);
             }
             cancellationToken.ThrowIfCancellationRequested();
-            transition = CampaignStateReducer.Supersede(
+            transition = allowCorrectnessChanges ? CampaignStateReducer.SupersedeFreshSnapshot(
+                predecessor.Artifact, predecessor, successorAuthority, successorExecution,
+                styleConfigurationId, validatedStyleConfigurationProjection, inputIdentity,
+                successorPlanningInput, successorPlan) : CampaignStateReducer.Supersede(
                 predecessor.Artifact,
                 predecessor,
                 successorAuthority,

@@ -19,9 +19,9 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.False(File.Exists(fixture.State));
         var before = fixture.Checkpoint();
         var resumed = await fixture.Run("resume");
-        AssertResult(resumed, 0, "replayed");
+        AssertResult(resumed, 0, "awaiting-review");
         Assert.False(File.Exists(fixture.State));
-        Assert.True(fixture.Checkpoint().CheckpointRevision > before.CheckpointRevision);
+        Assert.Equal(before.Sha256, fixture.Checkpoint().Sha256);
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         await fixture.AssertSourceUnchanged();
@@ -55,44 +55,28 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Fresh_process_reconstructs_and_charges_but_replays_without_publication_writes()
+    public async Task Published_resume_waits_without_reconstruction_charges_or_publication_writes()
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        var first = await fixture.Run("start");
-        AssertResult(first, 0, "published");
+        AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
-        var firstRemote = fixture.GitHub.Coordination().ToJsonString();
-        var mutations = fixture.GitHub.PublicationWrites;
-        var second = await fixture.Run("resume");
-        AssertResult(second, 0, "replayed");
-        var reconstructed = fixture.Checkpoint();
-        Assert.True(reconstructed.CheckpointRevision > accepted.CheckpointRevision);
-        Assert.True(reconstructed.State.LineageCharges.PatchValidationInvocations
-            > accepted.State.LineageCharges.PatchValidationInvocations);
-        Assert.NotEqual(accepted.State.CandidateObservation!.PatchRequestSha256,
-            reconstructed.State.CandidateObservation!.PatchRequestSha256);
-        Assert.NotEqual(accepted.State.CandidateObservation.PatchResultCommitmentSha256,
-            reconstructed.State.CandidateObservation.PatchResultCommitmentSha256);
-        Assert.Equal(accepted.Sha256, reconstructed.State.AcceptedCandidateOrigin!.CheckpointSha256);
-        Assert.Equal(accepted.CheckpointRevision, reconstructed.State.AcceptedCandidateOrigin.CheckpointRevision);
-        Assert.Equal(firstRemote, fixture.GitHub.Coordination().ToJsonString());
-        Assert.Equal(mutations, fixture.GitHub.PublicationWrites);
-        Assert.Single(fixture.GitHub.PullRequests);
-        Assert.Equal(1, fixture.GitHub.PrAttempts);
-        Assert.Equal(2, fixture.TokenReads());
-        using var firstJson = JsonDocument.Parse(first.Stdout);
-        Assert.Equal("https://github.com/Owner/repo/pull/1", firstJson.RootElement.GetProperty("pullRequestUrl").GetString());
-        using var secondJson = JsonDocument.Parse(second.Stdout);
-        Assert.Equal(reconstructed.CheckpointRevision, secondJson.RootElement.GetProperty("checkpointRevision").GetInt64());
-        // R6's claim-only replay intentionally does not assert a PR URL.
-        Assert.Equal(JsonValueKind.Null, secondJson.RootElement.GetProperty("pullRequestUrl").ValueKind);
+        var before = GateCounts(fixture);
+        var writes = fixture.GitHub.Mutations;
+        var result = await fixture.Run("resume");
+        AssertResult(result, 0, "awaiting-review");
+        Assert.Equal(accepted.Sha256, fixture.Checkpoint().Sha256);
+        Assert.Equal(before, GateCounts(fixture));
+        Assert.Equal(writes, fixture.GitHub.Mutations);
+        using var json = JsonDocument.Parse(result.Stdout);
+        Assert.Equal(accepted.CheckpointRevision, json.RootElement.GetProperty("checkpointRevision").GetInt64());
+        Assert.Equal("https://github.com/Owner/repo/pull/1", json.RootElement.GetProperty("pullRequestUrl").GetString());
         await fixture.AssertSourceUnchanged();
     }
 
     [Theory]
     [InlineData("ready", 0, "awaiting-review")]
-    [InlineData("merged", 0, "merged")]
+    [InlineData("merged", 0, "no-op")]
     [InlineData("closed", 4, "closed-unmerged")]
     public async Task Fresh_process_observes_lifecycle_without_changing_the_pull_request(string lifecycle, int exit, string outcome)
     {
@@ -100,9 +84,15 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         fixture.GitHub.Lifecycle(lifecycle);
+        if (lifecycle == "merged")
+        {
+            var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+            layer["budgets"]!["invocation"]!["maximumTargets"] = 0;
+            await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString());
+        }
         var writes = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(writes + 1, fixture.GitHub.PublicationWrites); // One authenticated coordination observation.
+        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         var settledWrites = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
@@ -198,8 +188,8 @@ public sealed partial class GitHubProposalCliProcessTests
         layer["provider"]!["model"] = "drifted-model";
         await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString(), new UTF8Encoding(false, true));
         var result = await fixture.Run("resume");
-        AssertResult(result, 4, "stale");
-        Assert.Equal("github proposal stopped before publication: campaign.incompatible-snapshot\n", result.Stderr);
+        AssertResult(result, 0, "awaiting-review");
+        Assert.Empty(result.Stderr);
         Assert.Equal(checkpoint, fixture.GitHub.CheckpointBytes());
         Assert.Equal(providerRequests, fixture.Provider.RequestCount);
         Assert.Equal(tokenReads + 1, fixture.TokenReads());
@@ -324,9 +314,7 @@ public sealed partial class GitHubProposalCliProcessTests
             var source = await File.ReadAllBytesAsync(Path.Join(repository.Root, "App", "App.cs"));
             var governed = new Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)>(StringComparer.Ordinal);
             foreach (var path in Directory.EnumerateFiles(repository.Root, "*", SearchOption.AllDirectories)
-                .Where(path => !Path.GetRelativePath(repository.Root, path).Split(Path.DirectorySeparatorChar).Any(part => part is "obj" or "bin")
-                    && (path.EndsWith(".cs", StringComparison.Ordinal) || path.EndsWith(".csproj", StringComparison.Ordinal)
-                        || Path.GetFileName(path) == "policy.json")))
+                .Where(path => !Path.GetRelativePath(repository.Root, path).Split(Path.DirectorySeparatorChar).Any(part => part is "obj" or "bin" or ".git")))
                 governed.Add(Path.GetRelativePath(repository.Root, path).Replace('\\', '/'),
                     (await File.ReadAllBytesAsync(path), (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) ? File.GetUnixFileMode(path) : null));
             var github = new GitHubProposalLoopbackServer(governed.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes));

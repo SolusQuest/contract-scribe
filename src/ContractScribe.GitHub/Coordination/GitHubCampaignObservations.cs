@@ -26,7 +26,8 @@ internal sealed record GitHubCampaignPullRequest(long Id, string NodeId, int Num
     GitHubCampaignPullRequestKind Kind, GitHubPullRequestHead Head,
     GitHubRepositoryIdentity BaseRepository, string BaseRef, string BaseOid,
     GitHubActor? Author, DateTimeOffset CreatedAt, DateTimeOffset? ClosedAt,
-    DateTimeOffset? MergedAt, bool OwnershipVerified) : GitHubValue;
+    DateTimeOffset? MergedAt, bool OwnershipVerified,
+    string? OriginalBaseOid = null, string? GenerationId = null) : GitHubValue;
 
 internal sealed record GitHubCampaignObservation(GitHubCampaignKind Kind,
     GitHubCampaignLedgerKind LedgerKind, GitHubRepositoryIdentity? Repository,
@@ -37,4 +38,5 @@ internal sealed record GitHubCampaignObservation(GitHubCampaignKind Kind,
 // Derived only during the already bounded complete history proof; not exported in the observation.
 internal sealed record GitHubCampaignGeneration(string Ref, string HeadOid, string TreeOid,
     string OriginalBaseOid, string ObservedBaseOid, int? Number, GitHubCoordinationStage Stage,
-    GitHubProposalMetadata Metadata) : GitHubValue;
+    GitHubProposalMetadata Metadata, string GenerationId,
+    ImmutableArray<GitHubCoordinationChangedFile> ChangedFiles) : GitHubValue;

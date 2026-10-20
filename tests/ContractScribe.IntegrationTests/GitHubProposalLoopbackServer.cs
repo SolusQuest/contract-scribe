@@ -269,7 +269,8 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         {
             foreach (var pr in PullRequests)
             {
-                pr["head"]!["sha"] = Refs["refs/heads/" + pr["head"]!["ref"]!.GetValue<string>()];
+                if (Refs.TryGetValue("refs/heads/" + pr["head"]!["ref"]!.GetValue<string>(), out var headOid))
+                    pr["head"]!["sha"] = headOid;
                 if (pr["state"]!.GetValue<string>() == "open") pr["base"]!["sha"] = Refs["refs/heads/main"];
             }
             if (path == "/repos/Owner/repo/pulls") return (200, PullRequests.ToArray());

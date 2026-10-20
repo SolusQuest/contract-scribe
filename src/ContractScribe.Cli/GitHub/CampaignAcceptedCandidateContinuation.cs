@@ -1,5 +1,6 @@
 using ContractScribe.Core;
 using ContractScribe.GitHub.Publication;
+using ContractScribe.Roslyn;
 
 namespace ContractScribe.Cli;
 
@@ -11,8 +12,13 @@ internal sealed record CampaignRunSelection(CampaignTerminal? Terminal, CliExecu
 internal sealed class CampaignAcceptedCandidateContinuation(
     CliBuildIdentity identity, CampaignPreflightResult preflight,
     GitHubProposalRequestSnapshot request, Func<string, string?> credentialAccessor,
-    Func<ValidatedGitHubPublicationAuthority, ValidatedGitHubChangedFilePayload, CancellationToken, Task<GitHubPublicationObservation>>? publish = null)
+    Func<ValidatedGitHubPublicationAuthority, ValidatedGitHubChangedFilePayload, CancellationToken, Task<GitHubPublicationObservation>>? publish = null,
+    Func<ProductionRepositorySessionBundle, CancellationToken, Task<CliExecutionResult?>>? beforePlanning = null,
+    string? authenticatedBaseOid = null)
 {
+    internal bool RevalidateInputs() => request.Revalidate() && preflight.Configuration.Revalidate();
+    internal Task<CliExecutionResult?> BeforePlanningAsync(ProductionRepositorySessionBundle bundle, CancellationToken token) =>
+        beforePlanning?.Invoke(bundle, token) ?? Task.FromResult<CliExecutionResult?>(null);
     internal CliExecutionResult Present(CampaignTerminal terminal) => GitHubProposalPresentation.Campaign(identity, terminal);
 
     internal bool ReconstructAccepted(CampaignCheckpointState state)
@@ -55,7 +61,8 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             || current.State.CandidateObservation is null
             || current.State.CumulativeOutcome?.Kind != CampaignCumulativeOutcomeKind.Accepted)
             return GitHubProposalPresentation.ContractError(identity, preflight.Operation, current.CheckpointRevision);
-        if (!preflight.Configuration.Revalidate() || !request.Revalidate())
+        if (!preflight.Configuration.Revalidate() || !request.Revalidate()
+            || authenticatedBaseOid is not null && request.Request.GitHub.ExpectedBaseCommitOid != authenticatedBaseOid)
             return GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", current.CheckpointRevision);
         return null;
     }

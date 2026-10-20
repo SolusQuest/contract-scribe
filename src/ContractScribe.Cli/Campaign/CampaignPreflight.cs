@@ -16,7 +16,10 @@ internal sealed record CampaignPreflightResult(
     byte[] PolicyBytes,
     string SnapshotBinding,
     string StatePath,
-    CampaignResolvedConfigurationSnapshot Configuration);
+    CampaignResolvedConfigurationSnapshot Configuration)
+{
+    internal string PolicyPath { get; init; } = string.Empty;
+}
 
 internal static class CampaignPreflight
 {
@@ -55,7 +58,8 @@ internal static class CampaignPreflight
                 inputs.PolicyBytes,
                 arguments.Snapshot,
                 state,
-                configuration);
+                configuration)
+            { PolicyPath = inputs.PolicyPath };
         }
         catch (CampaignPreflightException)
         {

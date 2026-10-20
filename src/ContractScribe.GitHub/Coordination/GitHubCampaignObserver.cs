@@ -10,9 +10,20 @@ internal sealed class GitHubCampaignObserver : IDisposable
 {
     private readonly GitHubApiClient client;
     private readonly GitHubCoordinationStore coordination;
+    private readonly bool authenticateContent;
 
     private GitHubCampaignObserver(GitHubApiClient client)
     { this.client = client; coordination = GitHubCoordinationStore.Create(client); }
+
+    private GitHubCampaignObserver(GitHubApiClient client, GitHubCoordinationStore coordination)
+    { this.client = client; this.coordination = coordination; authenticateContent = true; }
+
+    // Borrow only the observation surface; this never binds mutation authority or owns the client.
+    internal static ValueTask<GitHubCampaignObservation> ObserveCheckpointAsync(
+        GitHubApiClient client, GitHubCoordinationStore coordination, CancellationToken token) =>
+        coordination.UsesClient(client) && !client.HasMutationAuthority
+            ? new GitHubCampaignObserver(client, coordination).ObserveAsync(token)
+            : throw new ArgumentException("Invalid campaign observation binding.");
 
     internal static GitHubCampaignObserver Create(ValidatedGitHubCampaignReadAuthority authority, string credential) =>
         new(GitHubApiClient.CreateReadOnly(authority, credential));
@@ -107,13 +118,15 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 return Fail(new(GitHubCampaignFailureKind.Ambiguous));
             var generationByRef = generations.ToDictionary(item => item.Ref, StringComparer.Ordinal);
             var refs = new Dictionary<string, GitHubRef>(StringComparer.Ordinal);
+            var absentTerminalRefs = new HashSet<string>(StringComparer.Ordinal);
             // Derived names are expectations; only a remote read establishes existence/OID.
             if (currentRef is not null)
             {
                 var expectedOid = coordination.ObservedProposalOid(state!);
                 var read = await client.GetRefAsync(currentRef, cancellation).ConfigureAwait(false);
                 proposalRef = read.Value;
-                if (proposalRef is null && (expectedOid is not null || read.Failure?.Code != GitHubFailureCode.NotFound))
+                var terminal = details.Any(pr => "refs/heads/" + pr.Head.Ref == currentRef && !pr.Open && pr.Merged is not null);
+                if (proposalRef is null && (!terminal && expectedOid is not null || read.Failure?.Code != GitHubFailureCode.NotFound))
                     return RefFailure(read.Failure, currentRef);
                 if (proposalRef is not null)
                 {
@@ -135,28 +148,31 @@ internal sealed class GitHubCampaignObserver : IDisposable
                     || "refs/heads/" + pr.BaseRef != authority.TargetRef
                     || pr.MaintainerCanModify != false || pr.Merged is null
                     || generation.Number is { } number && number != pr.Number
-                    || pr.Head.Oid != generation.HeadOid || pr.BaseOid != generation.ObservedBaseOid
+                    || pr.Head.Oid != generation.HeadOid
+                    || pr.Open && target.Oid == generation.OriginalBaseOid && pr.BaseOid != generation.OriginalBaseOid
                     || pr.Title != generation.Metadata.Title || pr.Body != generation.Metadata.Body)
                     return Fail(new(GitHubCampaignFailureKind.Ownership, Ref: reference, PullRequestNumber: pr.Number));
-                facts[index] = Project(pr, true);
+                if (authenticateContent && !await GitHubObservedProposalIntegrity.VerifyAsync(client, generation, cancellation).ConfigureAwait(false))
+                    return Fail(new(GitHubCampaignFailureKind.Ownership, Ref: reference, PullRequestNumber: pr.Number));
+                facts[index] = Project(pr, true, generation);
                 if (!refs.TryGetValue(reference, out var head))
                 {
                     var read = await client.GetRefAsync(reference, cancellation).ConfigureAwait(false);
-                    if (read.Value is null) return RefFailure(read.Failure, reference, pr.Number);
-                    head = read.Value;
-                    refs.Add(reference, head);
+                    if (read.Value is null)
+                    {
+                        if (pr.Open || read.Failure?.Code != GitHubFailureCode.NotFound)
+                            return RefFailure(read.Failure, reference, pr.Number);
+                        absentTerminalRefs.Add(reference);
+                    }
+                    else { head = read.Value; refs.Add(reference, head); }
                 }
-                if (head.Oid != pr.Head.Oid) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: reference, PullRequestNumber: pr.Number));
+                if (head is not null && head.Oid != pr.Head.Oid) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: reference, PullRequestNumber: pr.Number));
                 if (generation.Stage is GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged
                     && (pr.Open || (generation.Stage == GitHubCoordinationStage.Merged) != pr.Merged.Value))
                     return Fail(new(GitHubCampaignFailureKind.StaleLedger, PullRequestNumber: pr.Number));
-                if (pr.Open && pr.BaseOid != target.Oid)
+                if (pr.Open && generation.OriginalBaseOid != target.Oid)
                     return Fail(new(GitHubCampaignFailureKind.TargetMoved, Ref: authority.TargetRef, PullRequestNumber: pr.Number));
             }
-            if (state is not null && details.All(pr => !pr.Open)
-                && state.Stage is not (GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged)
-                && state.TargetCommitOid != target.Oid)
-                return Fail(new(GitHubCampaignFailureKind.TargetMoved, Ref: authority.TargetRef));
 
             // Close the observed read window. This is not a transactional snapshot or a claim.
             var finalTarget = await client.GetRefAsync(authority.TargetRef, cancellation).ConfigureAwait(false);
@@ -181,6 +197,12 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 var read = await client.GetRefAsync(pair.Key, cancellation).ConfigureAwait(false);
                 if (read.Value is null) return RefFailure(read.Failure, pair.Key);
                 if (read.Value != pair.Value) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: pair.Key));
+            }
+            foreach (var reference in absentTerminalRefs)
+            {
+                var read = await client.GetRefAsync(reference, cancellation).ConfigureAwait(false);
+                if (read.Value is not null) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: reference));
+                if (read.Failure?.Code != GitHubFailureCode.NotFound) return Transport(read.Failure, reference);
             }
             foreach (var pr in details)
             {
@@ -215,11 +237,12 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 ? Fail(new(GitHubCampaignFailureKind.MissingRef, failure, reference, number)) : Transport(failure, reference, number);
     }
 
-    private static GitHubCampaignPullRequest Project(GitHubPullRequest pr, bool owned) =>
+    private static GitHubCampaignPullRequest Project(GitHubPullRequest pr, bool owned, GitHubCampaignGeneration? generation = null) =>
         new(pr.Id, pr.NodeId, pr.Number, pr.Open ? pr.Draft ? GitHubCampaignPullRequestKind.OpenDraft : GitHubCampaignPullRequestKind.OpenReady
             : pr.Merged == true ? GitHubCampaignPullRequestKind.Merged
             : pr.Merged == false ? GitHubCampaignPullRequestKind.ClosedUnmerged : GitHubCampaignPullRequestKind.Unknown,
-            pr.Head, pr.BaseRepository, pr.BaseRef, pr.BaseOid, pr.Author, pr.CreatedAt, pr.ClosedAt, pr.MergedAt, owned);
+            pr.Head, pr.BaseRepository, pr.BaseRef, pr.BaseOid, pr.Author, pr.CreatedAt, pr.ClosedAt, pr.MergedAt, owned,
+            generation?.OriginalBaseOid, generation?.GenerationId);
 
     public void Dispose() => client.Dispose();
     public override string ToString() => nameof(GitHubCampaignObserver);

@@ -49,7 +49,7 @@ public sealed partial class GitHubProposalCliProcessTests
             Assert.Single(checkpoint.State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
             var writes = fixture.GitHub.PublicationWrites;
             var sends = fixture.Provider.RequestCount;
-            AssertResult(await fixture.Run("resume"), 0, "replayed");
+            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
             Assert.Equal(sends, fixture.Provider.RequestCount);
             Assert.Equal(CampaignTerminalKind.Exhausted, fixture.Checkpoint().State.TerminalOutcome!.Kind);
@@ -58,33 +58,19 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemFact]
-    public async Task Nonremovable_mixed_append_rejection_preserves_failure_without_publication()
+    public async Task Published_gate_prevents_an_unresolved_mixed_append_from_reaching_patch_rejection()
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true, rejectNewPath: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
-        Assert.Equal("App/App.cs", Assert.Single(accepted.State.CandidateObservation!.ChangedFiles).Path);
         await ConfigureAppend(fixture);
-        var reads = fixture.TokenReads();
-        var writes = fixture.GitHub.PublicationWrites;
-        var rejected = await fixture.Run("resume");
-        AssertResult(rejected, 5, "host-failure");
-        Assert.Equal("github proposal stopped before publication: campaign.patch-rejected\n", rejected.Stderr);
-        var settled = fixture.Checkpoint();
-        Assert.Equal(CampaignTerminalKind.Failed, settled.State.TerminalOutcome!.Kind);
-        Assert.Contains(settled.State.WorkItems, item => item.Status == CampaignWorkStatus.ProposalComplete);
-        Assert.Equal(accepted.Sha256, settled.State.AcceptedCandidateOrigin!.CheckpointSha256);
-        Assert.Equal(accepted.State.CandidateObservation.PatchResultCommitmentSha256,
-            settled.State.AcceptedCandidateOrigin.CandidateObservation.PatchResultCommitmentSha256);
-        Assert.Equal(accepted.State.LineageCharges.PatchValidationInvocations + 1,
-            settled.State.LineageCharges.PatchValidationInvocations);
-        Assert.Equal(reads + 1, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
-        AssertResult(await fixture.Run("resume"), 5, "host-failure");
-        Assert.Equal(settled.Sha256, fixture.Checkpoint().Sha256);
-        Assert.Equal(reads + 2, fixture.TokenReads());
-        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
+        var before = GateCounts(fixture);
+        var writes = fixture.GitHub.Mutations;
+        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        Assert.Equal(accepted.Sha256, fixture.Checkpoint().Sha256);
+        Assert.Equal(before, GateCounts(fixture));
+        Assert.Equal(writes, fixture.GitHub.Mutations);
         await fixture.AssertSourceUnchanged();
     }
 
@@ -107,8 +93,10 @@ public sealed partial class GitHubProposalCliProcessTests
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
         var result = await fixture.Run("resume");
-        AssertResult(result, exit, outcome);
-        Assert.Equal("github proposal stopped before publication: " + diagnostic + "\n", result.Stderr);
+        Assert.Equal(exit, outcome == "stale" ? 4 : 5);
+        Assert.StartsWith("campaign.patch-", diagnostic, StringComparison.Ordinal);
+        AssertResult(result, 0, "awaiting-review");
+        Assert.Empty(result.Stderr);
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal(failed.CheckpointRevision, json.RootElement.GetProperty("checkpointRevision").GetInt64());
         Assert.Equal(failed.Sha256, fixture.Checkpoint().Sha256);
@@ -144,7 +132,9 @@ public sealed partial class GitHubProposalCliProcessTests
         await ConfigureAppend(fixture);
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
         var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
-        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true);
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true)
+            with
+        { SnapshotBinding = fixture.Checkpoint().State.Snapshot.OpaqueSnapshotBinding };
         var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, request,
             _ => throw new InvalidOperationException("No credential is needed to classify append progress."));
         var current = fixture.Checkpoint();
@@ -154,7 +144,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.True(continuation.HasNoAppendWork(current.State));
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
         Assert.Equal(current.Sha256, fixture.Checkpoint().Sha256);
         Assert.Equal(reads + 1, fixture.TokenReads());
         Assert.Equal(writes, fixture.GitHub.PublicationWrites);
@@ -165,7 +155,9 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
         var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
-        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true);
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true)
+            with
+        { SnapshotBinding = fixture.Checkpoint().State.Snapshot.OpaqueSnapshotBinding };
         var github = request.Request.GitHub;
         using var registration = (IDisposable)typeof(GitHubTransportTestHook)
             .GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!

@@ -98,6 +98,19 @@ internal sealed class GitHubApiClient : IDisposable
         return client;
     }
 
+    internal async ValueTask<bool> BindObservedCheckpointBaseAsync(
+        Coordination.GitHubCampaignObservation observation, CancellationToken token)
+    {
+        Input(checkpointAuthority is not null && mutationAuthority is null && checkpointWrite is null
+            && observation.Failure is null && observation.CollectionExhausted
+            && observation.Repository == AuthenticatedRepository && observation.TargetRef == readAuthority.TargetRef);
+        var current = await GetRefAsync(readAuthority.TargetRef, token).ConfigureAwait(false);
+        if (current.Value is not { } target || target.Oid != observation.TargetOid) return false;
+        checkpointAuthority = ValidatedGitHubCheckpointAuthority.Create(readAuthority.RepositoryOwner,
+            readAuthority.RepositoryName, readAuthority.TargetRef, readAuthority.CampaignLineage, target.Oid);
+        return true;
+    }
+
     internal void BindCheckpointWrite(GitHubCheckpointWrite? write)
     {
         Input(checkpointAuthority is not null);

@@ -115,6 +115,8 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("title", 4, "human-change")]
     [InlineData("body", 4, "human-change")]
     [InlineData("head", 4, "human-change")]
+    [InlineData("deleted-branch", 4, "human-change")]
+    [InlineData("missing-ledger", 4, "human-change")]
     [InlineData("original-bytes", 4, "human-change")]
     [InlineData("tree", 4, "human-change")]
     [InlineData("mode", 4, "human-change")]
@@ -201,6 +203,8 @@ public sealed partial class GitHubProposalCliProcessTests
                 server.Blobs[blob] = [123, 125, 10];
             }
             if (kind == "head") server.Refs[server.Refs.Keys.Single(k => k.Contains("/proposals/", StringComparison.Ordinal))] = server.BaseOid;
+            if (kind == "deleted-branch") server.Refs.Remove(server.Refs.Keys.Single(k => k.Contains("/proposals/", StringComparison.Ordinal)));
+            if (kind == "missing-ledger") server.Refs.Remove(server.Refs.Keys.Single(k => k.Contains("/coordination/", StringComparison.Ordinal)));
             if (kind == "original-bytes") server.Blobs[server.Blobs.Single(pair => pair.Value.AsSpan().SequenceEqual(fixture.Source)).Key] = [7, 8, 9];
             if (kind is "tree" or "mode")
             {
@@ -224,9 +228,11 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         var writes = server.PublicationWrites;
         var providerRequests = fixture.Provider.RequestCount;
+        var gates = GateCounts(fixture);
         var allMutations = server.Requests.Count(request => request.Method != "GET");
         AssertResult(await fixture.Run("resume"), exit, outcome);
         Assert.Equal(providerRequests, fixture.Provider.RequestCount);
+        Assert.Equal(gates, GateCounts(fixture));
         if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
             Assert.Equal(allMutations, server.Requests.Count(request => request.Method != "GET"));
         Assert.Equal(writes, server.PublicationWrites);

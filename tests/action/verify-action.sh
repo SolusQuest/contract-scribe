@@ -1241,8 +1241,7 @@ for base, dirs, names in os.walk(root):
     for name in names:
         path = os.path.join(base, name)
         rel = os.path.relpath(path, root).replace(os.sep, "/")
-        if rel.endswith((".cs", ".csproj")) or rel == "policy.json":
-            files[rel] = open(path, encoding="utf-8").read()
+        files[rel] = open(path, encoding="utf-8").read()
 json.dump({"files": files}, open(out, "w"))
 EOF
     touch "$WORK/provider-requests.log" "$WORK/hang-requests.log" \
