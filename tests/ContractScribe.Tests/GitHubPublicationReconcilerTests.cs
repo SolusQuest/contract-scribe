@@ -15,7 +15,7 @@ using Branch = ContractScribe.Tests.GitHubProposalBranchTests;
 namespace ContractScribe.Tests;
 
 [Collection("GitHub transport hook")]
-public sealed class GitHubPublicationReconcilerTests
+public sealed partial class GitHubPublicationReconcilerTests
 {
     private static readonly GitHubActor Publisher = new(99, "BOT_99", "github-actions[bot]", GitHubActorKind.Bot);
 
@@ -1149,13 +1149,24 @@ public sealed class GitHubPublicationReconcilerTests
 
     private sealed class Handler(Remote remote) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) => remote.Reply(request, cancellationToken);
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var response = await remote.Reply(request, cancellationToken);
+            if (remote.ServerNow is { } now)
+            {
+                response.Headers.Date = now;
+                remote.ServerNow = now.AddSeconds(remote.SecondsPerRequest);
+            }
+            return response;
+        }
     }
 
     // Reuse the real Git object/CAS fake; this extension owns only PR wire behavior.
     private sealed class Remote
     {
         internal readonly Branch.Remote Git = new();
+        internal DateTimeOffset? ServerNow;
+        internal int SecondsPerRequest;
         internal readonly List<JsonObject> Prs = [];
         internal readonly List<(string Method, string Path)> Attempts = [];
         internal int Posts;

@@ -101,7 +101,7 @@ internal sealed partial class GitHubCoordinationStore
     }
 
     private async ValueTask<bool> WriteDocumentAsync(GitHubCoordinationDocument document, IEnumerable<GitHubBlob> blobs,
-        CancellationToken token, bool requireLiveClaim = true)
+        CancellationToken token, bool requireLiveClaim = true, GitHubCoordinationDocument? livePredecessor = null)
     {
         var prepared = GitHubCoordinationObjects.Prepare(document);
         var payloads = blobs.ToImmutableArray();
@@ -109,7 +109,8 @@ internal sealed partial class GitHubCoordinationStore
         try
         {
             var created = await CreateObjectsAsync(prepared, token, payloads).ConfigureAwait(false);
-            if (created is not null || requireLiveClaim && !Owns(document)) return false;
+            if (created is not null || requireLiveClaim && !Owns(document)
+                || livePredecessor is not null && !Owns(livePredecessor)) return false;
             var result = await UpdateCoordinationRefAsync(new(coordinationRef, document.PredecessorOid,
                 prepared.CommitOid, document.PredecessorOid == ZeroOid), token).ConfigureAwait(false);
             if (result.Delivery == GitHubDelivery.NotDispatched) return false;
@@ -142,7 +143,7 @@ internal sealed partial class GitHubCoordinationStore
                         PredecessorOid = current.Head,
                         Claim = current.Document.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
                     };
-                    if (!await WriteDocumentAsync(document, [], checkpointLifetime.Token).ConfigureAwait(false))
+                    if (!await WriteDocumentAsync(document, [], checkpointLifetime.Token, livePredecessor: current.Document).ConfigureAwait(false))
                     { StopCheckpoint(); return; }
                 }
                 finally { checkpointGate.Release(); }
@@ -170,10 +171,61 @@ internal sealed partial class GitHubCoordinationStore
                 PredecessorOid = current.Head,
                 Claim = current.Document.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
             };
-            if (!await WriteDocumentAsync(renewed, [], token).ConfigureAwait(false)) throw new GitHubCoordinationException();
+            if (!await WriteDocumentAsync(renewed, [], token, livePredecessor: current.Document).ConfigureAwait(false)) throw new GitHubCoordinationException();
+            publicationClaimExpires = renewed.Claim!.ExpiresUnixSeconds;
+            publicationHead = GitHubCoordinationObjects.Prepare(renewed).CommitOid;
+            publicationActive = true;
             return await publish().ConfigureAwait(false);
         }
-        finally { checkpointGate.Release(); }
+        finally { publicationActive = false; checkpointGate.Release(); }
+    }
+
+    private bool publicationActive;
+    private string? publicationHead;
+    private long publicationClaimExpires;
+    private readonly Dictionary<string, string> publicationRenewals = new(StringComparer.Ordinal);
+
+    // Only this lifetime's read-back-confirmed claim-only CAS may carry a
+    // publication capability forward. External movement never enters this map.
+    internal string ResolvePublicationHead(string head)
+    {
+        while (publicationRenewals.TryGetValue(head, out var next)) head = next;
+        return head;
+    }
+
+    // The publication scope owns checkpointGate. Service renewal at operation
+    // boundaries without racing a prepared publication or paired ref CAS.
+    private async ValueTask<bool> RenewPublicationClaimAsync(CancellationToken token)
+    {
+        if (!publicationActive) return true;
+        token.ThrowIfCancellationRequested();
+        if (checkpointStopped) return false;
+        if (client.ServerTime is { } now && now.ToUnixTimeSeconds() < publicationClaimExpires - (ClaimSeconds - 60)) return true;
+        try
+        {
+            var head = RequireRemote(await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false)).Oid;
+            if (head != publicationHead) throw new GitHubCoordinationException();
+            var current = await ReadAcceptedDocumentAsync(head, token).ConfigureAwait(false);
+            if (!Owns(current)) throw new GitHubCoordinationException();
+            var renewed = current.RetainAt(head) with
+            {
+                PredecessorOid = head,
+                Claim = current.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
+            };
+            if (!await WriteDocumentAsync(renewed, [], token, livePredecessor: current).ConfigureAwait(false))
+                throw new GitHubCoordinationException();
+            var renewedHead = GitHubCoordinationObjects.Prepare(renewed).CommitOid;
+            publicationRenewals[head] = renewedHead;
+            publicationHead = renewedHead;
+            publicationClaimExpires = renewed.Claim!.ExpiresUnixSeconds;
+            return true;
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch
+        {
+            StopCheckpoint();
+            return false;
+        }
     }
 
     public async ValueTask DisposeAsync()

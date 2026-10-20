@@ -66,7 +66,7 @@ internal sealed class GitHubProposalStore
     internal static bool Authenticates(IGitHubInspectedProposal proof, GitHubCoordinationStore coordination,
         IGitHubCoordinationStateCapability state) => proof is Inspection owned
         && ReferenceEquals(owned.Owner.coordination, coordination) && coordination.Owns(state)
-        && owned.ContextHead == state.HeadOid;
+        && owned.ContextHead is { } head && coordination.ResolvePublicationHead(head) == state.HeadOid;
 
     internal ValueTask<GitHubProposalResult> InspectAsync(IGitHubCoordinationReadCapability read,
         ValidatedGitHubChangedFilePayload payload, CancellationToken token = default) => Run(async () =>

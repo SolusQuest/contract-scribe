@@ -23,7 +23,8 @@ internal sealed partial class GitHubCoordinationStore
             var prepared = Prepare(next, current.Creation?.State ?? current.State);
             var created = await CreateObjectsAsync(prepared, token).ConfigureAwait(false);
             if (created is not null) return created;
-            guard = await ReadClaimAsync(current, token).ConfigureAwait(false);
+            // Keep the prepared physical parent stable through the paired CAS.
+            guard = await ReadClaimAsync(current, token, renewClaim: false).ConfigureAwait(false);
             if (guard.Guard is null) return guard;
             var proposalRef = ProposalRef(current.State);
             var update = await client.UpdatePublicationRefsAsync(
@@ -39,6 +40,7 @@ internal sealed partial class GitHubCoordinationStore
             if (head.Value.Oid != prepared.CommitOid || proposal.Value.Oid != contentOid)
                 return DomainFailure(head.Value.Oid == prepared.CommitOid ? GitHubCoordinationFailureKind.ObjectMismatch
                     : GitHubCoordinationFailureKind.Conflict, update.Failure, update.Delivery, update.Context, update.RequiredPermissions);
+            if (publicationActive) publicationHead = head.Value.Oid;
             var read = await ReadPreparedAsync(current.Repository, current.Target, prepared, recovery.Token).ConfigureAwait(false);
             if (read.State is not StateCapability accepted) return read;
             var acknowledged = update.Value is not null && update.Failure is null && update.Delivery == GitHubDelivery.NeedsReadback;

@@ -170,6 +170,8 @@ internal sealed partial class GitHubCoordinationStore
         {
             var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
             if (repository.Value is null) return Failed(repository);
+            if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
+                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
             var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
             if (target.Value is null) return Failed(target);
             var current = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
@@ -257,6 +259,8 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
         try
         {
+            if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
+                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
             var currentRef = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
             var observedCurrent = owned.Current;
             if (currentRef.Value is not null
@@ -411,7 +415,7 @@ internal sealed partial class GitHubCoordinationStore
 
     internal async ValueTask<GitHubCoordinationResult> ReadClaimAsync(
         IGitHubCoordinationStateCapability capability,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool renewClaim = true)
     {
         if (capability is not StateCapability owned || !ReferenceEquals(owned.Owner, this)
             || !PermitsCreate(owned.State.Stage))
@@ -420,6 +424,8 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
         var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
         if (repository.Value is null) return Failed(repository);
+        if (renewClaim && !await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         if (repository.Value.Identity != owned.Repository)
             return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
         var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
@@ -562,6 +568,8 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
         var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
         if (repository.Value is null) return Failed(repository);
+        if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         if (repository.Value.Identity != owned.Repository)
             return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
         var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
@@ -618,6 +626,8 @@ internal sealed partial class GitHubCoordinationStore
                 return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
             var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
             if (repository.Value is null) return Failed(repository);
+            if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
+                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
             if (repository.Value.Identity != current.Repository)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
             var refRead = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
@@ -930,6 +940,7 @@ internal sealed partial class GitHubCoordinationStore
                     ? GitHubCoordinationFailureKind.Unresolved : GitHubCoordinationFailureKind.Conflict,
                 update.Failure, update.Delivery, update.Context,
                 update.RequiredPermissions, readbackFailure);
+        if (publicationActive) publicationHead = read.Value.Oid;
         var state = await ReadPreparedAsync(repository, target, candidate,
             recovery.Token).ConfigureAwait(false);
         if (state.State is null)
@@ -1452,8 +1463,9 @@ internal sealed partial class GitHubCoordinationStore
         private readonly StateCapability? current;
         internal ReadCapability(GitHubCoordinationStore owner, GitHubRepositoryIdentity repository,
             GitHubRef target, StateCapability? current, string? checkpointHead = null)
-        { this.owner = owner; this.repository = repository; this.target = target; this.current = current; CheckpointHead = checkpointHead; }
-        internal string? CheckpointHead { get; }
+        { this.owner = owner; this.repository = repository; this.target = target; this.current = current; this.checkpointHead = checkpointHead; }
+        private readonly string? checkpointHead;
+        internal string? CheckpointHead => checkpointHead is null ? null : owner.ResolvePublicationHead(checkpointHead);
         internal GitHubCoordinationStore Owner => owner;
         internal GitHubRepositoryIdentity Repository => repository;
         internal GitHubRef Target => target;
@@ -1477,7 +1489,7 @@ internal sealed partial class GitHubCoordinationStore
         public GitHubRepositoryIdentity Repository => repository;
         internal StateCapability? AdmissionSource { get; set; }
         internal GitHubRef Target => target;
-        public string HeadOid => headOid;
+        public string HeadOid => owner.ResolvePublicationHead(headOid);
         public GitHubCoordinationStage Stage => state.Stage;
         public string TargetRef => state.TargetRef;
         public string TargetCommitOid => state.TargetCommitOid;
@@ -1510,7 +1522,8 @@ internal sealed partial class GitHubCoordinationStore
         internal StateCapability? Creation { get; }
         internal ImmutableArray<GitHubCampaignGeneration> Generations { get; init; } = [];
         internal GitHubCoordinationState State => state;
-        internal ImmutableArray<byte> CanonicalBytes => canonicalBytes;
+        internal ImmutableArray<byte> CanonicalBytes => HeadOid == headOid ? canonicalBytes
+            : ImmutableArray.CreateRange(owner.documents[HeadOid].Encode());
         public override string ToString() => nameof(StateCapability);
     }
 
