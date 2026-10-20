@@ -204,6 +204,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure?.Code == GitHubFailureCode.Conflict)
         { return CampaignCheckpointReadResult.LeaseConflict(); }
+        catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
+        { CheckpointFailure = exception.TransportFailure; return CampaignCheckpointReadResult.Unreadable(); }
         catch (Exception exception) when (exception is GitHubCoordinationException or CampaignStateValidationException)
         { return CampaignCheckpointReadResult.Invalid(); }
         finally { checkpointGate.Release(); }

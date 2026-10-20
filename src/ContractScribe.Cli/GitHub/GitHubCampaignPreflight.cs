@@ -28,14 +28,8 @@ internal static class GitHubCampaignPreflight
             if (failure.Kind is GitHubCampaignFailureKind.MultipleActive or GitHubCampaignFailureKind.Ambiguous)
                 return Stop("conflict", "ambiguous-active-work");
             if (failure.Kind == GitHubCampaignFailureKind.Transport)
-                return failure.Transport?.Code switch
-                {
-                    GitHubFailureCode.Authentication or GitHubFailureCode.Permission => Stop("permission", "permission"),
-                    GitHubFailureCode.RateLimit => Stop("rate-limit", "rate-limit"),
-                    GitHubFailureCode.Cancelled => Stop("cancelled", "cancelled"),
-                    GitHubFailureCode.Timeout => Stop("timeout", "timeout"),
-                    _ => Stop("host-failure", "unverified-lifecycle"),
-                };
+                return Stop(TransportOutcome(failure.Transport), TransportOutcome(failure.Transport) is "host-failure"
+                    ? "unverified-lifecycle" : TransportOutcome(failure.Transport));
             return Stop("human-change", "unsafe-lifecycle");
         }
         if (!observed.CollectionExhausted || observed.TargetOid is null
@@ -44,10 +38,11 @@ internal static class GitHubCampaignPreflight
         if (observed.Ledger?.Stage == GitHubCoordinationStage.StaleDraft)
             return Stop("stale", "stale-publication");
         if (observed.PullRequests.Any(row => row.Kind is GitHubCampaignPullRequestKind.OpenDraft or GitHubCampaignPullRequestKind.OpenReady))
-            return Stop("awaiting-review", "awaiting-review");
+            return NeedsPublicationRecovery(observed) ? null : Stop("awaiting-review", "awaiting-review");
         if (observed.PullRequests.Any(row => row.Kind == GitHubCampaignPullRequestKind.ClosedUnmerged
             && row.OriginalBaseOid == observed.TargetOid))
             return Stop("closed-unmerged", "closed-same-base");
+        if (NeedsPublicationRecovery(observed)) return null;
         // An incomplete publication cannot be replaced by a changed caller operation/base.
         if (observed.Ledger is
             {
@@ -58,6 +53,22 @@ internal static class GitHubCampaignPreflight
             return Stop("conflict", "publication-incomplete");
         return null;
     }
+
+    internal static bool NeedsPublicationRecovery(GitHubCampaignObservation observed) =>
+        observed.Failure is null && observed.Ledger is
+        { Stage: GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreated } ledger
+        && observed.PullRequests.Any(row => row.OwnershipVerified && row.GenerationId == ledger.GenerationId
+            && "refs/heads/" + row.Head.Ref == ledger.ExpectedProposalRef);
+
+    internal static string TransportOutcome(GitHubFailure? failure) => failure?.Code switch
+    {
+        GitHubFailureCode.Authentication or GitHubFailureCode.Permission => "permission",
+        GitHubFailureCode.RateLimit => "rate-limit",
+        GitHubFailureCode.Cancelled => "cancelled",
+        GitHubFailureCode.Timeout => "timeout",
+        GitHubFailureCode.Conflict => "conflict",
+        _ => "host-failure",
+    };
 
     internal static string SnapshotBinding(CampaignPreflightResult preflight, GitHubProposalRequest request,
         GitHubCampaignObservation observed)
@@ -71,7 +82,16 @@ internal static class GitHubCampaignPreflight
             preflight.InputIdentity,
             policy = Convert.ToHexStringLower(SHA256.HashData(preflight.PolicyBytes)),
             configuration.Planning,
+            configuration.Retry,
             configuration.ScribeRequest,
+            campaignCorrectness = new
+            {
+                configuration.Budgets.Campaign.MaximumBlocks,
+                configuration.Budgets.Campaign.MaximumChangedFiles,
+                configuration.Budgets.Campaign.MaximumPatchBytes,
+                configuration.Budgets.Campaign.MaximumAttemptsPerTarget,
+                configuration.Budgets.Campaign.MaximumCandidatesPerBlock,
+            },
             contextLimits = configuration.Budgets.Scribe,
             provider = configuration.Provider.ExactProjection,
             configuration.CostPolicy,

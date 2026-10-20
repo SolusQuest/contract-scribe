@@ -104,8 +104,8 @@ internal sealed class GitHubApiClient : IDisposable
         Input(checkpointAuthority is not null && mutationAuthority is null && checkpointWrite is null
             && observation.Failure is null && observation.CollectionExhausted
             && observation.Repository == AuthenticatedRepository && observation.TargetRef == readAuthority.TargetRef);
-        var current = await GetRefAsync(readAuthority.TargetRef, token).ConfigureAwait(false);
-        if (current.Value is not { } target || target.Oid != observation.TargetOid) return false;
+        var current = Coordination.GitHubObservedProposalIntegrity.Read(await GetRefAsync(readAuthority.TargetRef, token).ConfigureAwait(false));
+        if (current is not { } target || target.Oid != observation.TargetOid) return false;
         checkpointAuthority = ValidatedGitHubCheckpointAuthority.Create(readAuthority.RepositoryOwner,
             readAuthority.RepositoryName, readAuthority.TargetRef, readAuthority.CampaignLineage, target.Oid);
         return true;

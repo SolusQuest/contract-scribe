@@ -101,22 +101,24 @@ internal sealed partial class GitHubCoordinationStore
     }
 
     private async ValueTask<bool> WriteDocumentAsync(GitHubCoordinationDocument document, IEnumerable<GitHubBlob> blobs,
-        CancellationToken token, bool requireLiveClaim = true, GitHubCoordinationDocument? livePredecessor = null)
+        CancellationToken token, bool requireLiveClaim = true, GitHubCoordinationDocument? livePredecessor = null,
+        GitHubPublicationEvent? publication = null)
     {
-        var prepared = GitHubCoordinationObjects.Prepare(document);
-        var payloads = blobs.ToImmutableArray();
+        var prepared = GitHubCoordinationObjects.Prepare(document, publication);
+        var payloads = blobs.Concat(publication is null ? [] : new[] { Blob(publication.Encode()) }).ToImmutableArray();
         client.BindCheckpointWrite(new(prepared, payloads));
         try
         {
             var created = await CreateObjectsAsync(prepared, token, payloads).ConfigureAwait(false);
+            if (created is not null) CheckpointFailure = created.Failure?.TransportFailure;
             if (created is not null || requireLiveClaim && !Owns(document)
                 || livePredecessor is not null && !Owns(livePredecessor)) return false;
             var result = await UpdateCoordinationRefAsync(new(coordinationRef, document.PredecessorOid,
                 prepared.CommitOid, document.PredecessorOid == ZeroOid), token).ConfigureAwait(false);
-            if (result.Delivery == GitHubDelivery.NotDispatched) return false;
+            if (result.Delivery == GitHubDelivery.NotDispatched) { CheckpointFailure = result.Failure; return false; }
             using var recovery = new CancellationTokenSource(RecoveryTimeout);
-            var current = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
-            if (current.Value?.Oid != prepared.CommitOid) return false;
+            var current = GitHubObservedProposalIntegrity.Read(await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false));
+            if (current?.Oid != prepared.CommitOid) return false;
             var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token).ConfigureAwait(false);
             return read == document && (!requireLiveClaim || Owns(read));
         }

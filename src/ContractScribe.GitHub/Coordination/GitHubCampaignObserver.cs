@@ -220,6 +220,8 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 || knownNumbers.Contains(pr.Number)
                 || currentCreation is not null && pr.Body?.Contains(currentCreation, StringComparison.Ordinal) == true;
         }
+        catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
+        { return Transport(exception.TransportFailure); }
         catch (OperationCanceledException) { return Transport(new(token.IsCancellationRequested ? GitHubFailureCode.Cancelled : GitHubFailureCode.Timeout)); }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         { return Transport(new(GitHubFailureCode.HostFailure)); }

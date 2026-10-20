@@ -44,10 +44,11 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    [Fact]
-    public async Task Killing_the_process_after_remote_PR_creation_recovers_that_PR_without_another_create_attempt()
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Killing_the_process_after_remote_PR_creation_recovers_that_PR_without_another_create_attempt(bool terminalBeforeRecovery)
     {
-        if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
         var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.GitHub.After = request =>
@@ -67,12 +68,28 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.GitHub.DelayResponses = false;
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
         Assert.Single(fixture.GitHub.PullRequests);
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        var before = GateCounts(fixture);
+        if (!terminalBeforeRecovery)
+        {
+            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            Assert.Equal(before, GateCounts(fixture));
+            Assert.Equal("published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
+            Assert.Equal(1, fixture.GitHub.PrAttempts);
+            var writes = fixture.GitHub.PublicationWrites;
+            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            Assert.Equal(writes, fixture.GitHub.PublicationWrites);
+        }
+        fixture.GitHub.Lifecycle("merged");
+        AdvanceReadme(fixture);
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
+        await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        Assert.Equal(terminalBeforeRecovery ? "merged" : "published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
+        Assert.Equal(before.Physical, fixture.Provider.RequestCount);
+        Assert.Equal(before.Discovery + 1, Observed(fixture, "sdk-discovery"));
         Assert.Equal(1, fixture.GitHub.PrAttempts);
-        var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
-        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
-        await fixture.AssertSourceUnchanged();
+        Assert.Null(fixture.Checkpoint().State.CandidateObservation);
     }
 
     [ContractScribe.TestSupport.NativeFileSystemTheory]

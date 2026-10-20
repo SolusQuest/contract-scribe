@@ -97,7 +97,7 @@ internal static class GitHubProposalHttpLossScenario
             {
                 GitHubProposalCliProcessTests.AssertResult(stable, 0, "awaiting-review");
                 Assert.Single(fixture.GitHub.PullRequests);
-                Assert.Contains(fixture.GitHub.Coordination()["stage"]!.GetValue<string>(), new[] { "published", "proposal-ref-advanced", "pull-request-created" });
+                Assert.Equal("published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
             }
             await fixture.AssertSourceUnchanged();
         }

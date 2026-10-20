@@ -182,6 +182,8 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("policy")]
     [InlineData("profile")]
     [InlineData("style")]
+    [InlineData("attempts")]
+    [InlineData("candidates")]
     public async Task G3_unpublished_correctness_change_creates_fresh_work_and_retains_archived_usage(string change)
     {
         await using var fixture = await Fixture.CreateAsync();
@@ -195,6 +197,8 @@ public sealed partial class GitHubProposalCliProcessTests
         {
             ["styleProfileTemplate"] = new JsonObject { ["styleProfileId"] = "style.changed" },
         };
+        if (change == "attempts") configuration["budgets"]!["campaign"]!["maximumAttemptsPerTarget"] = 3;
+        if (change == "candidates") configuration["budgets"]!["campaign"]!["maximumCandidatesPerBlock"] = 31;
         if (change == "profile")
         {
             configuration["planning"] = new JsonObject { ["targetProfile"] = "profile.assembly-visible" };
@@ -216,6 +220,113 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(archive, fixture.GitHub.CoordinationDocument()["archive"]!.ToJsonString());
         Assert.Equal(requests, fixture.Provider.RequestCount);
         Assert.Empty(fixture.GitHub.PullRequests);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task G3_product_owned_retry_override_cannot_replace_unpublished_recovery_authority()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var prior = await InterruptAcceptedUnpublished(fixture);
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        configuration["retry"] = new JsonObject { ["retryPolicyId"] = "retry.changed", ["retryPolicyVersion"] = 1 };
+        await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        var before = GateCounts(fixture);
+        AssertResult(await fixture.Run("resume"), 4, "local-invalid");
+        Assert.Equal(before, GateCounts(fixture));
+        Assert.Equal(prior.Sha256, fixture.Checkpoint().Sha256);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("local-only")]
+    [InlineData("remote-only")]
+    [InlineData("matched")]
+    public async Task G3_external_AdditionalFiles_membership_is_bound_even_when_the_local_glob_is_empty(string membership)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var projectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
+        var project = (await File.ReadAllTextAsync(projectPath)).Replace("</Project>",
+            "<ItemGroup><AdditionalFiles Include=\"../Shared/**/*.json\" /></ItemGroup></Project>", StringComparison.Ordinal);
+        await File.WriteAllTextAsync(projectPath, project);
+        fixture.GovernedFiles["App/App.csproj"] = (Encoding.UTF8.GetBytes(project), fixture.GovernedFiles["App/App.csproj"].Mode);
+        var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
+        var rules = "{\"rule\":\"synthetic\"}\n"u8.ToArray();
+        if (membership != "local-only") files.Add("Shared/rules.json", rules);
+        if (membership == "matched") files.Add("Shared/README.md", "Unrelated documentation.\n"u8.ToArray());
+        AdvanceTarget(fixture, files, "Bind external semantic input\n");
+        if (membership != "remote-only")
+        {
+            Directory.CreateDirectory(Path.Join(fixture.Repository.Root, "Shared"));
+            await File.WriteAllBytesAsync(Path.Join(fixture.Repository.Root, "Shared", "rules.json"), rules);
+        }
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
+        await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        var result = await fixture.Run("start");
+        AssertResult(result, membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
+        Assert.True(Observed(fixture, "sdk-discovery") > 0);
+        Assert.Equal(0, Observed(fixture, "provider-create"));
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task G3_documentation_only_change_inside_a_project_directory_allows_fresh_Audit()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        AssertResult(await fixture.Run("start"), 0, "published");
+        var prior = fixture.Checkpoint();
+        fixture.GitHub.Lifecycle("merged");
+        var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
+        files.Add("App/README.md", "Unrelated project documentation.\n"u8.ToArray());
+        AdvanceTarget(fixture, files, "Update project documentation only\n");
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
+        await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        var before = GateCounts(fixture);
+        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        Assert.Equal(before.Discovery + 1, Observed(fixture, "sdk-discovery"));
+        Assert.Equal(before.Physical, fixture.Provider.RequestCount);
+        Assert.NotEqual(prior.State.Snapshot, fixture.Checkpoint().State.Snapshot);
+        Assert.Null(fixture.Checkpoint().State.CandidateObservation);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("integrity", "commits", 429, 3, "rate-limit")]
+    [InlineData("integrity", "trees", 429, 3, "rate-limit")]
+    [InlineData("integrity", "blobs", 429, 3, "rate-limit")]
+    [InlineData("checkout", "commits", 429, 3, "rate-limit")]
+    [InlineData("checkout", "trees", 429, 3, "rate-limit")]
+    [InlineData("integrity", "blobs", 403, 4, "permission")]
+    [InlineData("checkout", "commits", 503, 5, "host-failure")]
+    public async Task G3_authenticated_object_reads_preserve_service_failures_before_provider(
+        string phase, string kind, int status, int exit, string outcome)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        if (phase == "integrity") AssertResult(await fixture.Run("start"), 0, "published");
+        var before = GateCounts(fixture);
+        var detailSeen = false;
+        var rejected = false;
+        fixture.GitHub.Before = request =>
+        {
+            if (request.Path == "/repos/Owner/repo/pulls/1") detailSeen = true;
+            if (request.Method == "GET" && request.Path.Contains("/git/" + kind + "/", StringComparison.Ordinal)
+                && (phase == "integrity" ? detailSeen : Observed(fixture, "sdk-discovery") > before.Discovery))
+            {
+                fixture.GitHub.RejectionStatus = status;
+                fixture.GitHub.RejectPath = request.Path;
+                rejected = true;
+            }
+        };
+        AssertResult(await fixture.Run(phase == "integrity" ? "resume" : "start"), exit, outcome);
+        Assert.True(rejected);
+        var after = GateCounts(fixture);
+        Assert.Equal(before.Created, after.Created);
+        Assert.Equal(before.Sent, after.Sent);
+        Assert.Equal(before.Physical, after.Physical);
+        if (phase == "integrity") Assert.Equal(before.Discovery, after.Discovery);
+        else Assert.Equal(before.Discovery + 1, after.Discovery);
     }
     private static (int Discovery, int Created, int Sent, int Physical) GateCounts(Fixture fixture) =>
         (Observed(fixture, "sdk-discovery"), Observed(fixture, "provider-create"),
