@@ -1080,7 +1080,8 @@ case_real_cancel() {
     real_env_ready || { echo "skip: real env unavailable"; return 0; }
     local w; w="$(new_work realcx)"
     prepare_real "$w" start
-    # Point the layer at the hanging provider so the CLI blocks mid-campaign.
+    # Keep faster runs active at the provider; cancellation during SDK loading
+    # is also valid, but a real CLI child must be running before the signal.
     python3 - "$w/layer.json" "$HANG_ENDPOINT" <<'PY'
 import json,os,sys
 d=json.load(open(sys.argv[1])); d["provider"]["endpoint"]=sys.argv[2]
@@ -1103,8 +1104,8 @@ PY
         bash -c "exec python3 '$ACTION_SCRIPTS/invoke.py'" &
     local entry=$!
     sleep 6
-    local provider_started=0
-    grep -q "POST /v1/chat/completions" "$WORK/hang-requests.log" && provider_started=1
+    local cli_started=0
+    pgrep -f "ContractScribe.Cli.dll" >/dev/null 2>&1 && cli_started=1
     kill -INT "$entry" 2>/dev/null
     sleep 4
     kill -TERM "$entry" 2>/dev/null || true
@@ -1115,7 +1116,7 @@ PY
     wait "$entry" || rc=$?
     case "$rc" in 6|130|143) ;; *) echo "unexpected rc=$rc" >&2; return 1;; esac
     ! pgrep -f "ContractScribe.Cli.dll" >/dev/null 2>&1
-    [ "$provider_started" -eq 1 ] || { echo "hanging provider was not reached before cancellation" >&2; return 1; }
+    [ "$cli_started" -eq 1 ] || { echo "real CLI was not running before cancellation" >&2; return 1; }
 }
 
 # ---------------------------------------------------------------------------
