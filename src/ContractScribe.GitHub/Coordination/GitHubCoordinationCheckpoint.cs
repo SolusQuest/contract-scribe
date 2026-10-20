@@ -192,18 +192,28 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         return new(current.Value.Oid, document, artifact, evidence);
     }
 
+    private async ValueTask<RemoteCheckpoint?> ReadCallerCheckpointAsync(CancellationToken token)
+    {
+        try { return await ReadRemoteCheckpointAsync(token).ConfigureAwait(false); }
+        catch (GitHubCoordinationException exception) when (
+            exception.TransportFailure?.Code == GitHubFailureCode.Cancelled && token.IsCancellationRequested)
+        { throw new OperationCanceledException(token); }
+    }
+
     public async ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken)
     {
         await checkpointGate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            var remote = await ReadRemoteCheckpointAsync(cancellationToken).ConfigureAwait(false);
+            var remote = await ReadCallerCheckpointAsync(cancellationToken).ConfigureAwait(false);
             return remote?.Artifact is not { } artifact ? CampaignCheckpointReadResult.NotFound()
                 : CampaignCheckpointReadResult.Found(artifact.ExactUtf8Json.AsSpan(), artifact.CheckpointRevision,
                     artifact.Sha256, remote.ArchiveEvidence);
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure?.Code == GitHubFailureCode.Conflict)
         { return CampaignCheckpointReadResult.LeaseConflict(); }
+        catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
+        { CheckpointFailure = exception.TransportFailure; return CampaignCheckpointReadResult.Unreadable(); }
         catch (Exception exception) when (exception is GitHubCoordinationException or CampaignStateValidationException)
         { return CampaignCheckpointReadResult.Invalid(); }
         finally { checkpointGate.Release(); }
@@ -224,6 +234,9 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             boundPlan = plan;
             return true;
         }
+        catch (GitHubCoordinationException exception) when (
+            exception.TransportFailure?.Code == GitHubFailureCode.Cancelled && cancellationToken.IsCancellationRequested)
+        { throw new OperationCanceledException(cancellationToken); }
         catch (Exception exception) when (exception is GitHubCoordinationException or CampaignStateValidationException)
         { return false; }
         finally { checkpointGate.Release(); }

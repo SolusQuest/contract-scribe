@@ -229,7 +229,12 @@ public sealed class RepositoryLoader
                             state is null ? Array.Empty<string>() : state.ProtectedPaths,
                             state is null ? Array.Empty<string>() : state.AllowedOutputRoots,
                             after,
-                            successfulSession.Projects));
+                            successfulSession.Projects,
+                            state?.BuildDeclarations,
+                            state?.DeclaredInputGlobs,
+                            state?.RepositoryInputGlobs,
+                            state?.CompilerFileInputs,
+                            before));
                 }
 
                 return outcome;
@@ -490,6 +495,7 @@ internal static class PostRegistrationLoader
                 trace?.Enter(LoaderExecutionPhase.Compilation);
                 var compilation = await project.GetCompilationAsync(cancellationToken)
                     ?? throw LoaderException.Compilation("compilation.unavailable");
+                state.BindBuildInputs(node.Path, project, compilation);
                 var workspaceSourceTrees = await ValidateWorkspaceSourcesAsync(
                     paths,
                     node,
@@ -683,6 +689,33 @@ internal static class PostRegistrationLoader
                     resolver,
                     state);
             }
+
+            foreach (var reference in project.MetadataReferences.OfType<PortableExecutableReference>())
+            {
+                if (reference.FilePath is not { } path || !IsContained(paths.PhysicalRoot, path)) continue;
+                // Roslyn's file reference documentation accompanies the assembly.
+                // Missing local XML must not hide remote-only documentation input.
+                var documentation = Path.ChangeExtension(path, ".xml");
+                var identity = resolver.RelativeIdentity(paths.PhysicalRoot, documentation);
+                state.AddProtected(identity);
+                state.AddDeclaredInputGlob(candidate => string.Equals(candidate, identity, StringComparison.Ordinal), repositoryOwned: true);
+                if (File.Exists(documentation))
+                    ProtectWorkspaceSemanticInput(paths, node, toolchain, documentation, resolver, state);
+            }
+
+            // Preserve actual compiler/generator repository inputs, independently
+            // of their suffix or of document-only semantic roles. External SDK,
+            // framework and package references retain their existing trust boundary.
+            foreach (var path in project.MetadataReferences.OfType<PortableExecutableReference>()
+                .Select(reference => reference.FilePath)
+                .Concat(project.AnalyzerReferences.Select(reference => reference.FullPath))
+                .Append(project.CompilationOptions?.CryptoKeyFile))
+            {
+                if (string.IsNullOrWhiteSpace(path)) continue;
+                var absolute = Path.GetFullPath(path, Path.GetDirectoryName(project.FilePath)!);
+                if (IsContained(paths.PhysicalRoot, absolute))
+                    ProtectWorkspaceSemanticInput(paths, node, toolchain, absolute, resolver, state);
+            }
         }
     }
 
@@ -827,10 +860,12 @@ internal static class PostRegistrationLoader
                 {
                     ["TargetFramework"] = targetFramework,
                 };
-                project = collection.LoadProject(
+                project = new MsBuildProject(
                     projectPath,
                     globalProperties,
-                    toolsVersion: null);
+                    toolsVersion: null,
+                    collection,
+                    ProjectLoadSettings.RecordEvaluatedItemElements);
             }
             catch (InvalidProjectFileException)
             {
@@ -860,6 +895,7 @@ internal static class PostRegistrationLoader
 
             RequireSourceInputsContained(paths.PhysicalRoot, project);
             var protectedPaths = ProtectedPaths(paths, projectPath, project, pathResolver);
+            CaptureBuildInputProvenance(paths, project, pathResolver, state);
             var allowedRoots = AllowedOutputRoots(paths.PhysicalRoot, project, pathResolver);
             var allowedExternalSemanticRoots = AllowedExternalSemanticRoots(paths.PhysicalRoot, project);
             state.AddPolicy(
@@ -884,6 +920,177 @@ internal static class PostRegistrationLoader
         }
 
         return graph;
+    }
+
+    private static void CaptureBuildInputProvenance(ResolvedRepositoryPaths paths, MsBuildProject project,
+        RepositoryPathResolver resolver, LoaderExecutionState state)
+    {
+        // Recorded by this evaluation: GetAllGlobs does not reevaluate. Snapshot
+        // only values before unloading MSBuild; workspace binding below reuses
+        // the existing compilation, never a second evaluator or resolver.
+        var projectPath = project.FullPath;
+        var directory = Path.GetDirectoryName(projectPath)!;
+        foreach (var value in project.GetPropertyValue("CompilerResponseFile").Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+        {
+            var absolute = Path.GetFullPath(value.Replace('\\', '/'), directory);
+            var identity = IsContained(paths.PhysicalRoot, absolute) ? resolver.RelativeIdentity(paths.PhysicalRoot, absolute) : absolute;
+            state.AddCompilerFileInput(new DocumentationPatchCompilerFileInput(identity, resolver.RelativeIdentity(paths.PhysicalRoot, directory)));
+        }
+        var ruleSet = project.GetPropertyValue("CodeAnalysisRuleSet");
+        if (!string.IsNullOrWhiteSpace(ruleSet))
+        {
+            // The standard task uses this direct project-relative/absolute file
+            // first. A missing direct file may use search directories instead;
+            // leave it unrepresented so GitHub admission refuses that resolution.
+            var absolute = Path.GetFullPath(ruleSet.Replace('\\', '/'), directory);
+            var identity = IsContained(paths.PhysicalRoot, absolute) ? resolver.RelativeIdentity(paths.PhysicalRoot, absolute) : absolute;
+            state.AddCompilerFileInput(new DocumentationPatchCompilerFileInput(identity,
+                resolver.RelativeIdentity(paths.PhysicalRoot, directory), DocumentationPatchCompilerInputKind.RuleSet));
+        }
+        var globs = project.GetAllGlobs();
+        var active = project.Items.SelectMany(item => new ProjectElement[] { item.Xml }
+                .Concat(item.Metadata.Where(metadata => metadata.Xml is not null).Select(metadata => (ProjectElement)metadata.Xml)))
+            .Concat(globs.Select(glob => glob.ItemElement)).Concat(project.Imports.Select(import => import.ImportingElement))
+            .Concat(new[] { "CompilerResponseFile", "CodeAnalysisRuleSet" }.Select(name => project.GetProperty(name)?.Xml).OfType<ProjectElement>())
+            .Select(element => (Owner: element.ContainingProject.FullPath, Element: BuildElementPath(element))).ToArray();
+        var declarations = new[] { projectPath }.Concat(project.Imports.Select(import => import.ImportedProject.FullPath))
+            .Where(path => IsContained(paths.PhysicalRoot, path)).Distinct(PathComparer())
+            .Select(path => new DocumentationPatchBuildDeclaration(
+                resolver.RelativeIdentity(paths.PhysicalRoot, directory), resolver.RelativeIdentity(paths.PhysicalRoot, path),
+                active.Where(element => PathComparer().Equals(element.Owner, path)).Select(element => element.Element).ToImmutableHashSet(StringComparer.Ordinal),
+                ImmutableHashSet<string>.Empty, ImmutableHashSet<string>.Empty, ImmutableHashSet<string>.Empty)).ToArray();
+        foreach (var declaration in declarations) state.AddBuildDeclaration(declaration);
+        foreach (var glob in globs.Where(glob => DocumentationPatchBuildDeclaration.IsCompilerInput(glob.ItemElement.ItemType)))
+        {
+            var matcher = GlobMatcher(glob.IncludeGlobs, glob.Excludes.Concat(glob.Removes));
+            var owner = glob.ItemElement.ContainingProject.FullPath;
+            var repositoryOwned = IsContained(paths.PhysicalRoot, owner)
+                && !resolver.RelativeIdentity(paths.PhysicalRoot, owner).Split('/').Any(part => part is "obj" or "bin");
+            state.AddDeclaredInputGlob(matcher, repositoryOwned);
+        }
+        var extensions = project.GetPropertyValue("AllowedReferenceAssemblyFileExtensions")
+            .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToImmutableHashSet(StringComparer.OrdinalIgnoreCase);
+        var searches = project.GetPropertyValue("AssemblySearchPaths").Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        var candidatePosition = Array.FindIndex(searches, value => value.Equals("{CandidateAssemblyFiles}", StringComparison.OrdinalIgnoreCase));
+        var references = project.GetItems("Reference").Where(item => IsContained(paths.PhysicalRoot, item.Xml.ContainingProject.FullPath))
+            .Select(item => (Include: item.EvaluatedInclude, Hint: item.GetMetadataValue("HintPath"), Specific: item.GetMetadataValue("SpecificVersion"))).ToArray();
+        var candidates = project.Items.Where(item => item.ItemType.Equals("None", StringComparison.OrdinalIgnoreCase) || item.ItemType.Equals("Content", StringComparison.OrdinalIgnoreCase))
+            .Select(item => (Path: item.GetMetadataValue("FullPath"), Owner: item.Xml.ContainingProject.FullPath, Element: BuildElementPath(item.Xml))).ToArray();
+        var candidateGlobs = globs.Where(glob => glob.ItemElement.ItemType.Equals("None", StringComparison.OrdinalIgnoreCase) || glob.ItemElement.ItemType.Equals("Content", StringComparison.OrdinalIgnoreCase))
+            .Select(glob => (Owner: glob.ItemElement.ContainingProject.FullPath, Element: BuildElementPath(glob.ItemElement), Includes: glob.IncludeGlobs.ToArray(), Excludes: glob.Excludes.Concat(glob.Removes).ToArray())).ToArray();
+        state.AddBuildInputBinder(projectPath, (workspace, compilation) =>
+        {
+            var resolved = workspace.MetadataReferences.OfType<PortableExecutableReference>().Where(reference => reference.FilePath is not null)
+                .Select(reference => (Path: reference.FilePath!, Symbol: compilation.GetAssemblyOrModuleSymbol(reference) as IAssemblySymbol)).ToArray();
+            var external = resolved.Where(reference => !IsContained(paths.PhysicalRoot, reference.Path) && reference.Symbol is not null)
+                .Select(reference => reference.Symbol!.Identity.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var names = references.Where(reference => !reference.Include.Contains('/') && !reference.Include.Contains('\\'))
+                .Select(reference => ReferenceName(reference.Include)).Where(name => name.Length > 0).ToHashSet(StringComparer.CurrentCultureIgnoreCase);
+            foreach (var reference in resolved.Where(reference => IsContained(paths.PhysicalRoot, reference.Path) && reference.Symbol is not null))
+                foreach (var dependency in reference.Symbol!.Modules.SelectMany(module => module.ReferencedAssemblies).Where(identity => !external.Contains(identity.Name)))
+                {
+                    names.Add(dependency.Name);
+                    foreach (var extension in extensions)
+                    {
+                        var sibling = resolver.RelativeIdentity(paths.PhysicalRoot, Path.Join(Path.GetDirectoryName(reference.Path)!, dependency.Name + extension));
+                        state.AddDeclaredInputGlob(path => string.Equals(path, sibling, StringComparison.Ordinal), repositoryOwned: true);
+                        ProtectCandidate(sibling);
+                    }
+                }
+            bool EarlierChosen(int position, string name) => references.Any(reference => ReferenceName(reference.Include).Equals(name, StringComparison.CurrentCultureIgnoreCase)
+                && searches.Take(position).Any(search => EarlierPaths(search, reference).Any(expected => resolved.Any(actual =>
+                    PathComparer().Equals(actual.Path, expected) && actual.Symbol is not null
+                    && ((!reference.Include.Contains(',') && !reference.Specific.Equals("true", StringComparison.OrdinalIgnoreCase))
+                        || actual.Symbol.Identity.GetDisplayName().Equals(CanonicalIdentity(reference.Include), StringComparison.OrdinalIgnoreCase))))));
+            ImmutableHashSet<string> NamesAt(int position) => names.Where(name => !EarlierChosen(position, name))
+                .ToImmutableHashSet(StringComparer.CurrentCultureIgnoreCase);
+            // RawFileName is an exact input path, even for an unusual suffix.
+            // It does not make every neighboring DLL a compiler input.
+            var rawPosition = Array.FindIndex(searches, value => value.Equals("{RawFileName}", StringComparison.OrdinalIgnoreCase));
+            if (rawPosition >= 0)
+                foreach (var reference in references.Where(reference => !EarlierChosen(rawPosition, ReferenceName(reference.Include))))
+                {
+                    var raw = Path.GetFullPath(reference.Include.Replace('\\', '/'), directory);
+                    if (!IsContained(paths.PhysicalRoot, raw)) continue;
+                    var identity = resolver.RelativeIdentity(paths.PhysicalRoot, raw);
+                    state.AddDeclaredInputGlob(path => string.Equals(path, identity, StringComparison.Ordinal), repositoryOwned: true);
+                    ProtectCandidate(identity);
+                }
+            var candidateNames = candidatePosition < 0 ? ImmutableHashSet<string>.Empty : NamesAt(candidatePosition);
+            bool CandidateName(string path) => candidateNames.Contains(Path.GetFileNameWithoutExtension(path)) && extensions.Contains(Path.GetExtension(path));
+            var elements = new List<(string Owner, string Element)>();
+            foreach (var item in candidates.Where(item => CandidateName(item.Path) && IsContained(paths.PhysicalRoot, item.Path)))
+            {
+                elements.Add((item.Owner, item.Element));
+                var identity = resolver.RelativeIdentity(paths.PhysicalRoot, item.Path);
+                state.AddDeclaredInputGlob(path => string.Equals(path, identity, StringComparison.Ordinal), repositoryOwned: true);
+                ProtectCandidate(identity);
+            }
+            foreach (var glob in candidateGlobs.Where(glob => glob.Includes.Any(pattern => candidateNames.Any(name => extensions.Any(extension =>
+                Microsoft.Build.Globbing.MSBuildGlob.Parse(directory, Path.GetFileName(pattern.Replace('\\', '/'))).IsMatch(Path.Join(directory, name + extension)))))))
+            {
+                elements.Add((glob.Owner, glob.Element));
+                var matches = GlobMatcher(glob.Includes, glob.Excludes);
+                state.AddDeclaredInputGlob(path => CandidateName(path) && matches(path), repositoryOwned: true);
+            }
+            for (var index = 0; index < searches.Length; index++)
+            {
+                if (searches[index].StartsWith('{')) continue;
+                var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(searches[index].Replace('\\', '/'), directory));
+                if (!IsContained(paths.PhysicalRoot, root)) continue;
+                var slotNames = NamesAt(index);
+                state.AddDeclaredInputGlob(path => slotNames.Contains(Path.GetFileNameWithoutExtension(path)) && extensions.Contains(Path.GetExtension(path))
+                    && PathComparer().Equals(Path.GetDirectoryName(Path.GetFullPath(path, paths.PhysicalRoot)), root), repositoryOwned: true);
+            }
+            foreach (var declaration in declarations)
+                state.ReplaceBuildDeclaration(declaration, declaration with
+                {
+                    ReferenceNames = candidateNames,
+                    ReferenceExtensions = extensions,
+                    ReferenceCandidateElements = elements.Where(element => IsContained(paths.PhysicalRoot, element.Owner) && resolver.RelativeIdentity(paths.PhysicalRoot, element.Owner) == declaration.RepositoryPath)
+                        .Select(element => element.Element).ToImmutableHashSet(StringComparer.Ordinal),
+                });
+            IEnumerable<string> EarlierPaths(string search, (string Include, string Hint, string Specific) reference)
+            {
+                if (search.Equals("{HintPathFromItem}", StringComparison.OrdinalIgnoreCase))
+                    return string.IsNullOrWhiteSpace(reference.Hint) ? [] : [Path.GetFullPath(reference.Hint.Replace('\\', '/'), directory)];
+                if (search.Equals("{RawFileName}", StringComparison.OrdinalIgnoreCase)) return [Path.GetFullPath(reference.Include.Replace('\\', '/'), directory)];
+                if (search.StartsWith('{')) return [];
+                return extensions.Select(extension => Path.GetFullPath(Path.Join(search, ReferenceName(reference.Include) + extension).Replace('\\', '/'), directory));
+            }
+        });
+        static string ReferenceName(string value)
+        {
+            if (value.Contains('/') || value.Contains('\\')) return Path.GetFileNameWithoutExtension(value.Replace('\\', '/'));
+            try { return new System.Reflection.AssemblyName(value).Name ?? string.Empty; }
+            catch (Exception exception) when (exception is ArgumentException or System.IO.FileLoadException) { return string.Empty; }
+        }
+        static string CanonicalIdentity(string value)
+        {
+            try { return new System.Reflection.AssemblyName(value).FullName; }
+            catch (Exception exception) when (exception is ArgumentException or System.IO.FileLoadException) { return string.Empty; }
+        }
+        Func<string, bool> GlobMatcher(IEnumerable<string> includes, IEnumerable<string> excludes)
+        {
+            var admitted = includes.Select(pattern => Microsoft.Build.Globbing.MSBuildGlob.Parse(directory, pattern)).ToArray();
+            var removed = excludes.Select(pattern => Microsoft.Build.Globbing.MSBuildGlob.Parse(directory, pattern)).ToArray();
+            return path => admitted.Any(matcher => matcher.IsMatch(Path.GetFullPath(path, paths.PhysicalRoot)))
+                && !removed.Any(matcher => matcher.IsMatch(Path.GetFullPath(path, paths.PhysicalRoot)));
+        }
+        void ProtectCandidate(string identity)
+        {
+            state.AddProtected(identity);
+            var physical = Path.Join(paths.PhysicalRoot, identity);
+            if (File.Exists(physical)) state.AddPolicy(ProtectionIdentities(paths, resolver.ResolveSemantic(paths.PhysicalRoot, physical), resolver), []);
+        }
+    }
+
+    private static string BuildElementPath(ProjectElement element)
+    {
+        var path = new Stack<int>();
+        for (var current = element; current.Parent is { } parent; current = parent)
+            path.Push(parent.Children.TakeWhile(child => !ReferenceEquals(child, current)).Count());
+        return string.Join("/", path);
     }
 
     private static async Task<IReadOnlyDictionary<SyntaxTree, WorkspaceSourceBinding>> ValidateWorkspaceSourcesAsync(
@@ -996,8 +1203,9 @@ internal static class PostRegistrationLoader
     {
         var semanticPaths = new[] { projectPath, paths.PhysicalInput, paths.LexicalInput }
             .Concat(project.Imports.Select(import => import.ImportedProject.FullPath))
-            .Concat(new[] { "Compile", "AdditionalFiles", "Analyzer", "AnalyzerConfigFiles", "EditorConfigFiles" }
-                .SelectMany(itemType => project.GetItems(itemType).Select(item => item.GetMetadataValue("FullPath"))))
+            .Concat(project.Items.Where(item => DocumentationPatchBuildDeclaration.IsCompilerInput(item.ItemType)
+                    && !item.ItemType.Equals("Reference", StringComparison.OrdinalIgnoreCase))
+                .Select(item => item.GetMetadataValue("FullPath")))
             .Where(path => !string.IsNullOrWhiteSpace(path) && File.Exists(path))
             .Select(path => Path.GetFullPath(path))
             .Where(path => IsContained(paths.PhysicalRoot, path))
@@ -1556,6 +1764,48 @@ internal sealed class LoaderExecutionState
     private readonly List<LoaderDiagnostic> diagnostics = [];
     private readonly HashSet<string> protectedPaths = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
+    private readonly List<DocumentationPatchCompilerFileInput> compilerFileInputs = [];
+
+    public IReadOnlyList<DocumentationPatchCompilerFileInput> CompilerFileInputs => compilerFileInputs;
+
+    public void AddCompilerFileInput(DocumentationPatchCompilerFileInput response) => compilerFileInputs.Add(response);
+
+    private readonly Dictionary<string, Action<RoslynProject, Compilation>> buildInputBinders = new(StringComparer.Ordinal);
+
+    public void AddBuildInputBinder(string project, Action<RoslynProject, Compilation> binder) => buildInputBinders.Add(project, binder);
+
+    public void BindBuildInputs(string project, RoslynProject workspace, Compilation compilation)
+    {
+        if (buildInputBinders.Remove(project, out var binder)) binder(workspace, compilation);
+    }
+
+    public void ReplaceBuildDeclaration(DocumentationPatchBuildDeclaration original, DocumentationPatchBuildDeclaration replacement)
+    {
+        var index = buildDeclarations.FindIndex(declaration => ReferenceEquals(declaration, original));
+        if (index < 0) throw new InvalidOperationException("The evaluated declaration is not owned by this load.");
+        buildDeclarations[index] = replacement;
+    }
+
+    private readonly List<Func<string, bool>> declaredInputGlobs = [];
+
+    public IReadOnlyList<Func<string, bool>> DeclaredInputGlobs => declaredInputGlobs;
+
+    private readonly List<Func<string, bool>> repositoryInputGlobs = [];
+
+    public IReadOnlyList<Func<string, bool>> RepositoryInputGlobs => repositoryInputGlobs;
+
+    public void AddDeclaredInputGlob(Func<string, bool> matcher, bool repositoryOwned)
+    {
+        declaredInputGlobs.Add(matcher);
+        if (repositoryOwned) repositoryInputGlobs.Add(matcher);
+    }
+
+    private readonly List<DocumentationPatchBuildDeclaration> buildDeclarations = [];
+
+    public IReadOnlyList<DocumentationPatchBuildDeclaration> BuildDeclarations => buildDeclarations;
+
+    public void AddBuildDeclaration(DocumentationPatchBuildDeclaration declaration) => buildDeclarations.Add(declaration);
+
     private readonly HashSet<string> allowedOutputRoots = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
 

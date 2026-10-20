@@ -89,7 +89,11 @@ internal static class CampaignCommandRunner
                 preflight.PolicyBytes,
                 PublicationTarget: null,
                 PublishResult: false),
-            new ProductionAuditHostControls(SessionConsumer: async (bundle, token) =>
+            new ProductionAuditHostControls(StageBoundary: (stage, _) =>
+            {
+                if (continuation is not null && stage == HostStage.SdkDiscovery) GitHubProposalProcessHooks.Reach("sdk-discovery");
+                return Task.CompletedTask;
+            }, SessionConsumer: async (bundle, token) =>
             {
                 selection = await RunInSessionAsync(
                     preflight,
@@ -140,6 +144,9 @@ internal static class CampaignCommandRunner
         {
             return Terminal(preflight.Operation, "preflight", "campaign.invalid-configuration", existing);
         }
+
+        if (continuation is not null && await continuation.BeforePlanningAsync(bundle, cancellationToken).ConfigureAwait(false) is { } inputFailure)
+            return new(null, inputFailure);
 
         CampaignPlanningInput planning;
         CampaignWorkPlan plan;
@@ -264,7 +271,7 @@ internal static class CampaignCommandRunner
                     planning,
                     plan,
                     preflight.Configuration.Revalidate,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken, allowCorrectnessChanges: continuation is not null).ConfigureAwait(false);
                 if (reconciled.Kind != ChangedBaseCampaignReconciliationKind.Accepted
                     || reconciled.AcceptedCheckpoint is not { } acceptedSuccessor)
                 {
@@ -395,7 +402,7 @@ internal static class CampaignCommandRunner
                     store,
                     cancellationToken,
                     cancellationToken,
-                    DispatchGuard: preflight.Configuration.Revalidate,
+                    DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
                     AcceptedOnly: reconstructAccepted)).ConfigureAwait(false);
                 if (continuation is not null && patched.Kind is
                     DocumentationCampaignOutcomeKind.Accepted or DocumentationCampaignOutcomeKind.Reconstructed)
@@ -513,7 +520,7 @@ internal static class CampaignCommandRunner
                 ExecutionToken: cancellationToken,
                 SettlementToken: settlementCancellation.Token,
                 DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor, configuration.Budgets.Invocation.MaximumConnectMilliseconds),
-                DispatchGuard: preflight.Configuration.Revalidate,
+                DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
                 TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance)).ConfigureAwait(false);
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady)
             {
@@ -582,6 +589,7 @@ internal static class CampaignCommandRunner
         ArgumentNullException.ThrowIfNull(credentialAccessor);
         try
         {
+            GitHubProposalProcessHooks.Reach("provider-create");
             string? credential = null;
             if (string.Equals(provider.Endpoint.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
             {
@@ -616,6 +624,7 @@ internal static class CampaignCommandRunner
             DocumentationScribeModelRequest request,
             CancellationToken cancellationToken)
         {
+            GitHubProposalProcessHooks.Reach("provider-send");
             var pending = inner.SendAsync(request, cancellationToken);
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalDuringProviderDispatch);
             return await pending.ConfigureAwait(false);
@@ -624,6 +633,7 @@ internal static class CampaignCommandRunner
         public async ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeModelRequest request,
             DocumentationScribeExecutionScope scope, CancellationToken cancellationToken)
         {
+            GitHubProposalProcessHooks.Reach("provider-send");
             var pending = inner.SendAsync(request, scope, cancellationToken);
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalDuringProviderDispatch);
             return await pending.ConfigureAwait(false);

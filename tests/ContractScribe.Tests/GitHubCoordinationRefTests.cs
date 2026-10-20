@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Reflection;
 using ContractScribe.Core;
+using ContractScribe.Cli;
 using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Coordination;
 using ContractScribe.GitHub.Transport;
@@ -304,6 +305,80 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCampaignFailureKind.StaleLedger, result.Failure!.Kind);
         Assert.Equal(GitHubCampaignPullRequestKind.OpenDraft, Assert.Single(result.PullRequests).Kind);
         Assert.Equal(17, result.Failure.PullRequestNumber);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("closed")]
+    [InlineData("merged")]
+    public async Task G3_verified_terminal_PR_retains_immutable_base_when_its_proposal_branch_is_deleted(string terminal)
+    {
+        var remote = G1Remote.Published(terminal);
+        remote.Refs.Clear();
+        using var observer = remote.Observer();
+        var result = await observer.ObserveAsync();
+        Assert.Null(result.Failure);
+        Assert.Equal(GitHubCampaignKind.Terminal, result.Kind);
+        Assert.True(Assert.Single(result.PullRequests).OwnershipVerified);
+        Assert.Equal(Oid('1'), result.PullRequests[0].OriginalBaseOid);
+        Assert.Null(result.ProposalRef);
+        remote.AssertReadOnly();
+    }
+
+    [Theory]
+    [InlineData("closed")]
+    [InlineData("merged")]
+    public async Task G3_terminal_snapshot_seed_survives_an_incomplete_successor_and_mutable_PR_base(string terminal)
+    {
+        var remote = G1Remote.Published(terminal);
+        using var observer = remote.Observer();
+        var observed = await observer.ObserveAsync();
+        Assert.Null(observed.Failure);
+        var seed = GitHubCampaignPreflight.TerminalSeed(observed);
+        var successor = observed with
+        {
+            Ledger = observed.Ledger! with
+            {
+                Stage = GitHubCoordinationStage.Claimed,
+                OperationId = "operation.incomplete-successor",
+                OperationCommitmentSha256 = new string('9', 64),
+                GenerationId = "generation.incomplete-successor",
+            },
+            PullRequests = observed.PullRequests.Select(pr => pr with { BaseOid = Oid('9') }).ToImmutableArray(),
+        };
+        Assert.Equal(seed, GitHubCampaignPreflight.TerminalSeed(successor));
+        Assert.NotEqual(seed, GitHubCampaignPreflight.TerminalSeed(observed with
+        {
+            PullRequests = observed.PullRequests.Select(pr => pr with { GenerationId = "generation.other-terminal" }).ToImmutableArray(),
+        }));
+        remote.AssertReadOnly();
+    }
+
+    [Fact]
+    public async Task G3_closed_base_reason_links_the_matching_retained_generation()
+    {
+        var remote = G1Remote.Published("closed");
+        using var observer = remote.Observer();
+        var observed = await observer.ObserveAsync();
+        var first = Assert.Single(observed.PullRequests);
+        var decision = observed with
+        {
+            TargetOid = Oid('9'),
+            PullRequests = [first, first with
+            {
+                Number = 18, OriginalBaseOid = Oid('9'), BaseOid = Oid('1'), GenerationId = "closed-at-current-base",
+            }],
+        };
+        var request = new GitHubProposalRequest(1, "campaign.test", "snapshot.test", "coordination-ref",
+            new("Owner", "repo", "refs/heads/main", Oid('9'), "operation.not-attempted", "generation.not-attempted",
+                new(128, 128, 4_194_304), GitHubPublicationTransitionKind.Initial));
+        var result = GitHubCampaignPreflight.Select(CliBuildIdentity.Current, CampaignOperation.Resume, request, decision, 7);
+        Assert.NotNull(result);
+        Assert.Equal("github-proposal.closed-same-base", Assert.Single(result.Diagnostics).Code);
+        using var json = JsonDocument.Parse(result.StandardOutput);
+        Assert.EndsWith("/pull/18", json.RootElement.GetProperty("pullRequestUrl").GetString(), StringComparison.Ordinal);
+        Assert.Equal("closed-at-current-base", json.RootElement.GetProperty("generationId").GetString());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("publicationOperationId").ValueKind);
         remote.AssertReadOnly();
     }
 

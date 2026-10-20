@@ -95,7 +95,7 @@ internal static class GitHubProposalHttpLossScenario
             Assert.All(fixture.GitHub.Requests, r => Assert.True(r.Method == "GET" || r.Method == "POST"));
             if (stable.ExitCode == 0)
             {
-                GitHubProposalCliProcessTests.AssertResult(stable, 0, "replayed");
+                GitHubProposalCliProcessTests.AssertResult(stable, 0, "awaiting-review");
                 Assert.Single(fixture.GitHub.PullRequests);
                 Assert.Equal("published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
             }

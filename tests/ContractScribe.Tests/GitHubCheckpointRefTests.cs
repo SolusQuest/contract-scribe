@@ -7,11 +7,12 @@ namespace ContractScribe.Tests;
 
 public sealed partial class GitHubCoordinationRefTests
 {
-    internal static GitHubApiClient CheckpointClient(CoordinationRemote remote, string lineage = "campaign-1", HttpMessageHandler? handler = null)
+    internal static GitHubApiClient CheckpointClient(CoordinationRemote remote, string lineage = "campaign-1", HttpMessageHandler? handler = null,
+        int timeoutMilliseconds = 30_000)
     {
         using var registration = (IDisposable)typeof(GitHubTransportTestHook)
             .GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
-            .Invoke(null, [Origin, handler ?? new RemoteHandler(remote), 30_000])!;
+            .Invoke(null, [Origin, handler ?? new RemoteHandler(remote), timeoutMilliseconds])!;
         return GitHubApiClient.CreateCheckpoint(ValidatedGitHubCheckpointAuthority.Create(
             "Owner", "repo", "refs/heads/main", lineage, Oid('1')), GitHubTransportTestHook.Placeholder);
     }
@@ -94,7 +95,7 @@ public sealed partial class GitHubCoordinationRefTests
         }
     }
 
-    private sealed class CheckpointInterceptHandler(CoordinationRemote remote) : HttpMessageHandler
+    internal sealed class CheckpointInterceptHandler(CoordinationRemote remote) : HttpMessageHandler
     {
         internal Func<HttpRequestMessage, Task>? BeforeRequest;
         internal bool PauseNextRequest;

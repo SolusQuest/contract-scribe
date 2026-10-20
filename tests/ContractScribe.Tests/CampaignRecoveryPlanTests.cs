@@ -7,6 +7,100 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Theory]
+    [InlineData(GitHubCoordinationRefTests.LostReadback.Exact)]
+    [InlineData(GitHubCoordinationRefTests.LostReadback.Missing)]
+    [InlineData(GitHubCoordinationRefTests.LostReadback.Mismatch)]
+    public async Task Remote_checkpoint_cancellation_keeps_unknown_or_mismatched_write_effects_fail_closed(
+        GitHubCoordinationRefTests.LostReadback readback)
+    {
+        var scenario = CreateProposalScenario();
+        var artifact = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, artifact.State.CampaignLineage, handler);
+        await using var store = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(scenario.Plan), default));
+        var writes = remote.RefMutationAttempts;
+        var objects = remote.ObjectMutationAttempts;
+        using var cancellation = new CancellationTokenSource();
+        var readbacks = 0;
+        handler.BeforeRequest = request =>
+        {
+            if (cancellation.IsCancellationRequested && request.Method == HttpMethod.Get
+                && request.RequestUri!.AbsolutePath.Contains("/git/blobs/", StringComparison.Ordinal)) readbacks++;
+            return Task.CompletedTask;
+        };
+        remote.CancelAfterMutation = GitHubCoordinationRefTests.LostMutation.Blob;
+        remote.CancelSource = cancellation;
+        remote.LostBlobReadback = readback;
+        if (readback != GitHubCoordinationRefTests.LostReadback.Exact)
+            remote.LoseResponse = GitHubCoordinationRefTests.LostMutation.Blob;
+        async Task Write() => Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure,
+            (await store.CreateIfAbsentAsync(artifact.ExactUtf8Json.AsMemory(), artifact.CheckpointRevision,
+                artifact.Sha256, cancellation.Token)).Kind);
+        if (readback == GitHubCoordinationRefTests.LostReadback.Exact)
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(Write);
+        else await Write();
+        Assert.True(cancellation.IsCancellationRequested);
+        Assert.Equal(writes, remote.RefMutationAttempts);
+        Assert.Equal(objects + 1, remote.ObjectMutationAttempts);
+        Assert.True(readbacks > 0);
+    }
+
+    [Theory]
+    [InlineData("read", "caller")]
+    [InlineData("plan", "caller")]
+    [InlineData("claim", "caller")]
+    [InlineData("read", "timeout")]
+    [InlineData("plan", "timeout")]
+    [InlineData("claim", "timeout")]
+    [InlineData("read", "response-loss")]
+    [InlineData("plan", "response-loss")]
+    [InlineData("claim", "response-loss")]
+    public async Task Remote_checkpoint_ports_distinguish_caller_cancellation_from_transport_failure(string operation, string failure)
+    {
+        var scenario = CreateProposalScenario();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, scenario.InitialState.CampaignLineage, handler,
+            timeoutMilliseconds: failure == "timeout" ? 100 : 30_000);
+        await using var store = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client);
+        if (operation != "claim")
+            Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        var writes = remote.RefMutationAttempts;
+        using var cancellation = new CancellationTokenSource();
+        var callerCancelled = failure == "caller";
+        if (failure == "timeout") handler.PauseNextRequest = true;
+        else handler.BeforeRequest = _ =>
+        {
+            if (callerCancelled) cancellation.Cancel();
+            throw new OperationCanceledException(cancellation.Token);
+        };
+        async Task Invoke()
+        {
+            if (operation == "plan")
+                Assert.False(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(scenario.Plan), cancellation.Token));
+            else
+            {
+                var kind = operation == "claim" ? await store.AcquireCheckpointAsync(cancellation.Token)
+                    : (await store.ReadAsync(cancellation.Token)).Kind;
+                Assert.Equal(CampaignCheckpointReadKind.Unreadable, kind);
+                Assert.Equal(callerCancelled ? ContractScribe.GitHub.Transport.GitHubFailureCode.Cancelled
+                    : failure == "timeout" ? ContractScribe.GitHub.Transport.GitHubFailureCode.Timeout
+                    : ContractScribe.GitHub.Transport.GitHubFailureCode.ResponseLost, store.CheckpointFailure!.Code);
+            }
+        }
+        try
+        {
+            if (callerCancelled && operation != "claim") await Assert.ThrowsAnyAsync<OperationCanceledException>(Invoke);
+            else await Invoke();
+            Assert.Equal(writes, remote.RefMutationAttempts);
+        }
+        finally { handler.BeforeRequest = null; }
+    }
+
     [Fact]
     public async Task Remote_checkpoint_archives_usage_and_restores_from_a_fresh_store()
     {

@@ -40,11 +40,15 @@ public sealed class PackagedCliGitHubProcessTests
         Assert.Single(github.PullRequests);
         Assert.Equal(1, github.PrAttempts);
         var mutationsAfterStart = github.Mutations;
+        var providerAfterStart = provider.RequestCount;
+        var discoveryAfterStart = File.ReadAllLines(observations).Count(line => line == "sdk-discovery");
 
         var resume = await RunGitHubStepAsync(
             "resume", fixture, state, request, layer, github, provider, observations,
-            environment, 0, "github-proposal.replayed");
-        Assert.True(github.Mutations > mutationsAfterStart);
+            environment, 0, "github-proposal.awaiting-review");
+        Assert.Equal(mutationsAfterStart, github.Mutations);
+        Assert.Equal(providerAfterStart, provider.RequestCount);
+        Assert.Equal(discoveryAfterStart, File.ReadAllLines(observations).Count(line => line == "sdk-discovery"));
         Assert.False(File.Exists(state));
         Assert.Single(github.PullRequests);
         Assert.Equal(1, github.PrAttempts);
@@ -216,10 +220,7 @@ public sealed class PackagedCliGitHubProcessTests
         var governed = new Dictionary<string, byte[]>(StringComparer.Ordinal);
         foreach (var path in Directory.EnumerateFiles(fixtureRoot, "*", SearchOption.AllDirectories)
             .Where(path => !Path.GetRelativePath(fixtureRoot, path)
-                    .Split(Path.DirectorySeparatorChar).Any(part => part is "obj" or "bin")
-                && (path.EndsWith(".cs", StringComparison.Ordinal)
-                    || path.EndsWith(".csproj", StringComparison.Ordinal)
-                    || Path.GetFileName(path) == "policy.json")))
+                    .Split(Path.DirectorySeparatorChar).Any(part => part is "obj" or "bin")))
         {
             governed[Path.GetRelativePath(fixtureRoot, path).Replace('\\', '/')] =
                 await File.ReadAllBytesAsync(path);

@@ -45,7 +45,7 @@ public sealed class GitHubArchitectureTests
         Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
-        Assert.Equal(new[] { "BindCheckpointWrite", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateTreeAsync",
+        Assert.Equal(new[] { "BindCheckpointWrite", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateTreeAsync",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
             "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);

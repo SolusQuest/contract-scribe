@@ -1080,7 +1080,8 @@ case_real_cancel() {
     real_env_ready || { echo "skip: real env unavailable"; return 0; }
     local w; w="$(new_work realcx)"
     prepare_real "$w" start
-    # Point the layer at the hanging provider so the CLI blocks mid-campaign.
+    # Keep faster runs active at the provider; cancellation during SDK loading
+    # is also valid, but a real CLI child must be running before the signal.
     python3 - "$w/layer.json" "$HANG_ENDPOINT" <<'PY'
 import json,os,sys
 d=json.load(open(sys.argv[1])); d["provider"]["endpoint"]=sys.argv[2]
@@ -1103,6 +1104,8 @@ PY
         bash -c "exec python3 '$ACTION_SCRIPTS/invoke.py'" &
     local entry=$!
     sleep 6
+    local cli_started=0
+    pgrep -f "ContractScribe.Cli.dll" >/dev/null 2>&1 && cli_started=1
     kill -INT "$entry" 2>/dev/null
     sleep 4
     kill -TERM "$entry" 2>/dev/null || true
@@ -1113,6 +1116,7 @@ PY
     wait "$entry" || rc=$?
     case "$rc" in 6|130|143) ;; *) echo "unexpected rc=$rc" >&2; return 1;; esac
     ! pgrep -f "ContractScribe.Cli.dll" >/dev/null 2>&1
+    [ "$cli_started" -eq 1 ] || { echo "real CLI was not running before cancellation" >&2; return 1; }
 }
 
 # ---------------------------------------------------------------------------
@@ -1241,26 +1245,38 @@ for base, dirs, names in os.walk(root):
     for name in names:
         path = os.path.join(base, name)
         rel = os.path.relpath(path, root).replace(os.sep, "/")
-        if rel.endswith((".cs", ".csproj")) or rel == "policy.json":
-            files[rel] = open(path, encoding="utf-8").read()
+        files[rel] = open(path, encoding="utf-8").read()
 json.dump({"files": files}, open(out, "w"))
 EOF
     touch "$WORK/provider-requests.log" "$WORK/hang-requests.log" \
         "$WORK/github-requests.log" "$WORK/github-failures.log"
-    python3 "$SCRIPT_DIR/fake_github_api.py" "$WORK/github-config.json" \
-        "$WORK/github-ready.json" "$WORK/github-requests.log" \
-        "$WORK/github-failures.log" &
-    GH_PID=$!
-    for f in provider-ready hang-ready github-ready; do
+    for f in provider-ready hang-ready; do
         for _ in $(seq 50); do [ -f "$WORK/$f.json" ] && break; sleep 0.1; done
     done
     PROVIDER_ENDPOINT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' "$WORK/provider-ready.json")"
     HANG_ENDPOINT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' "$WORK/hang-ready.json")"
-    GITHUB_ENDPOINT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' "$WORK/github-ready.json")"
-    BASE_OID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseOid"])' "$WORK/github-ready.json")"
+    start_real_github() {
+        # Each leg has its own campaign lineage and must not inherit another
+        # leg's published checkpoint/PR. Stop the previous fake before reuse.
+        if [ -n "${GH_PID:-}" ]; then
+            kill "$GH_PID" 2>/dev/null || true
+            wait "$GH_PID" 2>/dev/null || true
+        fi
+        rm -f "$WORK/github-ready.json"
+        python3 "$SCRIPT_DIR/fake_github_api.py" "$WORK/github-config.json" \
+            "$WORK/github-ready.json" "$WORK/github-requests.log" \
+            "$WORK/github-failures.log" &
+        GH_PID=$!
+        for _ in $(seq 50); do [ -f "$WORK/github-ready.json" ] && break; sleep 0.1; done
+        GITHUB_ENDPOINT="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' "$WORK/github-ready.json")"
+        BASE_OID="$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["baseOid"])' "$WORK/github-ready.json")"
+    }
 
+    start_real_github
     run_case real-chain case_real_chain
+    start_real_github
     run_case real-missing-token case_real_missing_token
+    start_real_github
     run_case real-cancel case_real_cancel
 
     kill $PROV_PID $HANG_PID $GH_PID 2>/dev/null || true

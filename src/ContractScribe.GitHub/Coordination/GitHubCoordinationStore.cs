@@ -248,7 +248,8 @@ internal sealed partial class GitHubCoordinationStore
         return new(reference, (latest.ProposalCommitOid ?? admission?.ProposalCommitOid)!,
             (latest.ProposalTreeOid ?? admission?.ProposalTreeOid)!, creation.TargetCommitOid,
             latest.ObservedBaseOid ?? admission?.ObservedBaseOid ?? latest.TargetCommitOid,
-            latest.PullRequestNumber ?? admission?.PullRequestNumber, latest.Stage, metadata);
+            latest.PullRequestNumber ?? admission?.PullRequestNumber, latest.Stage, metadata, creation.GenerationId,
+            latest.CumulativeChangedFiles);
     }
 
     internal async ValueTask<GitHubCoordinationResult> ClaimAsync(

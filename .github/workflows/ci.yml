@@ -1216,8 +1216,7 @@ jobs:
               for name in names:
                   path = os.path.join(base, name)
                   rel = os.path.relpath(path, root).replace(os.sep, "/")
-                  if rel.endswith((".cs", ".csproj")) or rel == "policy.json":
-                      files[rel] = open(path, encoding="utf-8").read()
+                  files[rel] = open(path, encoding="utf-8").read()
           json.dump({"files": files}, open(out, "w"))
           PYEOF
           python3 action-src/tests/action/fake_github_api.py fakes/github-config.json fakes/github-ready.json fakes/github.log fakes/github-failures.log &
@@ -1757,11 +1756,17 @@ jobs:
         run: |
           set -euo pipefail
           [ "$STATUS" = ok ]
-          [ "$OUTCOME" = github-proposal.replayed ]
+          [ "$OUTCOME" = github-proposal.awaiting-review ]
           test ! -e "$RUNNER_TEMP/cs-state/checkpoint.json"
           test ! -s fakes/github-failures.log
+          test ! -s fakes/provider.log
+          test -f consumer-obs.txt
+          if grep -Eq '^(sdk-discovery|provider-create|provider-send)$' consumer-obs.txt; then
+            echo 'Awaiting review unexpectedly entered SDK/provider work.' >&2
+            exit 1
+          fi
           if grep -q 'POST /repos/Owner/repo/pulls' fakes/github.log; then
-            echo 'Replay unexpectedly attempted PR creation.' >&2
+            echo 'Awaiting review unexpectedly attempted PR creation.' >&2
             exit 1
           fi
           WORK="$RUNNER_TEMP/invocation-cases" bash action-src/tests/action-workflows/verify-examples.sh

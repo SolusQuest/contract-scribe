@@ -1,4 +1,6 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
+using System.Text;
 using ContractScribe.Cli;
 using ContractScribe.Core;
 using ContractScribe.GitHub.Coordination;
@@ -11,6 +13,28 @@ namespace ContractScribe.Tests;
 public sealed class GitHubProposalCliContractTests
 {
     private static readonly CliBuildIdentity Identity = new("test+" + new string('a', 40), new('a', 40), new('a', 40));
+
+    [Fact]
+    public void Product_owned_retry_authority_changes_the_effective_GitHub_snapshot()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null && !File.Exists(Path.Join(directory.FullName, "ContractScribe.slnx"))) directory = directory.Parent;
+        var root = Assert.IsType<DirectoryInfo>(directory).FullName;
+        var json = JsonNode.Parse(File.ReadAllText(Path.Join(root, "tests", "fixtures", "campaign", "cli", "configuration-valid.json")))!;
+        var original = CampaignConfiguration.Parse(Encoding.UTF8.GetBytes(json.ToJsonString()));
+        json["retry"]!["retryPolicyId"] = "retry.product.changed";
+        var changed = CampaignConfiguration.Parse(Encoding.UTF8.GetBytes(json.ToJsonString()));
+        Assert.NotEqual(original.CreateExecutionPolicy().RetryPolicy, changed.CreateExecutionPolicy().RetryPolicy);
+        var preflight = new CampaignPreflightResult(CampaignOperation.Resume, root, "Fixture.slnx", "Fixture.slnx",
+            "{}"u8.ToArray(), "snapshot.test", "unused", new([], original));
+        var request = new GitHubProposalRequest(1, "campaign.test", "snapshot.test", "coordination-ref",
+            new("Owner", "repo", "refs/heads/main", new('a', 40), "operation.test", "generation.test",
+                new(128, 128, 4_194_304), GitHubPublicationTransitionKind.Initial));
+        var observation = new GitHubCampaignObservation(GitHubCampaignKind.FirstRun, GitHubCampaignLedgerKind.Missing,
+            null, "refs/heads/main", new('a', 40), "refs/heads/coordination", null, null, null, [], true, 1);
+        Assert.NotEqual(GitHubCampaignPreflight.SnapshotBinding(preflight, request, observation),
+            GitHubCampaignPreflight.SnapshotBinding(preflight with { Configuration = new([], changed) }, request, observation));
+    }
 
     [Fact]
     public void Publication_diagnostic_has_fixed_order_nulls_and_no_effect_on_terminal()

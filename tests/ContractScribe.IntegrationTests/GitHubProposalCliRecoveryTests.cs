@@ -44,10 +44,11 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    [Fact]
-    public async Task Killing_the_process_after_remote_PR_creation_recovers_that_PR_without_another_create_attempt()
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Killing_the_process_after_remote_PR_creation_recovers_that_PR_without_another_create_attempt(bool terminalBeforeRecovery)
     {
-        if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
         var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.GitHub.After = request =>
@@ -67,30 +68,43 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.GitHub.DelayResponses = false;
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
         Assert.Single(fixture.GitHub.PullRequests);
-        AssertResult(await fixture.Run("resume"), 0, "published");
+        var before = GateCounts(fixture);
+        if (!terminalBeforeRecovery)
+        {
+            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            Assert.Equal(before, GateCounts(fixture));
+            Assert.Equal("published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
+            Assert.Equal(1, fixture.GitHub.PrAttempts);
+            var writes = fixture.GitHub.PublicationWrites;
+            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            Assert.Equal(writes, fixture.GitHub.PublicationWrites);
+        }
+        fixture.GitHub.Lifecycle("merged");
+        AdvanceReadme(fixture);
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
+        await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        Assert.Equal(terminalBeforeRecovery ? "merged" : "published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
+        Assert.Equal(before.Physical, fixture.Provider.RequestCount);
+        Assert.Equal(before.Discovery + 1, Observed(fixture, "sdk-discovery"));
         Assert.Equal(1, fixture.GitHub.PrAttempts);
-        var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), 0, "replayed");
-        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
-        await fixture.AssertSourceUnchanged();
+        Assert.Null(fixture.Checkpoint().State.CandidateObservation);
     }
 
     [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Killed_accepted_only_or_mixed_append_reservation_uses_fresh_retry_and_preserves_accounting(bool append)
+    public async Task Killed_unpublished_accepted_reconstruction_retries_the_original_reservation_and_preserves_accounting(bool twoWorks)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
-        await using var fixture = await Fixture.CreateAsync(twoWorks: true);
-        AssertResult(await fixture.Run("start"), 0, "published");
-        var accepted = fixture.Checkpoint();
-        if (append) await ConfigureAppend(fixture);
+        await using var fixture = await Fixture.CreateAsync(twoWorks: twoWorks);
+        var accepted = await InterruptAcceptedUnpublished(fixture);
         var acknowledgement = Path.Join(fixture.Outside, "patch-reserved.ack");
-        var release = Path.Join(fixture.Outside, "never-released");
         var environment = fixture.Environment();
         foreach (var pair in CampaignCliProcessTests.HookEnvironment(
-            ContractScribe.Cli.CampaignProcessBoundaryHooks.PatchAfterReservationReadback, acknowledgement, release))
-            environment[pair.Key] = pair.Value;
+            ContractScribe.Cli.CampaignProcessBoundaryHooks.PatchAfterReservationReadback, acknowledgement,
+            Path.Join(fixture.Outside, "never-released"))) environment[pair.Key] = pair.Value;
         using (var interrupted = CampaignCliProcessTests.Start(fixture.Args("resume"), environment))
         {
             try
@@ -103,14 +117,14 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
         var reserved = fixture.Checkpoint();
+        var requests = fixture.Provider.RequestCount;
         Assert.Equal(accepted.Sha256, reserved.State.AcceptedCandidateOrigin!.CheckpointSha256);
-        var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), 0, append ? "published" : "replayed");
+        AssertResult(await fixture.Run("resume"), 0, "published");
         var retried = fixture.Checkpoint();
         Assert.Null(retried.State.ActiveReservation);
         Assert.True(retried.State.LineageCharges.PatchValidationInvocations > reserved.State.LineageCharges.PatchValidationInvocations);
-        Assert.Equal(append ? 2 : 1, retried.State.CandidateObservation!.AcceptedWorkItemKeys.Length);
-        if (!append) Assert.Equal(writes, fixture.GitHub.PublicationWrites);
+        Assert.Equal(requests, fixture.Provider.RequestCount);
+        Assert.Single(retried.State.CandidateObservation!.AcceptedWorkItemKeys);
         Assert.Single(fixture.GitHub.PullRequests);
         await fixture.AssertSourceUnchanged();
     }
@@ -118,26 +132,20 @@ public sealed partial class GitHubProposalCliProcessTests
     [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Same_snapshot_append_accepts_new_work_and_its_fresh_process_retry_is_zero_write(bool newPath)
+    public async Task Published_snapshot_append_waits_without_accepting_or_publishing_new_work(bool newPath)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: newPath);
         AssertResult(await fixture.Run("start"), 0, "published");
-        var first = fixture.Checkpoint();
-        Assert.Single(first.State.WorkItems, w => w.Status == CampaignWorkStatus.Accepted);
-        Assert.Single(first.State.WorkItems, w => w.Status == CampaignWorkStatus.Planned);
+        var prior = fixture.Checkpoint();
         await ConfigureAppend(fixture);
-        AssertResult(await fixture.Run("resume"), 0, "published");
-        var second = fixture.Checkpoint();
-        Assert.Equal(2, second.State.WorkItems.Count(w => w.Status == CampaignWorkStatus.Accepted));
-        Assert.Equal(newPath ? 2 : 1, second.State.CandidateObservation!.ChangedFiles.Length);
-        Assert.Equal(second.CheckpointRevision, second.State.AcceptedCandidateOrigin!.CheckpointRevision);
-        Assert.Null(second.State.AcceptedCandidateOrigin.CheckpointSha256);
-        Assert.NotEqual(first.State.CandidateObservation!.PatchResultCommitmentSha256,
-            second.State.CandidateObservation!.PatchResultCommitmentSha256);
-        var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), 0, "replayed");
-        Assert.Equal(writes, fixture.GitHub.PublicationWrites);
+        var before = GateCounts(fixture);
+        var writes = fixture.GitHub.Mutations;
+        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        Assert.Equal(prior.Sha256, fixture.Checkpoint().Sha256);
+        Assert.Equal(before, GateCounts(fixture));
+        Assert.Equal(writes, fixture.GitHub.Mutations);
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         await fixture.AssertSourceUnchanged();

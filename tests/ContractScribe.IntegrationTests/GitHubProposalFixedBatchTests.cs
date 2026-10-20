@@ -59,17 +59,21 @@ public sealed partial class GitHubProposalCliProcessTests
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
         var providerRequests = fixture.Provider.RequestCount;
+        var gates = GateCounts(fixture);
+        Assert.Equal(unresolved ? 5 : 0, exit);
+        Assert.Equal(unresolved ? "host-failure" : "no-op", outcome);
         for (var repeat = 0; repeat < 2; repeat++)
         {
             var stopped = await fixture.Run("resume");
-            AssertResult(stopped, exit, outcome);
-            Assert.Equal(unresolved ? "github proposal stopped before publication: campaign.unresolved\n" : "", stopped.Stderr);
+            AssertResult(stopped, 0, "awaiting-review");
+            Assert.Empty(stopped.Stderr);
             var current = fixture.Checkpoint();
             Assert.Equal(accepted.Sha256, current.Sha256);
             Assert.Equal(accepted.State.LineageCharges.PatchValidationInvocations, current.State.LineageCharges.PatchValidationInvocations);
             Assert.Equal(reads + repeat + 1, fixture.TokenReads());
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
             Assert.Equal(providerRequests, fixture.Provider.RequestCount);
+            Assert.Equal(gates, GateCounts(fixture));
         }
         await fixture.AssertSourceUnchanged();
     }
@@ -87,6 +91,8 @@ public sealed partial class GitHubProposalCliProcessTests
             github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Request.CampaignLineage,
             github.ExpectedBaseCommitOid), GitHubTransportTestHook.Placeholder);
         await using var checkpoint = GitHubCoordinationStore.Create(client);
+        var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, default);
+        preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Request, observed) };
         Assert.Equal(CampaignCheckpointReadKind.Found, await checkpoint.AcquireCheckpointAsync(default));
         var configuration = preflight.Configuration.Document;
         CampaignCheckpointArtifact? initial = null;

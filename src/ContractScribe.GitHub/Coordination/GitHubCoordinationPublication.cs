@@ -4,6 +4,65 @@ namespace ContractScribe.GitHub.Coordination;
 
 internal sealed partial class GitHubCoordinationStore
 {
+    // Finish only the already-created PR of the current recorded operation.
+    // Re-observe inside the owned checkpoint claim; no caller projection,
+    // candidate, publication authority or PR-create entitlement authorizes this CAS.
+    internal async ValueTask<GitHubCampaignObservation> RecoverObservedPublicationAsync(CancellationToken token)
+    {
+        await checkpointGate.WaitAsync(token).ConfigureAwait(false);
+        GitHubCampaignObservation? observed = null;
+        try
+        {
+            observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, this, token).ConfigureAwait(false);
+            if (observed.Failure is not null) return observed;
+            var remote = await ReadRemoteCheckpointAsync(token).ConfigureAwait(false);
+            if (remote is null || !Owns(remote.Document) || remote.Head != observed.CoordinationOid
+                || observed.Repository is null || observed.TargetOid is null)
+                throw new GitHubCoordinationException();
+            var target = GitHubObservedProposalIntegrity.Read(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
+            if (target?.Oid != observed.TargetOid) throw new GitHubCoordinationException();
+            var read = await ReadObservedStateAsync(observed.Repository, target, remote.Head, token).ConfigureAwait(false);
+            if (read.State is not StateCapability current)
+                throw new GitHubCoordinationException(transportFailure: read.Failure?.TransportFailure);
+            if (current.Stage is not (GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreated)) return observed;
+            var generation = ObservedCurrentGeneration(current) ?? throw new GitHubCoordinationException();
+            var pr = observed.PullRequests.SingleOrDefault(row => row.OwnershipVerified
+                && row.GenerationId == generation.GenerationId && "refs/heads/" + row.Head.Ref == generation.Ref)
+                ?? throw new GitHubCoordinationException();
+            var stage = pr.Kind switch
+            {
+                GitHubCampaignPullRequestKind.OpenDraft => GitHubCoordinationStage.Published,
+                GitHubCampaignPullRequestKind.OpenReady => GitHubCoordinationStage.AwaitingReview,
+                GitHubCampaignPullRequestKind.Merged => GitHubCoordinationStage.Merged,
+                GitHubCampaignPullRequestKind.ClosedUnmerged => GitHubCoordinationStage.ClosedUnmerged,
+                _ => throw new GitHubCoordinationException(),
+            };
+            var update = GitHubCoordinationStageUpdate.PullRequestResult(stage, generation.HeadOid,
+                generation.TreeOid, generation.Metadata.CreationCommitment, pr.Number,
+                current.TargetCommitOid, pr.BaseOid, generation.Metadata.MarkerHash);
+            var next = Apply(current.State, update, current.HeadOid);
+            ValidateSuccessor(current.State, next);
+            var prepared = Prepare(next, current.Creation?.State ?? current.State);
+            if (!await WriteDocumentAsync(prepared.Document, [], token,
+                livePredecessor: remote.Document, publication: prepared.Event).ConfigureAwait(false))
+            {
+                StopCheckpoint();
+                throw new GitHubCoordinationException(transportFailure: CheckpointFailure ?? new(GitHubFailureCode.Conflict));
+            }
+            return await GitHubCampaignObserver.ObserveCheckpointAsync(client, this, token).ConfigureAwait(false);
+        }
+        catch (GitHubCoordinationException exception) when (observed is not null)
+        {
+            return observed with
+            {
+                Kind = GitHubCampaignKind.Unverifiable,
+                Failure = exception.TransportFailure is { } failure
+                ? new(GitHubCampaignFailureKind.Transport, failure) : new(GitHubCampaignFailureKind.StaleLedger)
+            };
+        }
+        finally { checkpointGate.Release(); }
+    }
+
     internal async ValueTask<GitHubCoordinationResult> AdvanceProposalRefsAsync(
         IGitHubCoordinationStateCapability state, IGitHubProposalRefEntitlement entitlement,
         string contentOid, string treeOid, string beforeProposalOid, CancellationToken token)

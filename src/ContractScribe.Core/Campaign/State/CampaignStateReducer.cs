@@ -1538,7 +1538,28 @@ public static partial class CampaignStateReducer
         string inputIdentity,
         CampaignPlanningInput successorPlanningInput,
         CampaignWorkPlan successorPlan,
-        CampaignTransitionResult? simultaneousOldSnapshotTransition = null)
+        CampaignTransitionResult? simultaneousOldSnapshotTransition = null) =>
+        SupersedeCore(current, acceptedCheckpoint, successorAuthority, successorExecutionCapability,
+            styleConfigurationId, validatedStyleConfigurationProjection, inputIdentity, successorPlanningInput,
+            successorPlan, simultaneousOldSnapshotTransition, allowCorrectnessChanges: false);
+
+    // CLI uses this only after authenticated GitHub lifecycle admission. It creates
+    // fresh work authority, never migrates old proposals or relaxes history retention.
+    internal static CampaignTransitionResult SupersedeFreshSnapshot(
+        CampaignCheckpointArtifact current, CampaignAcceptedCheckpoint acceptedCheckpoint,
+        CampaignInitialCheckpointAuthority successorAuthority, CampaignScribeExecutionCapability successorExecutionCapability,
+        string styleConfigurationId, JsonElement validatedStyleConfigurationProjection, string inputIdentity,
+        CampaignPlanningInput successorPlanningInput, CampaignWorkPlan successorPlan) =>
+        SupersedeCore(current, acceptedCheckpoint, successorAuthority, successorExecutionCapability,
+            styleConfigurationId, validatedStyleConfigurationProjection, inputIdentity, successorPlanningInput,
+            successorPlan, null, allowCorrectnessChanges: true);
+
+    private static CampaignTransitionResult SupersedeCore(
+        CampaignCheckpointArtifact current, CampaignAcceptedCheckpoint? acceptedCheckpoint,
+        CampaignInitialCheckpointAuthority successorAuthority, CampaignScribeExecutionCapability successorExecutionCapability,
+        string styleConfigurationId, JsonElement validatedStyleConfigurationProjection, string inputIdentity,
+        CampaignPlanningInput successorPlanningInput, CampaignWorkPlan successorPlan,
+        CampaignTransitionResult? simultaneousOldSnapshotTransition, bool allowCorrectnessChanges)
     {
         ArgumentNullException.ThrowIfNull(current);
         ArgumentNullException.ThrowIfNull(successorAuthority);
@@ -1577,7 +1598,7 @@ public static partial class CampaignStateReducer
             }
             if (state.ProductRevision != template.ProductRevision
                 || !string.Equals(state.CampaignLineage, template.CampaignLineage, StringComparison.Ordinal)
-                || !CampaignStateFactory.SameCorrectnessCeilings(state.ConfiguredCeilings, template.ConfiguredCeilings)
+                || !allowCorrectnessChanges && (!CampaignStateFactory.SameCorrectnessCeilings(state.ConfiguredCeilings, template.ConfiguredCeilings)
                 || !string.Equals(
                     state.Snapshot.InputIdentityCommitmentSha256,
                     template.Snapshot.InputIdentityCommitmentSha256,
@@ -1586,7 +1607,7 @@ public static partial class CampaignStateReducer
                     state.Snapshot.PolicyAuthorityCommitmentSha256,
                     template.Snapshot.PolicyAuthorityCommitmentSha256,
                     StringComparison.Ordinal)
-                || state.Snapshot.TargetProfile != template.Snapshot.TargetProfile
+                || state.Snapshot.TargetProfile != template.Snapshot.TargetProfile)
                 || string.Equals(
                     state.Snapshot.OpaqueSnapshotBinding,
                     template.Snapshot.OpaqueSnapshotBinding,
