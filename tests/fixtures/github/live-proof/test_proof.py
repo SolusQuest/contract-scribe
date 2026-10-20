@@ -2,6 +2,7 @@ import contextlib
 import copy
 import datetime as dt
 import fnmatch
+import http.server
 import io
 import json
 import os
@@ -11,6 +12,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from unittest import mock
 import zipfile
@@ -372,6 +374,27 @@ class ResultTests(unittest.TestCase):
             self.assertNotIn('M5_READ_TOKEN', calls[0][1])
 
 
+@contextlib.contextmanager
+def local_provider():
+    from provider import PORT, Provider
+
+    class ObservedProvider(Provider):
+        def do_GET(self):
+            type(self).requests += 1
+            self.send_error(400, 'Unexpected synthetic read')
+
+    with http.server.ThreadingHTTPServer(('127.0.0.1', PORT), ObservedProvider) as server:
+        thread = threading.Thread(target=server.serve_forever)
+        thread.start()
+        try:
+            yield ObservedProvider
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+            if thread.is_alive():
+                raise AssertionError('local provider did not stop')
+
+
 @unittest.skipUnless(sys.platform == 'linux' and os.environ.get('M5_TEST_CLI') and os.environ.get('M5_TEST_CHECKER'),
                      'Requires native Linux and the normal CLI/Core helper built by the H3 offline job')
 class GenuineCheckpointTests(unittest.TestCase):
@@ -379,10 +402,12 @@ class GenuineCheckpointTests(unittest.TestCase):
         config = inputs()[0]
         cli, checker = Path(os.environ['M5_TEST_CLI']), Path(os.environ['M5_TEST_CHECKER'])
         environment = proof.clean_environment()
-        with tempfile.TemporaryDirectory(prefix='m5-h3-local-') as temporary:
+        with tempfile.TemporaryDirectory(prefix='m5-h3-local-') as temporary, local_provider() as provider:
             root = Path(temporary)
             proof.write_configuration(config, root)
             first_revision = None
+            first_requests = None
+            first_candidate = None
             for index, operation in enumerate(('start', 'resume')):
                 target = root / ('target-' + str(index))
                 target.mkdir()
@@ -396,32 +421,67 @@ class GenuineCheckpointTests(unittest.TestCase):
                 else:
                     state.mkdir(mode=0o700)
                     checkpoint = state / 'checkpoint.json'
-                request = root / ('request-' + str(index) + '.json')
-                request.write_bytes(canonical(proof.request_document(config, checkpoint, config['base_sha'])))
-                provider = subprocess.Popen([sys.executable, str(proof.HERE / 'provider.py')], env=environment,
-                                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                try:
-                    from provider import wait_ready
-                    wait_ready(provider)
-                    args = ['dotnet', str(cli), 'github-proposal', operation, '--repository-root', str(target),
-                            '--input', 'Synthetic.csproj', '--policy', 'policy.json',
-                            '--request', str(request), '--configuration', str(root / 'layer.json')]
-                    result = subprocess.run(args, env=environment, capture_output=True, timeout=180)
-                finally:
-                    provider.terminate()
-                    provider.wait(timeout=5)
+                # Local Core reconstruction remains a real campaign execution.
+                # github-proposal now owns a remote coordination-ref checkpoint.
+                args = ['dotnet', str(cli), 'campaign', operation, '--repository-root', str(target),
+                        '--input', 'Synthetic.csproj', '--policy', 'policy.json',
+                        '--state', str(checkpoint), '--campaign-lineage', 'campaign.issue166.' + config['activation'],
+                        '--snapshot', 'snapshot.issue166.' + config['activation'],
+                        '--configuration', str(root / 'layer.json')]
+                result = subprocess.run(args, env=environment, capture_output=True, timeout=180)
                 envelope = parse_json(result.stdout)
-                self.assertEqual((4, 'publication', 'github-proposal.permission'),
-                                 (result.returncode, envelope.get('terminalLayer'), envelope.get('outcome')), envelope)
+                self.assertEqual((0, 'campaign.complete'), (result.returncode, envelope.get('outcome')), envelope)
                 parsed = proof.check_checkpoint(checkpoint, checker)
+                accepted = parse_json(checkpoint.read_bytes())
+                self.assertIsNotNone(accepted['acceptedCandidateOrigin'])
+                candidate = accepted['candidateObservation']['changedFiles']
+                self.assertTrue(candidate)
                 if index:
                     self.assertGreater(parsed['revision'], first_revision)
+                    self.assertEqual(first_requests, provider.requests)
+                    self.assertEqual(first_candidate, candidate)
                 else:
                     first_revision = parsed['revision']
+                    first_requests = provider.requests
+                    self.assertGreater(first_requests, 0)
+                    first_candidate = candidate
                 self.assertEqual((proof.HERE / 'Synthetic.cs').read_bytes(), (target / 'Synthetic.cs').read_bytes())
             malformed = proof.private_checkpoint(root / 'malformed', b'{}')
             with self.assertRaises(ProofFailure):
                 proof.check_checkpoint(malformed, checker)
+
+    def test_current_github_request_without_credential_stops_before_sdk_or_provider(self):
+        config = inputs()[0]
+        cli = Path(os.environ['M5_TEST_CLI'])
+        hook = Path(os.environ['M5_TEST_HOOK'])
+        self.assertTrue(hook.is_file())
+        with tempfile.TemporaryDirectory(prefix='m5-h3-no-credential-') as temporary, local_provider() as provider:
+            root = Path(temporary)
+            target = root / 'target'
+            target.mkdir()
+            for name in ('Synthetic.cs', 'Synthetic.csproj', 'policy.json'):
+                shutil.copyfile(proof.HERE / name, target / name)
+            before = {path.name: path.read_bytes() for path in target.iterdir()}
+            proof.write_configuration(config, root)
+            observation = root / 'observations.txt'
+            environment = proof.clean_environment()
+            environment.update(DOTNET_STARTUP_HOOKS=str(hook),
+                               CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS=str(observation),
+                               CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT='http://127.0.0.1:48265/')
+            for operation in ('start', 'resume'):
+                result = subprocess.run(['dotnet', str(cli), 'github-proposal', operation,
+                                         '--repository-root', str(target), '--input', 'Synthetic.csproj',
+                                         '--policy', 'policy.json', '--request', str(root / 'request-positive.json'),
+                                         '--configuration', str(root / 'layer.json')],
+                                        env=environment, capture_output=True, timeout=180)
+                envelope = parse_json(result.stdout)
+                self.assertEqual((4, 'preflight', 'github-proposal.permission'),
+                                 (result.returncode, envelope.get('terminalLayer'), envelope.get('outcome')), envelope)
+                self.assertIsNone(envelope['checkpointRevision'])
+            self.assertEqual(['token-read', 'token-read'], observation.read_text().splitlines())
+            self.assertEqual(0, provider.requests)
+            self.assertEqual(before, {path.name: path.read_bytes() for path in target.iterdir()})
+            self.assertFalse((root / 'positive').exists())
 
 
 if __name__ == '__main__':

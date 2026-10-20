@@ -174,13 +174,13 @@ class ReadbackTests(unittest.TestCase):
                  'expectedBaseOid': config['base_sha'], 'observedBaseOid': config['base_sha'],
                  'proposalRefOid': 'f' * 40, 'proposalCommitOid': 'f' * 40, 'contentCommitOid': 'f' * 40,
                  'pullRequestNumber': 2, 'pullRequestCreationOperationCommitmentSha256': '1' * 64,
-                 'snapshotCommitmentSha256': '2' * 64, 'policyCommitmentSha256': '3' * 64,
+                 'snapshotCommitmentSha256': '2' * 64, 'batchIdentity': '3' * 64,
                  'operationCommitmentSha256': '4' * 64, 'ownershipMarkerSha256': sha(marker.encode()),
                  'proposalTreeOid': '5' * 40, 'coordinationPredecessorOid': '6' * 40,
                  'cumulativeChangedFiles': [{'path': 'Synthetic.cs', 'candidateSha256': sha(candidate)}],
                  'cumulativeDocumentationBlocks': 1}
         body = marker + 'campaign=sha256:' + key + '\ngeneration=sha256:' + generation + '\nsnapshot=sha256:' + '2' * 64
-        body += '\npolicy=sha256:' + '3' * 64 + '\nheadRef=sha256:' + sha(proposal_ref.encode())
+        body += '\nbatch=sha256:' + '3' * 64 + '\nheadRef=sha256:' + sha(proposal_ref.encode())
         body += '\nbaseRef=sha256:' + sha(b'refs/heads/main') + '\ncreationOperationId=sha256:' + '4' * 64 + '\n'
         pr = {'number': 2, 'state': 'open', 'draft': True, 'merged': False, 'user': dict(ACTOR),
               'head': {'sha': 'f' * 40, 'ref': proposal_ref.removeprefix('refs/heads/'), 'repo': {'id': REPOSITORY_ID}},
