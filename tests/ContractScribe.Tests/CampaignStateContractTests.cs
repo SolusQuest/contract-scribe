@@ -2103,6 +2103,12 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
         Assert.Equal(CampaignWorkStatus.Planned, retry.Artifact.State.WorkItems[0].Status);
         CampaignStateFactory.ValidateSuccessorHistory(completed.Artifact, retry.Artifact);
+        var retryState = retry.Artifact.State;
+        var unreserved = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(
+            retryState.ProductRevision, retryState.CampaignLineage, retryState.Snapshot, retryState.CheckpointRevision,
+            retryState.ConfiguredCeilings, retryState.LineageCharges, retryState.WorkItems, retryState.Batch,
+            dispatchObservations: retryState.DispatchObservations, scribeProgress: retryState.ScribeProgress));
+        Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateSuccessorHistory(completed.Artifact, unreserved));
         Assert.Null(retry.Artifact.State.WorkItems[0].ClosedOutcome);
         Assert.NotEqual(
             firstAttempt,

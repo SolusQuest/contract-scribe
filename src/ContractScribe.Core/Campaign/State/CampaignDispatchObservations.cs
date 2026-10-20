@@ -108,6 +108,9 @@ public static partial class CampaignStateFactory
             Require(work.OuterAttemptCount >= oldWork.OuterAttemptCount
                 && work.CandidateAttemptCount >= oldWork.CandidateAttemptCount,
                 CampaignStateValidationCode.InvalidCorrelation);
+            if (oldWork.Status == CampaignWorkStatus.Closed)
+                Require(work.Status == CampaignWorkStatus.Closed && SameRetainedFact(oldWork.ClosedOutcome, work.ClosedOutcome)
+                    || IsCorrelatedClosedRetry(before, next, oldWork, work), CampaignStateValidationCode.InvalidCorrelation);
             if (oldWork.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
             {
                 // The existing reducer can close an independently rejected patch
@@ -151,6 +154,43 @@ public static partial class CampaignStateFactory
         foreach (var operation in before.KnownCompletedOperations)
             Require(next.KnownCompletedOperations.Any(current => SameRetainedFact(operation, current)),
                 CampaignStateValidationCode.InvalidCorrelation);
+    }
+
+    private static bool IsCorrelatedClosedRetry(CampaignCheckpointState before, CampaignCheckpointState next,
+        CampaignWorkItemState oldWork, CampaignWorkItemState work)
+    {
+        static bool Retryable(CampaignWorkItemState item) => item is
+        {
+            Status: CampaignWorkStatus.Closed, AttemptDisposition: CampaignAttemptDisposition.Open, PausedProviderAttempt: null,
+            ClosedOutcome:
+            {
+                Stage: CampaignWorkOutcomeStage.Scribe, Code: CampaignWorkOutcomeCode.ProviderFailure,
+                ProviderDisposition: CampaignProviderFinalDisposition.Retryable
+            },
+        };
+        if (!Retryable(oldWork) || before.ActiveReservation is not null || before.TerminalOutcome is not null
+            || work.Status != CampaignWorkStatus.Planned || work.ClosedOutcome is not null
+            || oldWork.OuterAttemptCount >= before.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget
+            || next.ActiveReservation is not CampaignProviderReservation
+            {
+                OperationKind: CampaignProviderOperationKind.Host, HostPhase: CampaignProviderHostPhase.Preflight,
+                CurrentOperationOrdinal: 1, LastDispatchOrdinal: 0
+            } claim
+            || claim.ExecutionStartRevision != next.CheckpointRevision
+            || next.ScribeProgress?.Session is not { Ended: false } session
+            || session.AttemptId != claim.AttemptId || !session.AdmittedWorkItemKeys.Contains(work.WorkItemKey, StringComparer.Ordinal))
+            return false;
+        var anchor = before.WorkItems.Single(item => item.WorkItemKey == claim.WorkItemKey);
+        var nextAnchor = next.WorkItems.Single(item => item.WorkItemKey == claim.WorkItemKey);
+        var previousAttempt = before.ScribeProgress?.Members.SingleOrDefault(member => member.WorkItemKey == oldWork.WorkItemKey)?.AttemptId
+            ?? CreateScribeAttemptId(before.Snapshot.ExecutionCommitmentSha256,
+                before.ConfiguredCeilings.ScribeExecutionAuthority, oldWork.WorkItemKey, oldWork.OuterAttemptCount);
+        return Retryable(anchor) && previousAttempt == oldWork.ClosedOutcome!.AttemptId
+            && nextAnchor.OuterAttemptCount == checked(anchor.OuterAttemptCount + 1)
+            && work.OuterAttemptCount == oldWork.OuterAttemptCount + (work.WorkItemKey == claim.WorkItemKey ? 1 : 0)
+            && claim.AttemptId == CreateScribeAttemptId(before.Snapshot.ExecutionCommitmentSha256,
+                before.ConfiguredCeilings.ScribeExecutionAuthority, anchor.WorkItemKey, nextAnchor.OuterAttemptCount)
+            && next.LineageCharges.OuterInvocations == checked(before.LineageCharges.OuterInvocations + 1);
     }
 
     internal static string DispatchSettlementCommitment(CampaignDispatchObservation row) =>
