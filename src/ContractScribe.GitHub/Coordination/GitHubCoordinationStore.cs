@@ -594,7 +594,7 @@ internal sealed partial class GitHubCoordinationStore
         // Revalidate through the bounded ancestry reader; this is not a general history API.
         if (current.AdmissionSource is { Transition: "same-snapshot-append" } source)
         {
-            var previous = await ReadStateAsync(repository, target, source.HeadOid, cancellationToken).ConfigureAwait(false);
+            var previous = await ReadStateAsync(repository, target, source.PhysicalHeadOid, cancellationToken).ConfigureAwait(false);
             if (previous.State is not StateCapability authenticated) return previous;
             if (!SameState(source, authenticated)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             current.AdmissionSource = authenticated;
@@ -978,8 +978,8 @@ internal sealed partial class GitHubCoordinationStore
             cancellationToken).ConfigureAwait(false);
         if (state.State is null) return state;
         var capability = (StateCapability)state.State;
-        if (capability.HeadOid != prepared.CommitOid
-            || !capability.CanonicalBytes.AsSpan().SequenceEqual(prepared.StateBytes.AsSpan()))
+        if (capability.PhysicalHeadOid != prepared.CommitOid
+            || !capability.PhysicalCanonicalBytes.AsSpan().SequenceEqual(prepared.StateBytes.AsSpan()))
             return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
         return new(GitHubCoordinationOutcome.Current, state: capability);
     }
@@ -1029,7 +1029,8 @@ internal sealed partial class GitHubCoordinationStore
                     if (currentGeneration) creation = cursor;
                 }
             }
-            var predecessorOid = publicationPrevious.GetValueOrDefault(cursor.HeadOid)?.Anchor ?? ZeroOid;
+            // Event traversal uses the exact immutable observation, not the live renewal alias.
+            var predecessorOid = publicationPrevious.GetValueOrDefault(cursor.PhysicalHeadOid)?.Anchor ?? ZeroOid;
             if (predecessorOid == ZeroOid)
             {
                 if (cursor.Stage != GitHubCoordinationStage.Claimed || cursor.Transition != "initial"
@@ -1037,7 +1038,7 @@ internal sealed partial class GitHubCoordinationStore
                     || matchAuthority && cursor.OperationId == authority.OperationId && !ValidAuthorityRoot(cursor.State, null))
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
                 return new(GitHubCoordinationOutcome.Current, state: new StateCapability(this, repository, target,
-                    headOid, currentState.State, currentState.CanonicalBytes, creation)
+                    headOid, currentState.State, currentState.PhysicalCanonicalBytes, creation)
                 { AdmissionSource = currentState.AdmissionSource, Generations = generations.ToImmutable() });
             }
             if (!visited.Add(predecessorOid)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
@@ -1489,6 +1490,7 @@ internal sealed partial class GitHubCoordinationStore
         public GitHubRepositoryIdentity Repository => repository;
         internal StateCapability? AdmissionSource { get; set; }
         internal GitHubRef Target => target;
+        internal string PhysicalHeadOid => headOid;
         public string HeadOid => owner.ResolvePublicationHead(headOid);
         public GitHubCoordinationStage Stage => state.Stage;
         public string TargetRef => state.TargetRef;
@@ -1522,6 +1524,7 @@ internal sealed partial class GitHubCoordinationStore
         internal StateCapability? Creation { get; }
         internal ImmutableArray<GitHubCampaignGeneration> Generations { get; init; } = [];
         internal GitHubCoordinationState State => state;
+        internal ImmutableArray<byte> PhysicalCanonicalBytes => canonicalBytes;
         internal ImmutableArray<byte> CanonicalBytes => HeadOid == headOid ? canonicalBytes
             : ImmutableArray.CreateRange(owner.documents[HeadOid].Encode());
         public override string ToString() => nameof(StateCapability);

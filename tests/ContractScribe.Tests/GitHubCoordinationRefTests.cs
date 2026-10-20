@@ -2797,7 +2797,8 @@ public sealed partial class GitHubCoordinationRefTests
         long pullRequestNumber,
         string generationId,
         string headOid,
-        GitHubCoordinationStage stage)
+        GitHubCoordinationStage stage,
+        string? expectedBaseOid = null)
     {
         var disposition = stage == GitHubCoordinationStage.Merged
             ? GitHubPublicationPredecessorDisposition.Merged
@@ -2817,7 +2818,7 @@ public sealed partial class GitHubCoordinationRefTests
             : null;
         return GitHubPublicationFactory.CreateAuthority(new(
             predecessor.RepositoryOwner, predecessor.RepositoryName, predecessor.TargetRef,
-            Oid('9'), predecessor.CampaignLineage, Hash('a'), Hash('d'), Hash('b'), 9,
+            expectedBaseOid ?? Oid('9'), predecessor.CampaignLineage, Hash('a'), Hash('d'), Hash('b'), 9,
             Hash('e'), Hash('c'), Hash('f'), Hash('7'), Hash('8'), operation, "generation-2",
             null, null, null, null, null, null, terminalPredecessor, transition,
             predecessor.AcceptedM4Ceilings, predecessor.Policy,
