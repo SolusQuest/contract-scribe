@@ -49,6 +49,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
     internal Action<Request, byte[]>? BeforeBody { get; set; }
     internal Action<Request>? Before { get; set; }
     internal Action<Request>? After { get; set; }
+    internal Func<Request, Task?>? BeforeResponse { get; set; }
     private string? barrierPath;
     private int barrierCount;
     private TaskCompletionSource? barrier;
@@ -96,7 +97,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             Refs.Clear(); Refs["refs/heads/main"] = BaseOid;
             PullRequests.Clear(); Requests.Clear();
             Mutations = SuccessfulCas = PrAttempts = PublicationWrites = 0;
-            LoseAt = null; RejectPath = null; Before = After = null;
+            LoseAt = null; RejectPath = null; Before = After = null; BeforeResponse = null;
         }
     }
 
@@ -157,6 +158,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
                     wait = barrier!.Task;
                     if (--barrierCount == 0) barrier.TrySetResult();
                 }
+                wait ??= BeforeResponse?.Invoke(request);
             }
             if (wait is not null) await wait.WaitAsync(TimeSpan.FromSeconds(45), stop.Token);
             if (DelayResponses) await Task.Delay(Timeout.InfiniteTimeSpan, stop.Token);

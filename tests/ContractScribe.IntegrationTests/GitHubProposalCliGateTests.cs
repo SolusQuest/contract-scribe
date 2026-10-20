@@ -1,4 +1,6 @@
 using System.Text;
+using System.Diagnostics;
+using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using ContractScribe.Cli;
@@ -8,6 +10,75 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("read")]
+    [InlineData("write")]
+    [InlineData("readback")]
+    public async Task G3_caller_cancellation_during_initial_checkpoint_IO_preserves_cancelled(string phase)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var acknowledgement = Path.Join(fixture.Outside, "initial-checkpoint.ack");
+        var release = Path.Join(fixture.Outside, "initial-checkpoint.release");
+        var environment = fixture.Environment();
+        foreach (var pair in CampaignCliProcessTests.HookEnvironment(CampaignProcessBoundaryHooks.InitialBeforeCreate,
+            acknowledgement, release)) environment[pair.Key] = pair.Value;
+        environment["CONTRACTSCRIBE_TEST_GITHUB_TIMEOUT"] = "30000";
+        var responseRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var running = CampaignCliProcessTests.Start(fixture.Args("start"), environment);
+        try
+        {
+            await CampaignCliProcessTests.WaitForFileAsync(acknowledgement, running,
+                CampaignProcessBoundaryHooks.InitialBeforeCreate, TimeSpan.FromMinutes(2));
+            var held = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            var checkpointWritten = false;
+            fixture.GitHub.After = request =>
+            {
+                if (request.Method == "POST" && request.Path == "/graphql") checkpointWritten = true;
+            };
+            fixture.GitHub.BeforeResponse = request =>
+            {
+                if (held.Task.IsCompleted) return null;
+                var selected = phase == "write"
+                    ? request.Method == "POST" && request.Path.EndsWith("/git/blobs", StringComparison.Ordinal)
+                    : request.Method == "GET" && request.Path == "/repos/Owner/repo"
+                        && (phase == "read" || checkpointWritten);
+                if (!selected) return null;
+                held.TrySetResult();
+                return responseRelease.Task;
+            };
+            await File.WriteAllTextAsync(release, "continue\n");
+            await held.Task.WaitAsync(TimeSpan.FromMinutes(2));
+            using var signal = Process.Start(new ProcessStartInfo("kill")
+            {
+                UseShellExecute = false,
+                CreateNoWindow = true,
+                ArgumentList = { "-TERM", running.Process.Id.ToString(CultureInfo.InvariantCulture) },
+            })!;
+            await signal.WaitForExitAsync();
+            Assert.Equal(0, signal.ExitCode);
+            var elapsed = Stopwatch.StartNew();
+            while (Observed(fixture, "signal-observed") == 0)
+            {
+                Assert.False(running.Process.HasExited);
+                Assert.True(elapsed.Elapsed < TimeSpan.FromMinutes(2));
+                await Task.Delay(10);
+            }
+            // Only the original response is held. Independent bounded readback
+            // must remain available to reconcile an already dispatched write.
+            responseRelease.TrySetResult();
+            await running.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
+            AssertResult(await running.CompleteAsync(), 6, "cancelled");
+            Assert.Equal(0, Observed(fixture, "provider-create"));
+            Assert.Equal(0, fixture.Provider.RequestCount);
+            Assert.Empty(fixture.GitHub.PullRequests);
+        }
+        finally
+        {
+            responseRelease.TrySetResult();
+            await CampaignCliProcessTests.StopAsync(running);
+        }
+    }
+
     [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false, false)]
     [InlineData(true, false)]
