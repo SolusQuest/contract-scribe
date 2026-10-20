@@ -9,7 +9,7 @@ namespace ContractScribe.GitHub.PullRequests;
 
 internal enum GitHubProposalOutcome
 {
-    Absent, Appendable, HeldDraft, Ready, Merged, ClosedUnmerged,
+    Absent, OpenDraft, HeldDraft, Ready, Merged, ClosedUnmerged,
     StaleDraft, Conflict, Unresolved, Failed,
 }
 
@@ -25,10 +25,13 @@ internal interface IGitHubProposalObservation
     IGitHubCoordinationStateCapability Coordination { get; }
 }
 
+internal interface IGitHubProposalAbsence;
+
 internal sealed record GitHubProposalResult(GitHubProposalOutcome Outcome,
     IGitHubProposalObservation? Observation = null, GitHubFailure? Failure = null,
     GitHubDelivery Delivery = GitHubDelivery.Read,
-    GitHubCoordinationFailureKind? Cause = null) : GitHubValue;
+    GitHubCoordinationFailureKind? Cause = null,
+    IGitHubProposalAbsence? Absence = null) : GitHubValue;
 
 // R6 chooses an explicit operation. Recovery is deliberately incapable of creating a PR.
 internal sealed class GitHubProposalPullRequestStore
@@ -62,11 +65,11 @@ internal sealed class GitHubProposalPullRequestStore
         var commitment = coordination.CreationCommitment(state);
         if (source is null || reference is null || commitment is null) return null;
         return CreateMetadata(client.ReadAuthority, reference, source.SnapshotCommitmentSha256,
-            source.PolicyCommitmentSha256, source.TargetRef, source.OperationCommitmentSha256, commitment);
+            source.BatchIdentity, source.TargetRef, source.OperationCommitmentSha256, commitment);
     }
 
     internal static GitHubProposalMetadata CreateMetadata(ValidatedGitHubCampaignReadAuthority authority,
-        string reference, string snapshot, string policy, string targetRef, string operation, string commitment)
+        string reference, string snapshot, string batch, string targetRef, string operation, string commitment)
     {
         var campaign = GitHubPublicationFactory.CreateCoordinationRef(authority).Split('/')[^1];
         var generation = reference.Split('/')[^1];
@@ -74,7 +77,7 @@ internal sealed class GitHubProposalPullRequestStore
         var body = marker + "campaign=sha256:" + campaign + "\n"
             + "generation=sha256:" + generation + "\n"
             + "snapshot=sha256:" + snapshot + "\n"
-            + "policy=sha256:" + policy + "\n"
+            + "batch=sha256:" + batch + "\n"
             + "headRef=sha256:" + Hash(reference) + "\n"
             + "baseRef=sha256:" + Hash(targetRef) + "\n"
             + "creationOperationId=sha256:" + operation + "\n";
@@ -86,10 +89,40 @@ internal sealed class GitHubProposalPullRequestStore
         observation is Observation owned && ReferenceEquals(owned.Owner.coordination, coordination)
         && coordination.Owns(owned.Coordination);
 
+    internal static bool AuthenticatesAbsence(IGitHubProposalAbsence absence,
+        GitHubCoordinationStore coordination, IGitHubCoordinationStateCapability state) =>
+        absence is Absence owned && ReferenceEquals(owned.Owner.coordination, coordination)
+        && coordination.Owns(state) && coordination.ResolvePublicationHead(owned.HeadOid) == state.HeadOid
+        && owned.Operation == state.OperationCommitmentSha256;
+
+    internal static async ValueTask<bool> RevalidateAbsenceAsync(IGitHubProposalAbsence absence,
+        GitHubCoordinationStore coordination, IGitHubCoordinationStateCapability state, CancellationToken token)
+    {
+        if (!AuthenticatesAbsence(absence, coordination, state)) return false;
+        var owner = ((Absence)absence).Owner;
+        // The caller has prepared a physical CAS parent. Recheck without renewing
+        // that parent; expiry stops this write rather than changing its preimage.
+        var guard = await coordination.ReadClaimAsync(state, token, renewClaim: false).ConfigureAwait(false);
+        if (guard.Guard is null) return false;
+        var reference = coordination.ProposalRefFor(state)!;
+        var campaign = GitHubPublicationFactory.CreateCoordinationRef(owner.client.Authority).Split('/')[^1];
+        var collection = await owner.ReadCampaign(reference, campaign, null, [], token).ConfigureAwait(false);
+        if (collection.Failure is not null || collection.Items.Any(pr => pr.Open || "refs/heads/" + pr.Head.Ref == reference))
+            return false;
+        var proposal = await owner.client.GetRefAsync(reference, token).ConfigureAwait(false);
+        if (state.Stage == GitHubCoordinationStage.ContentCreated
+            ? proposal.Value is not null || proposal.Failure?.Code != GitHubFailureCode.NotFound
+            : state.Stage != GitHubCoordinationStage.ProposalRefAdvanced
+                || proposal.Value?.Oid != state.ProposalCommitOid)
+            return false;
+        guard = await coordination.ReadClaimAsync(state, token, renewClaim: false).ConfigureAwait(false);
+        return guard.Guard is not null;
+    }
+
     internal ValueTask<GitHubProposalResult> CreateAuthorizedAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubPullRequestEntitlement entitlement, CancellationToken token = default) =>
         coordination.ConsumePullRequestEntitlement(entitlement, state)
-            ? CreateAsync(state, expected, token) : ValueTask.FromResult(Conflict());
+            ? CreateCoreAsync(state, expected, token) : ValueTask.FromResult(Conflict());
 
     internal ValueTask<GitHubProposalResult> ObserveVerifiedAsync(IGitHubCoordinationStateCapability state,
         IGitHubInspectedProposal proof, IGitHubProposalObservation? previous = null, bool recovering = false,
@@ -99,10 +132,6 @@ internal sealed class GitHubProposalPullRequestStore
         GitHubProposalHead? head = null;
         if (proof.ContentExists && proof.ObservedRefOid == proof.CommitOid)
             head = new(proof.Ref, proof.CommitOid, proof.TreeOid);
-        else if (state.Transition == "same-snapshot-append"
-            && coordination.AdmissionSource(state) is { } source
-            && proof.ObservedRefOid == source.ProposalCommitOid && proof.BeforeOid == source.ProposalCommitOid)
-            head = new(proof.Ref, source.ProposalCommitOid!, source.ProposalTreeOid!);
         return head is null ? ValueTask.FromResult(Conflict())
             : ObserveCoreAsync(state, head, previous, recovering, token, verified: proof);
     }
@@ -126,7 +155,8 @@ internal sealed class GitHubProposalPullRequestStore
             if (item.Open || head == reference || head == unrecordedPredecessorRef) return Conflict();
         }
         fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
-        return fresh.Read is null ? ClaimFailure(fresh) : new(GitHubProposalOutcome.Absent);
+        return fresh.Read is null ? ClaimFailure(fresh) : new(GitHubProposalOutcome.Absent,
+            Absence: fresh.State is { } state ? new Absence(this, state) : null);
     }
 
     internal ValueTask<GitHubProposalResult> ObserveAsync(IGitHubCoordinationStateCapability state,
@@ -137,11 +167,10 @@ internal sealed class GitHubProposalPullRequestStore
         GitHubProposalHead expected, IGitHubProposalObservation? previous = null,
         CancellationToken cancellationToken = default) => ObserveCoreAsync(state, expected, previous, true, cancellationToken);
 
-    internal async ValueTask<GitHubProposalResult> CreateAsync(IGitHubCoordinationStateCapability state,
+    private async ValueTask<GitHubProposalResult> CreateCoreAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, CancellationToken cancellationToken = default)
     {
-        if (!Input(state, expected) || state.Stage != GitHubCoordinationStage.ProposalRefAdvanced
-            || state.Transition == "same-snapshot-append"
+        if (!Input(state, expected) || state.Stage != GitHubCoordinationStage.PullRequestCreateStarted
             || state.OperationCommitmentSha256 != client.Authority.OperationCommitmentSha256)
             return Conflict();
         var observed = await ObserveCoreAsync(state, expected, null, false, cancellationToken).ConfigureAwait(false);
@@ -157,7 +186,7 @@ internal sealed class GitHubProposalPullRequestStore
             expected.CommitOid, state.TargetRef, state.TargetCommitOid, metadata.Title, metadata.Body), cancellationToken).ConfigureAwait(false);
         if (created.Delivery == GitHubDelivery.NotDispatched) return Failed(created);
         // An uncertain POST is never retried. Recovery has its own bounded cancellation scope.
-        using var recovery = new CancellationTokenSource(recoveryTimeout);
+        using var recovery = client.CreateRecoveryScope(recoveryTimeout);
         var result = await ObserveCoreAsync(state, expected, null, true, recovery.Token).ConfigureAwait(false);
         if (recovery.IsCancellationRequested)
             return new(GitHubProposalOutcome.Failed, Failure: new(GitHubFailureCode.Timeout), Delivery: created.Delivery);
@@ -211,7 +240,12 @@ internal sealed class GitHubProposalPullRequestStore
             if (active != 0 || state.PullRequestNumber is not null
                 || coordination.CreationSource(state)?.PullRequestNumber is not null || previous is not null)
                 return Conflict();
-            return new(recovering ? GitHubProposalOutcome.Unresolved : GitHubProposalOutcome.Absent);
+            var finalAbsent = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
+            if (finalAbsent.State?.HeadOid != state.HeadOid) return Conflict();
+            proposal = await VerifyProposalAsync(state, expected, verified, cancellationToken).ConfigureAwait(false);
+            if (proposal is not null) return proposal;
+            return new(recovering ? GitHubProposalOutcome.Unresolved : GitHubProposalOutcome.Absent,
+                Absence: recovering ? null : new Absence(this, finalAbsent.State));
         }
         var candidate = candidates[0];
         if (active > (candidate.Open ? 1 : 0)) return Conflict();
@@ -302,7 +336,7 @@ internal sealed class GitHubProposalPullRequestStore
         }
         if (!pr.Draft) return Observed(GitHubProposalOutcome.Ready);
         return Observed(state.Stage == GitHubCoordinationStage.AwaitingReview
-            ? GitHubProposalOutcome.HeldDraft : GitHubProposalOutcome.Appendable);
+            ? GitHubProposalOutcome.HeldDraft : GitHubProposalOutcome.OpenDraft);
 
         GitHubProposalResult Observed(GitHubProposalOutcome outcome) =>
             new(outcome, new Observation(this, outcome, pr, metadata, state));
@@ -342,19 +376,10 @@ internal sealed class GitHubProposalPullRequestStore
         IGitHubCoordinationStateCapability state, GitHubProposalHead expected, string? observed,
         IGitHubInspectedProposal? verified, CancellationToken cancellationToken)
     {
-        // A legitimate append can move the proposal while this reader still holds its predecessor.
-        // Attribute drift to a human only under the same authenticated coordination authority.
+        // Attribute drift only under the same authenticated coordination authority.
         var current = await coordination.ReadCurrentAsync(cancellationToken).ConfigureAwait(false);
         if (current.State is null) return ClaimFailure(current);
         if (current.State.HeadOid != state.HeadOid || current.State.Repository != state.Repository) return Conflict();
-        // The ref CAS can also precede its stage CAS. Only R4's complete, owner-bound
-        // proof of this exact forward successor explains that unchanged-stage window.
-        if (verified is { ContentExists: true } && GitHubProposalStore.Authenticates(verified, coordination, state)
-            && state.Stage == GitHubCoordinationStage.ContentCreated && state.Transition == "same-snapshot-append"
-            && state.ContentCommitOid == verified.CommitOid && verified.Ref == expected.Ref
-            && verified.BeforeOid == expected.CommitOid && verified.ObservedRefOid == expected.CommitOid
-            && verified.CommitOid == observed && coordination.AdmissionSource(state)?.ProposalCommitOid == expected.CommitOid)
-            return Conflict();
         return HumanChange();
     }
 
@@ -389,5 +414,14 @@ internal sealed class GitHubProposalPullRequestStore
         public GitHubProposalMetadata Metadata { get; } = metadata;
         public IGitHubCoordinationStateCapability Coordination { get; } = state;
         public override string ToString() => nameof(Observation);
+    }
+
+    private sealed class Absence(GitHubProposalPullRequestStore owner, IGitHubCoordinationStateCapability state)
+        : IGitHubProposalAbsence
+    {
+        internal GitHubProposalPullRequestStore Owner { get; } = owner;
+        internal string HeadOid { get; } = state.HeadOid;
+        internal string Operation { get; } = state.OperationCommitmentSha256;
+        public override string ToString() => nameof(Absence);
     }
 }

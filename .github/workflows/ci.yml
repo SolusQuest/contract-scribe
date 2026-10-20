@@ -1235,9 +1235,6 @@ jobs:
            "github":{"repositoryOwner":"Owner","repositoryName":"repo",
              "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
              "operationId":"operation.e2e","generationId":"generation.e2e",
-             "policy":{"maximumDocumentationBlocks":128,
-               "maximumDistinctChangedFiles":128,
-               "maximumCumulativePatchBytes":4194304},
              "transition":"initial"}}
           EOFX
           cp action-inputs/request.json action-inputs/request-2.json
@@ -1496,10 +1493,7 @@ jobs:
               "generationId": "generation.a3",
               "targetRef": "refs/heads/main",
               "repositoryOwner": "Owner",
-              "repositoryName": "repo",
-              "policyCeilings": {"maximumDocumentationBlocks": 128,
-                                 "maximumDistinctChangedFiles": 128,
-                                 "maximumCumulativePatchBytes": 4194304}}
+              "repositoryName": "repo"}
           json.dump(campaign, open("action-inputs/campaign.json", "w"))
           context = {"runId": 91001, "runNumber": 500, "runAttempt": 1,
                      "event": "workflow_dispatch", "ref": "refs/heads/main",
@@ -1521,7 +1515,7 @@ jobs:
         env:
           CS_OPERATION: start
           CS_CAMPAIGN_LINEAGE: campaign.action.a3
-          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo"}'
           CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"${{ steps.target.outputs.target_head }}","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
           python3 action-src/examples/github-actions/handoff.py request
@@ -1723,7 +1717,7 @@ jobs:
         env:
           CS_OPERATION: resume
           CS_CAMPAIGN_LINEAGE: campaign.action.a3
-          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo","policyCeilings":{"maximumDocumentationBlocks":128,"maximumDistinctChangedFiles":128,"maximumCumulativePatchBytes":4194304}}'
+          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo"}'
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"${{ steps.target.outputs.target_head }}","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
         run: >-
           python3 action-src/examples/github-actions/handoff.py request

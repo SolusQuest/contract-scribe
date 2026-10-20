@@ -33,9 +33,6 @@
           "type": "object",
           "additionalProperties": false,
           "properties": {
-            "maximumBlocks": { "type": "integer", "minimum": 1, "maximum": 16384 },
-            "maximumChangedFiles": { "type": "integer", "minimum": 1, "maximum": 16384 },
-            "maximumPatchBytes": { "type": "integer", "minimum": 1 },
             "maximumProviderRequests": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000 },
             "maximumAttemptsPerTarget": { "type": "integer", "minimum": 1, "maximum": 1000 },
             "maximumInputTokens": { "type": ["integer", "null"], "minimum": 0 },

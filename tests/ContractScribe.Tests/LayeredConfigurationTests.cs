@@ -190,14 +190,26 @@ public sealed partial class LayeredConfigurationTests : IDisposable
         Assert.Throws<CampaignConfigurationException>(() => Resolve(defaultsDuplicates));
     }
 
+    [Theory]
+    [InlineData("maximumBlocks")]
+    [InlineData("maximumChangedFiles")]
+    [InlineData("maximumPatchBytes")]
+    public void Retired_business_quotas_are_unknown_consumer_fields(string field)
+    {
+        AssertInvalid(Defaults(), Layer("budgets", new JsonObject
+        {
+            ["campaign"] = new JsonObject { [field] = 1 },
+        }));
+    }
+
     [Fact]
     public void Resolve_CorruptDefaultsCannotBeRepairedByAnUpperLayer()
     {
         var corrupt = Defaults(root =>
-            ((JsonObject)((JsonObject)root["budgets"]!)["campaign"]!)["maximumBlocks"] = "corrupt");
+            ((JsonObject)((JsonObject)root["budgets"]!)["campaign"]!)["maximumCandidatesPerBlock"] = "corrupt");
         var repairing = Layer("budgets", new JsonObject
         {
-            ["campaign"] = new JsonObject { ["maximumBlocks"] = 128 },
+            ["campaign"] = new JsonObject { ["maximumCandidatesPerBlock"] = 128 },
         });
         AssertInvalid(corrupt, repairing);
     }
@@ -437,11 +449,11 @@ public sealed partial class LayeredConfigurationTests : IDisposable
         AssertInvalid(Defaults(), Layer("budgets", null));
         AssertInvalid(Defaults(), Layer("budgets", new JsonObject
         {
-            ["campaign"] = new JsonObject { ["maximumBlocks"] = "128" },
+            ["campaign"] = new JsonObject { ["maximumCandidatesPerBlock"] = "128" },
         }));
         AssertInvalid(Defaults(), Layer("budgets", new JsonObject
         {
-            ["campaign"] = new JsonObject { ["maximumBlocks"] = 1.5 },
+            ["campaign"] = new JsonObject { ["maximumCandidatesPerBlock"] = 1.5 },
         }));
         AssertInvalid(Defaults(), Layer("planning", new JsonObject { ["targetProfile"] = 7 }));
         AssertInvalid(Defaults(), Layer("provider", new JsonObject { ["requestProfile"] = "x" }));
@@ -471,7 +483,7 @@ public sealed partial class LayeredConfigurationTests : IDisposable
         AssertInvalid(Defaults(), Write("layer.json",
             "{\"consumerConfigurationVersion\":1,\"bogus\":1,\"bogus\":2}"));
         AssertInvalid(Defaults(), Write("layer.json",
-            "{\"consumerConfigurationVersion\":1,\"budgets\":{\"campaign\":{\"maximumBlocks\":1,\"maximumBlocks\":2}}}"));
+            "{\"consumerConfigurationVersion\":1,\"budgets\":{\"campaign\":{\"maximumCandidatesPerBlock\":1,\"maximumCandidatesPerBlock\":2}}}"));
     }
 
     [Fact]
@@ -494,7 +506,7 @@ public sealed partial class LayeredConfigurationTests : IDisposable
         AssertInvalidBytes(Defaults(), Encoding.UTF8.GetBytes("[1,2]"));
 
         var deep = new StringBuilder("{\"consumerConfigurationVersion\":1,\"budgets\":");
-        deep.Append("{\"campaign\":{\"maximumBlocks\":1}");
+        deep.Append("{\"campaign\":{\"maximumCandidatesPerBlock\":1}");
         for (var index = 0; index < 70; index++)
         {
             deep.Insert(deep.Length - 1, "{\"x\":".AsSpan());

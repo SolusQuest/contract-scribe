@@ -510,8 +510,7 @@ public static partial class CampaignStateFactory
             .Where(item => item is not null)
             .Select(item => item!)
             .ToImmutableArray();
-        if (completeProjectionSet.Length > CampaignStateContract.MaximumActivePatchBlocks
-            || completeProjectionSet.Length > state.ConfiguredCeilings.CampaignBudget.MaximumBlocks)
+        if (completeProjectionSet.Length > CampaignStateContract.MaximumActivePatchBlocks)
         {
             return CampaignTrustedProposalAdmissionKind.OverBound;
         }
@@ -645,8 +644,7 @@ public static partial class CampaignStateFactory
             .Where(item => item.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
             .Select(item => item.TrustedProposal!)
             .ToImmutableArray();
-        if (activeProposals.Length >= CampaignStateContract.MaximumActivePatchBlocks
-            || activeProposals.Length >= state.ConfiguredCeilings.CampaignBudget.MaximumBlocks)
+        if (activeProposals.Length >= CampaignStateContract.MaximumActivePatchBlocks)
         {
             return CampaignTrustedProposalAdmissionKind.OverBound;
         }
@@ -1380,8 +1378,7 @@ public static partial class CampaignStateFactory
         }
 
         Require(completedOverboundScribeOperations <= 1, CampaignStateValidationCode.InvalidBound);
-        Require(activeBlocks <= CampaignStateContract.MaximumActivePatchBlocks
-            && activeBlocks <= state.ConfiguredCeilings.CampaignBudget.MaximumBlocks,
+        Require(activeBlocks <= CampaignStateContract.MaximumActivePatchBlocks,
             CampaignStateValidationCode.InvalidBound);
         ValidateActiveProjectionSet(state.WorkItems);
         var activeProposals = state.WorkItems
@@ -1660,9 +1657,6 @@ public static partial class CampaignStateFactory
         var budget = policy.CampaignBudget;
         var limits = policy.ScribeRunLimits;
         var projectedBudget = new CampaignStateCampaignBudget(
-            budget.MaximumBlocks,
-            budget.MaximumChangedFiles,
-            budget.MaximumPatchBytes,
             budget.MaximumProviderRequests,
             budget.MaximumAttemptsPerTarget,
             budget.MaximumInputTokens,
@@ -1785,10 +1779,7 @@ public static partial class CampaignStateFactory
             && ceilings.StyleConfigurationAuthority is not null,
             CampaignStateValidationCode.InvalidShape);
         var budget = ceilings.CampaignBudget;
-        Require(budget.MaximumBlocks is >= 0 and <= CampaignStateContract.MaximumWorkItems
-            && budget.MaximumChangedFiles is >= 0 and <= CampaignStateContract.MaximumChangedFiles
-            && budget.MaximumPatchBytes is >= 0 and <= CampaignStateContract.MaximumPatchBytes
-            && budget.MaximumProviderRequests is null or (>= 0 and <= 1_000_000)
+        Require(budget.MaximumProviderRequests is null or (>= 0 and <= 1_000_000)
             && budget.MaximumAttemptsPerTarget is >= 0 and <= 1_000
             && budget.MaximumInputTokens is null or (>= 0 and <= CampaignStateContract.MaximumCampaignInputTokens)
             && budget.MaximumUncachedInputTokens is null or (>= 0 and <= CampaignStateContract.MaximumCampaignInputTokens)
@@ -2162,7 +2153,6 @@ public static partial class CampaignStateFactory
                 CreateAcceptedProjectionCommitment(acceptedProposals),
                 StringComparison.Ordinal)
             && !candidate.ChangedFiles.IsDefault
-            && candidate.ChangedFiles.Length <= state.ConfiguredCeilings.CampaignBudget.MaximumChangedFiles
             && candidate.ChangedFiles.Length <= CampaignStateContract.MaximumChangedFiles
             && IsSha256(candidate.PatchRequestSha256)
             && IsSha256(candidate.PatchResultCommitmentSha256),
@@ -2189,9 +2179,7 @@ public static partial class CampaignStateFactory
             patchBytes = checked(patchBytes + file.CandidateDocumentationByteCount);
         }
 
-        Require(blocks == accepted.Length
-            && blocks <= state.ConfiguredCeilings.CampaignBudget.MaximumBlocks
-            && patchBytes <= state.ConfiguredCeilings.CampaignBudget.MaximumPatchBytes,
+        Require(blocks == accepted.Length,
             CampaignStateValidationCode.InvalidBound);
     }
 
@@ -2761,9 +2749,6 @@ public static partial class CampaignStateFactory
         CampaignPlanningCommitmentWriter writer,
         CampaignStateCampaignBudget budget)
     {
-        writer.Add("budget.blocks", budget.MaximumBlocks);
-        writer.Add("budget.files", budget.MaximumChangedFiles);
-        writer.Add("budget.patch-bytes", budget.MaximumPatchBytes);
         writer.Add("budget.attempts-per-target", budget.MaximumAttemptsPerTarget);
         writer.Add("budget.candidates-per-block", budget.MaximumCandidatesPerBlock);
     }

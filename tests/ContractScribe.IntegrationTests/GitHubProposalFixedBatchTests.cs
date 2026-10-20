@@ -36,10 +36,10 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Theory]
-    [InlineData(false, 0, "no-op")]
-    [InlineData(true, 5, "host-failure")]
-    public async Task Same_predecessor_append_stops_a_fixed_batch_without_reconstruction_or_publication(
-        bool unresolved, int exit, string outcome)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Published_fixed_batch_waits_without_reconstruction_or_new_results(
+        bool unresolved)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: !unresolved, newPath: !unresolved,
@@ -55,13 +55,11 @@ public sealed partial class GitHubProposalCliProcessTests
             accepted.State.TerminalOutcome!.Reason);
         Assert.Contains(accepted.State.TargetProgress, item => item.Kind == (unresolved
             ? CampaignTargetProgressKind.UnsupportedCurrentExecutor : CampaignTargetProgressKind.Deferred));
-        await ConfigureAppend(fixture);
+        await ConfigureSealedResume(fixture);
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
         var providerRequests = fixture.Provider.RequestCount;
         var gates = GateCounts(fixture);
-        Assert.Equal(unresolved ? 5 : 0, exit);
-        Assert.Equal(unresolved ? "host-failure" : "no-op", outcome);
         for (var repeat = 0; repeat < 2; repeat++)
         {
             var stopped = await fixture.Run("resume");

@@ -31,6 +31,20 @@ internal sealed class GitHubApiClient : IDisposable
     [DebuggerBrowsable(DebuggerBrowsableState.Never)]
     private string? credential;
     private int disposed;
+    private CancellationToken finalizationDeadline;
+
+    internal void BindFinalizationDeadline(CancellationToken deadline)
+    {
+        Input(!finalizationDeadline.CanBeCanceled || finalizationDeadline == deadline);
+        finalizationDeadline = deadline;
+    }
+
+    internal CancellationTokenSource CreateRecoveryScope(TimeSpan maximum)
+    {
+        var scope = CancellationTokenSource.CreateLinkedTokenSource(finalizationDeadline);
+        scope.CancelAfter(maximum);
+        return scope;
+    }
 
     internal ValidatedGitHubPublicationAuthority Authority
     {
@@ -485,7 +499,7 @@ internal sealed class GitHubApiClient : IDisposable
                 status = null;
                 retry = null;
                 permissions = null;
-                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, finalizationDeadline);
                 timeout.CancelAfter(requestTimeoutMilliseconds);
                 using var message = new HttpRequestMessage(prepared.Body is null ? HttpMethod.Get : HttpMethod.Post, uri)
                 {

@@ -7,6 +7,7 @@ internal enum GitHubCoordinationStage
     Claimed,
     ContentCreated,
     ProposalRefAdvanced,
+    PullRequestCreateStarted,
     PullRequestCreated,
     Published,
     AwaitingReview,
@@ -30,13 +31,11 @@ internal sealed class GitHubCoordinationState
         string targetCommitOid,
         string snapshotCommitmentSha256,
         string authorityCommitmentSha256,
-        string policyCommitmentSha256,
+        string batchIdentity,
+        string resultSetCommitmentSha256,
         string operationId,
         string operationCommitmentSha256,
         string currentCandidateCommitmentSha256,
-        string? precedingOperationId,
-        string? precedingAuthorityCommitmentSha256,
-        string? precedingCandidateCommitmentSha256,
         string generationId,
         string transition,
         string coordinationPredecessorOid,
@@ -61,13 +60,11 @@ internal sealed class GitHubCoordinationState
         TargetCommitOid = targetCommitOid;
         SnapshotCommitmentSha256 = snapshotCommitmentSha256;
         AuthorityCommitmentSha256 = authorityCommitmentSha256;
-        PolicyCommitmentSha256 = policyCommitmentSha256;
+        BatchIdentity = batchIdentity;
+        ResultSetCommitmentSha256 = resultSetCommitmentSha256;
         OperationId = operationId;
         OperationCommitmentSha256 = operationCommitmentSha256;
         CurrentCandidateCommitmentSha256 = currentCandidateCommitmentSha256;
-        PrecedingOperationId = precedingOperationId;
-        PrecedingAuthorityCommitmentSha256 = precedingAuthorityCommitmentSha256;
-        PrecedingCandidateCommitmentSha256 = precedingCandidateCommitmentSha256;
         GenerationId = generationId;
         Transition = transition;
         CoordinationPredecessorOid = coordinationPredecessorOid;
@@ -92,13 +89,11 @@ internal sealed class GitHubCoordinationState
     internal string TargetCommitOid { get; }
     internal string SnapshotCommitmentSha256 { get; }
     internal string AuthorityCommitmentSha256 { get; }
-    internal string PolicyCommitmentSha256 { get; }
+    internal string BatchIdentity { get; }
+    internal string ResultSetCommitmentSha256 { get; }
     internal string OperationId { get; }
     internal string OperationCommitmentSha256 { get; }
     internal string CurrentCandidateCommitmentSha256 { get; }
-    internal string? PrecedingOperationId { get; }
-    internal string? PrecedingAuthorityCommitmentSha256 { get; }
-    internal string? PrecedingCandidateCommitmentSha256 { get; }
     internal string GenerationId { get; }
     internal string Transition { get; }
     internal string CoordinationPredecessorOid { get; }

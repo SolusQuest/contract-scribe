@@ -16,7 +16,6 @@ public static partial class CampaignPlanner
     private const int MaximumViolations = 131_072;
     private const int MaximumAuditRows = MaximumTargets + MaximumComponents + MaximumUnresolved;
     private const int MaximumIdentifierScalars = 512;
-    private const long MaximumByteBudget = 1_099_511_627_776;
     private const long MaximumTokenBudget = 1_000_000_000_000;
     private const long MaximumCostBudget = 1_000_000_000_000_000;
     private const long MaximumElapsedBudget = 2_678_400_000;
@@ -465,10 +464,7 @@ public static partial class CampaignPlanner
 
         var budget = policy.CampaignBudget!;
         Require(
-            budget.MaximumBlocks is > 0 and <= MaximumTargets
-            && budget.MaximumChangedFiles is > 0 and <= MaximumTargets
-            && budget.MaximumPatchBytes is > 0 and <= MaximumByteBudget
-            && budget.MaximumProviderRequests is null or (>= 0 and <= MaximumRequestBudget)
+            budget.MaximumProviderRequests is null or (>= 0 and <= MaximumRequestBudget)
             && budget.MaximumAttemptsPerTarget is > 0 and <= MaximumAttemptBudget
             && budget.MaximumInputTokens is null or (>= 0 and <= MaximumTokenBudget)
             && budget.MaximumUncachedInputTokens is null or (>= 0 and <= MaximumTokenBudget)
@@ -1503,9 +1499,6 @@ public static partial class CampaignPlanner
         writer.Add("scribe.max-cost", limits.MaximumCostMicrounits);
         writer.Add("scribe.max-elapsed", limits.MaximumElapsedMilliseconds);
         var budget = policy.CampaignBudget;
-        writer.Add("campaign.max-blocks", budget.MaximumBlocks);
-        writer.Add("campaign.max-files", budget.MaximumChangedFiles);
-        writer.Add("campaign.max-patch-bytes", budget.MaximumPatchBytes);
         writer.Add("campaign.max-attempts-target", budget.MaximumAttemptsPerTarget);
         writer.Add("campaign.max-candidates", budget.MaximumCandidatesPerBlock);
         writer.Add("campaign.cost-enforced", budget.CostEnforced);

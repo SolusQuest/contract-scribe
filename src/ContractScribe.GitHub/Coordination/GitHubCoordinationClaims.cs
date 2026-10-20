@@ -68,6 +68,8 @@ internal sealed partial class GitHubCoordinationStore
             if (expectedRevision is not null && remote.Artifact is null) return new(CampaignCheckpointWriteKind.PredecessorMissing);
             if (remote.Artifact is { } current && (current.CheckpointRevision != expectedRevision || current.Sha256 != expectedSha))
                 return new(CampaignCheckpointWriteKind.CurrentMismatch);
+            if (!await PublicationAllowsCheckpointAsync(remote, artifact, token).ConfigureAwait(false))
+                return new(CampaignCheckpointWriteKind.Unsafe);
             var document = remote.Document.RetainAt(remote.Head) with { PredecessorOid = remote.Head };
             var blobs = new List<GitHubBlob>();
             var checkpoint = Blob(bytes.Span);
@@ -129,7 +131,7 @@ internal sealed partial class GitHubCoordinationStore
                 if (result.Failure?.Code == GitHubFailureCode.Cancelled) token.ThrowIfCancellationRequested();
                 return false;
             }
-            using var recovery = new CancellationTokenSource(RecoveryTimeout);
+            using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
             var current = GitHubObservedProposalIntegrity.Read(await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false));
             if (current?.Oid != prepared.CommitOid) return false;
             var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token).ConfigureAwait(false);
@@ -254,7 +256,7 @@ internal sealed partial class GitHubCoordinationStore
             if (renewal is not null) await renewal.ConfigureAwait(false);
             if (!checkpointStopped && invocationOwner is not null)
             {
-                using var deadline = new CancellationTokenSource(RecoveryTimeout);
+                using var deadline = client.CreateRecoveryScope(RecoveryTimeout);
                 var current = await ReadRemoteCheckpointAsync(deadline.Token).ConfigureAwait(false);
                 if (current is not null && Owns(current.Document))
                     await WriteDocumentAsync(current.Document.RetainAt(current.Head) with

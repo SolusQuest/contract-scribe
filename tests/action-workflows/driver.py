@@ -39,9 +39,7 @@ def main():
             time.sleep(.02)
         endpoint = json.loads(ready.read_text())["endpoint"]
         campaign = dict(snapshot="snapshot.example", operationId="operation.example", generationId="generation.example",
-                        targetRef="refs/heads/main", repositoryOwner="Owner", repositoryName="repo",
-                        policyCeilings=dict(maximumDocumentationBlocks=8, maximumDistinctChangedFiles=4,
-                                            maximumCumulativePatchBytes=65536))
+                        targetRef="refs/heads/main", repositoryOwner="Owner", repositoryName="repo")
         env = dict(os.environ, CS_ACTIONS_API_URL=endpoint, GITHUB_TOKEN="synthetic-actions-read",
                    CS_RUN_CONTEXT=json.dumps(context), CS_CAMPAIGN=json.dumps(campaign),
                    CS_CAMPAIGN_LINEAGE="campaign.example", CS_OPERATION="start")

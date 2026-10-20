@@ -246,9 +246,6 @@ public static partial class CampaignStateJson
         writer.WritePropertyName("campaignBudget");
         writer.WriteStartObject();
         var budget = ceilings.CampaignBudget;
-        writer.WriteNumber("maximumBlocks", budget.MaximumBlocks);
-        writer.WriteNumber("maximumChangedFiles", budget.MaximumChangedFiles);
-        writer.WriteNumber("maximumPatchBytes", budget.MaximumPatchBytes);
         WriteNullableNumber(writer, "maximumProviderRequests", budget.MaximumProviderRequests);
         writer.WriteNumber("maximumAttemptsPerTarget", budget.MaximumAttemptsPerTarget);
         WriteNullableNumber(writer, "maximumInputTokens", budget.MaximumInputTokens);
@@ -1010,9 +1007,6 @@ public static partial class CampaignStateJson
         var budget = element.GetProperty("campaignBudget");
         ExpectObject(
             budget,
-            "maximumBlocks",
-            "maximumChangedFiles",
-            "maximumPatchBytes",
             "maximumProviderRequests",
             "maximumAttemptsPerTarget",
             "maximumInputTokens",
@@ -1057,9 +1051,6 @@ public static partial class CampaignStateJson
             "bindingCommitmentSha256");
         return new CampaignStateConfiguredCeilings(
             new CampaignStateCampaignBudget(
-                ReadInt32(budget, "maximumBlocks"),
-                ReadInt32(budget, "maximumChangedFiles"),
-                ReadInt64(budget, "maximumPatchBytes"),
                 ReadNullableInt32(budget, "maximumProviderRequests"),
                 ReadInt32(budget, "maximumAttemptsPerTarget"),
                 ReadNullableInt64(budget, "maximumInputTokens"),

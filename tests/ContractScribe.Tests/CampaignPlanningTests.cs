@@ -1607,9 +1607,6 @@ public sealed class CampaignPlanningTests
         var scenario = CreateScenario();
         var budget = scenario.Input.ExecutionPolicy.CampaignBudget;
         var invalidBudget = new CampaignPlanningBudgetPolicy(
-            budget.MaximumBlocks,
-            budget.MaximumChangedFiles,
-            long.MaxValue,
             budget.MaximumProviderRequests,
             budget.MaximumAttemptsPerTarget,
             budget.MaximumInputTokens,
@@ -1976,9 +1973,6 @@ public sealed class CampaignPlanningTests
         var executionPolicy = new CampaignPlanningExecutionPolicy(
             request.Limits,
             new CampaignPlanningBudgetPolicy(
-                100,
-                20,
-                1_000_000,
                 100,
                 3,
                 1_000_000,

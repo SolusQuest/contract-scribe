@@ -236,7 +236,7 @@ def cmd_request(base_oid, out_path):
     ctx = context()
     campaign = env_json("CS_CAMPAIGN", BOUND_CAMPAIGN)
     require(set(campaign) == {"snapshot", "operationId", "generationId",
-                              "targetRef", "policyCeilings",
+                              "targetRef",
                               "repositoryOwner", "repositoryName"},
             "campaign-fields")
     # The lineage is a separate caller authority (it also drives the
@@ -261,15 +261,6 @@ def cmd_request(base_oid, out_path):
     require(owner + "/" + name == ctx["repository"], "campaign-repo")
     require(SHA_RE.fullmatch(base_oid), "base-oid")
     require(base_oid == ctx["sha"], "base-context-mismatch")
-    ceilings = campaign["policyCeilings"]
-    require(isinstance(ceilings, dict)
-            and set(ceilings) == {"maximumDocumentationBlocks",
-                                  "maximumDistinctChangedFiles",
-                                  "maximumCumulativePatchBytes"},
-            "campaign-ceilings")
-    for key, value in ceilings.items():
-        require(isinstance(value, int) and not isinstance(value, bool)
-                and 0 < value <= 1 << 30, f"ceiling-{key}")
     request = {
         "githubProposalRequestVersion": 1,
         "campaignLineage": lineage,
@@ -282,14 +273,6 @@ def cmd_request(base_oid, out_path):
             "expectedBaseCommitOid": base_oid,
             "operationId": campaign["operationId"],
             "generationId": campaign["generationId"],
-            "policy": {
-                "maximumDocumentationBlocks":
-                    ceilings["maximumDocumentationBlocks"],
-                "maximumDistinctChangedFiles":
-                    ceilings["maximumDistinctChangedFiles"],
-                "maximumCumulativePatchBytes":
-                    ceilings["maximumCumulativePatchBytes"],
-            },
             "transition": "initial",
         },
     }

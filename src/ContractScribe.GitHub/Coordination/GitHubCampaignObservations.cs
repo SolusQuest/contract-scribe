@@ -19,7 +19,7 @@ internal sealed record GitHubCampaignFailure(GitHubCampaignFailureKind Kind,
 
 internal sealed record GitHubCampaignLedger(string HeadOid, GitHubCoordinationStage Stage,
     string OriginalBaseOid, string GenerationId, string SnapshotCommitmentSha256,
-    string PolicyCommitmentSha256, string OperationId, string OperationCommitmentSha256,
+    string BatchIdentity, string OperationId, string OperationCommitmentSha256,
     string CandidateCommitmentSha256, string? ExpectedProposalRef, int? PullRequestNumber) : GitHubValue;
 
 internal sealed record GitHubCampaignPullRequest(long Id, string NodeId, int Number,

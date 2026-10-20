@@ -17,7 +17,6 @@ public static class GitHubPublicationContract
 public enum GitHubPublicationTransitionKind
 {
     Initial,
-    SameSnapshotAppend,
     SuccessorAfterMerge,
     SuccessorAfterClosedUnmerged,
 }
@@ -28,9 +27,7 @@ public enum GitHubPublicationValidationCode
     InvalidBound,
     InvalidPath,
     InvalidHash,
-    InvalidPolicy,
     InvalidTransition,
-    InvalidAuthorization,
     InvalidCorrelation,
     DuplicatePath,
     CaseCollidingPath,
@@ -48,15 +45,35 @@ public sealed class GitHubPublicationValidationException : FormatException
     public GitHubPublicationValidationCode Code { get; }
 }
 
-public sealed record GitHubPublicationPolicy(
-    int MaximumDocumentationBlocks,
-    int MaximumDistinctChangedFiles,
-    long MaximumCumulativePatchBytes);
+public sealed record GitHubPublicationBatchTarget(string TargetKey, string WorkItemKey);
 
-public sealed record GitHubPublicationM4Ceilings(
-    int MaximumDocumentationBlocks,
-    int MaximumDistinctChangedFiles,
-    long MaximumCumulativePatchBytes);
+/// <summary>Exact selected manifest and accepted subset, without proposal or source bytes.</summary>
+public sealed record GitHubPublicationBatchInput(
+    string BatchIdentity,
+    int CreationQuota,
+    IEnumerable<GitHubPublicationBatchTarget> SelectedTargets,
+    IEnumerable<string> AcceptedWorkItemKeys);
+
+public sealed class ValidatedGitHubPublicationBatch
+{
+    internal ValidatedGitHubPublicationBatch(string identity, int creationQuota,
+        ImmutableArray<GitHubPublicationBatchTarget> selectedTargets,
+        ImmutableArray<string> acceptedWorkItemKeys, string resultSetCommitmentSha256)
+    {
+        Identity = identity;
+        CreationQuota = creationQuota;
+        SelectedTargets = selectedTargets;
+        AcceptedWorkItemKeys = acceptedWorkItemKeys;
+        ResultSetCommitmentSha256 = resultSetCommitmentSha256;
+    }
+
+    public string Identity { get; }
+    public int CreationQuota { get; }
+    public ImmutableArray<GitHubPublicationBatchTarget> SelectedTargets { get; }
+    public ImmutableArray<string> AcceptedWorkItemKeys { get; }
+    public string ResultSetCommitmentSha256 { get; }
+    public override string ToString() => nameof(ValidatedGitHubPublicationBatch);
+}
 
 public sealed record GitHubChangedFileAuthority(
     string Path,
@@ -67,10 +84,6 @@ public sealed record GitHubChangedFileAuthority(
     int CandidateDocumentationByteCount,
     int OriginalDocumentationLineCount,
     int CandidateDocumentationLineCount);
-
-public sealed record GitHubPrecedingChangedFileAuthority(
-    string Path,
-    string CandidateFileSha256);
 
 public enum GitHubPublicationPredecessorDisposition
 {
@@ -84,18 +97,6 @@ public sealed record GitHubPublicationPredecessorAuthority(
     string GenerationId,
     string HeadOid,
     GitHubPublicationPredecessorDisposition Disposition);
-
-public sealed record GitHubClosedUnmergedSuccessorAuthorization(
-    string AuthorizationId,
-    string LogicalPredecessorId,
-    long ClosedPullRequestNumber,
-    string ClosedGenerationId,
-    string ClosedHeadOid,
-    string FreshSnapshotCommitmentSha256,
-    string FreshWorkPlanCommitmentSha256,
-    string FreshCandidateCommitmentSha256,
-    string NewGenerationId,
-    string OperationId);
 
 /// <summary>
 /// Caller-supplied facts available before credentials, ambient Git discovery,
@@ -119,29 +120,19 @@ public sealed record GitHubPublicationAuthorityInput(
     string AcceptedProjectionCommitmentSha256,
     string OperationId,
     string GenerationId,
-    string? PrecedingOperationId,
-    string? PrecedingAuthorityCommitmentSha256,
-    string? PrecedingCandidateCommitmentSha256,
-    string? PrecedingGenerationId,
-    string? PrecedingSnapshotCommitmentSha256,
-    string? PrecedingPolicyCommitmentSha256,
-    GitHubPublicationPredecessorAuthority? TerminalPredecessor,
     GitHubPublicationTransitionKind Transition,
-    GitHubPublicationM4Ceilings AcceptedM4Ceilings,
-    GitHubPublicationPolicy Policy,
+    GitHubPublicationBatchInput Batch,
     IEnumerable<GitHubChangedFileAuthority> ChangedFiles,
-    IEnumerable<GitHubPrecedingChangedFileAuthority> PrecedingChangedFiles,
-    GitHubClosedUnmergedSuccessorAuthorization? ClosedUnmergedSuccessorAuthorization = null);
+    GitHubPublicationPredecessorAuthority? TerminalPredecessor = null);
 
 public sealed class ValidatedGitHubPublicationAuthority
 {
     internal ValidatedGitHubPublicationAuthority(
         GitHubPublicationAuthorityInput input,
         ImmutableArray<GitHubChangedFileAuthority> changedFiles,
-        ImmutableArray<GitHubPrecedingChangedFileAuthority> precedingChangedFiles,
+        ValidatedGitHubPublicationBatch batch,
         int cumulativeDocumentationBlocks,
         long cumulativePatchBytes,
-        string policyCommitmentSha256,
         string authorityCommitmentSha256,
         string operationCommitmentSha256)
     {
@@ -161,22 +152,12 @@ public sealed class ValidatedGitHubPublicationAuthority
         AcceptedProjectionCommitmentSha256 = input.AcceptedProjectionCommitmentSha256;
         OperationId = input.OperationId;
         GenerationId = input.GenerationId;
-        PrecedingOperationId = input.PrecedingOperationId;
-        PrecedingAuthorityCommitmentSha256 = input.PrecedingAuthorityCommitmentSha256;
-        PrecedingCandidateCommitmentSha256 = input.PrecedingCandidateCommitmentSha256;
-        PrecedingGenerationId = input.PrecedingGenerationId;
-        PrecedingSnapshotCommitmentSha256 = input.PrecedingSnapshotCommitmentSha256;
-        PrecedingPolicyCommitmentSha256 = input.PrecedingPolicyCommitmentSha256;
         TerminalPredecessor = input.TerminalPredecessor;
         Transition = input.Transition;
-        AcceptedM4Ceilings = input.AcceptedM4Ceilings;
-        Policy = input.Policy;
         ChangedFiles = changedFiles;
-        PrecedingChangedFiles = precedingChangedFiles;
-        ClosedUnmergedSuccessorAuthorization = input.ClosedUnmergedSuccessorAuthorization;
+        Batch = batch;
         CumulativeDocumentationBlocks = cumulativeDocumentationBlocks;
         CumulativePatchBytes = cumulativePatchBytes;
-        PolicyCommitmentSha256 = policyCommitmentSha256;
         AuthorityCommitmentSha256 = authorityCommitmentSha256;
         OperationCommitmentSha256 = operationCommitmentSha256;
     }
@@ -197,22 +178,12 @@ public sealed class ValidatedGitHubPublicationAuthority
     public string AcceptedProjectionCommitmentSha256 { get; }
     public string OperationId { get; }
     public string GenerationId { get; }
-    public string? PrecedingOperationId { get; }
-    public string? PrecedingAuthorityCommitmentSha256 { get; }
-    public string? PrecedingCandidateCommitmentSha256 { get; }
-    public string? PrecedingGenerationId { get; }
-    public string? PrecedingSnapshotCommitmentSha256 { get; }
-    public string? PrecedingPolicyCommitmentSha256 { get; }
     public GitHubPublicationPredecessorAuthority? TerminalPredecessor { get; }
     public GitHubPublicationTransitionKind Transition { get; }
-    public GitHubPublicationM4Ceilings AcceptedM4Ceilings { get; }
-    public GitHubPublicationPolicy Policy { get; }
     public ImmutableArray<GitHubChangedFileAuthority> ChangedFiles { get; }
-    public ImmutableArray<GitHubPrecedingChangedFileAuthority> PrecedingChangedFiles { get; }
-    public GitHubClosedUnmergedSuccessorAuthorization? ClosedUnmergedSuccessorAuthorization { get; }
+    public ValidatedGitHubPublicationBatch Batch { get; }
     public int CumulativeDocumentationBlocks { get; }
     public long CumulativePatchBytes { get; }
-    public string PolicyCommitmentSha256 { get; }
     public string AuthorityCommitmentSha256 { get; }
     public string OperationCommitmentSha256 { get; }
 

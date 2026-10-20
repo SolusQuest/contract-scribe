@@ -17,22 +17,17 @@ public sealed partial class GitHubProposalCliProcessTests
     [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Structural_partial_stop_hands_off_only_the_independently_validated_candidate(bool patchTimeout)
+    public async Task Controlled_partial_stop_hands_off_only_the_independently_validated_candidate(bool patchTimeout)
     {
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
         var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
-        layer["budgets"]!["invocation"]!["maximumProviderRequests"] = 64;
-        layer["budgets"]!["campaign"]!["maximumBlocks"] = 1;
-        fixture.Publication["policy"]!["maximumDocumentationBlocks"] = 1;
         if (patchTimeout)
             layer["planning"] = new JsonObject { ["maximumPatchElapsedMilliseconds"] = 1 };
         await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString());
         var result = await fixture.Run("start");
         var checkpoint = fixture.Checkpoint();
-        Assert.Contains(checkpoint.State.WorkItems, work => work.ClosedOutcome?.Code == CampaignWorkOutcomeCode.CompletedOverBound);
+        Assert.Equal(2, checkpoint.State.Batch.SelectedTargetKeys.Length);
         Assert.True(checkpoint.State.CumulativeOutcome is not null, result.Stdout + result.Stderr);
-        Assert.Equal(CampaignTerminalKind.Exhausted, checkpoint.State.TerminalOutcome!.Kind);
-        Assert.Equal(CampaignTerminalReason.Budget, checkpoint.State.TerminalOutcome.Reason);
         Assert.Null(checkpoint.State.ActiveReservation);
         if (patchTimeout)
         {
@@ -52,19 +47,19 @@ public sealed partial class GitHubProposalCliProcessTests
             AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
             Assert.Equal(sends, fixture.Provider.RequestCount);
-            Assert.Equal(CampaignTerminalKind.Exhausted, fixture.Checkpoint().State.TerminalOutcome!.Kind);
+            Assert.Single(fixture.Checkpoint().State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
         }
         await fixture.AssertSourceUnchanged();
     }
 
     [ContractScribe.TestSupport.NativeFileSystemFact]
-    public async Task Published_gate_prevents_an_unresolved_mixed_append_from_reaching_patch_rejection()
+    public async Task Published_gate_prevents_an_unresolved_mixed_result_set_from_reaching_patch_rejection()
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true, rejectNewPath: true);
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
-        await ConfigureAppend(fixture);
+        await ConfigureSealedResume(fixture);
         var before = GateCounts(fixture);
         var writes = fixture.GitHub.Mutations;
         AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
@@ -78,7 +73,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("host", 5, "host-failure", "campaign.patch-host-failure")]
     [InlineData("rejected", 5, "host-failure", "campaign.patch-rejected")]
     [InlineData("stale", 4, "stale", "campaign.patch-stale")]
-    public async Task Persisted_failed_reconstruction_wins_over_append_no_work(
+    public async Task Persisted_failed_reconstruction_wins_over_sealed_batch_wait(
         string failure, int exit, string outcome, string diagnostic)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
@@ -89,7 +84,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(CampaignTerminalKind.Failed, failed.State.TerminalOutcome!.Kind);
         Assert.Null(failed.State.ActiveReservation);
         Assert.Equal(accepted.Sha256, failed.State.AcceptedCandidateOrigin!.CheckpointSha256);
-        await ConfigureAppend(fixture);
+        await ConfigureSealedResume(fixture);
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
         var result = await fixture.Run("resume");
@@ -122,26 +117,25 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Genuine_predecessor_reconstruction_at_handoff_is_not_new_append_work()
+    public async Task Genuine_original_reconstruction_preserves_frozen_origin_and_is_not_new_work()
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         var accepted = fixture.Checkpoint();
         var reconstruction = await RealReconstruction(fixture, "accepted");
-        await ConfigureAppend(fixture);
+        await ConfigureSealedResume(fixture);
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
         var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
         var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true)
             with
         { SnapshotBinding = fixture.Checkpoint().State.Snapshot.OpaqueSnapshotBinding };
         var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, request,
-            _ => throw new InvalidOperationException("No credential is needed to classify append progress."));
+            _ => throw new InvalidOperationException("No credential is needed to classify original progress."));
         var current = fixture.Checkpoint();
         Assert.Equal(accepted.Sha256, current.State.AcceptedCandidateOrigin!.CheckpointSha256);
         Assert.Null(continuation.ValidateHandoff(current, reconstruction));
-        Assert.False(continuation.ReconstructAccepted(current.State));
-        Assert.True(continuation.HasNoAppendWork(current.State));
+        Assert.True(continuation.ReconstructAccepted(current.State));
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), 0, "awaiting-review");

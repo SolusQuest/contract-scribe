@@ -1051,7 +1051,7 @@ public static partial class CampaignStateReducer
             CampaignTerminalOutcome? terminal = state.TerminalOutcome;
             if (completion.CandidateObservation is { } proposed)
             {
-                if (!FitsCandidate(proposed, state.ConfiguredCeilings.CampaignBudget))
+                if (!FitsCandidate(proposed))
                 {
                     terminal = new CampaignTerminalOutcome(
                         CampaignTerminalKind.Exhausted,
@@ -1946,8 +1946,7 @@ public static partial class CampaignStateReducer
         if (first is null) return;
         var work = state.WorkItems.Single(item => item.WorkItemKey == first.WorkItemKey);
         var budget = state.ConfiguredCeilings.CampaignBudget;
-        if (budget.MaximumBlocks == 0
-            || work.PausedProviderAttempt is null && work.OuterAttemptCount >= budget.MaximumAttemptsPerTarget
+        if (work.PausedProviderAttempt is null && work.OuterAttemptCount >= budget.MaximumAttemptsPerTarget
             || work.CandidateAttemptCount >= budget.MaximumCandidatesPerBlock
             || !HasProviderCompletionRevisionHeadroom(state)) return;
         if (work.PausedProviderAttempt?.RetryProgress.RetryableFailureCount >= DocumentationScribeContract.MaximumAttempts) return;
@@ -2208,22 +2207,9 @@ public static partial class CampaignStateReducer
                 }
                 : item).ToImmutableArray();
 
-    private static bool FitsCandidate(
-        CampaignCandidateObservation candidate,
-        CampaignStateCampaignBudget budget)
-    {
-        try
-        {
-            return candidate.AcceptedWorkItemKeys.Length <= budget.MaximumBlocks
-                && candidate.ChangedFiles.Length <= budget.MaximumChangedFiles
-                && candidate.ChangedFiles.Sum(file => checked((long)file.CandidateDocumentationByteCount))
-                    <= budget.MaximumPatchBytes;
-        }
-        catch (OverflowException)
-        {
-            return false;
-        }
-    }
+    private static bool FitsCandidate(CampaignCandidateObservation candidate) =>
+        candidate.AcceptedWorkItemKeys.Length <= CampaignStateContract.MaximumActivePatchBlocks
+        && candidate.ChangedFiles.Length <= CampaignStateContract.MaximumChangedFiles;
 
     private static bool CanReservePatchFromTerminal(CampaignCheckpointState state)
     {

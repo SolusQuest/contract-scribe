@@ -47,25 +47,18 @@ public sealed class GitHubPublicationRequestFactoryTests
 
     [Theory]
     [MemberData(nameof(ConfigurationCases))]
-    public Task Configuration_policy_and_predecessor_mismatches_fail_locally(string mutation) =>
+    public Task Configuration_and_terminal_predecessor_mismatches_fail_locally(string mutation) =>
         DocumentationScribeCompositionTests.PublicationConfigurationAsync(mutation);
 
     public static IEnumerable<object[]> ConfigurationCases() => new[]
     {
         "owner", "repository", "target", "tag", "base", "operation", "generation", "unknown-transition",
-        "blocks-zero", "files-zero", "bytes-zero", "blocks-over-m4", "files-over-m4", "bytes-over-m4",
-        "bytes-under-candidate", "initial-append", "initial-terminal", "initial-authorization",
-        "append-missing", "append-operation", "append-authority", "append-candidate",
-        "append-generation", "append-snapshot", "append-policy", "append-paths", "append-extra-path",
-        "append-duplicate-path", "append-case-path", "append-terminal", "append-authorization",
-        "merged-missing", "merged-disposition", "merged-generation", "merged-authorization",
-        "closed-missing", "closed-id", "closed-logical", "closed-pr", "closed-generation",
-        "closed-head", "closed-snapshot", "closed-work", "closed-candidate", "closed-new-generation",
-        "closed-operation",
+        "initial-terminal", "merged-missing", "merged-disposition", "merged-generation",
+        "closed-missing", "closed-disposition", "closed-generation", "closed-head", "closed-pr", "closed-logical",
     }.Select(value => new object[] { value });
 
     [Fact]
-    public Task Initial_append_and_explicit_successors_use_the_R1_transition_matrix() =>
+    public Task Initial_and_terminal_successors_preserve_the_frozen_batch() =>
         DocumentationScribeCompositionTests.PublicationTransitionsAsync();
 
     [Fact]
@@ -135,9 +128,9 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(fixture.Outcome.Artifact.State.CandidateObservation!.PatchResultCommitmentSha256,
             authority.CandidateCommitmentSha256);
         Assert.Equal(authority.CandidateCommitmentSha256, authority.PatchResultCommitmentSha256);
-        Assert.Equal(32, authority.AcceptedM4Ceilings.MaximumDocumentationBlocks);
-        Assert.Equal(8, authority.AcceptedM4Ceilings.MaximumDistinctChangedFiles);
-        Assert.Equal(1_000_000, authority.AcceptedM4Ceilings.MaximumCumulativePatchBytes);
+        Assert.Equal(fixture.Outcome.Artifact.State.Batch.Identity, authority.Batch.Identity);
+        Assert.Equal(fixture.Outcome.Artifact.State.Batch.CreationQuota, authority.Batch.CreationQuota);
+        Assert.Equal(fixture.Outcome.Artifact.State.CandidateObservation.AcceptedWorkItemKeys.Order(StringComparer.Ordinal), authority.Batch.AcceptedWorkItemKeys);
         Assert.NotEqual(payload.CandidateBytes.Length, changed.CandidateDocumentationByteCount);
         Assert.True(fixture.Outcome.AcceptedCandidate!.Files.Length > result.Payload.Files.Length);
         Assert.Equal(authority.AuthorityCommitmentSha256, result.Payload.AuthorityCommitmentSha256);
@@ -288,19 +281,21 @@ public sealed partial class DocumentationScribeCompositionTests
     internal static async Task PublicationConfigurationAsync(string mutation)
     {
         await using var fixture = await PublicationFixture.CreateAsync();
-        var initial = Publish(fixture);
-        AssertPublicationAccepted(initial);
         var configuration = PublicationConfiguration();
-        var append = PublicationAppend(initial.Authority!);
         var terminal = new GitHubPublicationPredecessorAuthority("predecessor", 10, "generation.previous",
             new string('b', 40), GitHubPublicationPredecessorDisposition.ClosedUnmerged);
-        var authorization = PublicationAuthorization(initial.Authority!, terminal);
-        if (mutation.StartsWith("append-", StringComparison.Ordinal))
-            configuration = configuration with { Transition = GitHubPublicationTransitionKind.SameSnapshotAppend, AppendPredecessor = append };
         if (mutation.StartsWith("merged-", StringComparison.Ordinal))
-            configuration = configuration with { Transition = GitHubPublicationTransitionKind.SuccessorAfterMerge, TerminalPredecessor = terminal with { Disposition = GitHubPublicationPredecessorDisposition.Merged } };
+            configuration = configuration with
+            {
+                Transition = GitHubPublicationTransitionKind.SuccessorAfterMerge,
+                TerminalPredecessor = terminal with { Disposition = GitHubPublicationPredecessorDisposition.Merged }
+            };
         if (mutation.StartsWith("closed-", StringComparison.Ordinal))
-            configuration = configuration with { Transition = GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged, TerminalPredecessor = terminal, ClosedUnmergedSuccessorAuthorization = authorization };
+            configuration = configuration with
+            {
+                Transition = GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged,
+                TerminalPredecessor = terminal
+            };
         configuration = mutation switch
         {
             "owner" => configuration with { RepositoryOwner = "bad/owner" },
@@ -311,44 +306,14 @@ public sealed partial class DocumentationScribeCompositionTests
             "operation" => configuration with { OperationId = "bad\noperation" },
             "generation" => configuration with { GenerationId = "" },
             "unknown-transition" => configuration with { Transition = (GitHubPublicationTransitionKind)99 },
-            "blocks-zero" => configuration with { Policy = configuration.Policy with { MaximumDocumentationBlocks = 0 } },
-            "files-zero" => configuration with { Policy = configuration.Policy with { MaximumDistinctChangedFiles = 0 } },
-            "bytes-zero" => configuration with { Policy = configuration.Policy with { MaximumCumulativePatchBytes = 0 } },
-            "blocks-over-m4" => configuration with { Policy = configuration.Policy with { MaximumDocumentationBlocks = 33 } },
-            "files-over-m4" => configuration with { Policy = configuration.Policy with { MaximumDistinctChangedFiles = 9 } },
-            "bytes-over-m4" => configuration with { Policy = configuration.Policy with { MaximumCumulativePatchBytes = 1_000_001 } },
-            "bytes-under-candidate" => configuration with { Policy = configuration.Policy with { MaximumCumulativePatchBytes = initial.Authority!.CumulativePatchBytes - 1 } },
-            "initial-append" => configuration with { AppendPredecessor = append },
             "initial-terminal" => configuration with { TerminalPredecessor = terminal },
-            "initial-authorization" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization },
-            "append-missing" => configuration with { AppendPredecessor = null },
-            "append-operation" => configuration with { AppendPredecessor = append with { OperationId = configuration.OperationId } },
-            "append-authority" => configuration with { AppendPredecessor = append with { AuthorityCommitmentSha256 = null! } },
-            "append-candidate" => configuration with { AppendPredecessor = append with { CandidateCommitmentSha256 = null! } },
-            "append-generation" => configuration with { AppendPredecessor = append with { GenerationId = "different" } },
-            "append-snapshot" => configuration with { AppendPredecessor = append with { SnapshotCommitmentSha256 = PublicationHex('f') } },
-            "append-policy" => configuration with { Policy = configuration.Policy with { MaximumDocumentationBlocks = 31 } },
-            "append-paths" => configuration with { AppendPredecessor = append with { ChangedFiles = [] } },
-            "append-extra-path" => configuration with { AppendPredecessor = append with { ChangedFiles = [new("Extra.cs", PublicationHex('a'))] } },
-            "append-duplicate-path" => configuration with { AppendPredecessor = append with { ChangedFiles = [append.ChangedFiles[0], append.ChangedFiles[0]] } },
-            "append-case-path" => configuration with { AppendPredecessor = append with { ChangedFiles = [append.ChangedFiles[0], new("fixture.cs", PublicationHex('a'))] } },
-            "append-terminal" => configuration with { TerminalPredecessor = terminal },
-            "append-authorization" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization },
-            "merged-missing" => configuration with { TerminalPredecessor = null },
+            "merged-missing" or "closed-missing" => configuration with { TerminalPredecessor = null },
             "merged-disposition" => configuration with { TerminalPredecessor = terminal },
-            "merged-generation" => configuration with { GenerationId = terminal.GenerationId },
-            "merged-authorization" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization },
-            "closed-missing" => configuration with { ClosedUnmergedSuccessorAuthorization = null },
-            "closed-id" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { AuthorizationId = "" } },
-            "closed-logical" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { LogicalPredecessorId = "other" } },
-            "closed-pr" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { ClosedPullRequestNumber = 11 } },
-            "closed-generation" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { ClosedGenerationId = "other" } },
-            "closed-head" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { ClosedHeadOid = new('c', 40) } },
-            "closed-snapshot" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { FreshSnapshotCommitmentSha256 = PublicationHex('f') } },
-            "closed-work" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { FreshWorkPlanCommitmentSha256 = PublicationHex('f') } },
-            "closed-candidate" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { FreshCandidateCommitmentSha256 = PublicationHex('f') } },
-            "closed-new-generation" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { NewGenerationId = "other" } },
-            "closed-operation" => configuration with { ClosedUnmergedSuccessorAuthorization = authorization with { OperationId = "other" } },
+            "closed-disposition" => configuration with { TerminalPredecessor = terminal with { Disposition = GitHubPublicationPredecessorDisposition.Merged } },
+            "merged-generation" or "closed-generation" => configuration with { GenerationId = terminal.GenerationId },
+            "closed-head" => configuration with { TerminalPredecessor = terminal with { HeadOid = "bad" } },
+            "closed-pr" => configuration with { TerminalPredecessor = terminal with { PullRequestNumber = 0 } },
+            "closed-logical" => configuration with { TerminalPredecessor = terminal with { LogicalPredecessorId = "" } },
             _ => throw new InvalidOperationException(mutation),
         };
         AssertPublicationInvalid(GitHubPublicationRequestFactory.Create(fixture.Context, fixture.Outcome, configuration));
@@ -361,9 +326,7 @@ public sealed partial class DocumentationScribeCompositionTests
         AssertPublicationAccepted(first);
         var configurations = new[]
         {
-            PublicationConfiguration() with { Transition = GitHubPublicationTransitionKind.SameSnapshotAppend, AppendPredecessor = PublicationAppend(first.Authority!) },
             PublicationConfiguration() with { Transition = GitHubPublicationTransitionKind.SuccessorAfterMerge, TerminalPredecessor = new("predecessor", 10, "generation.previous", new('b', 40), GitHubPublicationPredecessorDisposition.Merged) },
-            PublicationConfiguration() with { Policy = new(1, 1, first.Authority!.CumulativePatchBytes) },
         };
         foreach (var configuration in configurations)
         {
@@ -376,16 +339,13 @@ public sealed partial class DocumentationScribeCompositionTests
         {
             Transition = GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged,
             TerminalPredecessor = predecessor,
-            ClosedUnmergedSuccessorAuthorization = PublicationAuthorization(first.Authority!, predecessor),
         };
         var successor = GitHubPublicationRequestFactory.Create(fixture.Context, fixture.Outcome, closed);
         AssertPublicationAccepted(successor);
         var replay = GitHubPublicationRequestFactory.Create(fixture.Context, fixture.Outcome, closed);
         Assert.Equal(successor.Authority!.OperationCommitmentSha256, replay.Authority!.OperationCommitmentSha256);
-        var differentId = GitHubPublicationRequestFactory.Create(fixture.Context, fixture.Outcome,
-            closed with { ClosedUnmergedSuccessorAuthorization = closed.ClosedUnmergedSuccessorAuthorization! with { AuthorizationId = "another-explicit-authorization" } });
-        AssertPublicationAccepted(differentId);
-        Assert.NotEqual(successor.Authority.OperationCommitmentSha256, differentId.Authority!.OperationCommitmentSha256);
+        Assert.Equal(first.Authority!.Batch.Identity, successor.Authority.Batch.Identity);
+        Assert.Equal(first.Authority.Batch.ResultSetCommitmentSha256, successor.Authority.Batch.ResultSetCommitmentSha256);
     }
 
     internal static async Task PublicationPayloadBoundAsync()
@@ -436,18 +396,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
     private static GitHubPublicationConfiguration PublicationConfiguration() => new(
         "synthetic-owner", "synthetic-repository", "refs/heads/main", new('a', 40),
-        "operation.current", "generation.current", new(32, 8, 1_000_000), GitHubPublicationTransitionKind.Initial);
-
-    private static GitHubPublicationAppendPredecessor PublicationAppend(ValidatedGitHubPublicationAuthority authority) => new(
-        "operation.previous", PublicationHex('a'), PublicationHex('b'), authority.GenerationId,
-        authority.SnapshotCommitmentSha256, authority.PolicyCommitmentSha256,
-        authority.ChangedFiles.Select(file => new GitHubPrecedingChangedFileAuthority(file.Path, PublicationHex('c'))).ToImmutableArray());
-
-    private static GitHubClosedUnmergedSuccessorAuthorization PublicationAuthorization(
-        ValidatedGitHubPublicationAuthority authority, GitHubPublicationPredecessorAuthority predecessor) => new(
-        "authorization.explicit", predecessor.LogicalPredecessorId, predecessor.PullRequestNumber,
-        predecessor.GenerationId, predecessor.HeadOid, authority.SnapshotCommitmentSha256,
-        authority.WorkPlanCommitmentSha256, authority.CandidateCommitmentSha256, authority.GenerationId, authority.OperationId);
+        "operation.current", "generation.current", GitHubPublicationTransitionKind.Initial);
 
     private static GitHubPublicationContext PublicationContext(
         CompositionFixture fixture, CampaignExecutionFixture campaign, CampaignCheckpointArtifact current) => new(

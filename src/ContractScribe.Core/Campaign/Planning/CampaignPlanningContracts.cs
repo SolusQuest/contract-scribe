@@ -222,9 +222,6 @@ public sealed record CampaignPlanningSnapshot
 public sealed record CampaignPlanningBudgetPolicy
 {
     public CampaignPlanningBudgetPolicy(
-        int maximumBlocks,
-        int maximumChangedFiles,
-        long maximumPatchBytes,
         int? maximumProviderRequests,
         int maximumAttemptsPerTarget,
         long? maximumInputTokens,
@@ -238,9 +235,6 @@ public sealed record CampaignPlanningBudgetPolicy
         CampaignPlanningContentAuthority? costRatePolicy,
         CampaignCostRates? costRates = null)
     {
-        MaximumBlocks = maximumBlocks;
-        MaximumChangedFiles = maximumChangedFiles;
-        MaximumPatchBytes = maximumPatchBytes;
         MaximumProviderRequests = maximumProviderRequests;
         MaximumAttemptsPerTarget = maximumAttemptsPerTarget;
         MaximumInputTokens = maximumInputTokens;
@@ -255,9 +249,6 @@ public sealed record CampaignPlanningBudgetPolicy
         CostRates = costRates;
     }
 
-    public int MaximumBlocks { get; }
-    public int MaximumChangedFiles { get; }
-    public long MaximumPatchBytes { get; }
     public int? MaximumProviderRequests { get; init; }
     public int MaximumAttemptsPerTarget { get; }
     public long? MaximumInputTokens { get; init; }

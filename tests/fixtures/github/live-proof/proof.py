@@ -218,11 +218,10 @@ def request_document(config, state, base):
     return {'githubProposalRequestVersion': 1,
             'campaignLineage': 'campaign.issue166.' + nonce,
             'snapshot': 'snapshot.issue166.' + nonce,
-            'state': str(state),
+            'checkpointStore': 'coordination-ref',
             'github': {'repositoryOwner': 'SolusQuest', 'repositoryName': 'contract-scribe-sandbox',
                        'targetRef': 'refs/heads/main', 'expectedBaseCommitOid': base,
                        'operationId': 'operation.issue166.' + nonce, 'generationId': 'generation.issue166.' + nonce,
-                       'policy': {'maximumDocumentationBlocks': 1, 'maximumDistinctChangedFiles': 1, 'maximumCumulativePatchBytes': 4096},
                        'transition': 'initial'}}
 
 

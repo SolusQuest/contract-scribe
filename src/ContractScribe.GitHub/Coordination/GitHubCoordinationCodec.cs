@@ -23,10 +23,9 @@ internal static class GitHubCoordinationCodec
     private static readonly string[] PropertyNames =
     [
         "version", "campaignLineage", "stage", "repositoryId", "targetRef", "targetCommitOid",
-        "snapshotCommitmentSha256", "authorityCommitmentSha256", "policyCommitmentSha256",
+        "snapshotCommitmentSha256", "authorityCommitmentSha256", "batchIdentity", "resultSetCommitmentSha256",
         "operationId", "operationCommitmentSha256", "currentCandidateCommitmentSha256",
-        "precedingOperationId", "precedingAuthorityCommitmentSha256",
-        "precedingCandidateCommitmentSha256", "generationId", "transition",
+        "generationId", "transition",
         "coordinationPredecessorOid", "contentCommitOid", "proposalRefOid",
         "proposalCommitOid", "proposalTreeOid", "pullRequestCreationOperationCommitmentSha256",
         "pullRequestNumber", "expectedBaseOid", "observedBaseOid", "ownershipMarkerSha256",
@@ -42,13 +41,11 @@ internal static class GitHubCoordinationCodec
         authority.ExpectedBaseCommitOid,
         authority.SnapshotCommitmentSha256,
         authority.AuthorityCommitmentSha256,
-        authority.PolicyCommitmentSha256,
+        authority.Batch.Identity,
+        authority.Batch.ResultSetCommitmentSha256,
         authority.OperationId,
         authority.OperationCommitmentSha256,
         authority.CandidateCommitmentSha256,
-        authority.PrecedingOperationId,
-        authority.PrecedingAuthorityCommitmentSha256,
-        authority.PrecedingCandidateCommitmentSha256,
         authority.GenerationId,
         Transition(authority.Transition),
         coordinationPredecessorOid,
@@ -73,10 +70,9 @@ internal static class GitHubCoordinationCodec
         string? ownershipMarkerSha256 = null) => new(
         stage, current.RepositoryId, current.TargetRef, current.TargetCommitOid,
         current.SnapshotCommitmentSha256, current.AuthorityCommitmentSha256,
-        current.PolicyCommitmentSha256, current.OperationId,
+        current.BatchIdentity, current.ResultSetCommitmentSha256, current.OperationId,
         current.OperationCommitmentSha256, current.CurrentCandidateCommitmentSha256,
-        current.PrecedingOperationId, current.PrecedingAuthorityCommitmentSha256,
-        current.PrecedingCandidateCommitmentSha256, current.GenerationId,
+        current.GenerationId,
         current.Transition, predecessorOid, contentCommitOid, proposalRefOid,
         proposalCommitOid, proposalTreeOid, pullRequestCreationOperationCommitmentSha256,
         pullRequestNumber, expectedBaseOid, observedBaseOid, ownershipMarkerSha256,
@@ -105,13 +101,11 @@ internal static class GitHubCoordinationCodec
             writer.WriteString("targetCommitOid", state.TargetCommitOid);
             writer.WriteString("snapshotCommitmentSha256", state.SnapshotCommitmentSha256);
             writer.WriteString("authorityCommitmentSha256", state.AuthorityCommitmentSha256);
-            writer.WriteString("policyCommitmentSha256", state.PolicyCommitmentSha256);
+            writer.WriteString("batchIdentity", state.BatchIdentity);
+            writer.WriteString("resultSetCommitmentSha256", state.ResultSetCommitmentSha256);
             writer.WriteString("operationId", state.OperationId);
             writer.WriteString("operationCommitmentSha256", state.OperationCommitmentSha256);
             writer.WriteString("currentCandidateCommitmentSha256", state.CurrentCandidateCommitmentSha256);
-            WriteOptional(writer, "precedingOperationId", state.PrecedingOperationId);
-            WriteOptional(writer, "precedingAuthorityCommitmentSha256", state.PrecedingAuthorityCommitmentSha256);
-            WriteOptional(writer, "precedingCandidateCommitmentSha256", state.PrecedingCandidateCommitmentSha256);
             writer.WriteString("generationId", state.GenerationId);
             writer.WriteString("transition", state.Transition);
             writer.WriteString("coordinationPredecessorOid", state.CoordinationPredecessorOid);
@@ -205,13 +199,11 @@ internal static class GitHubCoordinationCodec
             RequiredString(root, "targetCommitOid"),
             RequiredString(root, "snapshotCommitmentSha256"),
             RequiredString(root, "authorityCommitmentSha256"),
-            RequiredString(root, "policyCommitmentSha256"),
+            RequiredString(root, "batchIdentity"),
+            RequiredString(root, "resultSetCommitmentSha256"),
             RequiredString(root, "operationId"),
             RequiredString(root, "operationCommitmentSha256"),
             RequiredString(root, "currentCandidateCommitmentSha256"),
-            OptionalString(root, "precedingOperationId"),
-            OptionalString(root, "precedingAuthorityCommitmentSha256"),
-            OptionalString(root, "precedingCandidateCommitmentSha256"),
             RequiredString(root, "generationId"),
             RequiredString(root, "transition"),
             RequiredString(root, "coordinationPredecessorOid"),
@@ -240,7 +232,8 @@ internal static class GitHubCoordinationCodec
             && RefName(state.TargetRef) && IsOid(state.TargetCommitOid)
             && Hex(state.SnapshotCommitmentSha256, 64)
             && Hex(state.AuthorityCommitmentSha256, 64)
-            && Hex(state.PolicyCommitmentSha256, 64)
+            && Hex(state.BatchIdentity, 64)
+            && Hex(state.ResultSetCommitmentSha256, 64)
             && Opaque(state.OperationId)
             && Hex(state.OperationCommitmentSha256, 64)
             && Hex(state.CurrentCandidateCommitmentSha256, 64)
@@ -249,20 +242,12 @@ internal static class GitHubCoordinationCodec
             && IsOid(state.CoordinationPredecessorOid, zero: true)
             && state.CumulativeDocumentationBlocks is > 0
                 and <= CampaignStateContract.MaximumActivePatchBlocks
-            && state.CumulativePatchBytes is > 0
-                and <= CampaignStateContract.MaximumPatchBytes
+            && state.CumulativePatchBytes > 0
             && !state.CumulativeChangedFiles.IsDefaultOrEmpty
             && state.CumulativeChangedFiles.Length <= GitHubPublicationContract.MaximumChangedFiles
+            && state.CumulativePatchBytes <= (long)state.CumulativeChangedFiles.Length * int.MaxValue
             && state.CumulativeChangedFiles.Length <= state.CumulativeDocumentationBlocks
             && state.CumulativeChangedFiles.Length <= state.CumulativePatchBytes);
-        var append = state.Transition == "same-snapshot-append";
-        Require(append == (state.PrecedingOperationId is not null)
-            && append == (state.PrecedingAuthorityCommitmentSha256 is not null)
-            && append == (state.PrecedingCandidateCommitmentSha256 is not null));
-        if (append)
-            Require(Opaque(state.PrecedingOperationId!)
-                && Hex(state.PrecedingAuthorityCommitmentSha256, 64)
-                && Hex(state.PrecedingCandidateCommitmentSha256, 64));
         var previous = string.Empty;
         var folded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var file in state.CumulativeChangedFiles)
@@ -282,6 +267,7 @@ internal static class GitHubCoordinationCodec
         GitHubCoordinationStage.Claimed => "claimed",
         GitHubCoordinationStage.ContentCreated => "content-created",
         GitHubCoordinationStage.ProposalRefAdvanced => "proposal-ref-advanced",
+        GitHubCoordinationStage.PullRequestCreateStarted => "pull-request-create-started",
         GitHubCoordinationStage.PullRequestCreated => "pr-created",
         GitHubCoordinationStage.Published => "published",
         GitHubCoordinationStage.AwaitingReview => "awaiting-review",
@@ -297,6 +283,7 @@ internal static class GitHubCoordinationCodec
         "claimed" => GitHubCoordinationStage.Claimed,
         "content-created" => GitHubCoordinationStage.ContentCreated,
         "proposal-ref-advanced" => GitHubCoordinationStage.ProposalRefAdvanced,
+        "pull-request-create-started" => GitHubCoordinationStage.PullRequestCreateStarted,
         "pr-created" => GitHubCoordinationStage.PullRequestCreated,
         "published" => GitHubCoordinationStage.Published,
         "awaiting-review" => GitHubCoordinationStage.AwaitingReview,
@@ -319,13 +306,15 @@ internal static class GitHubCoordinationCodec
             && state.ContentCommitOid is not null
             && state.ProposalRefOid == state.ContentCommitOid
             && state.ProposalCommitOid == state.ContentCommitOid));
-        var pr = state.PullRequestCreationOperationCommitmentSha256 is not null
-            || state.PullRequestNumber is not null || state.OwnershipMarkerSha256 is not null;
+        var creation = state.PullRequestCreationOperationCommitmentSha256 is not null
+            || state.OwnershipMarkerSha256 is not null;
+        var pr = state.PullRequestNumber is not null;
         var bases = state.ExpectedBaseOid is not null || state.ObservedBaseOid is not null;
-        if (pr)
+        if (creation)
         {
             Require(completeProposal && Hex(state.PullRequestCreationOperationCommitmentSha256, 64)
-                && state.PullRequestNumber > 0 && Hex(state.OwnershipMarkerSha256, 64)
+                && (state.PullRequestNumber > 0 || state.Stage == GitHubCoordinationStage.PullRequestCreateStarted
+                    && state.PullRequestNumber is null) && Hex(state.OwnershipMarkerSha256, 64)
                 && IsOid(state.ExpectedBaseOid) && IsOid(state.ObservedBaseOid));
         }
         else Require(state.PullRequestCreationOperationCommitmentSha256 is null
@@ -344,6 +333,9 @@ internal static class GitHubCoordinationCodec
                 break;
             case GitHubCoordinationStage.ProposalRefAdvanced:
                 Require(completeProposal && !pr && !bases);
+                break;
+            case GitHubCoordinationStage.PullRequestCreateStarted:
+                Require(creation && !pr && state.ExpectedBaseOid == state.ObservedBaseOid);
                 break;
             case GitHubCoordinationStage.PullRequestCreated:
             case GitHubCoordinationStage.Published:
@@ -378,7 +370,8 @@ internal static class GitHubCoordinationCodec
             && state.TargetRef == creation.TargetRef && state.TargetCommitOid == creation.TargetCommitOid
             && state.GenerationId == creation.GenerationId
             && state.SnapshotCommitmentSha256 == creation.SnapshotCommitmentSha256
-            && state.PolicyCommitmentSha256 == creation.PolicyCommitmentSha256
+            && state.BatchIdentity == creation.BatchIdentity
+            && state.ResultSetCommitmentSha256 == creation.ResultSetCommitmentSha256
             && (creation.PullRequestNumber is null || state.PullRequestNumber == creation.PullRequestNumber));
         var commitment = PullRequestCreationCommitment(creation, proposalRef);
         Require(commitment == state.PullRequestCreationOperationCommitmentSha256
@@ -434,7 +427,7 @@ internal static class GitHubCoordinationCodec
     {
         long estimate = 4096;
         foreach (var value in new[] { state.RepositoryId, state.TargetRef, state.OperationId,
-            state.PrecedingOperationId, state.GenerationId })
+            state.GenerationId })
             if (value is not null) estimate = checked(estimate + (long)value.Length * 6);
         foreach (var file in state.CumulativeChangedFiles)
             estimate = checked(estimate + (long)file.Path.Length * 6 + 160);
@@ -491,13 +484,12 @@ internal static class GitHubCoordinationCodec
         && !value.Any(character => character is '\0' or '\r' or '\n')
         && ValidUtf16(value);
 
-    private static bool Transition(string value) => value is "initial" or "same-snapshot-append"
+    private static bool Transition(string value) => value is "initial"
         or "successor-after-merge" or "successor-after-closed-unmerged";
 
     private static string Transition(GitHubPublicationTransitionKind value) => value switch
     {
         GitHubPublicationTransitionKind.Initial => "initial",
-        GitHubPublicationTransitionKind.SameSnapshotAppend => "same-snapshot-append",
         GitHubPublicationTransitionKind.SuccessorAfterMerge => "successor-after-merge",
         GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged => "successor-after-closed-unmerged",
         _ => throw Fail(),

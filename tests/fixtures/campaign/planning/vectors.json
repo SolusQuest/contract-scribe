@@ -2,9 +2,9 @@
   "contractRevision": "campaign-planning-v1",
   "scenario": "required-target-and-components",
   "auditResultSha256": "e64112e3c4c1e5ee94f65745a7dabe04a940357481d6d58e109d9e44a56dd501",
-  "executionCommitment": "41ae4ea088e0fbe4a67c3499a5e1a8f1b0a0207d1c05ffaf6032cf9801565e64",
+  "executionCommitment": "e5c81b661abe94844a839d2caeb84bc2e5f9fbfe407fcd191cf440a6bfba43fd",
   "workItemKeys": [
-    "campaign-work.e345b6e5ddb5c2fc4e6c0d88b9dc22811aa1cbe03d9f9060d1f5c409a0276526"
+    "campaign-work.83f611ca64a639c3a16ce5fd4f57fa592f829938059a0aea809f5880a5faed02"
   ],
   "invalidVectors": [
     { "id": "split-shared-owner", "validationCode": "InvalidOwnerAuthority" },

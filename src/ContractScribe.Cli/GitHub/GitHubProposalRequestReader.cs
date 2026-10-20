@@ -66,7 +66,7 @@ internal static class GitHubProposalRequestReader
             throw new JsonException();
         if (!github.TryGetProperty("transition", out var transition)
             || transition.ValueKind != JsonValueKind.String
-            || transition.GetString() is not ("initial" or "same-snapshot-append" or "successor-after-merge" or "successor-after-closed-unmerged"))
+            || transition.GetString() is not ("initial" or "successor-after-merge" or "successor-after-closed-unmerged"))
             throw new JsonException();
         if (github.TryGetProperty("terminalPredecessor", out var terminal) && terminal.ValueKind != JsonValueKind.Null
             && (terminal.ValueKind != JsonValueKind.Object
@@ -141,17 +141,9 @@ internal static class GitHubProposalRequestReader
             || !GitHubPublicationFactory.IsRefName(configuration.TargetRef)
             || !configuration.TargetRef.StartsWith("refs/heads/", StringComparison.Ordinal)
             || !GitHubPublicationFactory.IsGitOid(configuration.ExpectedBaseCommitOid, allowMissing: false)
-            || configuration.Policy is null
-            || configuration.Policy.MaximumDocumentationBlocks <= 0
-            || configuration.Policy.MaximumDistinctChangedFiles <= 0
-            || configuration.Policy.MaximumCumulativePatchBytes <= 0
-            || ((configuration.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend)
-                != (configuration.AppendPredecessor is not null))
             || ((configuration.Transition is GitHubPublicationTransitionKind.SuccessorAfterMerge
                     or GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged)
-                != (configuration.TerminalPredecessor is not null))
-            || (configuration.ClosedUnmergedSuccessorAuthorization is not null
-                && configuration.Transition != GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged))
+                != (configuration.TerminalPredecessor is not null)))
             throw new JsonException();
         foreach (var part in new[] { configuration.RepositoryOwner, configuration.RepositoryName })
             if (part is null || part.Length is 0 or > 100

@@ -10,8 +10,7 @@ using PrOutcome = ContractScribe.GitHub.PullRequests.GitHubProposalOutcome;
 
 namespace ContractScribe.GitHub.Publication;
 
-// One authority-bound lifetime can carry acknowledged write rights between bounded calls.
-// Reconstructing this adapter intentionally reconstructs observations, never those rights.
+// Each write is the freshly validated next step of one frozen operation.
 internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
 {
     private readonly GitHubApiClient client;
@@ -19,7 +18,6 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
     private readonly GitHubProposalStore git;
     private readonly GitHubProposalPullRequestStore prs;
     private readonly SemaphoreSlim gate = new(1, 1);
-    private IGitHubPullRequestEntitlement? createRight;
     private IGitHubProposalObservation? previous;
     private ValidatedGitHubPublicationAuthority Authority => client.Authority;
 
@@ -27,8 +25,15 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
     {
         this.client = client;
         coordination = checkpoint ?? GitHubCoordinationStore.Create(client);
-        git = GitHubProposalStore.Create(client, coordination);
         prs = GitHubProposalPullRequestStore.Create(client, coordination, publisher);
+        git = GitHubProposalStore.Create(client, coordination, async (state, token) =>
+        {
+            var read = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
+            if (read.Read is null || read.State?.HeadOid != state.HeadOid) return false;
+            var absent = await prs.PreflightAsync(read.Read, token).ConfigureAwait(false);
+            return absent.Absence is not null
+                && GitHubProposalPullRequestStore.AuthenticatesAbsence(absent.Absence, coordination, state);
+        });
     }
 
     // Publisher is supplied by trusted host composition, independently of inspected PRs.
@@ -122,13 +127,6 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
                     if (!SuccessorMatches(state, observed.Observation)) return Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.SuccessorMismatch);
                 }
             }
-            else if (Authority.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend)
-            {
-                if (observed.Outcome != PrOutcome.Appendable || state.Stage != GitHubCoordinationStage.Published
-                    || !AppendIdentityMatches(state)) return Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.AppendMismatch);
-                if (state.PolicyCommitmentSha256 != Authority.PolicyCommitmentSha256 || Exhausted(state))
-                    return Hold(observed.Observation!);
-            }
             else if (!(Authority.Transition == GitHubPublicationTransitionKind.Initial
                 && state.Stage == GitHubCoordinationStage.Stale && Authority.GenerationId != state.GenerationId
                 && observed.Outcome == PrOutcome.Absent)) return Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.TransitionMismatch);
@@ -138,7 +136,6 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         {
             var preflight = await git.InspectAsync(read.Read, payload, token).ConfigureAwait(false);
             if (preflight.Inspection is null) return Project(preflight, GitHubPublicationBoundary.GitInspect);
-            if (Authority.Transition != GitHubPublicationTransitionKind.SameSnapshotAppend)
             {
                 if (preflight.Inspection.ObservedRefOid != GitHubPublicationContract.MissingGitObjectId)
                     return Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.UnexpectedProposalRef);
@@ -162,13 +159,13 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         var proof = inspected.Inspection;
         if (state.Stage == GitHubCoordinationStage.Claimed && proof.ObservedRefOid == proof.CommitOid)
             return Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.ClaimedRefPresent);
-        var hasPrContext = state.ProposalCommitOid is not null || state.Transition == "same-snapshot-append";
+        var hasPrContext = state.ProposalCommitOid is not null;
         var pr = hasPrContext
             ? await prs.ObserveVerifiedAsync(state, proof, previous, token: token).ConfigureAwait(false)
             : await prs.PreflightAsync(read.Read, token).ConfigureAwait(false);
         if (pr.Outcome is PrOutcome.Failed or PrOutcome.Conflict or PrOutcome.Unresolved) return Project(pr, hasPrContext ? GitHubPublicationBoundary.PullRequestObserve : GitHubPublicationBoundary.PullRequestPreflight);
         previous = pr.Observation ?? previous;
-        if (pr.Observation is not null && pr.Outcome is not PrOutcome.Appendable)
+        if (pr.Observation is not null && pr.Outcome is not PrOutcome.OpenDraft)
             return await Complete(state, pr.Observation, payload, token).ConfigureAwait(false);
         if (state.Stage is GitHubCoordinationStage.Stale or GitHubCoordinationStage.StaleDraft)
             return Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.StaleStage);
@@ -195,6 +192,8 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
                 await AdvanceProposal(state, payload, token).ConfigureAwait(false),
             GitHubCoordinationStage.ProposalRefAdvanced =>
                 await FinishProposal(state, proof, pr, payload, allowCreate: true, token).ConfigureAwait(false),
+            GitHubCoordinationStage.PullRequestCreateStarted =>
+                await FinishProposal(state, proof, pr, payload, allowCreate: false, token).ConfigureAwait(false),
             GitHubCoordinationStage.PullRequestCreated or GitHubCoordinationStage.Published or GitHubCoordinationStage.AwaitingReview
                 when pr.Observation is not null => await Complete(state, pr.Observation, payload, token).ConfigureAwait(false),
             _ => Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.UnexpectedStage),
@@ -218,17 +217,22 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
             if (state.Stage == GitHubCoordinationStage.Stale) return Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.StaleStage);
             right = recorded.ProposalRefEntitlement;
         }
-        // The active PR may have changed while immutable objects were materialized.
-        if (state.Transition == "same-snapshot-append")
+        // Reissue only after fresh original-content and exhaustive absence proof,
+        // including when this invocation observed the preceding stage acknowledgement.
         {
             var current = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
-            if (current.Read is null) return Project(current, GitHubPublicationBoundary.CoordinationRead);
+            if (current.Read is null || current.State is null) return Project(current, GitHubPublicationBoundary.CoordinationRead);
+            state = current.State;
             var inspected = await git.InspectAsync(current.Read, payload, token).ConfigureAwait(false);
             if (inspected.Inspection is null) return Project(inspected, GitHubPublicationBoundary.GitInspect);
-            var observed = await prs.ObserveVerifiedAsync(state, inspected.Inspection, previous, token: token).ConfigureAwait(false);
-            if (observed.Observation is null) return Project(observed, GitHubPublicationBoundary.PullRequestObserve);
-            previous = observed.Observation;
-            if (observed.Outcome != PrOutcome.Appendable) return Lifecycle(observed.Observation);
+            var absent = await prs.PreflightAsync(current.Read, token).ConfigureAwait(false);
+            if (absent.Absence is null) return Project(absent, GitHubPublicationBoundary.PullRequestPreflight);
+            var recovered = await coordination.RecoverOriginalProposalRefAsync(state,
+                inspected.Inspection, absent.Absence, token).ConfigureAwait(false);
+            if (recovered.State is null || recovered.ProposalRefEntitlement is null)
+                return Project(recovered, GitHubPublicationBoundary.GitAdvanceRef);
+            state = recovered.State;
+            right = recovered.ProposalRefEntitlement;
         }
         var advanced = await git.AdvanceRefAsync(content.Content, state, right, token).ConfigureAwait(false);
         if (advanced.Failure is not null)
@@ -244,7 +248,6 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         if (result.State is null) return Project(result, GitHubPublicationBoundary.CoordinationAdvanceRef);
         state = result.State;
         if (state.Stage != GitHubCoordinationStage.ProposalRefAdvanced) return Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.UnexpectedStage);
-        createRight = result.PullRequestEntitlement;
         var read = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
         if (read.Read is null || read.State is null) return Project(read, GitHubPublicationBoundary.CoordinationRead);
         var checkedGit = await git.InspectAsync(read.Read, payload, token).ConfigureAwait(false);
@@ -259,12 +262,19 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
     {
         if (observed.Observation is not null) return await Complete(state, observed.Observation, payload, token).ConfigureAwait(false);
         if (observed.Outcome != PrOutcome.Absent) return Project(observed, GitHubPublicationBoundary.PullRequestObserve);
-        if (!allowCreate)
+        if (!allowCreate && state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
             return GitHubPublicationResult.RecoveredRefPartial(new(proof.Ref, proof.BeforeOid, proof.ObservedRefOid,
                 Authority.OperationCommitmentSha256));
-        if (Authority.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend) return Reject(GitHubPublicationRemoteFailureKind.Conflict, GitHubPublicationPredicate.AppendCreateForbidden);
-        var right = createRight;
-        createRight = null;
+        IGitHubPullRequestEntitlement? right = null;
+        if (allowCreate && state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
+        {
+            if (observed.Absence is null) return Project(observed, GitHubPublicationBoundary.PullRequestPreflight);
+            var fenced = await coordination.BeginOriginalPullRequestAsync(state, proof,
+                observed.Absence, token).ConfigureAwait(false);
+            if (fenced.State is null) return Project(fenced, GitHubPublicationBoundary.CoordinationAdvanceRef);
+            state = fenced.State;
+            right = fenced.PullRequestEntitlement;
+        }
         var result = right is null
             ? await prs.RecoverAsync(state, new(proof.Ref, proof.CommitOid, proof.TreeOid), previous, token).ConfigureAwait(false)
             : await prs.CreateAuthorizedAsync(state, new(proof.Ref, proof.CommitOid, proof.TreeOid), right, token).ConfigureAwait(false);
@@ -277,7 +287,6 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         int remainingObservations = 3)
     {
         previous = observation;
-        // Partial append holds concern the already authenticated preceding PR, not unpublished candidate Q.
         if (state.ProposalCommitOid is null) return Lifecycle(observation);
         var desired = observation.Outcome switch
         {
@@ -317,27 +326,13 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         state.OperationCommitmentSha256 == Authority.OperationCommitmentSha256
         && state.AuthorityCommitmentSha256 == Authority.AuthorityCommitmentSha256;
 
-    private bool AppendIdentityMatches(IGitHubCoordinationStateCapability state) =>
-        Authority.PrecedingOperationId == state.OperationId && Authority.PrecedingAuthorityCommitmentSha256 == state.AuthorityCommitmentSha256
-        && Authority.PrecedingCandidateCommitmentSha256 == state.CurrentCandidateCommitmentSha256
-        && Authority.GenerationId == state.GenerationId && Authority.SnapshotCommitmentSha256 == state.SnapshotCommitmentSha256
-        && Authority.ExpectedBaseCommitOid == state.TargetCommitOid
-        && Authority.PrecedingChangedFiles.Length == state.CumulativeChangedFiles.Length
-        && Authority.PrecedingChangedFiles.Zip(state.CumulativeChangedFiles)
-            .All(p => p.First.Path == p.Second.Path && p.First.CandidateFileSha256 == p.Second.CandidateSha256);
-
     private bool SuccessorMatches(IGitHubCoordinationStateCapability state, IGitHubProposalObservation observation) =>
         Authority.TerminalPredecessor is { } expected && expected.PullRequestNumber == observation.PullRequest.Number
         && expected.GenerationId == state.GenerationId && expected.HeadOid == observation.PullRequest.Head.Oid
         && Authority.GenerationId != state.GenerationId && Authority.SnapshotCommitmentSha256 != state.SnapshotCommitmentSha256
         && ((Authority.Transition == GitHubPublicationTransitionKind.SuccessorAfterMerge && observation.Outcome == PrOutcome.Merged)
             || (Authority.Transition == GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged
-                && observation.Outcome == PrOutcome.ClosedUnmerged && Authority.ClosedUnmergedSuccessorAuthorization is not null));
-
-    private bool Exhausted(IGitHubCoordinationStateCapability state) =>
-        state.CumulativeDocumentationBlocks >= Authority.Policy.MaximumDocumentationBlocks
-        || state.CumulativeChangedFiles.Length >= Authority.Policy.MaximumDistinctChangedFiles
-        || state.CumulativePatchBytes >= Authority.Policy.MaximumCumulativePatchBytes;
+                && observation.Outcome == PrOutcome.ClosedUnmerged && Authority.ExpectedBaseCommitOid != state.TargetCommitOid));
 
     private static GitHubPublicationPullRequestIdentity Identity(IGitHubProposalObservation observation) =>
         new(observation.PullRequest.Number, observation.Coordination.GenerationId,

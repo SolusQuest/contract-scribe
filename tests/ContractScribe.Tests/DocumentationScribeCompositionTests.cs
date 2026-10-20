@@ -1427,9 +1427,6 @@ public sealed partial class DocumentationScribeCompositionTests
             var executionPolicy = new CampaignPlanningExecutionPolicy(
                 Request.Limits,
                 new CampaignPlanningBudgetPolicy(
-                    32,
-                    8,
-                    1_000_000,
                     64,
                     3,
                     1_000_000,

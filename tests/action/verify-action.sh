@@ -1003,9 +1003,6 @@ EOF
  "github":{"repositoryOwner":"Owner","repositoryName":"repo",
    "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
    "operationId":"operation.action","generationId":"generation.action",
-   "policy":{"maximumDocumentationBlocks":128,
-     "maximumDistinctChangedFiles":128,
-     "maximumCumulativePatchBytes":4194304},
    "transition":"initial"}}
 EOF
     env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" HOME="$HOME" RUNNER_OS=Linux RUNNER_ARCH=X64 \

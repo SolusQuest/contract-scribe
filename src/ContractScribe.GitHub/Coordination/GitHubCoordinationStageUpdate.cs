@@ -77,6 +77,16 @@ internal sealed class GitHubCoordinationStageUpdate
             expectedBaseOid, observedBaseOid, ownershipMarkerSha256);
     }
 
+    internal static GitHubCoordinationStageUpdate PullRequestCreateStarted(
+        string commitOid, string treeOid, string creationCommitment, string baseOid, string markerHash)
+    {
+        Require(IsOid(commitOid) && IsOid(treeOid) && Hex(creationCommitment, 64)
+            && IsOid(baseOid) && Hex(markerHash, 64));
+        return new(GitHubCoordinationStage.PullRequestCreateStarted, commitOid, commitOid,
+            commitOid, treeOid, creationCommitment, expectedBaseOid: baseOid,
+            observedBaseOid: baseOid, ownershipMarkerSha256: markerHash);
+    }
+
     internal static GitHubCoordinationStageUpdate Stale(
         string expectedBaseOid,
         string observedBaseOid)

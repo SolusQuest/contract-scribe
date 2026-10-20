@@ -132,13 +132,13 @@ public sealed partial class GitHubProposalCliProcessTests
     [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Published_snapshot_append_waits_without_accepting_or_publishing_new_work(bool newPath)
+    public async Task Published_subset_waits_without_accepting_or_publishing_new_work(bool newPath)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: newPath);
         AssertResult(await fixture.Run("start"), 0, "published");
         var prior = fixture.Checkpoint();
-        await ConfigureAppend(fixture);
+        await ConfigureSealedResume(fixture);
         var before = GateCounts(fixture);
         var writes = fixture.GitHub.Mutations;
         AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
@@ -156,17 +156,17 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData(true, false)]
     [InlineData(false, true)]
     [InlineData(true, true)]
-    public async Task Independent_processes_compete_for_the_same_ref_claim_without_duplicate_publication(bool differentOperation, bool append)
+    public async Task Independent_processes_compete_for_the_same_ref_claim_without_duplicate_publication(bool differentOperation, bool published)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
-        await using var fixture = await Fixture.CreateAsync(twoWorks: append);
-        if (append)
+        await using var fixture = await Fixture.CreateAsync(twoWorks: published);
+        if (published)
         {
             AssertResult(await fixture.Run("start"), 0, "published");
-            await ConfigureAppend(fixture);
+            await ConfigureSealedResume(fixture);
         }
         var otherRequest = Path.Join(fixture.Outside, "other-request.json");
-        var otherArgs = fixture.Args(append ? "resume" : "start", requestPath: otherRequest);
+        var otherArgs = fixture.Args(published ? "resume" : "start", requestPath: otherRequest);
         if (differentOperation)
         {
             var request = JsonNode.Parse(await File.ReadAllTextAsync(otherRequest))!;
@@ -174,7 +174,7 @@ public sealed partial class GitHubProposalCliProcessTests
             await File.WriteAllTextAsync(otherRequest, request.ToJsonString());
         }
         fixture.GitHub.Barrier("/git/ref/heads/contract-scribe/");
-        using var first = CampaignCliProcessTests.Start(fixture.Args(append ? "resume" : "start"), fixture.Environment());
+        using var first = CampaignCliProcessTests.Start(fixture.Args(published ? "resume" : "start"), fixture.Environment());
         var otherEnvironment = fixture.Environment();
         otherEnvironment["CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS"] = Path.Join(fixture.Outside, "other-observations.txt");
         using var second = CampaignCliProcessTests.Start(otherArgs, otherEnvironment);
@@ -192,28 +192,14 @@ public sealed partial class GitHubProposalCliProcessTests
         finally { await CampaignCliProcessTests.StopAsync(first); await CampaignCliProcessTests.StopAsync(second); }
     }
 
-    private static async Task ConfigureAppend(Fixture fixture)
+    private static async Task ConfigureSealedResume(Fixture fixture)
     {
-        var previous = fixture.GitHub.Coordination();
-        fixture.Publication["operationId"] = "operation.append";
-        fixture.Publication["transition"] = "same-snapshot-append";
-        fixture.Publication["appendPredecessor"] = new JsonObject
-        {
-            ["operationId"] = previous["operationId"]!.DeepClone(),
-            ["authorityCommitmentSha256"] = previous["authorityCommitmentSha256"]!.DeepClone(),
-            ["candidateCommitmentSha256"] = previous["currentCandidateCommitmentSha256"]!.DeepClone(),
-            ["generationId"] = previous["generationId"]!.DeepClone(),
-            ["snapshotCommitmentSha256"] = previous["snapshotCommitmentSha256"]!.DeepClone(),
-            ["policyCommitmentSha256"] = previous["policyCommitmentSha256"]!.DeepClone(),
-            ["changedFiles"] = new JsonArray(previous["cumulativeChangedFiles"]!.AsArray().Select(file => (JsonNode)new JsonObject
-            {
-                ["path"] = file!["path"]!.DeepClone(),
-                ["candidateFileSha256"] = file["candidateSha256"]!.DeepClone(),
-            }).ToArray()),
-        };
+        // Raise spending/selection settings without changing the original operation.
+        // An already published subset must remain a zero-work wait.
         var path = Assert.IsType<string>(fixture.Configuration);
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(path))!;
         configuration["budgets"]!["invocation"]!["maximumProviderRequests"] = 64;
+        configuration["budgets"]!["invocation"]!["maximumTargets"] = 4096;
         await File.WriteAllTextAsync(path, configuration.ToJsonString());
     }
 }

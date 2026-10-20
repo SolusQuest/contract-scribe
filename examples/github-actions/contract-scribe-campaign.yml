@@ -1,7 +1,7 @@
 # Copy alongside .github/contract-scribe/handoff.py and select a reviewed Action ref.
 # Set CONTRACTSCRIBE_CAMPAIGN_LINEAGE and CONTRACTSCRIBE_CAMPAIGN repository variables.
 # The campaign JSON contains snapshot, operationId, generationId, targetRef,
-# repositoryOwner, repositoryName and policyCeilings. Resume uses the same ref-backed
+# repositoryOwner and repositoryName. Resume uses the same ref-backed
 # checkpoint; each run explicitly selects start or resume. No schedule or artifact
 # selection authorizes an invocation. Provider/acquisition secrets are passed only
 # to the Action; publication uses this job's github.token.

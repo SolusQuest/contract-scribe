@@ -48,14 +48,9 @@ public static class GitHubPublicationFactory
         RequireSha256(input.AcceptedProjectionCommitmentSha256);
         RequireOpaque(input.OperationId);
         RequireOpaque(input.GenerationId);
-        ValidatePolicy(input.AcceptedM4Ceilings, input.Policy);
+        var batch = CreateBatch(input.Batch);
 
         var files = CollectBounded(input.ChangedFiles, GitHubPublicationContract.MaximumChangedFiles)
-            .OrderBy(file => file.Path, StringComparer.Ordinal)
-            .ToImmutableArray();
-        var precedingFiles = CollectBounded(
-                input.PrecedingChangedFiles,
-                GitHubPublicationContract.MaximumChangedFiles)
             .OrderBy(file => file.Path, StringComparer.Ordinal)
             .ToImmutableArray();
         Require(!files.IsEmpty, GitHubPublicationValidationCode.InvalidBound);
@@ -94,47 +89,72 @@ public static class GitHubPublicationFactory
             throw Fail(GitHubPublicationValidationCode.ArithmeticOverflow);
         }
 
-        var precedingPaths = new HashSet<string>(StringComparer.Ordinal);
-        var precedingFolded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var file in precedingFiles)
-        {
-            ArgumentNullException.ThrowIfNull(file);
-            ValidatePathAndHashes(file.Path, file.CandidateFileSha256, file.CandidateFileSha256);
-            Require(precedingPaths.Add(file.Path), GitHubPublicationValidationCode.DuplicatePath);
-            Require(precedingFolded.Add(file.Path), GitHubPublicationValidationCode.CaseCollidingPath);
-            Require(paths.Contains(file.Path), GitHubPublicationValidationCode.InvalidCorrelation);
-        }
-
-        Require(cumulativeBlocks <= input.Policy.MaximumDocumentationBlocks,
-            GitHubPublicationValidationCode.InvalidPolicy);
-        Require(files.Length <= input.Policy.MaximumDistinctChangedFiles,
-            GitHubPublicationValidationCode.InvalidPolicy);
-        Require(cumulativePatchBytes <= input.Policy.MaximumCumulativePatchBytes,
-            GitHubPublicationValidationCode.InvalidPolicy);
-        var policyCommitment = GitHubPublicationCommitments.CreatePolicy(
-            input.AcceptedM4Ceilings,
-            input.Policy);
-        ValidateTransition(input, precedingFiles, policyCommitment);
+        Require(cumulativeBlocks == batch.AcceptedWorkItemKeys.Length,
+            GitHubPublicationValidationCode.InvalidCorrelation);
+        ValidateTransition(input);
         var authorityCommitment = GitHubPublicationCommitments.CreateAuthority(
-            input,
-            files,
-            precedingFiles,
-            cumulativeBlocks,
-            cumulativePatchBytes,
-            policyCommitment);
-        var operationCommitment = GitHubPublicationCommitments.CreateOperation(
-            input,
-            authorityCommitment,
-            policyCommitment);
-        return new ValidatedGitHubPublicationAuthority(
-            input,
-            files,
-            precedingFiles,
-            cumulativeBlocks,
-            cumulativePatchBytes,
-            policyCommitment,
-            authorityCommitment,
-            operationCommitment);
+            input, files, batch, cumulativeBlocks, cumulativePatchBytes);
+        var operationCommitment = GitHubPublicationCommitments.CreateOperation(input, authorityCommitment);
+        return new ValidatedGitHubPublicationAuthority(input, files, batch,
+            cumulativeBlocks, cumulativePatchBytes, authorityCommitment, operationCommitment);
+    }
+
+    public static GitHubPublicationBatchInput CreateBatchInput(CampaignCheckpointState state)
+    {
+        CampaignStateFactory.Validate(state);
+        Require(state.CandidateObservation is not null,
+            GitHubPublicationValidationCode.InvalidCorrelation);
+        var targets = state.Batch.CompleteTargets.ToDictionary(target => target.TargetKey, StringComparer.Ordinal);
+        return new(state.Batch.Identity, state.Batch.CreationQuota,
+            state.Batch.SelectedTargetKeys.Select(key => new GitHubPublicationBatchTarget(key, targets[key].WorkItemKey)).ToImmutableArray(),
+            state.CandidateObservation!.AcceptedWorkItemKeys);
+    }
+
+    public static ValidatedGitHubPublicationBatch CreateBatch(GitHubPublicationBatchInput input)
+    {
+        ArgumentNullException.ThrowIfNull(input);
+        RequireSha256(input.BatchIdentity);
+        Require(input.CreationQuota is > 0 and <= CampaignStateContract.MaximumWorkItems,
+            GitHubPublicationValidationCode.InvalidBound);
+        var targets = CollectBounded(input.SelectedTargets, CampaignStateContract.MaximumWorkItems);
+        var accepted = CollectBounded(input.AcceptedWorkItemKeys, CampaignStateContract.MaximumActivePatchBlocks)
+            .Order(StringComparer.Ordinal).ToImmutableArray();
+        Require(!targets.IsEmpty && targets.Length <= input.CreationQuota && !accepted.IsEmpty,
+            GitHubPublicationValidationCode.InvalidBound);
+        var targetKeys = new HashSet<string>(StringComparer.Ordinal);
+        var workKeys = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var target in targets)
+        {
+            Require(target is not null
+                && CampaignStateFactory.IsOpaqueId(target.TargetKey, CampaignStateContract.MaximumIdentifierScalars)
+                && CampaignStateFactory.IsOpaqueId(target.WorkItemKey, CampaignStateContract.MaximumIdentifierScalars)
+                && targetKeys.Add(target.TargetKey), GitHubPublicationValidationCode.InvalidCorrelation);
+            workKeys.Add(target.WorkItemKey);
+        }
+        Require(accepted.Distinct(StringComparer.Ordinal).Count() == accepted.Length
+            && accepted.All(workKeys.Contains), GitHubPublicationValidationCode.InvalidCorrelation);
+        using var writer = new GitHubPublicationCommitmentWriter("contract-scribe/github-publication-result-set/v1");
+        writer.Add("batch", input.BatchIdentity);
+        writer.Add("creation-quota", input.CreationQuota);
+        writer.Add("selected.count", targets.Length);
+        foreach (var target in targets)
+        {
+            writer.Add("target", target.TargetKey);
+            writer.Add("work", target.WorkItemKey);
+        }
+        writer.Add("accepted.count", accepted.Length);
+        foreach (var key in accepted) writer.Add("accepted", key);
+        return new(input.BatchIdentity, input.CreationQuota, targets, accepted, writer.Complete());
+    }
+
+    public static bool MatchesFrozenResult(CampaignCheckpointState state, string batchIdentity,
+        string resultSetCommitmentSha256, string originalCandidateCommitmentSha256)
+    {
+        CampaignStateFactory.Validate(state);
+        if (state.CandidateObservation is null || state.Batch.Identity != batchIdentity
+            || state.AcceptedCandidateOrigin?.CandidateObservation.PatchResultCommitmentSha256
+                != originalCandidateCommitmentSha256) return false;
+        return CreateBatch(CreateBatchInput(state)).ResultSetCommitmentSha256 == resultSetCommitmentSha256;
     }
 
     public static ValidatedGitHubChangedFilePayload CreatePayload(
@@ -204,7 +224,7 @@ public static class GitHubPublicationFactory
     {
         ArgumentNullException.ThrowIfNull(authority);
         return CreateProposalRef(CreateCampaignReadAuthority(authority), authority.GenerationId,
-            authority.SnapshotCommitmentSha256, authority.PolicyCommitmentSha256);
+            authority.SnapshotCommitmentSha256, authority.Batch.Identity);
     }
 
     public static string CreateProposalRefPrefix(ValidatedGitHubCampaignReadAuthority authority)
@@ -218,15 +238,15 @@ public static class GitHubPublicationFactory
     }
 
     public static string CreateProposalRef(ValidatedGitHubCampaignReadAuthority authority,
-        string generationId, string snapshotCommitmentSha256, string policyCommitmentSha256)
+        string generationId, string snapshotCommitmentSha256, string batchIdentity)
     {
         ArgumentNullException.ThrowIfNull(authority);
         RequireOpaque(generationId);
         RequireSha256(snapshotCommitmentSha256);
-        RequireSha256(policyCommitmentSha256);
+        RequireSha256(batchIdentity);
         var generation = GitHubPublicationCommitments.CreateIdentityKey(
             "proposal-generation", authority.CampaignLineage, generationId,
-            snapshotCommitmentSha256, policyCommitmentSha256);
+            snapshotCommitmentSha256, batchIdentity);
         return CreateProposalRefPrefix(authority) + generation;
     }
 
@@ -276,78 +296,23 @@ public static class GitHubPublicationFactory
             && !segment.EndsWith(".", StringComparison.Ordinal));
     }
 
-    private static void ValidateTransition(
-        GitHubPublicationAuthorityInput input,
-        ImmutableArray<GitHubPrecedingChangedFileAuthority> precedingFiles,
-        string policyCommitmentSha256)
+    private static void ValidateTransition(GitHubPublicationAuthorityInput input)
     {
-        var hasPrecedingOperation = input.PrecedingOperationId is not null;
-        var hasPrecedingAuthority = input.PrecedingAuthorityCommitmentSha256 is not null;
-        var hasPrecedingCandidate = input.PrecedingCandidateCommitmentSha256 is not null;
-        var hasPrecedingGeneration = input.PrecedingGenerationId is not null;
-        var hasPrecedingSnapshot = input.PrecedingSnapshotCommitmentSha256 is not null;
-        var hasPrecedingPolicy = input.PrecedingPolicyCommitmentSha256 is not null;
-        if (hasPrecedingOperation) RequireOpaque(input.PrecedingOperationId!);
-        if (hasPrecedingAuthority) RequireSha256(input.PrecedingAuthorityCommitmentSha256!);
-        if (hasPrecedingCandidate) RequireSha256(input.PrecedingCandidateCommitmentSha256!);
-        if (hasPrecedingGeneration) RequireOpaque(input.PrecedingGenerationId!);
-        if (hasPrecedingSnapshot) RequireSha256(input.PrecedingSnapshotCommitmentSha256!);
-        if (hasPrecedingPolicy) RequireSha256(input.PrecedingPolicyCommitmentSha256!);
         if (input.TerminalPredecessor is { } predecessor)
         {
             ValidatePredecessor(predecessor);
-            Require(!string.Equals(predecessor.GenerationId, input.GenerationId, StringComparison.Ordinal),
+            Require(predecessor.GenerationId != input.GenerationId,
                 GitHubPublicationValidationCode.InvalidTransition);
         }
-
-        switch (input.Transition)
+        Require(input.Transition switch
         {
-            case GitHubPublicationTransitionKind.Initial:
-                Require(!hasPrecedingOperation && !hasPrecedingAuthority && !hasPrecedingCandidate
-                        && !hasPrecedingGeneration && !hasPrecedingSnapshot && !hasPrecedingPolicy
-                        && precedingFiles.IsEmpty && input.TerminalPredecessor is null
-                        && input.ClosedUnmergedSuccessorAuthorization is null,
-                    GitHubPublicationValidationCode.InvalidTransition);
-                break;
-            case GitHubPublicationTransitionKind.SameSnapshotAppend:
-                Require(hasPrecedingOperation && hasPrecedingAuthority && hasPrecedingCandidate
-                        && hasPrecedingGeneration && hasPrecedingSnapshot && hasPrecedingPolicy
-                        && !string.Equals(input.OperationId, input.PrecedingOperationId,
-                            StringComparison.Ordinal)
-                        && string.Equals(input.GenerationId, input.PrecedingGenerationId,
-                            StringComparison.Ordinal)
-                        && string.Equals(input.SnapshotCommitmentSha256,
-                            input.PrecedingSnapshotCommitmentSha256, StringComparison.Ordinal)
-                        && string.Equals(policyCommitmentSha256,
-                            input.PrecedingPolicyCommitmentSha256, StringComparison.Ordinal)
-                        && !precedingFiles.IsEmpty && input.TerminalPredecessor is null
-                        && input.ClosedUnmergedSuccessorAuthorization is null,
-                    GitHubPublicationValidationCode.InvalidTransition);
-                break;
-            case GitHubPublicationTransitionKind.SuccessorAfterMerge:
-                Require(!hasPrecedingOperation && !hasPrecedingAuthority && !hasPrecedingCandidate
-                        && !hasPrecedingGeneration && !hasPrecedingSnapshot && !hasPrecedingPolicy
-                        && precedingFiles.IsEmpty
-                        && input.TerminalPredecessor?.Disposition == GitHubPublicationPredecessorDisposition.Merged
-                        && input.ClosedUnmergedSuccessorAuthorization is null,
-                    GitHubPublicationValidationCode.InvalidTransition);
-                break;
-            case GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged:
-                Require(!hasPrecedingOperation && !hasPrecedingAuthority && !hasPrecedingCandidate
-                        && !hasPrecedingGeneration && !hasPrecedingSnapshot && !hasPrecedingPolicy
-                        && precedingFiles.IsEmpty
-                        && input.TerminalPredecessor?.Disposition
-                            == GitHubPublicationPredecessorDisposition.ClosedUnmerged
-                        && input.ClosedUnmergedSuccessorAuthorization is not null,
-                    GitHubPublicationValidationCode.InvalidTransition);
-                ValidateClosedAuthorization(
-                    input,
-                    input.TerminalPredecessor!,
-                    input.ClosedUnmergedSuccessorAuthorization!);
-                break;
-            default:
-                throw Fail(GitHubPublicationValidationCode.InvalidVocabulary);
-        }
+            GitHubPublicationTransitionKind.Initial => input.TerminalPredecessor is null,
+            GitHubPublicationTransitionKind.SuccessorAfterMerge =>
+                input.TerminalPredecessor?.Disposition == GitHubPublicationPredecessorDisposition.Merged,
+            GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged =>
+                input.TerminalPredecessor?.Disposition == GitHubPublicationPredecessorDisposition.ClosedUnmerged,
+            _ => false,
+        }, GitHubPublicationValidationCode.InvalidTransition);
     }
 
     private static void ValidatePredecessor(GitHubPublicationPredecessorAuthority predecessor)
@@ -357,66 +322,6 @@ public static class GitHubPublicationFactory
         RequireOpaque(predecessor.GenerationId);
         RequireGitOid(predecessor.HeadOid, allowMissing: false);
         Require(Enum.IsDefined(predecessor.Disposition), GitHubPublicationValidationCode.InvalidVocabulary);
-    }
-
-    private static void ValidateClosedAuthorization(
-        GitHubPublicationAuthorityInput input,
-        GitHubPublicationPredecessorAuthority predecessor,
-        GitHubClosedUnmergedSuccessorAuthorization authorization)
-    {
-        RequireOpaque(authorization.AuthorizationId);
-        RequireOpaque(authorization.LogicalPredecessorId);
-        Require(authorization.ClosedPullRequestNumber > 0,
-            GitHubPublicationValidationCode.InvalidAuthorization);
-        RequireOpaque(authorization.ClosedGenerationId);
-        RequireGitOid(authorization.ClosedHeadOid, allowMissing: false);
-        RequireSha256(authorization.FreshSnapshotCommitmentSha256);
-        RequireSha256(authorization.FreshWorkPlanCommitmentSha256);
-        RequireSha256(authorization.FreshCandidateCommitmentSha256);
-        RequireOpaque(authorization.NewGenerationId);
-        RequireOpaque(authorization.OperationId);
-        Require(string.Equals(authorization.LogicalPredecessorId,
-                    predecessor.LogicalPredecessorId, StringComparison.Ordinal)
-                && authorization.ClosedPullRequestNumber == predecessor.PullRequestNumber
-                && string.Equals(authorization.ClosedGenerationId,
-                    predecessor.GenerationId, StringComparison.Ordinal)
-                && string.Equals(authorization.ClosedHeadOid,
-                    predecessor.HeadOid, StringComparison.Ordinal)
-                && !string.Equals(authorization.ClosedGenerationId,
-                    authorization.NewGenerationId, StringComparison.Ordinal)
-                && string.Equals(authorization.FreshSnapshotCommitmentSha256,
-                    input.SnapshotCommitmentSha256, StringComparison.Ordinal)
-                && string.Equals(authorization.FreshWorkPlanCommitmentSha256,
-                    input.WorkPlanCommitmentSha256, StringComparison.Ordinal)
-                && string.Equals(authorization.FreshCandidateCommitmentSha256,
-                    input.CandidateCommitmentSha256, StringComparison.Ordinal)
-                && string.Equals(authorization.NewGenerationId,
-                    input.GenerationId, StringComparison.Ordinal)
-                && string.Equals(authorization.OperationId,
-                    input.OperationId, StringComparison.Ordinal),
-            GitHubPublicationValidationCode.InvalidAuthorization);
-    }
-
-    private static void ValidatePolicy(
-        GitHubPublicationM4Ceilings accepted,
-        GitHubPublicationPolicy requested)
-    {
-        ArgumentNullException.ThrowIfNull(accepted);
-        ArgumentNullException.ThrowIfNull(requested);
-        Require(accepted.MaximumDocumentationBlocks is > 0
-                and <= CampaignStateContract.MaximumActivePatchBlocks
-                && accepted.MaximumDistinctChangedFiles is > 0
-                and <= CampaignStateContract.MaximumChangedFiles
-                && accepted.MaximumCumulativePatchBytes is > 0
-                and <= CampaignStateContract.MaximumPatchBytes,
-            GitHubPublicationValidationCode.InvalidPolicy);
-        Require(requested.MaximumDocumentationBlocks is > 0
-                && requested.MaximumDocumentationBlocks <= accepted.MaximumDocumentationBlocks
-                && requested.MaximumDistinctChangedFiles is > 0
-                && requested.MaximumDistinctChangedFiles <= accepted.MaximumDistinctChangedFiles
-                && requested.MaximumCumulativePatchBytes is > 0
-                && requested.MaximumCumulativePatchBytes <= accepted.MaximumCumulativePatchBytes,
-            GitHubPublicationValidationCode.InvalidPolicy);
     }
 
     private static ImmutableArray<T> CollectBounded<T>(IEnumerable<T> source, int maximum)
@@ -498,36 +403,18 @@ internal static class GitHubPublicationCommitments
         return writer.Complete();
     }
 
-    public static string CreatePolicy(
-        GitHubPublicationM4Ceilings accepted,
-        GitHubPublicationPolicy requested)
-    {
-        using var writer = new GitHubPublicationCommitmentWriter(
-            "contract-scribe/github-publication-policy/v1");
-        writer.Add("m4.maximum-documentation-blocks", accepted.MaximumDocumentationBlocks);
-        writer.Add("m4.maximum-distinct-changed-files", accepted.MaximumDistinctChangedFiles);
-        writer.Add("m4.maximum-cumulative-patch-bytes", accepted.MaximumCumulativePatchBytes);
-        writer.Add("m5.maximum-documentation-blocks", requested.MaximumDocumentationBlocks);
-        writer.Add("m5.maximum-distinct-changed-files", requested.MaximumDistinctChangedFiles);
-        writer.Add("m5.maximum-cumulative-patch-bytes", requested.MaximumCumulativePatchBytes);
-        writer.Add("counting", "complete-candidate-candidate-documentation-byte-count");
-        writer.Add("generation-lifetime", "immutable");
-        writer.Add("closed-unmerged", "terminal-no-automatic-retry");
-        return writer.Complete();
-    }
-
     public static string CreateAuthority(
         GitHubPublicationAuthorityInput input,
         ImmutableArray<GitHubChangedFileAuthority> files,
-        ImmutableArray<GitHubPrecedingChangedFileAuthority> precedingFiles,
+        ValidatedGitHubPublicationBatch batch,
         int cumulativeBlocks,
-        long cumulativePatchBytes,
-        string policyCommitment)
+        long cumulativePatchBytes)
     {
         using var writer = new GitHubPublicationCommitmentWriter(
             "contract-scribe/github-publication-authority/v1");
         AddInput(writer, input);
-        writer.Add("policy-commitment", policyCommitment);
+        writer.Add("batch-identity", batch.Identity);
+        writer.Add("result-set", batch.ResultSetCommitmentSha256);
         writer.Add("cumulative-blocks", cumulativeBlocks);
         writer.Add("cumulative-patch-bytes", cumulativePatchBytes);
         writer.Add("changed-files.count", files.Length);
@@ -542,30 +429,19 @@ internal static class GitHubPublicationCommitments
             writer.Add("file.original-documentation-lines", file.OriginalDocumentationLineCount);
             writer.Add("file.candidate-documentation-lines", file.CandidateDocumentationLineCount);
         }
-        writer.Add("preceding-files.count", precedingFiles.Length);
-        foreach (var file in precedingFiles)
-        {
-            writer.Add("preceding-file.path", file.Path);
-            writer.Add("preceding-file.candidate-sha256", file.CandidateFileSha256);
-        }
         AddPredecessor(writer, input.TerminalPredecessor);
-        AddAuthorization(writer, input.ClosedUnmergedSuccessorAuthorization);
         return writer.Complete();
     }
 
     public static string CreateOperation(
         GitHubPublicationAuthorityInput input,
-        string authorityCommitment,
-        string policyCommitment)
+        string authorityCommitment)
     {
         using var writer = new GitHubPublicationCommitmentWriter(
             "contract-scribe/github-publication-operation/v1");
         writer.Add("authority-commitment", authorityCommitment);
-        writer.Add("policy-commitment", policyCommitment);
         writer.Add("operation-id", input.OperationId);
         writer.Add("generation-id", input.GenerationId);
-        writer.AddOptional("preceding-operation-id", input.PrecedingOperationId);
-        writer.AddOptional("preceding-authority", input.PrecedingAuthorityCommitmentSha256);
         writer.Add("transition", TransitionId(input.Transition));
         return writer.Complete();
     }
@@ -591,9 +467,6 @@ internal static class GitHubPublicationCommitments
         writer.Add("accepted-projection", input.AcceptedProjectionCommitmentSha256);
         writer.Add("operation-id", input.OperationId);
         writer.Add("generation-id", input.GenerationId);
-        writer.AddOptional("preceding-operation-id", input.PrecedingOperationId);
-        writer.AddOptional("preceding-authority", input.PrecedingAuthorityCommitmentSha256);
-        writer.AddOptional("preceding-candidate", input.PrecedingCandidateCommitmentSha256);
         writer.Add("transition", TransitionId(input.Transition));
     }
 
@@ -610,28 +483,9 @@ internal static class GitHubPublicationCommitments
         writer.Add("predecessor.disposition", predecessor.Disposition.ToString());
     }
 
-    private static void AddAuthorization(
-        GitHubPublicationCommitmentWriter writer,
-        GitHubClosedUnmergedSuccessorAuthorization? authorization)
-    {
-        writer.Add("closed-authorization.present", authorization is not null);
-        if (authorization is null) return;
-        writer.Add("closed-authorization.id", authorization.AuthorizationId);
-        writer.Add("closed-authorization.predecessor", authorization.LogicalPredecessorId);
-        writer.Add("closed-authorization.pr", authorization.ClosedPullRequestNumber);
-        writer.Add("closed-authorization.generation", authorization.ClosedGenerationId);
-        writer.Add("closed-authorization.head", authorization.ClosedHeadOid);
-        writer.Add("closed-authorization.snapshot", authorization.FreshSnapshotCommitmentSha256);
-        writer.Add("closed-authorization.work-plan", authorization.FreshWorkPlanCommitmentSha256);
-        writer.Add("closed-authorization.candidate", authorization.FreshCandidateCommitmentSha256);
-        writer.Add("closed-authorization.new-generation", authorization.NewGenerationId);
-        writer.Add("closed-authorization.operation", authorization.OperationId);
-    }
-
     private static string TransitionId(GitHubPublicationTransitionKind transition) => transition switch
     {
         GitHubPublicationTransitionKind.Initial => "initial",
-        GitHubPublicationTransitionKind.SameSnapshotAppend => "same-snapshot-append",
         GitHubPublicationTransitionKind.SuccessorAfterMerge => "successor-after-merge",
         GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged => "successor-after-closed-unmerged",
         _ => throw new ArgumentOutOfRangeException(nameof(transition)),

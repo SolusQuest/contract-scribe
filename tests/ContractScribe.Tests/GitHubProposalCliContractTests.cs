@@ -29,7 +29,7 @@ public sealed class GitHubProposalCliContractTests
             "{}"u8.ToArray(), "snapshot.test", "unused", new([], original));
         var request = new GitHubProposalRequest(1, "campaign.test", "snapshot.test", "coordination-ref",
             new("Owner", "repo", "refs/heads/main", new('a', 40), "operation.test", "generation.test",
-                new(128, 128, 4_194_304), GitHubPublicationTransitionKind.Initial));
+                GitHubPublicationTransitionKind.Initial));
         var observation = new GitHubCampaignObservation(GitHubCampaignKind.FirstRun, GitHubCampaignLedgerKind.Missing,
             null, "refs/heads/main", new('a', 40), "refs/heads/coordination", null, null, null, [], true, 1);
         Assert.NotEqual(GitHubCampaignPreflight.SnapshotBinding(preflight, request, observation),

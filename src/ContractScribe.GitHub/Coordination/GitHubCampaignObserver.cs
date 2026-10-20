@@ -78,7 +78,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 if (state is not null)
                 {
                     ledger = new(state.HeadOid, state.Stage, state.TargetCommitOid, state.GenerationId,
-                        state.SnapshotCommitmentSha256, state.PolicyCommitmentSha256, state.OperationId,
+                        state.SnapshotCommitmentSha256, state.BatchIdentity, state.OperationId,
                         state.OperationCommitmentSha256, state.CurrentCandidateCommitmentSha256,
                         coordination.ProposalRefFor(state), state.PullRequestNumber);
                     generations.AddRange(coordination.ObservedGenerations(state));

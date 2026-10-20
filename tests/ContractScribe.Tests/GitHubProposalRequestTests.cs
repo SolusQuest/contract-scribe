@@ -77,7 +77,6 @@ public sealed class GitHubProposalRequestTests
             expectedBaseCommitOid = new string('a', 40),
             operationId = "operation.initial",
             generationId = "generation.initial",
-            policy = new { maximumDocumentationBlocks = 12, maximumDistinctChangedFiles = 8, maximumCumulativePatchBytes = 4096 },
             transition = "initial",
         },
     });
@@ -90,8 +89,8 @@ public sealed class GitHubProposalRequestTests
     [InlineData("token")]
     [InlineData("endpoint")]
     [InlineData("missing")]
-    [InlineData("nested-missing")]
-    [InlineData("nested-unknown")]
+    [InlineData("retired-policy")]
+    [InlineData("retired-append")]
     [InlineData("null-required")]
     [InlineData("transition-case")]
     [InlineData("transition-number")]
@@ -116,8 +115,8 @@ public sealed class GitHubProposalRequestTests
             case "token": json["token"] = "private-token"; break;
             case "endpoint": github["endpoint"] = "http://127.0.0.1:1234/"; break;
             case "missing": github.Remove("generationId"); break;
-            case "nested-missing": github["policy"]!.AsObject().Remove("maximumDocumentationBlocks"); break;
-            case "nested-unknown": github["policy"]!["extension"] = true; break;
+            case "retired-policy": github["policy"] = new JsonObject(); break;
+            case "retired-append": github["transition"] = "same-snapshot-append"; break;
             case "null-required": github["operationId"] = null; break;
             case "transition-case": github["transition"] = "Initial"; break;
             case "transition-number": github["transition"] = 0; break;

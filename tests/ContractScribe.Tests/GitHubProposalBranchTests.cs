@@ -172,19 +172,22 @@ public sealed class GitHubProposalBranchTests
     }
 
     [Fact]
-    public async Task A_third_operation_appends_to_the_authenticated_second_proposal()
+    public async Task Later_operations_cannot_replace_the_original_sealed_proposal()
     {
         var remote = new Remote();
         var initial = Authority(remote);
         using var first = new Session(initial, remote);
-        await RecordPublication(first, remote, Candidate, false);
-        var secondAuthority = Authority(remote, "second", initial, [6]);
-        using var second = new Session(secondAuthority, remote);
-        var preceding = await RecordPublication(second, remote, [6], false);
-        var thirdAuthority = Authority(remote, "third", secondAuthority, [7]);
-        using var third = new Session(thirdAuthority, remote);
-        var content = await RecordPublication(third, remote, [7], false);
-        Assert.Equal(preceding.CommitOid, Assert.Single(remote.Commits[content.CommitOid].Parents));
+        var published = await RecordPublication(first, remote, Candidate, false);
+        var writes = remote.Writes;
+        foreach (var operation in new[] { "second", "third" })
+        {
+            var replacement = Authority(remote, operation, initial, [6]);
+            using var session = new Session(replacement, remote);
+            var read = await session.Coordination.ReadCurrentAsync();
+            Assert.Equal(GitHubCoordinationOutcome.Conflict, (await session.Coordination.ClaimAsync(read.Read!)).Outcome);
+            Assert.Equal(published.CommitOid, remote.Refs[published.Ref]);
+            Assert.Equal(writes, remote.Writes);
+        }
     }
 
     [Fact]
@@ -205,25 +208,18 @@ public sealed class GitHubProposalBranchTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Rehashed_predecessor_with_an_unauthorized_parent_is_rejected(bool precedingAppend)
+    public async Task Rehashed_original_with_an_unauthorized_parent_is_rejected_by_live_and_cold_inspection(bool cold)
     {
         var remote = new Remote();
-        var initial = Authority(remote);
-        using var first = new Session(initial, remote);
-        await RecordPublication(first, remote, Candidate, badParent: !precedingAppend);
-        var previous = initial;
-        if (precedingAppend)
-        {
-            previous = Authority(remote, "previous-append", initial, [6]);
-            using var append = new Session(previous, remote);
-            await RecordPublication(append, remote, [6], badParent: true);
-        }
-        var current = Authority(remote, "current-append", previous, [7]);
-        using var session = new Session(current, remote);
-        var claim = await Claim(session);
+        var authority = Authority(remote);
+        using var first = new Session(authority, remote);
+        await RecordPublication(first, remote, Candidate, badParent: true);
+        using var restart = new Session(authority, remote);
+        var session = cold ? restart : first;
+        var read = await session.Coordination.ReadCurrentAsync();
         var writes = remote.Writes;
-        var result = await session.Proposal.PrepareAsync(claim, Payload(current, [7]));
-        Assert.Equal(GitHubProposalOutcome.Failed, result.Outcome);
+        Assert.Equal(GitHubProposalOutcome.Failed,
+            (await session.Proposal.VerifyRecordedAsync(read.State!, Payload(authority))).Outcome);
         Assert.Equal(writes, remote.Writes);
     }
 
@@ -844,13 +840,26 @@ public sealed class GitHubProposalBranchTests
         Assert.NotNull(terminal.State);
         remote.MergedBase();
         var freshBytes = new byte[] { 5, 4, 3 };
-        var authority = GitHubPublicationFactory.CreateAuthority(new(
-            "Owner", "repo", "refs/heads/main", remote.BaseOid, "campaign", Hash('a'), Hash('b'), Hash('c'), 3,
-            Hash('d'), Hash('e'), Hash('6'), Hash('7'), Hash('8'), "successor", "generation-2",
-            null, null, null, null, null, null,
-            new("predecessor", 1, "generation", content.CommitOid, GitHubPublicationPredecessorDisposition.Merged),
-            GitHubPublicationTransitionKind.SuccessorAfterMerge, new(10, 10, 1000), new(10, 10, 1000),
-            [new("file.bin", Sha256(Candidate), Sha256(freshBytes), 1, 1, 2, 1, 1)], []));
+        var authority = GitHubPublicationFactory.CreateAuthority(new("Owner",
+            "repo",
+            "refs/heads/main",
+            remote.BaseOid,
+            "campaign",
+            Hash('a'),
+            Hash('b'),
+            Hash('c'),
+            3,
+            Hash('d'),
+            Hash('e'),
+            Hash('6'),
+            Hash('7'),
+            Hash('8'),
+            "successor",
+            "generation-2",
+            GitHubPublicationTransitionKind.SuccessorAfterMerge,
+            Batch: GitHubPublicationTestBatch.ForFiles([new("file.bin", Sha256(Candidate), Sha256(freshBytes), 1, 1, 2, 1, 1)]),
+            [new("file.bin", Sha256(Candidate), Sha256(freshBytes), 1, 1, 2, 1, 1)],
+            new("predecessor", 1, "generation", content.CommitOid, GitHubPublicationPredecessorDisposition.Merged)));
         using var successor = new Session(authority, remote);
         var nextClaim = await Claim(successor);
         var prepared = await successor.Proposal.PrepareAsync(nextClaim, Payload(authority, freshBytes));
@@ -869,41 +878,20 @@ public sealed class GitHubProposalBranchTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
-    public async Task Cold_append_uses_authenticated_previous_head_and_complete_cumulative_tree(bool rewindAtCas)
+    public async Task Cold_replacement_cannot_change_the_original_ref_or_expand_the_sealed_tree(bool includeNew)
     {
         var remote = new Remote();
-        var initial = Authority(remote);
-        using var first = new Session(initial, remote);
-        var (claim, content) = await CreateContent(first);
-        var stage = await first.Coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(content.CommitOid));
-        Assert.Equal(GitHubProposalOutcome.RefVerified,
-            (await first.Proposal.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement)).Outcome);
-        var proposal = await first.Coordination.AdvanceAsync(stage.State!,
-            GitHubCoordinationStageUpdate.ProposalRefAdvanced(content.CommitOid, content.TreeOid));
-        await Publish(first, remote, proposal.State!, content);
-        var append = Authority(remote, "append", initial, [0, 253, 3, 13, 10], includeNew: true);
-        using var admitted = new Session(append, remote);
-        await Claim(admitted);
-        using var restart = new Session(append, remote);
-        var restartedClaim = (await restart.Coordination.ReadCurrentAsync()).State!;
-        var source = restart.Coordination.AdmissionSource(restartedClaim);
-        Assert.Equal(content.CommitOid, source!.ProposalCommitOid);
-        var payload = Payload(append, [0, 253, 3, 13, 10], includeNew: true);
-        var prepared = await restart.Proposal.PrepareAsync(restartedClaim, payload);
-        Assert.Equal(GitHubProposalOutcome.Prepared, prepared.Outcome);
-        var created = await restart.Proposal.CreateContentAsync(prepared.Prepared!, restartedClaim);
-        Assert.Equal(GitHubProposalOutcome.ContentVerified, created.Outcome);
-        Assert.Equal(content.CommitOid, Assert.Single(remote.Commits[created.Content!.CommitOid].Parents));
-        var next = await restart.Coordination.AdvanceAsync(restartedClaim,
-            GitHubCoordinationStageUpdate.ContentCreated(created.Content.CommitOid));
-        Assert.NotNull(next.ProposalRefEntitlement);
-        if (rewindAtCas) remote.ProposalBeforeCas = remote.BaseOid;
-        Assert.Equal(rewindAtCas ? GitHubProposalOutcome.Failed : GitHubProposalOutcome.RefVerified,
-            (await restart.Proposal.AdvanceRefAsync(created.Content, next.State!, next.ProposalRefEntitlement)).Outcome);
-        Assert.Equal(rewindAtCas ? 1 : 2, remote.ProposalWrites);
-        var newRoot = remote.Trees[created.Content.TreeOid];
-        var nested = remote.Trees[newRoot.Single(e => e.Path == "keep").Oid];
-        Assert.Equal(new byte[] { 7 }, remote.Blobs[nested.Single().Oid]);
+        var authority = Authority(remote);
+        using var first = new Session(authority, remote);
+        var content = await RecordPublication(first, remote, Candidate, badParent: false);
+        var writes = remote.Writes;
+        var replacement = Authority(remote, "replacement", authority, [7], includeNew);
+        using var restarted = new Session(replacement, remote);
+        var read = await restarted.Coordination.ReadCurrentAsync();
+        Assert.Equal(GitHubCoordinationOutcome.Conflict, (await restarted.Coordination.ClaimAsync(read.Read!)).Outcome);
+        Assert.Equal(content.CommitOid, remote.Refs[content.Ref]);
+        Assert.Equal(writes, remote.Writes);
+        Assert.Equal(1, remote.ProposalWrites);
     }
 
     private static async Task Publish(Session session, Remote remote, IGitHubCoordinationStateCapability state, IGitHubProposalContent content,
@@ -912,6 +900,17 @@ public sealed class GitHubProposalBranchTests
         var creation = session.Coordination.CreationCommitment(state);
         Assert.NotNull(creation);
         var marker = Sha256(Encoding.UTF8.GetBytes("<!-- contract-scribe-publication-v1 ownership=sha256:" + creation + " -->\n"));
+        if (state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
+        {
+            // R4 fixtures model a historical acknowledged send. R6/CLI tests
+            // exercise the actual guarded fence CAS and one-use send capability.
+            var fence = GitHubCoordinationCodec.WithStage(remote.CoordinationState(state.HeadOid),
+                GitHubCoordinationStage.PullRequestCreateStarted, state.HeadOid,
+                content.CommitOid, content.CommitOid, content.CommitOid, content.TreeOid,
+                creation, null, state.TargetCommitOid, state.TargetCommitOid, marker);
+            remote.SeedPublicationEvent(fence);
+            state = (await session.Coordination.ReadCurrentAsync()).State!;
+        }
         var result = await session.Coordination.AdvanceAsync(state, GitHubCoordinationStageUpdate.PullRequestResult(
             stage, content.CommitOid, content.TreeOid, creation, 1, remote.BaseOid, remote.Refs["refs/heads/main"], marker));
         Assert.Equal(GitHubCoordinationOutcome.Advanced, result.Outcome);
@@ -936,17 +935,30 @@ public sealed class GitHubProposalBranchTests
     }
     internal static ValidatedGitHubPublicationAuthority Authority(Remote remote, string operation = "initial",
         ValidatedGitHubPublicationAuthority? previous = null, byte[]? candidate = null, bool includeNew = false,
-        string? checkpoint = null) => GitHubPublicationFactory.CreateAuthority(new(
-            "Owner", "repo", "refs/heads/main", remote.BaseOid, "campaign", Hash('1'), Hash('2'), Hash('3'), previous is null ? 1 : 2,
-            checkpoint ?? Hash('4'), Sha256(candidate ?? Candidate), Hash('6'), Hash('7'), Hash('8'), operation, "generation",
-            previous?.OperationId, previous?.AuthorityCommitmentSha256, previous?.CandidateCommitmentSha256,
-            previous?.GenerationId, previous?.SnapshotCommitmentSha256, previous?.PolicyCommitmentSha256, null,
-            previous is null ? GitHubPublicationTransitionKind.Initial : GitHubPublicationTransitionKind.SameSnapshotAppend,
-            new(10, 10, 1000), new(10, 10, 1000),
+        string? checkpoint = null) => GitHubPublicationFactory.CreateAuthority(new("Owner",
+            "repo",
+            "refs/heads/main",
+            remote.BaseOid,
+            "campaign",
+            Hash('1'),
+            Hash('2'),
+            Hash('3'),
+            previous is null ? 1 : 2,
+            checkpoint ?? Hash('4'),
+            Sha256(candidate ?? Candidate),
+            Hash('6'),
+            Hash('7'),
+            Hash('8'),
+            operation,
+            "generation",
+            GitHubPublicationTransitionKind.Initial,
+            Batch: GitHubPublicationTestBatch.ForFiles(includeNew ? [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1),
+                new("keep/nested.txt", Sha256(Unchanged), Sha256([7]), 1, 1, 2, 1, 1)]
+                : [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1)]),
             includeNew ? [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1),
                 new("keep/nested.txt", Sha256(Unchanged), Sha256([7]), 1, 1, 2, 1, 1)]
                 : [new("file.bin", Sha256(Original), Sha256(candidate ?? Candidate), 1, 1, 2, 1, 1)],
-            previous is null ? [] : [new("file.bin", previous.ChangedFiles[0].CandidateFileSha256)]));
+            null));
     internal static ValidatedGitHubChangedFilePayload Payload(ValidatedGitHubPublicationAuthority authority, byte[]? bytes = null, bool includeNew = false) =>
         GitHubPublicationFactory.CreatePayload(authority, includeNew
             ? [new("file.bin", bytes ?? Candidate), new("keep/nested.txt", new byte[] { 7 })]
@@ -1054,6 +1066,42 @@ public sealed class GitHubProposalBranchTests
             BaseTreeOid = AddTree(BaseRoot);
             var request = Commit(BaseTreeOid, Oid('1'), Hash('a'), Hash('b'));
             BaseOid = request.ExpectedOid; AddCommit(request); Refs["refs/heads/main"] = BaseOid;
+        }
+
+        internal void AdvanceUnchangedBase()
+        {
+            var request = Commit(BaseTreeOid, BaseOid, Hash('c'), Hash('d'));
+            BaseOid = request.ExpectedOid;
+            AddCommit(request);
+            Refs["refs/heads/main"] = BaseOid;
+        }
+
+        internal void SeedPublicationEvent(GitHubCoordinationState state)
+        {
+            var head = Refs[GitHubPublicationFactory.CreateCoordinationRef(
+                GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", "campaign"))];
+            var leaf = Trees[Commits[head].TreeOid].Single().Oid;
+            var previous = GitHubCoordinationDocument.Decode(Blobs[Trees[leaf].Single(e => e.Path == GitHubCoordinationObjects.StatePath).Oid]);
+            var prepared = GitHubCoordinationObjects.PreparePublication(state, previous.RetainAt(head));
+            Blobs[prepared.BlobOid] = prepared.StateBytes.ToArray();
+            Blobs[prepared.Document.Publication!.Oid] = prepared.Event!.Encode();
+            Trees[prepared.LeafTreeOid] = GitHubCoordinationObjects.LeafEntries(prepared);
+            Trees[prepared.RootTreeOid] = GitHubCoordinationObjects.RootEntries(prepared);
+            var request = GitHubCoordinationObjects.CommitRequest(prepared);
+            Commits[prepared.CommitOid] = new(prepared.CommitOid, prepared.RootTreeOid, [request.ParentOid],
+                prepared.Message, request.Author, request.Committer);
+            Refs[GitHubPublicationFactory.CreateCoordinationRef(GitHubPublicationFactory.CreateCampaignReadAuthority(
+                "Owner", "repo", "refs/heads/main", "campaign"))] = prepared.CommitOid;
+        }
+
+        internal void SetCheckpointFixtureFile(string path, byte[] bytes)
+        {
+            var parts = path.Split('/');
+            var entry = new GitHubTreeEntry(parts[^1], GitHubTreeMode.File, AddBlob(bytes), null);
+            for (var i = parts.Length - 2; i >= 0; i--)
+                entry = new(parts[i], GitHubTreeMode.Directory, AddTree([entry]), null);
+            BaseRoot = [entry];
+            SetBase();
         }
         internal void DeepBase(int depth)
         {

@@ -21,7 +21,6 @@ public static class CampaignStateContract
     public const long MaximumObservation = 1_000_000_000_000_000;
     public const long MaximumCampaignInputTokens = 1_000_000_000_000;
     public const long MaximumCampaignElapsedMilliseconds = 2_678_400_000;
-    public const long MaximumPatchBytes = 1_099_511_627_776;
     public const string Revision = "campaign-state-v1";
 }
 
@@ -179,9 +178,6 @@ public sealed record CampaignStyleConfigurationAuthority(
     string ContentSha256);
 
 public sealed record CampaignStateCampaignBudget(
-    int MaximumBlocks,
-    int MaximumChangedFiles,
-    long MaximumPatchBytes,
     int? MaximumProviderRequests,
     int MaximumAttemptsPerTarget,
     long? MaximumInputTokens,

@@ -9,7 +9,7 @@ public sealed partial class CampaignStateContractTests
     [Theory]
     [InlineData(CampaignProviderFinalDisposition.Retryable, false)]
     [InlineData(CampaignProviderFinalDisposition.Terminal, true)]
-    public void Append_selection_distinguishes_retryable_closed_work_from_completed_work(
+    public void Original_reconstruction_retains_retryable_and_closed_work_dispositions(
         CampaignProviderFinalDisposition disposition, bool noWork)
     {
         var basis = CreateAcceptedCandidateScenario().State;
@@ -25,29 +25,26 @@ public sealed partial class CampaignStateContractTests
             null, basis.CandidateObservation, basis.CumulativeOutcome, basis.KnownCompletedOperations, null, null)
         { AcceptedCandidateOrigin = basis.AcceptedCandidateOrigin };
         var configuration = new GitHubPublicationConfiguration("Owner", "repo", "refs/heads/main", new('a', 40),
-            "append", "generation", new(128, 128, 4194304), GitHubPublicationTransitionKind.SameSnapshotAppend,
-            new("previous", Hash('a'), basis.CandidateObservation!.PatchResultCommitmentSha256,
-                "generation", Hash('b'), Hash('c'), []));
+            "original", "generation", GitHubPublicationTransitionKind.Initial);
         var continuation = new CampaignAcceptedCandidateContinuation(null!, null!,
             new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
             _ => throw new InvalidOperationException("Selection must not access credentials."));
-        Assert.Equal(noWork, continuation.HasNoAppendWork(state));
+        Assert.True(continuation.ReconstructAccepted(state));
+        Assert.Equal(noWork, CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems) is { Kind: CampaignTerminalKind.Complete });
     }
 
     [Fact]
-    public void Append_selection_stops_on_an_accepted_fixed_batch_with_deferred_full_plan_work()
+    public void Original_reconstruction_does_not_include_deferred_full_plan_work()
     {
         var state = CreateAcceptedCandidateScenario(targetLimit: 1).State;
         Assert.Contains(state.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
         var configuration = new GitHubPublicationConfiguration("Owner", "repo", "refs/heads/main", new('a', 40),
-            "append", "generation", new(128, 128, 4194304), GitHubPublicationTransitionKind.SameSnapshotAppend,
-            new("previous", Hash('a'), state.CandidateObservation!.PatchResultCommitmentSha256,
-                "generation", Hash('b'), Hash('c'), []));
+            "original", "generation", GitHubPublicationTransitionKind.Initial);
         var continuation = new CampaignAcceptedCandidateContinuation(null!, null!,
             new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
             _ => throw new InvalidOperationException("Selection must not access credentials."));
-        Assert.False(continuation.ReconstructAccepted(state));
-        Assert.True(continuation.HasNoAppendWork(state));
+        Assert.True(continuation.ReconstructAccepted(state));
+        Assert.Single(state.CandidateObservation!.AcceptedWorkItemKeys);
     }
 
     [Theory]
