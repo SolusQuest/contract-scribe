@@ -362,9 +362,17 @@ public sealed class DarwinFileSystemTests
             IReadOnlyList<string>? captured = null;
             for (var attempt = 0; attempt < 100; attempt++)
             {
-                var identity = DarwinProcessObservation.ReadIdentity(process.Id);
-                var arguments = DarwinProcessObservation.ReadOwnedArguments(process.Id, identity.StartIdentity, Environment.ProcessId);
-                if (arguments.Count == 2 && arguments[0].Length == 0) { captured = arguments; break; }
+                try
+                {
+                    var identity = DarwinProcessObservation.ReadIdentity(process.Id);
+                    var arguments = DarwinProcessObservation.ReadOwnedArguments(process.Id, identity.StartIdentity, Environment.ProcessId);
+                    if (arguments.Count == 2 && arguments[0].Length == 0) { captured = arguments; break; }
+                }
+                catch (IOException) when (attempt < 99 && !process.HasExited)
+                {
+                    // KERN_PROCARGS2 can return EIO while our shell execs sleep.
+                    // Keep this startup observation inside the existing bounded wait.
+                }
                 await Task.Delay(10);
             }
             Assert.NotNull(captured);
