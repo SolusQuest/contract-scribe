@@ -128,8 +128,8 @@ public static class GitHubPublicationFactory
             Require(target is not null
                 && CampaignStateFactory.IsOpaqueId(target.TargetKey, CampaignStateContract.MaximumIdentifierScalars)
                 && CampaignStateFactory.IsOpaqueId(target.WorkItemKey, CampaignStateContract.MaximumIdentifierScalars)
-                && targetKeys.Add(target.TargetKey), GitHubPublicationValidationCode.InvalidCorrelation);
-            workKeys.Add(target.WorkItemKey);
+                && targetKeys.Add(target.TargetKey)
+                && workKeys.Add(target.WorkItemKey), GitHubPublicationValidationCode.InvalidCorrelation);
         }
         Require(accepted.Distinct(StringComparer.Ordinal).Count() == accepted.Length
             && accepted.All(workKeys.Contains), GitHubPublicationValidationCode.InvalidCorrelation);

@@ -32,7 +32,7 @@ The [GitHub proposal CLI](../github-proposal-cli.md) validates a fresh accepted 
 - stable operation ID, generation, transition and optional structured terminal predecessor;
 - every and only changed path, exact original/candidate full-file SHA-256 and cumulative M2 observations.
 
-The result-set commitment includes the manifest, creation quota and accepted subset. Admission requires a nonempty unique accepted subset of the selected manifest; the changed documentation block count equals that subset's size. Caller collections are bounded and copied. A partial valid subset may publish once while the remaining selected members remain unresolved. Increasing an invocation quota never adds members or replaces the frozen subset.
+The result-set commitment includes the manifest, creation quota and accepted subset. Selected target keys and their work-item keys must each be unique, matching the fixed batch's singleton selected work items. Admission requires a nonempty unique accepted subset of the selected manifest; the changed documentation block count equals that subset's size. Caller collections are bounded and copied. A partial valid subset may publish once while the remaining selected members remain unresolved. Increasing an invocation quota never adds members or replaces the frozen subset.
 
 Campaign lineage retains the M4 grammar
 `[A-Za-z0-9][A-Za-z0-9._:-]*` and its existing scalar bound. New M5 identifiers

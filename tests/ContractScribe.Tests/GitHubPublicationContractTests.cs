@@ -116,6 +116,75 @@ public sealed class GitHubPublicationContractTests
         Assert.NotEqual(accepted.OperationCommitmentSha256, changedQuota.OperationCommitmentSha256);
     }
 
+    [Theory]
+    [InlineData("target")]
+    [InlineData("work")]
+    [InlineData("accepted")]
+    public void Source_free_authority_rejects_duplicate_selected_mappings_and_accepted_keys(string duplicate)
+    {
+        var input = CreateInput();
+        var targets = new GitHubPublicationBatchTarget[]
+        {
+            new("target-a", "work-a"),
+            new(duplicate == "target" ? "target-a" : "target-b",
+                duplicate == "work" ? "work-a" : "work-b"),
+        };
+        var batch = input.Batch with
+        {
+            SelectedTargets = targets,
+            AcceptedWorkItemKeys = duplicate == "accepted" ? ["work-a", "work-a"] : ["work-a"],
+        };
+
+        Assert.Equal(GitHubPublicationValidationCode.InvalidCorrelation,
+            Assert.Throws<GitHubPublicationValidationException>(() =>
+                GitHubPublicationFactory.CreateAuthority(input with { Batch = batch })).Code);
+    }
+
+    [Theory]
+    [InlineData("work-a")]
+    [InlineData("work-z")]
+    public void Source_free_authority_preserves_the_selected_manifest_when_only_one_member_is_accepted(string acceptedKey)
+    {
+        var input = CreateInput();
+        var targets = new GitHubPublicationBatchTarget[] { new("target-z", "work-z"), new("target-a", "work-a") };
+        var authority = GitHubPublicationFactory.CreateAuthority(input with
+        {
+            Batch = input.Batch with { SelectedTargets = targets, AcceptedWorkItemKeys = [acceptedKey] },
+        });
+
+        Assert.Equal(targets, authority.Batch.SelectedTargets);
+        Assert.Equal(acceptedKey, Assert.Single(authority.Batch.AcceptedWorkItemKeys));
+        Assert.Equal(1, authority.CumulativeDocumentationBlocks);
+        Assert.Equal(input.Batch.CreationQuota, authority.Batch.CreationQuota);
+    }
+
+    [Fact]
+    public void Result_set_commitment_preserves_selected_order_and_canonicalizes_accepted_order()
+    {
+        var file = Changed("docs/readme.md", OriginalBytes, CandidateBytes) with { ChangedDocumentationBlockCount = 2 };
+        var input = CreateInput([file]);
+        var batch = input.Batch with
+        {
+            SelectedTargets = [new("target-z", "work-z"), new("target-a", "work-a")],
+            AcceptedWorkItemKeys = ["work-z", "work-a"],
+        };
+        var original = GitHubPublicationFactory.CreateAuthority(input with { Batch = batch });
+        var reversedAccepted = GitHubPublicationFactory.CreateAuthority(input with
+        {
+            Batch = batch with { AcceptedWorkItemKeys = batch.AcceptedWorkItemKeys.Reverse() },
+        });
+        var reversedSelected = GitHubPublicationFactory.CreateAuthority(input with
+        {
+            Batch = batch with { SelectedTargets = batch.SelectedTargets.Reverse() },
+        });
+
+        Assert.Equal(new[] { "work-a", "work-z" }, original.Batch.AcceptedWorkItemKeys.ToArray());
+        Assert.Equal(original.OperationCommitmentSha256, reversedAccepted.OperationCommitmentSha256);
+        Assert.Equal(original.Batch.ResultSetCommitmentSha256, reversedAccepted.Batch.ResultSetCommitmentSha256);
+        Assert.NotEqual(original.Batch.ResultSetCommitmentSha256, reversedSelected.Batch.ResultSetCommitmentSha256);
+        Assert.NotEqual(original.OperationCommitmentSha256, reversedSelected.OperationCommitmentSha256);
+    }
+
     [Fact]
     public void Cumulative_patch_bytes_are_observations_of_the_complete_candidate()
     {
