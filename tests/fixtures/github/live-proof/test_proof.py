@@ -478,7 +478,8 @@ class GenuineCheckpointTests(unittest.TestCase):
                 self.assertEqual((4, 'preflight', 'github-proposal.permission'),
                                  (result.returncode, envelope.get('terminalLayer'), envelope.get('outcome')), envelope)
                 self.assertIsNone(envelope['checkpointRevision'])
-            self.assertEqual(['token-read', 'token-read'], observation.read_text().splitlines())
+            self.assertEqual(['token-read', 'before-presentation', 'before-physical-output'] * 2,
+                             observation.read_text().splitlines())
             self.assertEqual(0, provider.requests)
             self.assertEqual(before, {path.name: path.read_bytes() for path in target.iterdir()})
             self.assertFalse((root / 'positive').exists())
