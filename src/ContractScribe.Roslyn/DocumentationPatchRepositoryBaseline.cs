@@ -194,6 +194,11 @@ public sealed class DocumentationPatchRepositoryBaseline
         RootIdentity = rootIdentity;
         Entries = entries;
         SemanticInputs = policy.SemanticInputs;
+        ProtectedInputPaths = policy.ProtectedPaths.Order(StringComparer.Ordinal).ToImmutableArray();
+        BuildDeclarations = policy.BuildDeclarations;
+        DeclaredInputGlobs = policy.DeclaredInputGlobs;
+        RepositoryInputGlobs = policy.RepositoryInputGlobs;
+        CompilerResponseFiles = policy.CompilerResponseFiles;
         this.directoryIdentities = directoryIdentities;
         byPath = entries.ToImmutableDictionary(
             entry => entry.RepositoryPath,
@@ -203,6 +208,17 @@ public sealed class DocumentationPatchRepositoryBaseline
     public ImmutableArray<DocumentationPatchRepositoryBaselineEntry> Entries { get; }
 
     public ImmutableArray<DocumentationPatchSemanticInputFact> SemanticInputs { get; }
+
+    // The sealed loader provenance also includes imports and compiler assemblies.
+    internal ImmutableArray<string> ProtectedInputPaths { get; }
+
+    internal ImmutableArray<DocumentationPatchBuildDeclaration> BuildDeclarations { get; }
+
+    internal ImmutableArray<Func<string, bool>> DeclaredInputGlobs { get; }
+
+    internal ImmutableArray<Func<string, bool>> RepositoryInputGlobs { get; }
+
+    internal ImmutableArray<DocumentationPatchCompilerResponseFile> CompilerResponseFiles { get; }
 
     internal DocumentationPatchPhysicalIdentity RootIdentity { get; }
 
@@ -423,12 +439,39 @@ public sealed class DocumentationPatchRepositoryBaseline
             "patch.stale.repository-context");
 }
 
+internal sealed record DocumentationPatchCompilerResponseFile(
+    string RepositoryPath, string ProjectDirectory, string? LoadSha256 = null, bool IsOutput = false);
+
+// Run-local provenance from the existing evaluation; never serialized or used
+// to evaluate a second project or authorize filesystem access.
+internal sealed record DocumentationPatchBuildDeclaration(
+    string ProjectDirectory,
+    string RepositoryPath,
+    ImmutableHashSet<string> ActiveElements,
+    ImmutableHashSet<string> ReferenceCandidateElements,
+    ImmutableHashSet<string> ReferenceNames,
+    ImmutableHashSet<string> ReferenceExtensions)
+{
+    internal bool IsReferenceCandidate(string path) => ReferenceNames.Contains(Path.GetFileNameWithoutExtension(path))
+        && ReferenceExtensions.Contains(Path.GetExtension(path));
+
+    private static readonly ImmutableHashSet<string> CompilerInputs = ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
+        "Compile", "AdditionalFiles", "EditorConfigFiles", "GlobalAnalyzerConfigFiles", "AnalyzerConfigFiles",
+        "Analyzer", "EmbeddedResource", "Resource", "LinkResource", "Reference", "CompilerResponseFile");
+
+    internal static bool IsCompilerInput(string itemType) => CompilerInputs.Contains(itemType);
+}
+
 internal sealed record DocumentationPatchRepositoryPolicy(
     string PhysicalRoot,
     ImmutableHashSet<string> ProtectedPaths,
     ImmutableArray<string> AllowedOutputRoots,
     ImmutableDictionary<string, InventoryEntry> ProtectedCommitments,
-    ImmutableArray<DocumentationPatchSemanticInputFact> SemanticInputs)
+    ImmutableArray<DocumentationPatchSemanticInputFact> SemanticInputs,
+    ImmutableArray<DocumentationPatchBuildDeclaration> BuildDeclarations,
+    ImmutableArray<Func<string, bool>> DeclaredInputGlobs,
+    ImmutableArray<Func<string, bool>> RepositoryInputGlobs,
+    ImmutableArray<DocumentationPatchCompilerResponseFile> CompilerResponseFiles)
 {
     public static StringComparer PathComparer { get; } = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -443,7 +486,11 @@ internal sealed record DocumentationPatchRepositoryPolicy(
         IEnumerable<string> protectedPaths,
         IEnumerable<string> allowedOutputRoots,
         IReadOnlyDictionary<string, InventoryEntry> inventory,
-        IReadOnlyList<LoadedProject> projects)
+        IReadOnlyList<LoadedProject> projects,
+        IEnumerable<DocumentationPatchBuildDeclaration>? buildDeclarations = null,
+        IEnumerable<Func<string, bool>>? declaredInputGlobs = null,
+        IEnumerable<Func<string, bool>>? repositoryInputGlobs = null,
+        IEnumerable<DocumentationPatchCompilerResponseFile>? compilerResponseFiles = null)
     {
         var protectedSet = protectedPaths.ToImmutableHashSet(PathComparer);
         var outputRoots = allowedOutputRoots
@@ -464,7 +511,16 @@ internal sealed record DocumentationPatchRepositoryPolicy(
             protectedSet,
             outputRoots,
             commitments,
-            CollectSemanticInputs(physicalRoot, projects));
+            CollectSemanticInputs(physicalRoot, projects),
+            (buildDeclarations ?? []).ToImmutableArray(),
+            (declaredInputGlobs ?? []).ToImmutableArray(),
+            (repositoryInputGlobs ?? []).ToImmutableArray(),
+            (compilerResponseFiles ?? []).Select(response => response with
+            {
+                LoadSha256 = inventory.TryGetValue(response.RepositoryPath, out var entry) && entry.Kind == "file" ? entry.Sha256 : null,
+                IsOutput = outputRoots.Any(output => response.RepositoryPath.Equals(output, PathComparison)
+                    || response.RepositoryPath.StartsWith(output + "/", PathComparison)),
+            }).ToImmutableArray());
     }
 
     internal static DocumentationPatchRepositoryPolicy CreateForTests(

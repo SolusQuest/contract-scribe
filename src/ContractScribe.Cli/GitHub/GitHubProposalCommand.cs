@@ -112,10 +112,11 @@ internal static class GitHubProposalCommand
                 {
                     try
                     {
-                        return !request.Revalidate() || !preflight.Configuration.Revalidate()
-                            ? GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid", accepted?.Artifact?.CheckpointRevision)
-                            : await GitHubCheckoutBinding.ValidateAsync(client, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false)
-                                ? null : GitHubProposalPresentation.Preflight(identity, arguments.Operation, "stale", "checkout-mismatch", accepted?.Artifact?.CheckpointRevision);
+                        if (!request.Revalidate() || !preflight.Configuration.Revalidate())
+                            return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
+                        var inputFailure = await GitHubCheckoutBinding.ValidateAsync(client, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false);
+                        return inputFailure is null ? null : GitHubProposalPresentation.Preflight(identity, arguments.Operation,
+                            "stale", inputFailure, accepted?.Artifact?.CheckpointRevision);
                     }
                     catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
                     {
