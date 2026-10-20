@@ -126,15 +126,52 @@ internal static class StartupHook
                 .Invoke(null, [new Uri(endpoint), null, milliseconds]);
         }
         var boundaries = cli.GetType("ContractScribe.Cli.GitHubProposalProcessHooks", true)!;
+        var deadlineBoundary = fault switch
+        {
+            "deadline-after-terminal" => "after-terminal",
+            "deadline-before-publication" => "before-publication",
+            "deadline-after-publication-recovery" => "after-publication-recovery",
+            _ => null,
+        };
+        var deadlineClock = deadlineBoundary is null ? null : new FinalizationClock();
+        if (deadlineClock is not null)
+            boundaries.GetMethod("RegisterFinalizationClock", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [deadlineClock]);
         if (terminal is not null)
             boundaries.GetMethod("RegisterTerminal", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [terminal, (long?)12]);
         Action<string> callback = name =>
         {
             if (observations is not null) File.AppendAllText(observations, name + "\n");
+            if (name == deadlineBoundary)
+            {
+                deadlineClock!.Expire();
+                if (observations is not null) File.AppendAllText(observations, "finalization-deadline-expired\n");
+            }
             if (fault == name) throw new InvalidOperationException("synthetic private fault sentinel");
             if (pause == name && (release is null || !SpinWait.SpinUntil(() => File.Exists(release), TimeSpan.FromSeconds(45))))
                 throw new TimeoutException("Synthetic physical-output pause expired.");
         };
         boundaries.GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [callback]);
+    }
+
+    private sealed class FinalizationClock : TimeProvider
+    {
+        private Action? expire;
+        internal void Expire() => (expire ?? throw new InvalidOperationException("Finalization timer was not started."))();
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (expire is not null || dueTime != TimeSpan.FromMinutes(5))
+                throw new InvalidOperationException("Unexpected finalization timer.");
+            var timer = new FinalizationTimer(callback, state);
+            expire = timer.Fire;
+            return timer;
+        }
+        private sealed class FinalizationTimer(TimerCallback callback, object? state) : ITimer
+        {
+            private bool disposed;
+            internal void Fire() { if (!disposed) callback(state); }
+            public bool Change(TimeSpan dueTime, TimeSpan period) => !disposed;
+            public void Dispose() => disposed = true;
+            public ValueTask DisposeAsync() { Dispose(); return ValueTask.CompletedTask; }
+        }
     }
 }

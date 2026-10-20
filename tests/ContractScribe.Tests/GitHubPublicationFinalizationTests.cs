@@ -24,6 +24,45 @@ public sealed class GitHubPublicationFinalizationTests
     }
 
     [Fact]
+    public void Claim_cancellation_keeps_its_disposition_when_the_host_deadline_later_expires()
+    {
+        var clock = new DeadlineClock();
+        using var claim = new CancellationTokenSource();
+        using var host = new GitHubPublicationFinalization(default, clock);
+        var execution = host.Begin(claim.Token);
+        claim.Cancel();
+        Assert.True(execution.IsCancellationRequested);
+        clock.Expire();
+        Assert.True(host.DeadlineToken.IsCancellationRequested);
+        Assert.False(host.TimedOut);
+    }
+
+    [Fact]
+    public void Claim_stop_is_recorded_before_its_linked_cancellation_can_expire_the_deadline()
+    {
+        var clock = new DeadlineClock();
+        using var claim = new CancellationTokenSource();
+        using var host = new GitHubPublicationFinalization(default, clock);
+        var execution = host.Begin(claim.Token);
+        using var propagation = execution.Register(clock.Expire);
+        claim.Cancel();
+        Assert.True(host.DeadlineToken.IsCancellationRequested);
+        Assert.False(host.TimedOut);
+    }
+
+    [Fact]
+    public void Deadline_timeout_is_not_reclassified_by_a_later_claim_stop()
+    {
+        var clock = new DeadlineClock();
+        using var claim = new CancellationTokenSource();
+        using var host = new GitHubPublicationFinalization(default, clock);
+        host.Begin(claim.Token);
+        clock.Expire();
+        claim.Cancel();
+        Assert.True(host.TimedOut);
+    }
+
+    [Fact]
     public void Caller_cancellation_preserves_independent_readback_but_host_deadline_still_bounds_it()
     {
         var clock = new DeadlineClock();

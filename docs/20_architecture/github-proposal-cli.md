@@ -115,7 +115,7 @@ The caller materializes the invocation request and any override to bounded files
 
 The GitHub facade pins the trusted Actions publisher independently of inspected PRs: `github-actions[bot]`, numeric ID `41898282`, node ID `MDM6Qm90NDE4OTgyODI=`, type `Bot`. One facade may make two bounded calls when the first stops at the original proposal ref. Each call freshly validates the next missing original-operation step. A process restart may recover deterministic Git objects/ref and a not-yet-fenced PR operation through fresh narrow capabilities. Only the acknowledged winning durable send-fence CAS issues one POST right; existing fences and ambiguous acknowledgement allow exact discovery only. Absence after the fence remains unresolved.
 
-One finite five-minute host finalization deadline starts before accepted-only reconstruction or candidate-free publication recovery, independent of the model allowance. It is shared across publication, independent uncertain-effect readback and checkpoint cleanup; it never renews per stage. Actual caller cancellation retains its distinct outcome.
+One finite five-minute host finalization deadline starts before accepted-only reconstruction or candidate-free publication recovery, independent of the model allowance. It is shared across publication, independent uncertain-effect readback and checkpoint cleanup; it never renews per stage. It bounds unfinished work without replacing an already selected exact terminal during teardown. Actual caller or claim cancellation retains its distinct outcome.
 
 ## Output
 

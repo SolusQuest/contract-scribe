@@ -118,6 +118,9 @@ internal static class CampaignCommandRunner
                 ?? CampaignCliPresentation.Present(identity, campaignTerminal);
         }
 
+        if (continuation?.FinalizationFailure(existing?.Artifact.CheckpointRevision) is { } unfinishedFinalization)
+            return unfinishedFinalization;
+
         var outcome = hostOutcome.Terminal.ExecutionOutcome switch
         {
             HostExecutionOutcome.Cancelled => "campaign.cancelled",
@@ -403,7 +406,9 @@ internal static class CampaignCommandRunner
                     patchToken,
                     DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
                     AcceptedOnly: reconstructAccepted)).ConfigureAwait(false);
-                if (continuation?.FinalizationFailure(patched.Artifact?.CheckpointRevision ?? current.Artifact.CheckpointRevision) is { } finalizationFailure)
+                if ((patched.Kind is DocumentationCampaignOutcomeKind.Cancelled or DocumentationCampaignOutcomeKind.TimedOut
+                    || patched.CheckpointFailure == CampaignCheckpointAcceptanceKind.Cancelled)
+                    && continuation?.FinalizationFailure(patched.Artifact?.CheckpointRevision ?? current.Artifact.CheckpointRevision) is { } finalizationFailure)
                     return new(null, finalizationFailure);
                 if (continuation is not null && patched.Kind is
                     DocumentationCampaignOutcomeKind.Accepted or DocumentationCampaignOutcomeKind.Reconstructed)
@@ -419,6 +424,9 @@ internal static class CampaignCommandRunner
                             _ => "campaign.host-contract-error",
                         }, AcceptedObservation(patched.Artifact));
                     var fresh = await CampaignCheckpointAcceptance.AcceptCurrentAsync(store, patchToken).ConfigureAwait(false);
+                    if (fresh.Kind == CampaignCheckpointAcceptanceKind.Cancelled
+                        && continuation.FinalizationFailure(current.Artifact.CheckpointRevision) is { } readDeadline)
+                        return new(null, readDeadline);
                     if (fresh.Kind != CampaignCheckpointAcceptanceKind.Accepted || fresh.AcceptedCheckpoint is null)
                         return Terminal(preflight.Operation, "state", AcceptanceOutcome(fresh.Kind), current);
                     if (continuation.ValidateHandoff(fresh.AcceptedCheckpoint.Artifact, patched) is { } handoffFailure)

@@ -45,9 +45,11 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemTheory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Killing_the_process_after_remote_PR_creation_recovers_that_PR_without_another_create_attempt(bool terminalBeforeRecovery)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Killing_the_process_after_remote_PR_creation_recovers_that_PR_without_another_create_attempt(
+        bool terminalBeforeRecovery, bool deadlineAfterRecovery)
     {
         await using var fixture = await Fixture.CreateAsync();
         var created = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -71,7 +73,8 @@ public sealed partial class GitHubProposalCliProcessTests
         var before = GateCounts(fixture);
         if (!terminalBeforeRecovery)
         {
-            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            AssertResult(await fixture.Run("resume", fault: deadlineAfterRecovery ? "deadline-after-publication-recovery" : null), 0, "awaiting-review");
+            if (deadlineAfterRecovery) Assert.Equal(1, Observed(fixture, "finalization-deadline-expired"));
             Assert.Equal(before, GateCounts(fixture));
             Assert.Equal("published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
             Assert.Equal(1, fixture.GitHub.PrAttempts);
@@ -79,6 +82,7 @@ public sealed partial class GitHubProposalCliProcessTests
             AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         }
+        if (deadlineAfterRecovery) fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
         fixture.GitHub.Lifecycle("merged");
         AdvanceReadme(fixture);
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
