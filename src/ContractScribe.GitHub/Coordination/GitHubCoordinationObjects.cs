@@ -9,7 +9,8 @@ namespace ContractScribe.GitHub.Coordination;
 internal sealed class GitHubPreparedCoordination
 {
     internal GitHubPreparedCoordination(
-        GitHubCoordinationState state,
+        GitHubCoordinationDocument document,
+        GitHubPublicationEvent? publicationEvent,
         byte[] stateBytes,
         string blobOid,
         string leafTreeOid,
@@ -18,7 +19,8 @@ internal sealed class GitHubPreparedCoordination
         string message,
         string commitOid)
     {
-        State = state;
+        Document = document;
+        Event = publicationEvent;
         StateBytes = ImmutableArray.CreateRange(stateBytes);
         BlobOid = blobOid;
         LeafTreeOid = leafTreeOid;
@@ -28,7 +30,9 @@ internal sealed class GitHubPreparedCoordination
         CommitOid = commitOid;
     }
 
-    internal GitHubCoordinationState State { get; }
+    internal GitHubCoordinationDocument Document { get; }
+    internal GitHubPublicationEvent? Event { get; }
+    internal GitHubCoordinationState State => Event?.State ?? throw new GitHubCoordinationException();
     internal ImmutableArray<byte> StateBytes { get; }
     internal string BlobOid { get; }
     internal string LeafTreeOid { get; }
@@ -48,19 +52,36 @@ internal static class GitHubCoordinationObjects
     internal const long ActorUnixSeconds = 946684800;
     internal static readonly DateTimeOffset ActorDate = DateTimeOffset.FromUnixTimeSeconds(ActorUnixSeconds);
 
-    internal static GitHubPreparedCoordination Prepare(GitHubCoordinationState state)
+    internal const string CheckpointPath = "checkpoint.json";
+    internal const string PlanPath = "plan.json";
+    internal const string ArchivePath = "archive-predecessor.json";
+    internal const string EventPath = "publication-event.json";
+
+    internal static GitHubPreparedCoordination Prepare(GitHubCoordinationState state) => PreparePublication(state, null);
+
+    internal static GitHubPreparedCoordination PreparePublication(GitHubCoordinationState state,
+        GitHubCoordinationDocument? predecessor)
     {
-        var stateBytes = GitHubCoordinationCodec.Encode(state);
+        var publication = new GitHubPublicationEvent(state, predecessor?.Publication);
+        var eventOid = ObjectOid("blob", publication.Encode());
+        var document = new GitHubCoordinationDocument(GitHubCoordinationDocument.CurrentFormat,
+            state.RepositoryId, state.TargetRef, state.TargetCommitOid, state.CampaignLineage,
+            state.CoordinationPredecessorOid, predecessor?.Checkpoint, predecessor?.Plan, predecessor?.Archive,
+            new(eventOid, GitHubCoordinationDocument.CurrentCommit), predecessor?.Claim);
+        return Prepare(document, publication);
+    }
+
+    internal static GitHubPreparedCoordination Prepare(GitHubCoordinationDocument document,
+        GitHubPublicationEvent? publication = null)
+    {
+        var stateBytes = document.Encode();
         var blobOid = ObjectOid("blob", stateBytes);
-        var leafBytes = TreeEntry("100644", StatePath, blobOid);
-        var leafOid = ObjectOid("tree", leafBytes);
-        var rootBytes = TreeEntry("40000", RootPath, leafOid);
-        var rootOid = ObjectOid("tree", rootBytes);
-        var parent = state.CoordinationPredecessorOid.All(character => character == '0')
-            ? state.TargetCommitOid : state.CoordinationPredecessorOid;
-        var message = "ContractScribe coordination v1\n"
-            + "operation=" + state.OperationCommitmentSha256 + "\n"
-            + "stage=" + GitHubCoordinationCodec.Stage(state.Stage) + "\n";
+        var leafEntries = Entries(document, blobOid);
+        var leafOid = TreeOid(leafEntries);
+        var rootOid = TreeOid([new(RootPath, GitHubTreeMode.Directory, leafOid, null)]);
+        var parent = document.PredecessorOid == GitHubCoordinationDocument.ZeroOid
+            ? document.TargetCommitOid : document.PredecessorOid;
+        var message = "ContractScribe campaign coordination v1\n";
         var commitText = "tree " + rootOid + "\n"
             + "parent " + parent + "\n"
             + "author " + ActorName + " <" + ActorEmail + "> "
@@ -68,8 +89,26 @@ internal static class GitHubCoordinationObjects
             + "committer " + ActorName + " <" + ActorEmail + "> "
             + ActorUnixSeconds.ToString(CultureInfo.InvariantCulture) + " +0000\n\n"
             + message;
-        var commitOid = ObjectOid("commit", Encoding.UTF8.GetBytes(commitText));
-        return new(state, stateBytes, blobOid, leafOid, rootOid, parent, message, commitOid);
+        return new(document, publication, stateBytes, blobOid, leafOid, rootOid, parent, message,
+            ObjectOid("commit", Encoding.UTF8.GetBytes(commitText)));
+    }
+
+    private static ImmutableArray<GitHubTreeEntry> Entries(GitHubCoordinationDocument document, string stateOid)
+    {
+        var entries = new List<GitHubTreeEntry> { new(StatePath, GitHubTreeMode.File, stateOid, null) };
+        if (document.Checkpoint is { } checkpoint) entries.Add(new(CheckpointPath, GitHubTreeMode.File, checkpoint.Oid, null));
+        if (document.Plan is { } plan) entries.Add(new(PlanPath, GitHubTreeMode.File, plan.Oid, null));
+        if (document.Archive is { } archive) entries.Add(new(ArchivePath, GitHubTreeMode.File, archive.Oid, null));
+        if (document.Publication is { } publication) entries.Add(new(EventPath, GitHubTreeMode.File, publication.Oid, null));
+        return entries.OrderBy(entry => entry.Path, StringComparer.Ordinal).ToImmutableArray();
+    }
+
+    internal static string TreeOid(ImmutableArray<GitHubTreeEntry> entries)
+    {
+        using var stream = new MemoryStream();
+        foreach (var entry in entries.OrderBy(entry => entry.Path, StringComparer.Ordinal))
+            stream.Write(TreeEntry(entry.Mode == GitHubTreeMode.Directory ? "40000" : "100644", entry.Path, entry.Oid));
+        return ObjectOid("tree", stream.ToArray());
     }
 
     internal static void Authenticate(
@@ -81,12 +120,11 @@ internal static class GitHubCoordinationObjects
     {
         Require(blob.Oid == expected.BlobOid
             && blob.Bytes.AsSpan().SequenceEqual(expected.StateBytes.AsSpan()));
-        var leafEntry = Single(leaf.Entries);
-        Require(leaf.Oid == expected.LeafTreeOid
-            && leafEntry.Path == StatePath
-            && leafEntry.Mode == GitHubTreeMode.File
-            && leafEntry.Oid == expected.BlobOid
-            && (leafEntry.Size is null || leafEntry.Size == expected.StateBytes.Length));
+        var expectedEntries = LeafEntries(expected);
+        Require(leaf.Oid == expected.LeafTreeOid && leaf.Entries.Length == expectedEntries.Length);
+        foreach (var entry in expectedEntries)
+            Require(leaf.Entries.Any(actual => actual.Path == entry.Path && actual.Mode == entry.Mode
+                && actual.Oid == entry.Oid && (actual.Size is null || actual.Size >= 0)));
         var rootEntry = Single(root.Entries);
         Require(root.Oid == expected.RootTreeOid
             && rootEntry.Path == RootPath
@@ -111,7 +149,7 @@ internal static class GitHubCoordinationObjects
         new(ActorName, ActorEmail, ActorDate));
 
     internal static ImmutableArray<GitHubTreeEntry> LeafEntries(GitHubPreparedCoordination prepared) =>
-        [new(StatePath, GitHubTreeMode.File, prepared.BlobOid, null)];
+        Entries(prepared.Document, prepared.BlobOid);
 
     internal static ImmutableArray<GitHubTreeEntry> RootEntries(GitHubPreparedCoordination prepared) =>
         [new(RootPath, GitHubTreeMode.Directory, prepared.LeafTreeOid, null)];
@@ -127,7 +165,7 @@ internal static class GitHubCoordinationObjects
         return entries[0];
     }
 
-    private static string ObjectOid(string type, ReadOnlySpan<byte> bytes)
+    internal static string ObjectOid(string type, ReadOnlySpan<byte> bytes)
     {
         var header = Encoding.ASCII.GetBytes(type + " "
             + bytes.Length.ToString(CultureInfo.InvariantCulture) + "\0");

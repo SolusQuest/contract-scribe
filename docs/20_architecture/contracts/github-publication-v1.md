@@ -149,13 +149,13 @@ the complete cumulative block count, cumulative candidate-byte count and
 changed-path/candidate-hash map. The distinct changed-file count is exactly the
 map length; it is not a separately caller-controlled field.
 
-The coordination ref points to a commit whose tree contains exactly one entry:
-the tree `.contract-scribe` with mode `40000`. That tree contains exactly
-`coordination-state-v1.json` with mode `100644`; no proposal or ownership file is
-present. The state object has every key below in this exact order. Optional and
-stage-forbidden values are encoded as JSON `null`, never omitted. Changed files
-are ordered by ordinal path and each object has exactly `path` then
-`candidateSha256`.
+The coordination ref points to one Git commit whose root contains only `.contract-scribe` (mode `40000`). Its sorted file entries (mode `100644`) are `coordination-state-v1.json` and the present `checkpoint.json`, `plan.json`, `archive-predecessor.json`, and `publication-event.json` pointers. Every referenced blob is a real tree entry. The current coordination document has fixed-order keys `format`, `repositoryId`, `targetRef`, `targetCommitOid`, `campaignLineage`, `predecessorOid`, `checkpoint`, `plan`, `archive`, `publication`, `claim`; absent optional pointers are explicit null. Its format is `campaign-coordination-v1`, bounded to 32 KiB, canonical compact JSON without a final LF.
+
+The checkpoint pointer binds blob OID, canonical SHA-256 and Core revision. The plan pointer binds blob OID, SHA-256, execution commitment and batch identity. The claim binds a random owner, increasing epoch and server-time expiration. Claims are renewed under exact HEAD CAS; server Date samples and monotonic elapsed time gate ownership. Missing time, expiry, takeover or uncertain CAS stops execution. Checkpoint authority cannot mutate a proposal ref or create a PR.
+
+Publication state is carried by an immutable `publication-event-v1` envelope with `format`, `state`, `previous`. `previous` names the preceding event's blob and containing commit, skipping checkpoint-only commits. The containing document uses `anchor: "current"`; successors retain the now-known commit OID. No object hashes its own future commit identity. Readers authenticate actual parent/tree linkage and original generation/PR creation provenance. The 1024-event traversal bound applies to publication events, not checkpoint commits. Current-head acceptance also checks the immediate actual predecessor: claim-only commits retain checkpoint, plan, archive and publication pointers; publication events retain checkpoint facts; checkpoint changes preserve revision, request history, and each known/unknown charge component (including explicit zero). Within an unchanged execution plan they retain fixed membership, completed proposals and member receipts, closed outcomes, known completions, and the original candidate provenance; correlated patch rejection, retries, and newly accepted candidates keep their existing reducer rules. Reopening a closed outcome requires a genuinely retryable provider failure, its retained prior attempt identity, and a fresh correlated reservation with the proper anchor/member attempt counts. Changes require exact compaction proof for a new archive and correlated successor planning for a new plan. A dropped checkpoint or substituted historical event is invalid, never first-run absence. Checkpoint acquisition authenticates the retained publication-event graph before granting execution. Reusing immutable event proof within an invocation does not skip the current head's predecessor check. A checkpoint-only document has no candidate or invented generation.
+
+The embedded publication state has every key below in the exact order. Optional and stage-forbidden values are JSON null. Changed files use ordinal path order and exactly `path` then `candidateSha256`.
 
 JSON numbers are base-ten integers without exponent, leading zero or fractional
 form. Strings use the exact escaping produced by a non-indented
@@ -167,7 +167,7 @@ UTF-16. The known-answer fixture, rather than a platform's future encoder
 defaults, is normative for byte replay.
 
 ```text
-version, stage, repositoryId, targetRef, targetCommitOid,
+version, campaignLineage, stage, repositoryId, targetRef, targetCommitOid,
 snapshotCommitmentSha256,
 authorityCommitmentSha256, policyCommitmentSha256, operationId,
 operationCommitmentSha256, currentCandidateCommitmentSha256,
@@ -189,9 +189,7 @@ parent <coordination-parent-oid>
 author ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000
 committer ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000
 
-ContractScribe coordination v1
-operation=<operation-commitment-sha256>
-stage=<lexical-stage-id>
+ContractScribe campaign coordination v1
 ```
 
 For the fixed coordination and proposal messages in this contract, response verification accepts the exact raw message or the observed REST representation that omits its single terminal LF. The independently prepared raw commit OID and all tree, parent, actor, date, state, and content checks must still match. This does not change the canonical raw preimage, request message, or known-answer OID, and does not allow general whitespace trimming, CRLF conversion, or other message changes. The response parser retains the observed text; this narrow equivalence is applied only by the owning commit verifier.
@@ -364,16 +362,13 @@ followed by exact readback, issues a private one-use proposal-ref entitlement.
 It binds the owning store, repository, operation, content-stage head, content
 commit and exact proposal predecessor. R4 atomically consumes it before replay
 or mutation handling. Stage replay, ambiguous CAS recovery and process restart
-can authenticate state but cannot manufacture this entitlement. This prevents
-identical contenders from retaining separate write rights after a proposal-ref
-update and intervening human rewind while coordination remains unchanged.
+can authenticate state but cannot manufacture this entitlement. The proposal update atomically advances both the coordination stage and proposal ref in one closed two-entry `updateRefs` transaction. Both expected predecessors must match; no no-op guard or single-proposal-ref fallback exists. Exact readback authenticates both effects. Ambiguity never mints a replacement PR-create entitlement.
 
 Without that entitlement, only exact successor discovery is recoverable:
 existing content with an absent/preceding proposal ref remains unresolved.
 Missing recorded content at `content-created` or later is not repaired. This
 conservative boundary provides safe recovery, not universal crash-resume
-liveness; it adds no persisted stage or attempt ledger. A proposal-ref OID CAS
-does not provide a transaction across independently modified refs.
+liveness. Checkpoint updates retain publication anchors unchanged. A PR POST remains outside the Git ref transaction: the durable original-operation intent and private one-use entitlement do not imply remote cancellation or permit a replacement send after takeover.
 
 ## Normative R5 PR representation and terminal capability
 
@@ -451,7 +446,7 @@ ready/merge/close/delete and release compatibility remain later work.
 
 ### Creation provenance across appends
 
-The R3 serialized state and creation-marker framing remain unchanged. A PR-bearing append retains the original generation's creation commitment, marker hash and PR number while its operation, proposal commit/tree and cumulative facts advance. R3 authenticates creation provenance through the existing immutable coordination predecessor chain, including older appended terminal generations used by successor admission. It validates every needed state/object and edge before issuing a capability; original creation facts are reconstructed from the non-append creation operation and carried only in the store-owned in-process capability. They are not inferred from PR prose. Intended PR-bearing results are checked against that original source before object preparation and again on readback.
+The publication-event state preserves the creation-marker framing. A PR-bearing append retains the original generation's creation commitment, marker hash and PR number while its operation, proposal commit/tree and cumulative facts advance. R3 authenticates creation provenance through immutable publication-event anchors and their actual-parent linkage, including older appended terminal generations used by successor admission. It validates every needed state/object and edge before issuing a capability; original creation facts are reconstructed from the non-append creation operation and carried only in the store-owned in-process capability. They are not inferred from PR prose. Intended PR-bearing results are checked against that original source before object preparation and again on readback.
 
 The expanded read is bounded to 1,024 states and 90 seconds, retaining the per-operation transition bound. Missing, substituted, cyclic, over-bound or incomplete provenance yields no partial authority. This is a bounded read with an availability limit, not arbitrary-history scalability. It introduces no second persisted descriptor or old-shape reader.
 

@@ -1507,7 +1507,7 @@ public static partial class CampaignStateReducer
                     ? PreservePausedAttempt(state.WorkItems, provider) : state.WorkItems,
                 state.Batch, activeReservation: null, state.CandidateObservation, state.CumulativeOutcome,
                 state.KnownCompletedOperations, terminal, state.Predecessor,
-                RetireDispatchObservation(state, charges), state.ScribeProgress);
+                RetireDispatchObservation(state, charges), state.ScribeProgress, state.ArchivedDispatchPrefix);
             var transition = Applied(predecessor, successor);
             ValidateInitialProviderReservationCapacity(transition.Artifact.State);
             return state.ActiveReservation is null ? transition
@@ -1612,7 +1612,7 @@ public static partial class CampaignStateReducer
                 template.Batch,
                 terminalOutcome: template.TerminalOutcome,
                 predecessor: summary,
-                dispatchObservations: RetireDispatchObservation(state, charges)));
+                dispatchObservations: RetireDispatchObservation(state, charges), archivedDispatchPrefix: state.ArchivedDispatchPrefix));
             // Carried charges and the predecessor summary belong to the final admission
             // shape; an empty-charge template cannot decide whether provider work fits.
             ValidateInitialProviderReservationCapacity(transition.Artifact.State);
@@ -1969,6 +1969,7 @@ public static partial class CampaignStateReducer
         {
             AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
             DispatchObservations = state.DispatchObservations,
+            ArchivedDispatchPrefix = state.ArchivedDispatchPrefix,
             ScribeProgress = state.ScribeProgress,
         };
         var maximumSize = CampaignStateJson.ValidateEncodedSize(upper);
@@ -1993,7 +1994,7 @@ public static partial class CampaignStateReducer
         var activeUpper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
             Maximum, state.ConfiguredCeilings, charges, state.WorkItems, state.Batch, maximumClaim,
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations, null, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = state.ScribeProgress };
         maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(activeUpper));
         var pausedItems = state.WorkItems.Select(item => item.WorkItemKey == reservation.WorkItemKey ? item with
         {
@@ -2002,7 +2003,7 @@ public static partial class CampaignStateReducer
         var pausedUpper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
             Maximum, state.ConfiguredCeilings, charges, pausedItems, state.Batch, null,
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations, null, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = state.ScribeProgress };
         maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(pausedUpper));
         var recovered = new CampaignWorkClosedOutcome(CampaignWorkOutcomeStage.Scribe, CampaignWorkOutcomeCode.ProviderFailure,
             CampaignProviderFinalDisposition.Retryable, reservation.ScribeRequestSha256, reservation.AttemptId,
@@ -2016,7 +2017,7 @@ public static partial class CampaignStateReducer
             Maximum, state.ConfiguredCeilings, charges, recoveredItems, state.Batch, null,
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             upper.TerminalOutcome, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = state.ScribeProgress };
         maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(recoveredUpper));
         maximumSize = checked(maximumSize + CampaignStateJson.MeasureDispatchSettlementGrowth(state)
             + MeasureScribeCompletionGrowth(state));
@@ -2068,7 +2069,7 @@ public static partial class CampaignStateReducer
             state.CheckpointRevision, state.ConfiguredCeilings, state.LineageCharges, items, state.Batch,
             state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             state.TerminalOutcome, state.Predecessor)
-        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ScribeProgress = maximumProgress };
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = maximumProgress };
         return Math.Max(0, CampaignStateJson.ValidateEncodedSize(upper) - CampaignStateJson.ValidateEncodedSize(state));
     }
 
@@ -2167,7 +2168,7 @@ public static partial class CampaignStateReducer
             dispatchObservations ?? (basis.ActiveReservation is CampaignProviderReservation
             { OperationKind: CampaignProviderOperationKind.Dispatch } && reservation is null
                 ? RetireDispatchObservation(basis, charges) : basis.DispatchObservations),
-            progress);
+            progress, basis.ArchivedDispatchPrefix);
     }
 
     private static ImmutableArray<CampaignWorkItemState> ReplaceWork(

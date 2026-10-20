@@ -51,8 +51,10 @@ internal sealed class GitHubCoordinationState
         string? ownershipMarkerSha256,
         int cumulativeDocumentationBlocks,
         long cumulativePatchBytes,
-        ImmutableArray<GitHubCoordinationChangedFile> cumulativeChangedFiles)
+        ImmutableArray<GitHubCoordinationChangedFile> cumulativeChangedFiles,
+        string campaignLineage)
     {
+        CampaignLineage = campaignLineage;
         Stage = stage;
         RepositoryId = repositoryId;
         TargetRef = targetRef;
@@ -83,6 +85,7 @@ internal sealed class GitHubCoordinationState
         CumulativeChangedFiles = cumulativeChangedFiles;
     }
 
+    internal string CampaignLineage { get; }
     internal GitHubCoordinationStage Stage { get; }
     internal string RepositoryId { get; }
     internal string TargetRef { get; }

@@ -10,7 +10,8 @@ internal sealed record CampaignRunSelection(CampaignTerminal? Terminal, CliExecu
 
 internal sealed class CampaignAcceptedCandidateContinuation(
     CliBuildIdentity identity, CampaignPreflightResult preflight,
-    GitHubProposalRequestSnapshot request, Func<string, string?> credentialAccessor)
+    GitHubProposalRequestSnapshot request, Func<string, string?> credentialAccessor,
+    Func<ValidatedGitHubPublicationAuthority, ValidatedGitHubChangedFilePayload, CancellationToken, Task<GitHubPublicationObservation>>? publish = null)
 {
     internal CliExecutionResult Present(CampaignTerminal terminal) => GitHubProposalPresentation.Campaign(identity, terminal);
 
@@ -76,8 +77,10 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             // Revalidate after candidate capture too; no ambient credential access occurs in H1.
             if (!preflight.Configuration.Revalidate() || !request.Revalidate())
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
-            var observed = await GitHubPublicationFacade.PublishAsync(admitted.Authority!, admitted.Payload!,
-                () => credentialAccessor("CONTRACTSCRIBE_GITHUB_TOKEN"), context.CancellationToken).ConfigureAwait(false);
+            var observed = publish is not null
+                ? await publish(admitted.Authority!, admitted.Payload!, context.CancellationToken).ConfigureAwait(false)
+                : await GitHubPublicationFacade.PublishAsync(admitted.Authority!, admitted.Payload!,
+                    () => credentialAccessor("CONTRACTSCRIBE_GITHUB_TOKEN"), context.CancellationToken).ConfigureAwait(false);
             return new(null, GitHubProposalPresentation.Publication(identity, preflight.Operation, revision, observed));
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)

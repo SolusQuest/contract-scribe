@@ -39,6 +39,8 @@ internal sealed record GitHubObjectContext(GitHubRepositoryIdentity Repository, 
     GitHubObjectKind Kind, string ExpectedOid) : GitHubMutationContext(Repository, OperationCommitment);
 internal sealed record GitHubRefContext(GitHubRepositoryIdentity Repository, string OperationCommitment,
     string Ref, string BeforeOid, string AfterOid, string ClientMutationId) : GitHubMutationContext(Repository, OperationCommitment);
+internal sealed record GitHubPublicationRefsContext(GitHubRepositoryIdentity Repository, string OperationCommitment,
+    GitHubUpdateRef Coordination, GitHubUpdateRef Proposal, string ClientMutationId) : GitHubMutationContext(Repository, OperationCommitment);
 internal sealed record GitHubPullRequestContext(GitHubRepositoryIdentity Repository, string OperationCommitment,
     string CreationCommitment, string HeadRef, string HeadOid, string BaseRef, string ExpectedBaseOid,
     string TitleSha256, string BodySha256) : GitHubMutationContext(Repository, OperationCommitment)

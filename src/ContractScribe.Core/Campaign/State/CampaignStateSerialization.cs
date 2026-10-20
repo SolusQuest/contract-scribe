@@ -165,6 +165,15 @@ public static partial class CampaignStateJson
         writer.WriteNumber("checkpointRevision", state.CheckpointRevision);
         WriteCeilings(writer, state.ConfiguredCeilings);
         WriteCharges(writer, state.LineageCharges);
+        writer.WritePropertyName("archivedDispatchPrefix");
+        if (state.ArchivedDispatchPrefix is not { } prefix) writer.WriteNullValue();
+        else
+        {
+            writer.WriteStartObject();
+            writer.WriteString("witnessSha256", prefix.WitnessSha256);
+            WriteCharges(writer, prefix.Charges);
+            writer.WriteEndObject();
+        }
         WriteDispatchObservations(writer, state.DispatchObservations);
         writer.WritePropertyName("scribeProgress");
         WriteScribeProgress(writer, state.ScribeProgress);
@@ -914,6 +923,7 @@ public static partial class CampaignStateJson
             "configuredCeilings",
             "lineageCharges",
             "dispatchObservations",
+            "archivedDispatchPrefix",
             "scribeProgress",
             "workItems",
             "batch",
@@ -953,6 +963,7 @@ public static partial class CampaignStateJson
         {
             AcceptedCandidateOrigin = ParseOrigin(root.GetProperty("acceptedCandidateOrigin")),
             ScribeProgress = ParseScribeProgress(root.GetProperty("scribeProgress")),
+            ArchivedDispatchPrefix = ParseArchivedPrefix(root.GetProperty("archivedDispatchPrefix")),
             DispatchObservations = ParseArray(root.GetProperty("dispatchObservations"),
                 ParseDispatchObservation, CampaignStateContract.MaximumArtifactUtf8Bytes),
         };
@@ -1109,6 +1120,13 @@ public static partial class CampaignStateJson
             ReadInt64(element, "uncachedInputMicrounitsPerMillion"),
             ReadInt64(element, "outputMicrounitsPerMillion"),
             ReadInt64(element, "reasoningMicrounitsPerMillion"));
+    }
+
+    private static CampaignArchivedDispatchPrefix? ParseArchivedPrefix(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Null) return null;
+        ExpectObject(element, "witnessSha256", "lineageCharges");
+        return new(ReadString(element, "witnessSha256"), ParseCharges(element.GetProperty("lineageCharges")));
     }
 
     private static CampaignLineageCharges ParseCharges(JsonElement element)

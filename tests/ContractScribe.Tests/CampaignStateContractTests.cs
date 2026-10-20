@@ -24,7 +24,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(
             Convert.ToHexString(SHA256.HashData(expected)).ToLowerInvariant(),
             artifact.Sha256);
-        Assert.Equal("7e740fbb2a0f357d6fa79d63aa7d234512dd8597f88d5df555fe805806d82474", artifact.Sha256);
+        Assert.Equal("ddac5c385ede4eeac2ed906d13db1c8ccb0bd2141e864262537eda910b758b71", artifact.Sha256);
         Assert.Equal((byte)'\n', expected[^1]);
         Assert.NotEqual((byte)'\n', expected[^2]);
     }
@@ -727,6 +727,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignTransitionKind.Applied, reconstructed.Kind);
         Assert.Equal(CampaignTerminalKind.Complete, reconstructed.Artifact.State.TerminalOutcome!.Kind);
         Assert.Equal(CampaignWorkStatus.Accepted, reconstructed.Artifact.State.WorkItems[0].Status);
+        CampaignStateFactory.ValidateSuccessorHistory(freshReservation.Artifact, reconstructed.Artifact);
         var original = CampaignStateFactory.ProveAcceptedCandidateOrigin(completed.Artifact, historicalRequest,
             CreateAcceptedPatchResult(historicalRequest, proposal));
         var replay = CampaignStateFactory.ProveAcceptedCandidateOrigin(reconstructed.Artifact, freshRequest,
@@ -1058,6 +1059,7 @@ public sealed partial class CampaignStateContractTests
             activeElapsedMilliseconds: 500);
         Assert.Equal(CampaignTransitionKind.Applied, applied.Kind);
         Assert.Equal(scenario.Predecessor.CheckpointRevision + 1, applied.Artifact.CheckpointRevision);
+        CampaignStateFactory.ValidateSuccessorHistory(scenario.Predecessor, applied.Artifact);
         var selected = Assert.Single(applied.Artifact.State.WorkItems, item =>
             string.Equals(item.WorkItemKey, scenario.SelectedWorkItemKey, StringComparison.Ordinal));
         Assert.Equal(CampaignWorkStatus.Closed, selected.Status);
@@ -2100,6 +2102,13 @@ public sealed partial class CampaignStateContractTests
 
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
         Assert.Equal(CampaignWorkStatus.Planned, retry.Artifact.State.WorkItems[0].Status);
+        CampaignStateFactory.ValidateSuccessorHistory(completed.Artifact, retry.Artifact);
+        var retryState = retry.Artifact.State;
+        var unreserved = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(
+            retryState.ProductRevision, retryState.CampaignLineage, retryState.Snapshot, retryState.CheckpointRevision,
+            retryState.ConfiguredCeilings, retryState.LineageCharges, retryState.WorkItems, retryState.Batch,
+            dispatchObservations: retryState.DispatchObservations, scribeProgress: retryState.ScribeProgress));
+        Assert.Throws<CampaignStateValidationException>(() => CampaignStateFactory.ValidateSuccessorHistory(completed.Artifact, unreserved));
         Assert.Null(retry.Artifact.State.WorkItems[0].ClosedOutcome);
         Assert.NotEqual(
             firstAttempt,

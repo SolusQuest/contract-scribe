@@ -57,7 +57,7 @@ public sealed class GitHubProposalRequestTests
             Assert.Equal(1, request.Version);
             Assert.Equal("campaign.github.request", request.CampaignLineage);
             Assert.Equal("snapshot.github.request", request.Snapshot);
-            Assert.Equal("checkpoint/checkpoint.json", request.State);
+            Assert.Equal("coordination-ref", request.CheckpointStore);
             Assert.Equal(GitHubPublicationTransitionKind.Initial, request.GitHub.Transition);
         }
         finally { Directory.Delete(directory, recursive: true); }
@@ -68,7 +68,7 @@ public sealed class GitHubProposalRequestTests
         githubProposalRequestVersion = 1,
         campaignLineage = "campaign.github.request",
         snapshot = "snapshot.github.request",
-        state = "checkpoint/checkpoint.json",
+        checkpointStore = "coordination-ref",
         github = new
         {
             repositoryOwner = "Owner",
@@ -155,11 +155,11 @@ public sealed class GitHubProposalRequestTests
     [InlineData("snapshot-punctuation")]
     [InlineData("snapshot-space")]
     [InlineData("snapshot-long")]
-    [InlineData("state-missing")]
-    [InlineData("state-null")]
-    [InlineData("state-empty")]
-    [InlineData("state-control")]
-    [InlineData("state-number")]
+    [InlineData("checkpoint-missing")]
+    [InlineData("checkpoint-null")]
+    [InlineData("checkpoint-empty")]
+    [InlineData("checkpoint-control")]
+    [InlineData("checkpoint-number")]
     [InlineData("github-missing")]
     [InlineData("github-null")]
     [InlineData("github-string")]
@@ -184,11 +184,11 @@ public sealed class GitHubProposalRequestTests
             case "snapshot-punctuation": json["snapshot"] = "-leading"; break;
             case "snapshot-space": json["snapshot"] = "has space"; break;
             case "snapshot-long": json["snapshot"] = new string('a', 129); break;
-            case "state-missing": json.Remove("state"); break;
-            case "state-null": json["state"] = null; break;
-            case "state-empty": json["state"] = ""; break;
-            case "state-control": json["state"] = "checkpoint\n.json"; break;
-            case "state-number": json["state"] = 7; break;
+            case "checkpoint-missing": json.Remove("checkpointStore"); break;
+            case "checkpoint-null": json["checkpointStore"] = null; break;
+            case "checkpoint-empty": json["checkpointStore"] = ""; break;
+            case "checkpoint-control": json["checkpointStore"] = "checkpoint\n.json"; break;
+            case "checkpoint-number": json["checkpointStore"] = 7; break;
             case "github-missing": json.Remove("github"); break;
             case "github-null": json["github"] = null; break;
             case "github-string": json["github"] = "github"; break;

@@ -1,3 +1,8 @@
+using ContractScribe.Core;
+using ContractScribe.GitHub.Transport;
+using ContractScribe.GitHub.Coordination;
+using ContractScribe.GitHub.Publication;
+
 namespace ContractScribe.Cli;
 
 internal static class GitHubProposalCommand
@@ -19,7 +24,7 @@ internal static class GitHubProposalCommand
         "Both --option value and --option=value forms are accepted in any order.\n\n" +
         "Environment:\n" +
         "  CONTRACTSCRIBE_PROVIDER_API_KEY  Existing campaign provider credential.\n" +
-        "  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local publication admission.\n\n" +
+        "  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local request/configuration validation.\n\n" +
         "Exit codes:\n" +
         "  0  Published, replayed, no work, awaiting review, or merged.\n" +
         "  2  Invalid command-line usage.\n" +
@@ -37,17 +42,43 @@ internal static class GitHubProposalCommand
         {
             cancellationToken.ThrowIfCancellationRequested();
             var request = GitHubProposalRequestReader.Read(arguments.Request, currentDirectory);
-            var preflight = CampaignPreflight.Run(arguments.Campaign(request), currentDirectory);
+            var preflight = CampaignPreflight.Run(arguments.Campaign(request), currentDirectory, identity, remoteCheckpoint: true);
             if (GitHubProposalProcessHooks.Terminal(arguments.Operation) is { } selectedTerminal)
                 return GitHubProposalPresentation.Campaign(identity, selectedTerminal);
             var accessor = credentialAccessor ?? Environment.GetEnvironmentVariable;
-            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request, name =>
+            if (!request.Revalidate() || !preflight.Configuration.Revalidate())
+                return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid");
+            var github = request.Request.GitHub;
+            var authority = ValidatedGitHubCheckpointAuthority.Create(github.RepositoryOwner, github.RepositoryName,
+                github.TargetRef, request.Request.CampaignLineage, github.ExpectedBaseCommitOid);
+            GitHubProposalProcessHooks.Reach("token-read");
+            GitHubApiClient client;
+            try { client = GitHubApiClient.CreateCheckpoint(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!); }
+            catch (Exception exception) when (exception is ArgumentException or GitHubProtocolException)
+            { return GitHubProposalPresentation.Local(identity, arguments.Operation, "permission"); }
+            using var clientLifetime = client;
+            await using var checkpoint = GitHubCoordinationStore.Create(client);
+            var claim = await checkpoint.AcquireCheckpointAsync(cancellationToken).ConfigureAwait(false);
+            if (claim != CampaignCheckpointReadKind.Found)
             {
-                GitHubProposalProcessHooks.Reach("token-read");
-                return accessor(name);
-            });
-            return await CampaignCommandRunner.RunAsync(identity, preflight, cancellationToken,
-                accessor, continuation).ConfigureAwait(false);
+                var outcome = checkpoint.CheckpointFailure?.Code switch
+                {
+                    GitHubFailureCode.Authentication or GitHubFailureCode.Permission => "permission",
+                    GitHubFailureCode.RateLimit => "rate-limit",
+                    GitHubFailureCode.Cancelled => "cancelled",
+                    GitHubFailureCode.Timeout => "timeout",
+                    _ => claim is CampaignCheckpointReadKind.LeaseConflict or CampaignCheckpointReadKind.LeaseUnverifiable
+                        ? "conflict" : claim == CampaignCheckpointReadKind.Invalid ? "human-change"
+                        : claim == CampaignCheckpointReadKind.Unreadable ? "host-failure" : "local-invalid",
+                };
+                return GitHubProposalPresentation.Local(identity, arguments.Operation, outcome);
+            }
+            using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, checkpoint.CheckpointToken);
+            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request, accessor,
+                (publication, payload, token) => GitHubPublicationFacade.PublishCheckpointAsync(client, checkpoint,
+                    publication, payload, token));
+            return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
+                accessor, continuation, checkpointStore: checkpoint).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

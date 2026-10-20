@@ -2,6 +2,7 @@ using System.Globalization;
 using ContractScribe.Core;
 using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
+using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.GitHub.Publication;
 
@@ -10,6 +11,33 @@ internal sealed record GitHubPublicationObservation(
 
 internal static class GitHubPublicationFacade
 {
+    internal static async Task<GitHubPublicationObservation> PublishCheckpointAsync(
+        GitHubApiClient client, GitHubCoordinationStore checkpoint,
+        ValidatedGitHubPublicationAuthority authority, ValidatedGitHubChangedFilePayload payload, CancellationToken token)
+    {
+        try
+        {
+            return await checkpoint.WithPublicationAsync(async () =>
+            {
+                client.BindPublication(authority);
+                try
+                {
+                    var reconciler = GitHubPublicationReconciler.Create(client, GitHubPublicationPrincipal.ActionsBot, checkpoint);
+                    var result = await reconciler.PublishObservedAsync(authority, payload, token).ConfigureAwait(false);
+                    if (result.Result.Kind == GitHubPublicationResultKind.RecoveredRefPartial)
+                        result = await reconciler.PublishObservedAsync(authority, payload, token).ConfigureAwait(false);
+                    return Observe(authority, result.Result, client.AuthenticatedRepository, result.Diagnostic);
+                }
+                finally { client.UnbindPublication(); }
+            }, token).ConfigureAwait(false);
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        {
+            return new(GitHubPublicationResult.FromRemoteFailure(token.IsCancellationRequested
+                ? GitHubPublicationRemoteFailureKind.Cancelled : GitHubPublicationRemoteFailureKind.HostFailure), null, null, null);
+        }
+    }
+
     internal static async Task<GitHubPublicationObservation> PublishAsync(
         ValidatedGitHubPublicationAuthority authority, ValidatedGitHubChangedFilePayload payload,
         Func<string?> readCredential, CancellationToken token)

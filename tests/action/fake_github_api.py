@@ -254,21 +254,23 @@ def serve(config_path, ready_file, log_file, fail_file):
                              "{updateRefs(input:$input){clientMutationId}}"):
                     fail("graphql-query")
                     return 500, {"message": "query"}
-                update = body["variables"]["input"]["refUpdates"][0]
-                name = update["name"]
-                if body["variables"]["input"]["repositoryId"] != "REPO_node" \
-                        or not name.startswith("refs/heads/contract-scribe/") \
-                        or update.get("force"):
-                    fail("cas-shape")
+                updates = body["variables"]["input"]["refUpdates"]
+                if len(updates) not in (1, 2) or len({u["name"] for u in updates}) != len(updates):
+                    fail("cas-count")
                     return 500, {"message": "cas"}
-                after = update["afterOid"]
-                if after == "0" * 40 or after not in state.commits:
-                    fail("cas-after")
-                    return 500, {"message": "after"}
-                if state.refs.get(name, "0" * 40) != update["beforeOid"]:
-                    return 200, {"data": None, "errors": [
-                        {"message": "conflict", "type": "CONFLICT"}]}
-                state.refs[name] = after
+                for update in updates:
+                    name = update["name"]
+                    if body["variables"]["input"]["repositoryId"] != "REPO_node" or not name.startswith("refs/heads/contract-scribe/") or update.get("force"):
+                        fail("cas-shape")
+                        return 500, {"message": "cas"}
+                    after = update["afterOid"]
+                    if after == "0" * 40 or after not in state.commits:
+                        fail("cas-after")
+                        return 500, {"message": "after"}
+                    if state.refs.get(name, "0" * 40) != update["beforeOid"]:
+                        return 200, {"data": None, "errors": [{"message": "conflict", "type": "CONFLICT"}]}
+                for update in updates:
+                    state.refs[update["name"]] = update["afterOid"]
                 return 200, {"data": {"updateRefs": {
                     "clientMutationId": body["variables"]["input"]
                     ["clientMutationId"]}}}

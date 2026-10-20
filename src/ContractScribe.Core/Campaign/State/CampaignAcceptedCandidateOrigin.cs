@@ -66,7 +66,7 @@ public static partial class CampaignStateFactory
             state.ConfiguredCeilings, state.LineageCharges, state.WorkItems, state.Batch, state.ActiveReservation,
             origin.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations,
             state.TerminalOutcome, state.Predecessor)
-        { DispatchObservations = state.DispatchObservations, ScribeProgress = state.ScribeProgress };
+        { DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = state.ScribeProgress };
         ValidateCandidate(historical);
         if (origin.CheckpointSha256 is null)
         {

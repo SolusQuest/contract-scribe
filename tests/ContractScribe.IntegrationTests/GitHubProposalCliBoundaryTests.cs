@@ -2,6 +2,8 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Core;
+using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -14,7 +16,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("usage", "INT", 2)]
     public async Task Late_real_signal_after_terminal_selection_preserves_physical_output(string outcome, string signal, int exit)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(required: outcome == "published");
         var environment = fixture.Environment();
         var release = Path.Join(fixture.Outside, "physical-output.release");
@@ -39,7 +41,7 @@ public sealed partial class GitHubProposalCliProcessTests
             await running.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(1));
             AssertResult(await running.CompleteAsync(), exit, outcome == "usage" ? "local-invalid" : outcome);
             Assert.Equal(writes, fixture.GitHub.Mutations);
-            Assert.Equal(outcome == "published" ? 1 : 0, fixture.TokenReads());
+            Assert.Equal(outcome == "usage" ? 0 : 1, fixture.TokenReads());
         }
         finally { await CampaignCliProcessTests.StopAsync(running); }
 
@@ -78,7 +80,7 @@ public sealed partial class GitHubProposalCliProcessTests
         try
         {
             await run.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
-            AssertResult(await run.CompleteAsync(), 0, "no-op");
+            AssertResult(await run.CompleteAsync(), 4, "permission");
             Assert.Empty(fixture.GitHub.Requests);
             Assert.False(File.Exists(fixture.Observations));
         }
@@ -90,7 +92,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("after-terminal")]
     public async Task Selected_publication_survives_real_process_presentation_and_host_teardown_faults(string boundary)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start", fault: boundary), 0, "published");
         Assert.Single(fixture.GitHub.PullRequests);
@@ -98,14 +100,15 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Pre_emission_failure_has_one_sanitized_fallback_without_secret_access()
+    public async Task Pre_emission_failure_has_one_sanitized_fallback_after_checkpoint_claim()
     {
         await using var fixture = await Fixture.CreateAsync(required: false);
         var result = await fixture.Run("start", fault: "before-presentation");
         AssertResult(result, 5, "host-failure");
         Assert.Equal("github proposal stopped before publication: github-proposal.campaign-contract-error\n", result.Stderr);
-        Assert.Equal(0, fixture.TokenReads());
-        Assert.Empty(fixture.GitHub.Requests);
+        Assert.Equal(1, fixture.TokenReads());
+        Assert.NotEmpty(fixture.GitHub.Requests);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
 
     [Theory]
@@ -120,14 +123,72 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("rate-limit", 3, "rate-limit")]
     [InlineData("incomplete-pagination", 5, "host-failure")]
     [InlineData("corrupt-coordination", 4, "human-change")]
+    [InlineData("reset-accepted", 4, "human-change")]
+    [InlineData("reset-origin", 4, "human-change")]
+    [InlineData("drop-receipts", 4, "human-change")]
+    [InlineData("drop-checkpoint", 4, "human-change")]
+    [InlineData("remove-publication", 4, "human-change")]
+    [InlineData("older-publication", 4, "human-change")]
     public async Task Fresh_process_authenticates_remote_changes_and_never_repairs_them(string kind, int exit, string outcome)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         var server = fixture.GitHub;
         lock (server.Gate)
         {
+            if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
+            {
+                var reference = server.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal));
+                var document = GitHubCoordinationDocument.Decode(JsonSerializer.SerializeToUtf8Bytes(server.CoordinationDocument()))
+                    .RetainAt(reference.Value) with
+                { PredecessorOid = reference.Value };
+                if (kind is "reset-accepted" or "reset-origin" or "drop-receipts")
+                {
+                    var original = CampaignStateJson.Parse(server.Blobs[document.Checkpoint!.Oid]).Artifact!;
+                    Assert.Contains(original.State.WorkItems, work => work.Status == CampaignWorkStatus.Accepted);
+                    var state = original.State;
+                    var reset = kind == "reset-accepted";
+                    var changed = CampaignStateFactory.CreateValidated(state.ProductRevision, state.CampaignLineage,
+                        state.Snapshot, original.CheckpointRevision + 1, state.ConfiguredCeilings, state.LineageCharges,
+                        reset ? state.WorkItems.Select(work => work.Status == CampaignWorkStatus.Accepted
+                            ? work with { Status = CampaignWorkStatus.Planned, TrustedProposal = null } : work) : state.WorkItems,
+                        state.Batch, state.ActiveReservation, reset ? null : state.CandidateObservation,
+                        reset ? null : state.CumulativeOutcome, state.KnownCompletedOperations,
+                        reset ? null : state.TerminalOutcome, state.Predecessor, state.DispatchObservations,
+                        kind is "reset-accepted" or "drop-receipts" ? null : state.ScribeProgress, state.ArchivedDispatchPrefix);
+                    if (kind == "drop-receipts") changed = CampaignStateFactory.PreserveOrigin(original, changed);
+                    var artifact = CampaignStateJson.CreateArtifact(changed);
+                    Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+                    var bytes = artifact.ExactUtf8Json.ToArray();
+                    var blob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+                    server.Blobs[blob] = bytes;
+                    document = document with { Checkpoint = new(blob, artifact.Sha256, artifact.CheckpointRevision) };
+                }
+                else if (kind == "drop-checkpoint") document = document with { Checkpoint = null, Plan = null, Archive = null };
+                else if (kind == "remove-publication") document = document with { Publication = null };
+                else
+                {
+                    var publication = GitHubPublicationEvent.Decode(server.Blobs[document.Publication!.Oid]);
+                    document = document with { Publication = publication.Previous! };
+                }
+                var prepared = GitHubCoordinationObjects.Prepare(document);
+                var files = GitHubCoordinationObjects.LeafEntries(prepared).ToDictionary(
+                    entry => ".contract-scribe/" + entry.Path,
+                    entry => entry.Path == GitHubCoordinationObjects.StatePath ? prepared.StateBytes.ToArray() : server.Blobs[entry.Oid]);
+                var tree = server.BuildTree(files);
+                var parent = server.Commits[reference.Value];
+                var oid = server.AddCommit(new JsonObject
+                {
+                    ["tree"] = tree,
+                    ["parents"] = new JsonArray(reference.Value),
+                    ["message"] = prepared.Message,
+                    ["author"] = parent["author"]!.DeepClone(),
+                    ["committer"] = parent["committer"]!.DeepClone(),
+                });
+                Assert.Equal(prepared.CommitOid, oid);
+                server.Refs[reference.Key] = oid;
+            }
             if (kind is "title" or "body") server.PullRequests[0][kind] = "human change";
             if (kind == "incomplete-pagination") server.IncompletePagination = true;
             if (kind == "corrupt-coordination")
@@ -135,7 +196,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 var reference = server.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal));
                 var tree = server.Commits[reference.Value]["tree"]!["sha"]!.GetValue<string>();
                 var leaf = Assert.Single(server.Trees[tree]).Oid;
-                var blob = Assert.Single(server.Trees[leaf]).Oid;
+                var blob = Assert.Single(server.Trees[leaf], entry => entry.Path == "coordination-state-v1.json").Oid;
                 Assert.True(server.Blobs.ContainsKey(blob));
                 server.Blobs[blob] = [123, 125, 10];
             }
@@ -161,9 +222,14 @@ public sealed partial class GitHubProposalCliProcessTests
                 server.RejectionStatus = kind == "permission" ? 403 : 429;
             }
         }
-        var writes = server.Mutations;
+        var writes = server.PublicationWrites;
+        var providerRequests = fixture.Provider.RequestCount;
+        var allMutations = server.Requests.Count(request => request.Method != "GET");
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(writes, server.Mutations);
+        Assert.Equal(providerRequests, fixture.Provider.RequestCount);
+        if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
+            Assert.Equal(allMutations, server.Requests.Count(request => request.Method != "GET"));
+        Assert.Equal(writes, server.PublicationWrites);
         Assert.Equal(1, server.PrAttempts);
         await fixture.AssertSourceUnchanged();
     }
@@ -173,7 +239,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData(true)]
     public async Task Real_transport_stop_and_timeout_have_closed_process_results(bool cancel)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         fixture.GitHub.DelayResponses = true;
         var environment = fixture.Environment();

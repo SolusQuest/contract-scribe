@@ -23,17 +23,17 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
     private IGitHubProposalObservation? previous;
     private ValidatedGitHubPublicationAuthority Authority => client.Authority;
 
-    private GitHubPublicationReconciler(GitHubApiClient client, GitHubActor publisher)
+    private GitHubPublicationReconciler(GitHubApiClient client, GitHubActor publisher, GitHubCoordinationStore? checkpoint = null)
     {
         this.client = client;
-        coordination = GitHubCoordinationStore.Create(client);
+        coordination = checkpoint ?? GitHubCoordinationStore.Create(client);
         git = GitHubProposalStore.Create(client, coordination);
         prs = GitHubProposalPullRequestStore.Create(client, coordination, publisher);
     }
 
     // Publisher is supplied by trusted host composition, independently of inspected PRs.
     // Token-kind/platform proof is host-owned; required-permission headers are not grants.
-    internal static GitHubPublicationReconciler Create(GitHubApiClient client, GitHubActor publisher) => new(client, publisher);
+    internal static GitHubPublicationReconciler Create(GitHubApiClient client, GitHubActor publisher, GitHubCoordinationStore? checkpoint = null) => new(client, publisher, checkpoint);
 
     public async ValueTask<GitHubPublicationResult> PublishAsync(ValidatedGitHubPublicationAuthority authority,
         ValidatedGitHubChangedFilePayload payload, CancellationToken cancellationToken = default) =>
@@ -239,7 +239,7 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
                     content.Content.CommitOid, Authority.OperationCommitmentSha256));
             return Project(advanced, GitHubPublicationBoundary.GitAdvanceRef);
         }
-        var result = await coordination.AdvanceAsync(state,
+        var result = advanced.Coordination ?? await coordination.AdvanceAsync(state,
             GitHubCoordinationStageUpdate.ProposalRefAdvanced(content.Content.CommitOid, content.Content.TreeOid), token).ConfigureAwait(false);
         if (result.State is null) return Project(result, GitHubPublicationBoundary.CoordinationAdvanceRef);
         state = result.State;

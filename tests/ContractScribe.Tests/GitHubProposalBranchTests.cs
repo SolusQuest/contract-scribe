@@ -58,7 +58,7 @@ public sealed class GitHubProposalBranchTests
         }
         Assert.Equal(Math.Min(missingReads, GitHubObjectReadback.MaximumObservations), remote.HiddenObservations);
         Assert.Equal(1, remote.DelayedObjectWrites);
-        Assert.InRange(remote.Writes - before, 1, coordination ? 5 : 3);
+        Assert.InRange(remote.Writes - before, 1, coordination ? 6 : 3);
         Assert.Equal(0, remote.ProposalAttempts);
     }
 
@@ -722,7 +722,8 @@ public sealed class GitHubProposalBranchTests
         remote.Refs.Remove(GitHubPublicationFactory.CreateProposalRef(authority));
         var loser = 1 - winner;
         var loserState = (await sessions[loser].Coordination.ReadCurrentAsync()).State!;
-        Assert.Equal(GitHubProposalFailureKind.Unresolved,
+        // The paired transaction already recorded the advanced stage; a missing ref is now a conflict.
+        Assert.Equal(GitHubProposalFailureKind.Conflict,
             (await sessions[loser].Proposal.AdvanceRefAsync(content[loser].Content!, loserState)).Failure!.Kind);
         Assert.Equal(1, remote.ProposalAttempts);
     }
@@ -1076,7 +1077,7 @@ public sealed class GitHubProposalBranchTests
         {
             var root = Trees[Commits[head].TreeOid];
             var leaf = Trees[root[0].Oid];
-            return GitHubCoordinationCodec.Decode(Blobs[leaf[0].Oid]);
+            return GitHubPublicationEvent.Decode(Blobs[leaf.Single(entry => entry.Path == GitHubCoordinationObjects.EventPath).Oid]).State;
         }
         internal void Barrier(string method, string path, int count, bool onlyMissing)
         { barrierMethod = method; barrierPath = path; barrierRemaining = count; barrierMissing = onlyMissing; barrier = new(TaskCreationOptions.RunContinuationsAsynchronously); }
@@ -1151,22 +1152,35 @@ public sealed class GitHubProposalBranchTests
                     Assert.Equal("/graphql", path);
                     Assert.Equal(GitHubApiClient.UpdateRefsDocument, body.GetProperty("query").GetString());
                     var input = body.GetProperty("variables").GetProperty("input");
-                    var update = Assert.Single(input.GetProperty("refUpdates").EnumerateArray());
-                    var name = update.GetProperty("name").GetString()!;
-                    Assert.StartsWith("refs/heads/contract-scribe/", name);
-                    Assert.False(update.GetProperty("force").GetBoolean());
-                    var before = update.GetProperty("beforeOid").GetString();
-                    var after = update.GetProperty("afterOid").GetString()!;
-                    Assert.NotEqual(Oid('0'), after);
-                    kind = name.Contains("/proposals/", StringComparison.Ordinal) ? "proposal-ref" : "coordination-ref";
+                    var updates = input.GetProperty("refUpdates").EnumerateArray().ToArray();
+                    Assert.InRange(updates.Length, 1, 2);
+                    Assert.Equal(updates.Length, updates.Select(update => update.GetProperty("name").GetString()).Distinct().Count());
+                    kind = updates.Any(update => update.GetProperty("name").GetString()!.Contains("/proposals/", StringComparison.Ordinal))
+                        ? "proposal-ref" : "coordination-ref";
                     if (kind == "proposal-ref") ProposalAttempts++;
-                    if (kind == "proposal-ref" && ProposalBeforeCas is not null)
-                    { Refs[name] = ProposalBeforeCas; ProposalBeforeCas = null; }
-                    if (Refs.GetValueOrDefault(name, Oid('0')) != before)
-                        return Json(HttpStatusCode.OK, new { data = (object?)null, errors = new[] { new { message = "conflict", type = "CONFLICT" } } });
-                    Refs[name] = after;
-                    if (kind == "proposal-ref") ProposalWrites++;
-                    if (kind == "proposal-ref" && LateFailure == "ref") { lateCommit = after; lateReads = 1; }
+                    // GitHub updateRefs checks every expected predecessor before applying any update.
+                    foreach (var update in updates)
+                    {
+                        var name = update.GetProperty("name").GetString()!;
+                        Assert.StartsWith("refs/heads/contract-scribe/", name);
+                        Assert.False(update.GetProperty("force").GetBoolean());
+                        Assert.NotEqual(Oid('0'), update.GetProperty("afterOid").GetString());
+                        if (name.Contains("/proposals/", StringComparison.Ordinal) && ProposalBeforeCas is not null)
+                        { Refs[name] = ProposalBeforeCas; ProposalBeforeCas = null; }
+                        if (Refs.GetValueOrDefault(name, Oid('0')) != update.GetProperty("beforeOid").GetString())
+                            return Json(HttpStatusCode.OK, new { data = (object?)null, errors = new[] { new { message = "conflict", type = "CONFLICT" } } });
+                    }
+                    foreach (var update in updates)
+                    {
+                        var name = update.GetProperty("name").GetString()!;
+                        var after = update.GetProperty("afterOid").GetString()!;
+                        Refs[name] = after;
+                        if (name.Contains("/proposals/", StringComparison.Ordinal))
+                        {
+                            ProposalWrites++;
+                            if (LateFailure == "ref") { lateCommit = after; lateReads = 1; }
+                        }
+                    }
                     response = new { data = new { updateRefs = new { clientMutationId = input.GetProperty("clientMutationId").GetString() } } };
                     status = HttpStatusCode.OK;
                 }

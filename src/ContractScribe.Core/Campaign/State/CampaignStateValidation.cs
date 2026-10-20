@@ -224,7 +224,8 @@ public static partial class CampaignStateFactory
         CampaignTerminalOutcome? terminalOutcome = null,
         CampaignPredecessorSummary? predecessor = null,
         IEnumerable<CampaignDispatchObservation>? dispatchObservations = null,
-        CampaignScribeProgress? scribeProgress = null)
+        CampaignScribeProgress? scribeProgress = null,
+        CampaignArchivedDispatchPrefix? archivedDispatchPrefix = null)
     {
         ArgumentNullException.ThrowIfNull(productRevision);
         ArgumentNullException.ThrowIfNull(campaignLineage);
@@ -259,6 +260,7 @@ public static partial class CampaignStateFactory
         {
             AcceptedCandidateOrigin = CreateSelfOrigin(state),
             ScribeProgress = scribeProgress,
+            ArchivedDispatchPrefix = archivedDispatchPrefix,
             DispatchObservations = CollectBounded(dispatchObservations ?? [],
                 CampaignStateContract.MaximumArtifactUtf8Bytes, "Dispatch history exceeds the checkpoint byte bound."),
         };
@@ -1223,6 +1225,7 @@ public static partial class CampaignStateFactory
             {
                 AcceptedCandidateOrigin = state.AcceptedCandidateOrigin,
                 DispatchObservations = state.DispatchObservations,
+                ArchivedDispatchPrefix = state.ArchivedDispatchPrefix,
                 ScribeProgress = state.ScribeProgress,
             };
             Validate(projectionCheck);

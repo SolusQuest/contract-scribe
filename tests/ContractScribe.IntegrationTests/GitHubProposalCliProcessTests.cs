@@ -11,7 +11,24 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [Fact]
-    public async Task Applied_claim_readback_failure_reaches_the_real_CLI_as_a_closed_call_diagnostic()
+    public async Task Ref_checkpoint_survives_a_new_CLI_process_without_a_local_checkpoint_file()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var started = await fixture.Run("start");
+        AssertResult(started, 0, "published");
+        Assert.False(File.Exists(fixture.State));
+        var before = fixture.Checkpoint();
+        var resumed = await fixture.Run("resume");
+        AssertResult(resumed, 0, "replayed");
+        Assert.False(File.Exists(fixture.State));
+        Assert.True(fixture.Checkpoint().CheckpointRevision > before.CheckpointRevision);
+        Assert.Single(fixture.GitHub.PullRequests);
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [Fact]
+    public async Task Applied_checkpoint_claim_readback_failure_stops_before_provider_or_publication()
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
@@ -26,21 +43,19 @@ public sealed partial class GitHubProposalCliProcessTests
         var result = await fixture.Run("start");
         AssertResult(result, 3, "conflict");
         using var json = JsonDocument.Parse(result.Stdout);
-        var diagnostic = json.RootElement.GetProperty("publicationDiagnostic");
-        Assert.Equal("CoordinationClaim", diagnostic.GetProperty("boundary").GetString());
-        Assert.Equal("Coordination", diagnostic.GetProperty("owner").GetString());
-        Assert.Equal(JsonValueKind.Null, diagnostic.GetProperty("transportCode").ValueKind);
-        Assert.Equal("NotFound", diagnostic.GetProperty("recoveryCode").GetString());
-        Assert.Equal(404, diagnostic.GetProperty("recoveryHttpStatus").GetInt32());
-        Assert.Equal("claimed", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
+        Assert.Equal("preflight", json.RootElement.GetProperty("terminalLayer").GetString());
+        Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("publicationDiagnostic").ValueKind);
+        Assert.Null(fixture.GitHub.CoordinationDocument()["publication"]);
+        Assert.Null(fixture.GitHub.CoordinationDocument()["checkpoint"]);
         Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PrAttempts);
         Assert.Equal(1, fixture.GitHub.SuccessfulCas);
         await fixture.AssertSourceUnchanged();
     }
 
     [Fact]
-    public async Task Fresh_process_reconstructs_and_charges_but_replays_the_original_publication_without_writes()
+    public async Task Fresh_process_reconstructs_and_charges_but_replays_without_publication_writes()
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
@@ -48,7 +63,7 @@ public sealed partial class GitHubProposalCliProcessTests
         AssertResult(first, 0, "published");
         var accepted = fixture.Checkpoint();
         var firstRemote = fixture.GitHub.Coordination().ToJsonString();
-        var mutations = fixture.GitHub.Mutations;
+        var mutations = fixture.GitHub.PublicationWrites;
         var second = await fixture.Run("resume");
         AssertResult(second, 0, "replayed");
         var reconstructed = fixture.Checkpoint();
@@ -62,7 +77,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(accepted.Sha256, reconstructed.State.AcceptedCandidateOrigin!.CheckpointSha256);
         Assert.Equal(accepted.CheckpointRevision, reconstructed.State.AcceptedCandidateOrigin.CheckpointRevision);
         Assert.Equal(firstRemote, fixture.GitHub.Coordination().ToJsonString());
-        Assert.Equal(mutations, fixture.GitHub.Mutations);
+        Assert.Equal(mutations, fixture.GitHub.PublicationWrites);
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         Assert.Equal(2, fixture.TokenReads());
@@ -81,17 +96,17 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("closed", 4, "closed-unmerged")]
     public async Task Fresh_process_observes_lifecycle_without_changing_the_pull_request(string lifecycle, int exit, string outcome)
     {
-        if (!OperatingSystem.IsLinux()) return;
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
         fixture.GitHub.Lifecycle(lifecycle);
-        var writes = fixture.GitHub.Mutations;
+        var writes = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(writes + 5, fixture.GitHub.Mutations); // One authenticated coordination observation.
+        Assert.Equal(writes + 1, fixture.GitHub.PublicationWrites); // One authenticated coordination observation.
         Assert.Equal(1, fixture.GitHub.PrAttempts);
-        var settledWrites = fixture.GitHub.Mutations;
+        var settledWrites = fixture.GitHub.PublicationWrites;
         AssertResult(await fixture.Run("resume"), exit, outcome);
-        Assert.Equal(settledWrites, fixture.GitHub.Mutations);
+        Assert.Equal(settledWrites, fixture.GitHub.PublicationWrites);
         Assert.Single(fixture.GitHub.PullRequests);
         await fixture.AssertSourceUnchanged();
     }
@@ -103,7 +118,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("request-corrupt")]
     [InlineData("missing-token")]
     [InlineData("no-work")]
-    public async Task Local_rejections_and_no_work_do_not_read_the_GitHub_credential(string scenario)
+    public async Task Local_rejections_precede_credentials_but_remote_no_work_requires_a_claim(string scenario)
     {
         await using var fixture = await Fixture.CreateAsync(required: scenario != "no-work");
         if (scenario == "unknown-property")
@@ -128,19 +143,25 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         var result = await fixture.RunArgs(arguments,
             fixture.Environment(token: scenario == "missing-token" ? null : Fixture.Placeholder));
-        if (scenario == "missing-token" && OperatingSystem.IsLinux())
+        if (scenario == "missing-token")
         {
             AssertResult(result, 4, "permission");
             Assert.Equal(1, fixture.TokenReads());
+            Assert.Empty(fixture.GitHub.Requests);
+        }
+        else if (scenario == "no-work")
+        {
+            AssertResult(result, 0, "no-op");
+            Assert.Equal(1, fixture.TokenReads());
+            Assert.NotEmpty(fixture.GitHub.Requests);
+            Assert.Equal(0, fixture.GitHub.PublicationWrites);
         }
         else
         {
-            if (scenario == "no-work") AssertResult(result, 0, "no-op");
-            else if (scenario == "missing-token") AssertResult(result, 5, "host-failure");
-            else AssertResult(result, 4, "local-invalid");
+            AssertResult(result, 4, "local-invalid");
             Assert.Equal(0, fixture.TokenReads());
+            Assert.Empty(fixture.GitHub.Requests);
         }
-        Assert.Empty(fixture.GitHub.Requests);
         Assert.DoesNotContain("private-token-sentinel", result.Stdout + result.Stderr);
     }
 
@@ -164,12 +185,12 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Layer_drift_on_resume_rejects_as_incompatible_snapshot_without_remote_activity()
+    public async Task Layer_drift_on_resume_rejects_without_provider_or_publication_activity()
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
         AssertResult(await fixture.Run("start"), 0, "published");
-        var checkpoint = await File.ReadAllBytesAsync(fixture.State);
+        var checkpoint = fixture.GitHub.CheckpointBytes();
         var providerRequests = fixture.Provider.RequestCount;
         var tokenReads = fixture.TokenReads();
         var githubRequests = fixture.GitHub.Requests.Count;
@@ -179,15 +200,15 @@ public sealed partial class GitHubProposalCliProcessTests
         var result = await fixture.Run("resume");
         AssertResult(result, 4, "stale");
         Assert.Equal("github proposal stopped before publication: campaign.incompatible-snapshot\n", result.Stderr);
-        Assert.Equal(checkpoint, await File.ReadAllBytesAsync(fixture.State));
+        Assert.Equal(checkpoint, fixture.GitHub.CheckpointBytes());
         Assert.Equal(providerRequests, fixture.Provider.RequestCount);
-        Assert.Equal(tokenReads, fixture.TokenReads());
-        Assert.Equal(githubRequests, fixture.GitHub.Requests.Count);
+        Assert.Equal(tokenReads + 1, fixture.TokenReads());
+        Assert.True(fixture.GitHub.Requests.Count > githubRequests);
         await fixture.AssertSourceUnchanged();
     }
 
     [Fact]
-    public async Task Resume_with_missing_state_is_local_invalid_without_remote_activity()
+    public async Task Resume_with_missing_remote_checkpoint_stops_before_provider_execution()
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
@@ -196,8 +217,9 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("github proposal stopped before publication: campaign.state-missing\n", result.Stderr);
         Assert.False(File.Exists(fixture.State));
         Assert.Equal(0, fixture.Provider.RequestCount);
-        Assert.Equal(0, fixture.TokenReads());
-        Assert.Empty(fixture.GitHub.Requests);
+        Assert.Equal(1, fixture.TokenReads());
+        Assert.NotEmpty(fixture.GitHub.Requests);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
 
     [Fact]
@@ -212,10 +234,12 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("campaign", json.RootElement.GetProperty("terminalLayer").GetString());
         // Execution legitimately began: the checkpoint persisted its terminal
         // before the HTTPS credential boundary stopped provider dispatch.
-        Assert.True(File.Exists(fixture.State));
+        Assert.False(File.Exists(fixture.State));
+        Assert.NotNull(fixture.Checkpoint());
         Assert.Equal(0, fixture.Provider.RequestCount);
-        Assert.Equal(0, fixture.TokenReads());
-        Assert.Empty(fixture.GitHub.Requests);
+        Assert.Equal(1, fixture.TokenReads());
+        Assert.NotEmpty(fixture.GitHub.Requests);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
 
     [Fact]
@@ -363,7 +387,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 ["githubProposalRequestVersion"] = 1,
                 ["campaignLineage"] = Lineage,
                 ["snapshot"] = Snapshot,
-                ["state"] = state ?? State,
+                ["checkpointStore"] = "coordination-ref",
                 ["github"] = Publication.DeepClone(),
             };
             var path = requestPath ?? Request;
@@ -398,7 +422,7 @@ public sealed partial class GitHubProposalCliProcessTests
             }
             finally { await CampaignCliProcessTests.StopAsync(process); }
         }
-        internal CampaignCheckpointArtifact Checkpoint() => CampaignStateJson.Parse(File.ReadAllBytes(State)).Artifact!;
+        internal CampaignCheckpointArtifact Checkpoint() => CampaignStateJson.Parse(GitHub.CheckpointBytes()).Artifact!;
         internal int TokenReads() => File.Exists(Observations) ? File.ReadAllLines(Observations).Count(line => line == "token-read") : 0;
         internal async Task AssertSourceUnchanged()
         {

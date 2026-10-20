@@ -17,7 +17,11 @@ internal sealed class GitHubApiClient : IDisposable
     internal const string ApiVersion = "2026-03-10";
     internal const string ProductionOrigin = "https://api.github.com/";
     internal const string UpdateRefsDocument = "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
-    private readonly ValidatedGitHubPublicationAuthority? mutationAuthority;
+    private ValidatedGitHubPublicationAuthority? mutationAuthority;
+    private ValidatedGitHubCheckpointAuthority? checkpointAuthority;
+    private GitHubCheckpointWrite? checkpointWrite;
+    private DateTimeOffset? serverDate;
+    private long serverDateTimestamp;
     private readonly ValidatedGitHubCampaignReadAuthority readAuthority;
     private readonly Uri origin;
     private readonly HttpMessageInvoker invoker;
@@ -75,6 +79,55 @@ internal sealed class GitHubApiClient : IDisposable
         return new(readAuthority, authority, credential, test?.Endpoint ?? new Uri(ProductionOrigin),
             test?.Handler ?? CreateProductionHandler(), test?.TimeoutMilliseconds ?? 30_000);
     }
+
+    internal ValidatedGitHubCheckpointAuthority? CheckpointAuthority => checkpointAuthority;
+    internal DateTimeOffset? ServerTime
+    {
+        get
+        {
+            lock (identityGate) return serverDate is { } date
+                ? date + Stopwatch.GetElapsedTime(serverDateTimestamp) : null;
+        }
+    }
+
+    internal static GitHubApiClient CreateCheckpoint(ValidatedGitHubCheckpointAuthority authority, string credential)
+    {
+        ArgumentNullException.ThrowIfNull(authority);
+        var client = CreateCore(authority.ReadAuthority, null, credential);
+        client.checkpointAuthority = authority;
+        return client;
+    }
+
+    internal void BindCheckpointWrite(GitHubCheckpointWrite? write)
+    {
+        Input(checkpointAuthority is not null);
+        if (write is not null)
+        {
+            var document = write.Prepared.Document;
+            Input(document.CampaignLineage == readAuthority.CampaignLineage && document.TargetRef == readAuthority.TargetRef
+                && document.RepositoryId == readAuthority.RepositoryOwner + "/" + readAuthority.RepositoryName);
+        }
+        checkpointWrite = write;
+    }
+
+    internal void BindPublication(ValidatedGitHubPublicationAuthority authority)
+    {
+        Input(checkpointAuthority is not null && authority.RepositoryOwner == readAuthority.RepositoryOwner
+            && authority.RepositoryName == readAuthority.RepositoryName && authority.TargetRef == readAuthority.TargetRef
+            && authority.CampaignLineage == readAuthority.CampaignLineage
+            && authority.ExpectedBaseCommitOid == checkpointAuthority.ExpectedBaseOid);
+        mutationAuthority = authority;
+    }
+
+    internal void UnbindPublication()
+    {
+        Input(checkpointAuthority is not null);
+        mutationAuthority = null;
+    }
+
+    private string ObjectOperation => mutationAuthority?.OperationCommitmentSha256
+        ?? (checkpointWrite is { } write ? Digest("checkpoint:" + write.Prepared.CommitOid)
+            : throw new GitHubProtocolException(GitHubFailureCode.InvalidRequest));
 
     internal static SocketsHttpHandler CreateProductionHandler() => new()
     {
@@ -167,9 +220,9 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubObjectIdentity>> CreateBlobAsync(string expectedOid,
         ReadOnlyMemory<byte> bytes, CancellationToken cancellationToken = default) => RunAsync<GitHubObjectIdentity>(() =>
     {
-        Input(HasMutationAuthority);
+        Input(HasMutationAuthority || checkpointWrite?.AllowsBlob(expectedOid, bytes.Span) == true);
         Input(IsOid(expectedOid) && bytes.Length <= MaximumBlobBytes);
-        var context = new GitHubObjectContext(Identity(), Authority.OperationCommitmentSha256, GitHubObjectKind.Blob, expectedOid);
+        var context = new GitHubObjectContext(Identity(), ObjectOperation, GitHubObjectKind.Blob, expectedOid);
         var copy = bytes.ToArray();
         var body = Encode(writer =>
         {
@@ -182,7 +235,7 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubTree>> CreateTreeAsync(string expectedOid,
         ImmutableArray<GitHubTreeEntry> entries, CancellationToken cancellationToken = default) => RunAsync<GitHubTree>(() =>
     {
-        Input(HasMutationAuthority);
+        Input(HasMutationAuthority || checkpointWrite?.AllowsTree(expectedOid, entries) == true);
         Input(IsOid(expectedOid) && !entries.IsDefault && entries.Length <= MaximumTreeEntries);
         var paths = new HashSet<string>(StringComparer.Ordinal);
         // Default JSON escaping can use six bytes per UTF-16 code unit. Bound
@@ -195,7 +248,7 @@ internal sealed class GitHubApiClient : IDisposable
             Input(inputBytes <= MaximumBodyBytes);
             _ = WireMode(entry.Mode);
         }
-        var context = new GitHubObjectContext(Identity(), Authority.OperationCommitmentSha256, GitHubObjectKind.Tree, expectedOid);
+        var context = new GitHubObjectContext(Identity(), ObjectOperation, GitHubObjectKind.Tree, expectedOid);
         var body = Encode(writer =>
         {
             writer.WriteStartArray("tree");
@@ -216,12 +269,12 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubCommit>> CreateCommitAsync(GitHubCreateCommit request,
         CancellationToken cancellationToken = default) => RunAsync<GitHubCommit>(() =>
     {
-        Input(HasMutationAuthority);
+        Input(HasMutationAuthority || request is not null && checkpointWrite?.AllowsCommit(request) == true);
         Input(request is not null && IsOid(request.ExpectedOid) && IsOid(request.TreeOid) && IsOid(request.ParentOid));
         InputText(request!.Message, 65536, allowEmpty: true);
         ValidateActor(request.Author);
         ValidateActor(request.Committer);
-        var context = new GitHubObjectContext(Identity(), Authority.OperationCommitmentSha256, GitHubObjectKind.Commit, request.ExpectedOid);
+        var context = new GitHubObjectContext(Identity(), ObjectOperation, GitHubObjectKind.Commit, request.ExpectedOid);
         var body = Encode(writer =>
         {
             writer.WriteString("message", request.Message);
@@ -263,14 +316,16 @@ internal sealed class GitHubApiClient : IDisposable
     internal ValueTask<GitHubApiResult<GitHubAcknowledgement>> UpdateRefAsync(GitHubUpdateRef request,
         CancellationToken cancellationToken = default) => RunAsync<GitHubAcknowledgement>(() =>
     {
-        Input(HasMutationAuthority);
+        Input(HasMutationAuthority || checkpointWrite is not null);
         Input(request is not null && IsOid(request.BeforeOid, zero: true) && IsOid(request.AfterOid)
             && request.ExpectedAbsence == (request.BeforeOid == new string('0', 40))
-            && (request.Ref == GitHubPublicationFactory.CreateCoordinationRef(Authority)
-                || request.Ref == GitHubPublicationFactory.CreateProposalRef(Authority)));
+            && (HasMutationAuthority && (request.Ref == GitHubPublicationFactory.CreateCoordinationRef(Authority)
+                    || request.Ref == GitHubPublicationFactory.CreateProposalRef(Authority))
+                || checkpointWrite is { } write && request.Ref == GitHubPublicationFactory.CreateCoordinationRef(readAuthority)
+                    && request.BeforeOid == write.Prepared.Document.PredecessorOid && request.AfterOid == write.Prepared.CommitOid));
         var identity = Identity();
         var mutationId = MutationId(identity, request!);
-        var context = new GitHubRefContext(identity, Authority.OperationCommitmentSha256,
+        var context = new GitHubRefContext(identity, ObjectOperation,
             request!.Ref, request.BeforeOid, request.AfterOid, mutationId);
         var body = Encode(writer =>
         {
@@ -292,6 +347,43 @@ internal sealed class GitHubApiClient : IDisposable
         });
         return new("graphql", element => GraphQl(element, mutationId), body, context, Status: 200);
     }, cancellationToken);
+
+    internal ValueTask<GitHubApiResult<GitHubAcknowledgement>> UpdatePublicationRefsAsync(
+        GitHubUpdateRef coordination, GitHubUpdateRef proposal, CancellationToken token) => RunAsync<GitHubAcknowledgement>(() =>
+    {
+        Input(HasMutationAuthority);
+        Input(coordination.Ref == GitHubPublicationFactory.CreateCoordinationRef(Authority)
+            && proposal.Ref == GitHubPublicationFactory.CreateProposalRef(Authority)
+            && IsOid(coordination.BeforeOid) && IsOid(coordination.AfterOid) && !coordination.ExpectedAbsence
+            && coordination.BeforeOid != coordination.AfterOid
+            && IsOid(proposal.BeforeOid, zero: true) && IsOid(proposal.AfterOid)
+            && proposal.ExpectedAbsence == (proposal.BeforeOid == new string('0', 40)));
+        var identity = Identity();
+        var mutationId = Digest(MutationId(identity, coordination) + MutationId(identity, proposal));
+        var context = new GitHubPublicationRefsContext(identity, Authority.OperationCommitmentSha256, coordination, proposal, mutationId);
+        var body = Encode(writer =>
+        {
+            writer.WriteString("query", UpdateRefsDocument);
+            writer.WriteStartObject("variables");
+            writer.WriteStartObject("input");
+            writer.WriteString("repositoryId", identity.NodeId);
+            writer.WriteString("clientMutationId", mutationId);
+            writer.WriteStartArray("refUpdates");
+            foreach (var update in new[] { coordination, proposal })
+            {
+                writer.WriteStartObject();
+                writer.WriteString("name", update.Ref);
+                writer.WriteString("beforeOid", update.BeforeOid);
+                writer.WriteString("afterOid", update.AfterOid);
+                writer.WriteBoolean("force", false);
+                writer.WriteEndObject();
+            }
+            writer.WriteEndArray();
+            writer.WriteEndObject();
+            writer.WriteEndObject();
+        });
+        return new("graphql", element => GraphQl(element, mutationId), body, context, Status: 200);
+    }, token);
 
     internal async ValueTask<GitHubApiResult<GitHubPullRequestSet>> ListPullRequestsAsync(CancellationToken cancellationToken = default)
     {
@@ -406,6 +498,15 @@ internal sealed class GitHubApiClient : IDisposable
                     timeout.Token.ThrowIfCancellationRequested();
                     dispatched = true;
                     using var response = await invoker.SendAsync(message, timeout.Token).ConfigureAwait(false);
+                    lock (identityGate)
+                    {
+                        var observed = response.Headers.Date;
+                        var projected = serverDate is { } previous
+                            ? previous + Stopwatch.GetElapsedTime(serverDateTimestamp) : (DateTimeOffset?)null;
+                        // A stale server sample must never extend an already observed lease.
+                        serverDate = observed is null ? null : projected is { } floor && floor > observed.Value ? floor : observed;
+                        serverDateTimestamp = Stopwatch.GetTimestamp();
+                    }
                     status = (int)response.StatusCode;
                     retry = GitHubResponseHeaders.Retry(response.Headers);
                     permissions = GitHubResponseHeaders.Permissions(response.Headers);
@@ -574,7 +675,7 @@ internal sealed class GitHubApiClient : IDisposable
     {
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         foreach (var field in new[] { "contract-scribe/github-ref-transport/v1", identity.Id.ToString(CultureInfo.InvariantCulture),
-            identity.NodeId, identity.Owner, identity.Name, Authority.OperationCommitmentSha256, update.Ref, update.BeforeOid, update.AfterOid })
+            identity.NodeId, identity.Owner, identity.Name, ObjectOperation, update.Ref, update.BeforeOid, update.AfterOid })
         {
             var bytes = Utf8.GetBytes(field);
             var length = new byte[4];

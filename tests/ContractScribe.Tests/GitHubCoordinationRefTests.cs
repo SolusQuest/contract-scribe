@@ -139,7 +139,7 @@ public sealed partial class GitHubCoordinationRefTests
         var terminalStage = lifecycle == "merged" ? GitHubCoordinationStage.Merged : GitHubCoordinationStage.ClosedUnmerged;
         var terminal = G1Terminal(chain[^1], terminalStage);
         var next = SuccessorAuthority(first, terminal, terminalStage);
-        var claim = GitHubCoordinationCodec.CreateClaim(next, GitHubCoordinationObjects.Prepare(terminal).CommitOid);
+        var claim = GitHubCoordinationCodec.CreateClaim(next, PrepareFixture(terminal).CommitOid);
         if (sameGeneration) claim = GitHubCoordinationCodec.Decode(Encoding.UTF8.GetBytes(
             Encoding.UTF8.GetString(GitHubCoordinationCodec.Encode(claim)).Replace(
                 "\"generationId\":\"generation-2\"", "\"generationId\":\"generation-1\"", StringComparison.Ordinal)));
@@ -210,14 +210,14 @@ public sealed partial class GitHubCoordinationRefTests
             preceding = history[^1];
             authority = AppendAuthority(authority, "append-" + index, (char)('6' + index),
                 precedingFileCandidate: (char)('5' + index));
-            var claim = GitHubCoordinationCodec.CreateClaim(authority, GitHubCoordinationObjects.Prepare(preceding).CommitOid);
+            var claim = GitHubCoordinationCodec.CreateClaim(authority, PrepareFixture(preceding).CommitOid);
             var head = Oid((char)('4' + index));
             var content = GitHubCoordinationCodec.WithStage(claim, GitHubCoordinationStage.ContentCreated,
-                GitHubCoordinationObjects.Prepare(claim).CommitOid, head);
+                PrepareFixture(claim).CommitOid, head);
             var proposal = GitHubCoordinationCodec.WithStage(content, GitHubCoordinationStage.ProposalRefAdvanced,
-                GitHubCoordinationObjects.Prepare(content).CommitOid, head, head, head, Oid('9'));
+                PrepareFixture(content).CommitOid, head, head, head, Oid('9'));
             var published = GitHubCoordinationCodec.WithStage(proposal, GitHubCoordinationStage.Published,
-                GitHubCoordinationObjects.Prepare(proposal).CommitOid, head, head, head, Oid('9'),
+                PrepareFixture(proposal).CommitOid, head, head, head, Oid('9'),
                 original[^1].PullRequestCreationOperationCommitmentSha256, 17, Oid('1'), Oid('1'), original[^1].OwnershipMarkerSha256);
             var steps = new[] { claim, content, proposal, published };
             var last = index == appendCount - 1 ? stage : 3;
@@ -503,27 +503,38 @@ public sealed partial class GitHubCoordinationRefTests
         remote.AssertReadOnly();
     }
 
-    [Fact]
-    public async Task G1_observes_old_terminal_and_current_active_generations_from_complete_history()
+    [Theory]
+    [InlineData(0)]
+    [InlineData(1025)]
+    public async Task G1_observes_old_terminal_and_current_active_generations_from_complete_history(int checkpointCommits)
     {
         var first = Authority();
         var chain = PublishedChain(first);
         var terminal = G1Terminal(chain[^1], GitHubCoordinationStage.Merged);
         var next = SuccessorAuthority(first, terminal, GitHubCoordinationStage.Merged);
-        var claim = GitHubCoordinationCodec.CreateClaim(next, GitHubCoordinationObjects.Prepare(terminal).CommitOid);
+        var claim = GitHubCoordinationCodec.CreateClaim(next, PrepareFixture(terminal).CommitOid);
         var content = GitHubCoordinationCodec.WithStage(claim, GitHubCoordinationStage.ContentCreated,
-            GitHubCoordinationObjects.Prepare(claim).CommitOid, Oid('2'));
+            PrepareFixture(claim).CommitOid, Oid('2'));
         var proposal = GitHubCoordinationCodec.WithStage(content, GitHubCoordinationStage.ProposalRefAdvanced,
-            GitHubCoordinationObjects.Prepare(content).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'));
+            PrepareFixture(content).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'));
         var creation = PullRequestCreationCommitment(claim, GitHubPublicationFactory.CreateProposalRef(next), Oid('2'), Oid('3'));
         var published = GitHubCoordinationCodec.WithStage(proposal, GitHubCoordinationStage.Published,
-            GitHubCoordinationObjects.Prepare(proposal).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'), creation, 18,
+            PrepareFixture(proposal).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'), creation, 18,
             Oid('9'), Oid('9'), OwnershipMarker(creation));
         var remote = new G1Remote();
         remote.Coordination.TargetHead = Oid('9');
         remote.Coordination.SeedChain([.. chain, terminal, claim, content, proposal, published]);
         remote.AddPr(first, chain[^1], "merged");
         remote.AddPr(next, published, "draft");
+        for (var index = 0; index < checkpointCommits; index++)
+        {
+            var head = remote.Coordination.CoordinationHead!;
+            var document = FixtureDocuments[head].RetainAt(head) with { PredecessorOid = head };
+            var prepared = GitHubCoordinationObjects.Prepare(document);
+            remote.Coordination.SeedObjects(prepared);
+            remote.Coordination.ForceCoordinationHead(prepared.CommitOid);
+        }
+        var reads = remote.Coordination.BlobReadAttempts;
         using var observer = remote.Observer();
         var result = await observer.ObserveAsync();
         Assert.Null(result.Failure);
@@ -533,11 +544,12 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCampaignPullRequestKind.OpenDraft, result.PullRequests[1].Kind);
         Assert.All(result.PullRequests, pr => Assert.True(pr.OwnershipVerified));
         Assert.Equal("generation-2", result.Ledger!.GenerationId);
+        Assert.InRange(remote.Coordination.BlobReadAttempts - reads, 1, 100);
         remote.AssertReadOnly();
     }
 
     private static GitHubCoordinationState G1Terminal(GitHubCoordinationState state, GitHubCoordinationStage stage) =>
-        GitHubCoordinationCodec.WithStage(state, stage, GitHubCoordinationObjects.Prepare(state).CommitOid,
+        GitHubCoordinationCodec.WithStage(state, stage, PrepareFixture(state).CommitOid,
             state.ContentCommitOid, state.ProposalRefOid, state.ProposalCommitOid, state.ProposalTreeOid,
             state.PullRequestCreationOperationCommitmentSha256, state.PullRequestNumber,
             state.ExpectedBaseOid, state.ObservedBaseOid, state.OwnershipMarkerSha256);
@@ -600,7 +612,7 @@ public sealed partial class GitHubCoordinationRefTests
         var chain = PublishedChain(first);
         var terminal = G1Terminal(chain[^1], GitHubCoordinationStage.Merged);
         var next = SuccessorAuthority(first, terminal, GitHubCoordinationStage.Merged);
-        var claim = GitHubCoordinationCodec.CreateClaim(next, GitHubCoordinationObjects.Prepare(terminal).CommitOid);
+        var claim = GitHubCoordinationCodec.CreateClaim(next, PrepareFixture(terminal).CommitOid);
         var remote = new G1Remote();
         remote.Coordination.TargetHead = Oid('9');
         remote.Coordination.SeedChain([.. chain, terminal, claim]);
@@ -760,7 +772,7 @@ public sealed partial class GitHubCoordinationRefTests
                 var bytes = Convert.FromBase64String(
                     vector.GetProperty("canonicalStateUtf8Base64").GetString()!);
                 var state = GitHubCoordinationCodec.Decode(bytes);
-                var prepared = GitHubCoordinationObjects.Prepare(state);
+                var prepared = PrepareVector(vector);
 
                 Assert.Equal(bytes, GitHubCoordinationCodec.Encode(state));
                 Assert.Equal(vector.GetProperty("blobOid").GetString(), prepared.BlobOid);
@@ -819,7 +831,7 @@ public sealed partial class GitHubCoordinationRefTests
             .GetProperty("canonicalStateUtf8Base64").GetString()!);
         var text = Encoding.UTF8.GetString(canonical);
         var reordered = Encoding.UTF8.GetBytes(text
-            .Replace("{\"version\":1,\"stage\":\"claimed\"", "{\"stage\":\"claimed\",\"version\":1", StringComparison.Ordinal));
+            .Replace("{\"version\":1,\"campaignLineage\":\"campaign-1\"", "{\"campaignLineage\":\"campaign-1\",\"version\":1", StringComparison.Ordinal));
         var spaced = Encoding.UTF8.GetBytes(text[..^1] + " \n");
         var noLf = canonical[..^1];
         var bom = Encoding.UTF8.GetPreamble().Concat(canonical).ToArray();
@@ -941,7 +953,7 @@ public sealed partial class GitHubCoordinationRefTests
             source.ProposalRefOid, source.ProposalCommitOid, source.ProposalTreeOid,
             source.PullRequestCreationOperationCommitmentSha256, source.PullRequestNumber,
             source.ExpectedBaseOid, source.ObservedBaseOid, source.OwnershipMarkerSha256,
-            blocks, bytes, files);
+            blocks, bytes, files, source.CampaignLineage);
 
     private static GitHubCoordinationState WithStageValue(
         GitHubCoordinationState source,
@@ -957,7 +969,7 @@ public sealed partial class GitHubCoordinationRefTests
             source.PullRequestCreationOperationCommitmentSha256, source.PullRequestNumber,
             source.ExpectedBaseOid, source.ObservedBaseOid, source.OwnershipMarkerSha256,
             source.CumulativeDocumentationBlocks, source.CumulativePatchBytes,
-            source.CumulativeChangedFiles);
+            source.CumulativeChangedFiles, source.CampaignLineage);
 
     private static ValidatedGitHubPublicationAuthority Authority() =>
         GitHubPublicationFactory.CreateAuthority(new(
@@ -968,6 +980,11 @@ public sealed partial class GitHubCoordinationRefTests
             null, null, null, null, null, null, null, GitHubPublicationTransitionKind.Initial,
             new(10, 10, 1000), new(10, 10, 1000),
             [new("docs/readme.md", new string('a', 64), new string('5', 64), 1, 10, 12, 1, 1)], []));
+
+    private static GitHubPreparedCoordination PrepareVector(JsonElement vector) =>
+        GitHubCoordinationObjects.Prepare(
+            GitHubCoordinationDocument.Decode(Convert.FromBase64String(vector.GetProperty("canonicalDocumentUtf8Base64").GetString()!)),
+            GitHubPublicationEvent.Decode(Convert.FromBase64String(vector.GetProperty("publicationEventUtf8Base64").GetString()!)));
 
     private static string Fixture() => Path.Join(Root(), "tests", "fixtures", "github",
         "publication-contract", "coordination-representation-v1.json");
@@ -1031,7 +1048,7 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCoordinationOutcome.Replayed, replay.Outcome);
         Assert.Equal(admitted.State.HeadOid, replay.State!.HeadOid);
         Assert.Equal(1, remote.RefMutationAttempts);
-        Assert.Equal(4, remote.ObjectMutationAttempts);
+        Assert.Equal(5, remote.ObjectMutationAttempts);
     }
 
     [Theory]
@@ -1157,7 +1174,7 @@ public sealed partial class GitHubCoordinationRefTests
         using var client = Client(authority, remote);
         var store = GitHubCoordinationStore.Create(client);
         var absence = await store.ReadCurrentAsync();
-        var prepared = GitHubCoordinationObjects.Prepare(
+        var prepared = PrepareFixture(
             GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
         remote.SeedObjects(prepared);
         remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
@@ -1180,7 +1197,7 @@ public sealed partial class GitHubCoordinationRefTests
         using var client = Client(authority, remote);
         var store = GitHubCoordinationStore.Create(client);
         var current = await store.ReadCurrentAsync();
-        var prepared = GitHubCoordinationObjects.Prepare(
+        var prepared = PrepareFixture(
             GitHubCoordinationCodec.CreateClaim(authority, current.State!.HeadOid));
         remote.SeedObjects(prepared);
         remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
@@ -1201,7 +1218,7 @@ public sealed partial class GitHubCoordinationRefTests
         using var client = Client(authority, remote);
         var store = GitHubCoordinationStore.Create(client);
         var absence = await store.ReadCurrentAsync();
-        var prepared = GitHubCoordinationObjects.Prepare(
+        var prepared = PrepareFixture(
             GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
         remote.MoveCoordinationHeadBeforeRefRead = prepared.CommitOid;
         remote.MoveCoordinationHeadAfterObjectMutationCount = 4;
@@ -1211,7 +1228,7 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCoordinationOutcome.Replayed, result.Outcome);
         Assert.Equal(prepared.CommitOid, result.State!.HeadOid);
         Assert.Equal(0, remote.RefMutationAttempts);
-        Assert.Equal(4, remote.ObjectMutationAttempts);
+        Assert.Equal(5, remote.ObjectMutationAttempts);
     }
 
     [Fact]
@@ -1222,7 +1239,7 @@ public sealed partial class GitHubCoordinationRefTests
         using var client = Client(authority, remote);
         var store = GitHubCoordinationStore.Create(client);
         var absence = await store.ReadCurrentAsync();
-        var prepared = GitHubCoordinationObjects.Prepare(
+        var prepared = PrepareFixture(
             GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
         remote.SeedObjects(prepared);
         remote.MoveCoordinationHeadBeforeCommitRead = prepared.CommitOid;
@@ -1245,7 +1262,7 @@ public sealed partial class GitHubCoordinationRefTests
         using var client = Client(authority, remote);
         var store = GitHubCoordinationStore.Create(client);
         var absence = await store.ReadCurrentAsync();
-        var prepared = GitHubCoordinationObjects.Prepare(
+        var prepared = PrepareFixture(
             GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
         remote.MoveCoordinationHeadBeforeRefRead = prepared.CommitOid;
         remote.MoveCoordinationHeadAfterObjectMutationCount = 4;
@@ -1284,7 +1301,7 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(2, remote.RefMutationAttempts);
         Assert.Equal(1, remote.SuccessfulRefMutations);
         Assert.All(remote.RefUpdates, update => Assert.Equal(
-            GitHubCoordinationObjects.Prepare(predecessor).CommitOid, update.Before));
+            PrepareFixture(predecessor).CommitOid, update.Before));
         Assert.DoesNotContain(remote.RefUpdates, update => update.After == Oid('0'));
     }
 
@@ -1346,7 +1363,7 @@ public sealed partial class GitHubCoordinationRefTests
 
         Assert.Equal(GitHubCoordinationOutcome.Failed, result.Outcome);
         Assert.Equal(GitHubCoordinationFailureKind.TargetMoved, result.Failure!.Kind);
-        Assert.Equal(4, remote.ObjectMutationAttempts);
+        Assert.Equal(5, remote.ObjectMutationAttempts);
         Assert.Equal(0, remote.RefMutationAttempts);
         Assert.Null(remote.CoordinationHead);
     }
@@ -1359,7 +1376,7 @@ public sealed partial class GitHubCoordinationRefTests
         using var client = Client(authority, remote);
         var store = GitHubCoordinationStore.Create(client);
         var absence = await store.ReadCurrentAsync();
-        var expected = GitHubCoordinationObjects.Prepare(
+        var expected = PrepareFixture(
             GitHubCoordinationCodec.CreateClaim(authority, Oid('0')));
         remote.SeedObjects(expected);
 
@@ -1812,7 +1829,7 @@ public sealed partial class GitHubCoordinationRefTests
         var proposal = chain[2];
         var staleDraft = GitHubCoordinationCodec.WithStage(proposal,
             GitHubCoordinationStage.StaleDraft,
-            GitHubCoordinationObjects.Prepare(proposal).CommitOid, proposal.ContentCommitOid,
+            PrepareFixture(proposal).CommitOid, proposal.ContentCommitOid,
             proposal.ProposalRefOid, proposal.ProposalCommitOid, proposal.ProposalTreeOid,
             Published(predecessor).PullRequestCreationOperationCommitmentSha256, 17,
             Oid('1'), Oid('9'), Published(predecessor).OwnershipMarkerSha256);
@@ -2121,7 +2138,7 @@ public sealed partial class GitHubCoordinationRefTests
 
         var created = GitHubCoordinationCodec.WithStage(chain[2],
             GitHubCoordinationStage.PullRequestCreated,
-            GitHubCoordinationObjects.Prepare(chain[2]).CommitOid,
+            PrepareFixture(chain[2]).CommitOid,
             chain[3].ContentCommitOid, chain[3].ProposalRefOid,
             chain[3].ProposalCommitOid, chain[3].ProposalTreeOid,
             chain[3].PullRequestCreationOperationCommitmentSha256, 17,
@@ -2193,7 +2210,7 @@ public sealed partial class GitHubCoordinationRefTests
             published.ExpectedBaseOid, published.ObservedBaseOid, published.OwnershipMarkerSha256);
         var skipped = GitHubCoordinationCodec.WithStage(chain[1],
             GitHubCoordinationStage.AwaitingReview,
-            GitHubCoordinationObjects.Prepare(chain[1]).CommitOid, published.ContentCommitOid,
+            PrepareFixture(chain[1]).CommitOid, published.ContentCommitOid,
             published.ProposalRefOid, published.ProposalCommitOid, published.ProposalTreeOid,
             published.PullRequestCreationOperationCommitmentSha256, published.PullRequestNumber,
             published.ExpectedBaseOid, published.ObservedBaseOid, published.OwnershipMarkerSha256);
@@ -2222,10 +2239,10 @@ public sealed partial class GitHubCoordinationRefTests
         var invalidRoot = GitHubCoordinationCodec.CreateClaim(authority, Oid('0'));
         var content = GitHubCoordinationCodec.WithStage(invalidRoot,
             GitHubCoordinationStage.ContentCreated,
-            GitHubCoordinationObjects.Prepare(invalidRoot).CommitOid, Oid('2'));
+            PrepareFixture(invalidRoot).CommitOid, Oid('2'));
         var proposal = GitHubCoordinationCodec.WithStage(content,
             GitHubCoordinationStage.ProposalRefAdvanced,
-            GitHubCoordinationObjects.Prepare(content).CommitOid,
+            PrepareFixture(content).CommitOid,
             Oid('2'), Oid('2'), Oid('2'), Oid('3'));
         var remote = new CoordinationRemote();
         remote.SeedChain(includeProposal
@@ -2253,7 +2270,7 @@ public sealed partial class GitHubCoordinationRefTests
         var authority = AppendAuthority(predecessorAuthority, "operation-map-b", '6',
             precedingFileCandidate: '9');
         var root = GitHubCoordinationCodec.CreateClaim(authority,
-            GitHubCoordinationObjects.Prepare(predecessor[^1]).CommitOid);
+            PrepareFixture(predecessor[^1]).CommitOid);
         var remote = new CoordinationRemote();
         remote.SeedChain([.. predecessor, root]);
         using var client = Client(authority, remote);
@@ -2280,7 +2297,7 @@ public sealed partial class GitHubCoordinationRefTests
         var chain = PublishedChain(predecessorAuthority);
         var published = chain[^1];
         var terminal = GitHubCoordinationCodec.WithStage(published, terminalStage,
-            GitHubCoordinationObjects.Prepare(published).CommitOid,
+            PrepareFixture(published).CommitOid,
             published.ContentCommitOid, published.ProposalRefOid,
             published.ProposalCommitOid, published.ProposalTreeOid,
             published.PullRequestCreationOperationCommitmentSha256,
@@ -2288,14 +2305,14 @@ public sealed partial class GitHubCoordinationRefTests
             published.ObservedBaseOid, published.OwnershipMarkerSha256);
         var authority = SuccessorAuthority(predecessorAuthority, terminal, terminalStage);
         var substitutedParent = GitHubCoordinationCodec.WithStage(published, terminalStage,
-            GitHubCoordinationObjects.Prepare(published).CommitOid,
+            PrepareFixture(published).CommitOid,
             published.ContentCommitOid, published.ProposalRefOid,
             published.ProposalCommitOid, published.ProposalTreeOid,
             published.PullRequestCreationOperationCommitmentSha256,
             published.PullRequestNumber!.Value + 1, published.ExpectedBaseOid,
             published.ObservedBaseOid, published.OwnershipMarkerSha256);
         var root = GitHubCoordinationCodec.CreateClaim(authority,
-            GitHubCoordinationObjects.Prepare(substitutedParent).CommitOid);
+            PrepareFixture(substitutedParent).CommitOid);
         var remote = new CoordinationRemote { TargetHead = Oid('9') };
         remote.SeedChain([.. chain, substitutedParent, root]);
         using var client = Client(authority, remote);
@@ -2314,7 +2331,7 @@ public sealed partial class GitHubCoordinationRefTests
     {
         var authority = InitialAuthority("operation-stale-base", '5');
         var claim = GitHubCoordinationCodec.CreateClaim(authority, Oid('0'));
-        var claimHead = GitHubCoordinationObjects.Prepare(claim).CommitOid;
+        var claimHead = PrepareFixture(claim).CommitOid;
         var stale = GitHubCoordinationCodec.WithStage(claim,
             GitHubCoordinationStage.Stale, claimHead,
             expectedBaseOid: Oid('1'), observedBaseOid: Oid('9'));
@@ -2344,7 +2361,7 @@ public sealed partial class GitHubCoordinationRefTests
         var claim = GitHubCoordinationCodec.CreateClaim(staleAuthority, Oid('0'));
         var proposalShapedStale = GitHubCoordinationCodec.WithStage(claim,
             GitHubCoordinationStage.Stale,
-            GitHubCoordinationObjects.Prepare(claim).CommitOid,
+            PrepareFixture(claim).CommitOid,
             Oid('2'), Oid('2'), Oid('2'), Oid('3'),
             expectedBaseOid: Oid('1'), observedBaseOid: Oid('9'));
         var staleRemote = new CoordinationRemote { TargetHead = Oid('9') };
@@ -2369,7 +2386,7 @@ public sealed partial class GitHubCoordinationRefTests
         var prRemote = new CoordinationRemote();
         prRemote.SeedChain(published[..3]);
         prRemote.SeedRaw(wrongBase, published[3].OperationCommitmentSha256,
-            "published", GitHubCoordinationObjects.Prepare(proposal).CommitOid);
+            "published", PrepareFixture(proposal).CommitOid);
         using var prClient = Client(prAuthority, prRemote);
 
         var prResult = await GitHubCoordinationStore.Create(prClient).ReadCurrentAsync();
@@ -2480,6 +2497,20 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, result.Failure!.Kind);
     }
 
+    // Content-addressed fixture documents let independently constructed state sequences
+    // retain the exact preceding event, including when tests deliberately forge an edge.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, GitHubCoordinationDocument>
+        FixtureDocuments = new(StringComparer.Ordinal);
+
+    private static GitHubPreparedCoordination PrepareFixture(GitHubCoordinationState state)
+    {
+        FixtureDocuments.TryGetValue(state.CoordinationPredecessorOid, out var previous);
+        var prepared = GitHubCoordinationObjects.PreparePublication(state,
+            previous?.RetainAt(state.CoordinationPredecessorOid));
+        FixtureDocuments[prepared.CommitOid] = prepared.Document;
+        return prepared;
+    }
+
     private static GitHubCoordinationState Published(ValidatedGitHubPublicationAuthority authority)
         => PublishedChain(authority)[^1];
 
@@ -2491,17 +2522,17 @@ public sealed partial class GitHubCoordinationRefTests
         var treeOid = Oid('3');
         var content = GitHubCoordinationCodec.WithStage(claim,
             GitHubCoordinationStage.ContentCreated,
-            GitHubCoordinationObjects.Prepare(claim).CommitOid, proposalOid);
+            PrepareFixture(claim).CommitOid, proposalOid);
         var proposal = GitHubCoordinationCodec.WithStage(content,
             GitHubCoordinationStage.ProposalRefAdvanced,
-            GitHubCoordinationObjects.Prepare(content).CommitOid,
+            PrepareFixture(content).CommitOid,
             proposalOid, proposalOid, proposalOid, treeOid);
         var creation = PullRequestCreationCommitment(claim,
             GitHubPublicationFactory.CreateProposalRef(authority), proposalOid, treeOid);
         var marker = OwnershipMarker(creation);
         var published = GitHubCoordinationCodec.WithStage(proposal,
             GitHubCoordinationStage.Published,
-            GitHubCoordinationObjects.Prepare(proposal).CommitOid,
+            PrepareFixture(proposal).CommitOid,
             proposalOid, proposalOid, proposalOid, treeOid, creation, 17,
             Oid('1'), Oid('1'), marker);
         return [claim, content, proposal, published];
@@ -2514,7 +2545,7 @@ public sealed partial class GitHubCoordinationRefTests
         var proposal = published[2];
         var staleDraft = GitHubCoordinationCodec.WithStage(proposal,
             GitHubCoordinationStage.StaleDraft,
-            GitHubCoordinationObjects.Prepare(proposal).CommitOid,
+            PrepareFixture(proposal).CommitOid,
             published[3].ContentCommitOid, published[3].ProposalRefOid,
             published[3].ProposalCommitOid, published[3].ProposalTreeOid,
             published[3].PullRequestCreationOperationCommitmentSha256,
@@ -2689,7 +2720,7 @@ public sealed partial class GitHubCoordinationRefTests
                             entry.PullRequestNumber, entry.ExpectedBaseOid, entry.ObservedBaseOid,
                             hasPr ? otherCreation.OwnershipMarkerSha256 : null);
                         substituted.Seed(changed);
-                        parent = GitHubCoordinationObjects.Prepare(changed).CommitOid;
+                        parent = PrepareFixture(changed).CommitOid;
                     }
                     var rejected = await badStore.ReadCurrentAsync();
                     Assert.Equal(GitHubCoordinationFailureKind.ObjectMismatch, rejected.Failure!.Kind);
@@ -2728,13 +2759,13 @@ public sealed partial class GitHubCoordinationRefTests
         {
             authority = AppendAuthority(authority, "history-" + index, index % 2 == 0 ? '6' : '7',
                 precedingFileCandidate: index == 0 ? '5' : index % 2 == 0 ? '7' : '6');
-            var claim = GitHubCoordinationCodec.CreateClaim(authority, GitHubCoordinationObjects.Prepare(chain[^1]).CommitOid);
+            var claim = GitHubCoordinationCodec.CreateClaim(authority, PrepareFixture(chain[^1]).CommitOid);
             var content = GitHubCoordinationCodec.WithStage(claim, GitHubCoordinationStage.ContentCreated,
-                GitHubCoordinationObjects.Prepare(claim).CommitOid, Oid('2'));
+                PrepareFixture(claim).CommitOid, Oid('2'));
             var proposal = GitHubCoordinationCodec.WithStage(content, GitHubCoordinationStage.ProposalRefAdvanced,
-                GitHubCoordinationObjects.Prepare(content).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'));
+                PrepareFixture(content).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'));
             var published = GitHubCoordinationCodec.WithStage(proposal, GitHubCoordinationStage.Published,
-                GitHubCoordinationObjects.Prepare(proposal).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'),
+                PrepareFixture(proposal).CommitOid, Oid('2'), Oid('2'), Oid('2'), Oid('3'),
                 creation, 17, Oid('1'), Oid('1'), marker);
             chain.AddRange([claim, content, proposal, published]);
         }
@@ -2766,7 +2797,8 @@ public sealed partial class GitHubCoordinationRefTests
         long pullRequestNumber,
         string generationId,
         string headOid,
-        GitHubCoordinationStage stage)
+        GitHubCoordinationStage stage,
+        string? expectedBaseOid = null)
     {
         var disposition = stage == GitHubCoordinationStage.Merged
             ? GitHubPublicationPredecessorDisposition.Merged
@@ -2786,7 +2818,7 @@ public sealed partial class GitHubCoordinationRefTests
             : null;
         return GitHubPublicationFactory.CreateAuthority(new(
             predecessor.RepositoryOwner, predecessor.RepositoryName, predecessor.TargetRef,
-            Oid('9'), predecessor.CampaignLineage, Hash('a'), Hash('d'), Hash('b'), 9,
+            expectedBaseOid ?? Oid('9'), predecessor.CampaignLineage, Hash('a'), Hash('d'), Hash('b'), 9,
             Hash('e'), Hash('c'), Hash('f'), Hash('7'), Hash('8'), operation, "generation-2",
             null, null, null, null, null, null, terminalPredecessor, transition,
             predecessor.AcceptedM4Ceilings, predecessor.Policy,
@@ -2827,7 +2859,7 @@ public sealed partial class GitHubCoordinationRefTests
         var store = GitHubCoordinationStore.Create(client);
         var current = await store.ReadCurrentAsync();
         var advanced = await store.AdvanceAsync(current.State!, update);
-        return GitHubCoordinationObjects.Prepare(template.State(advanced.State!.HeadOid));
+        return PrepareFixture(template.State(advanced.State!.HeadOid));
     }
 
     public enum LostMutation { None, Blob, LeafTree, RootTree, Commit, Ref }
@@ -2860,6 +2892,13 @@ public sealed partial class GitHubCoordinationRefTests
         private TaskCompletionSource? refBarrier;
         private int requiredRefCalls;
         private int arrivedRefCalls;
+        private TimeSpan serverClockOffset;
+        internal DateTimeOffset ServerNow
+        {
+            get => DateTimeOffset.UtcNow + serverClockOffset;
+            set => serverClockOffset = value - DateTimeOffset.UtcNow;
+        }
+        internal bool IncludeServerDate { get; set; } = true;
         internal string TargetHead { get; set; } = Oid('1');
         internal string? CoordinationHead { get; private set; }
         internal LostMutation LoseResponse { get; set; }
@@ -2892,7 +2931,7 @@ public sealed partial class GitHubCoordinationRefTests
 
         internal void Seed(GitHubCoordinationState state)
         {
-            var value = GitHubCoordinationObjects.Prepare(state);
+            var value = PrepareFixture(state);
             SeedObjects(value);
             CoordinationHead = value.CommitOid;
         }
@@ -2907,7 +2946,9 @@ public sealed partial class GitHubCoordinationRefTests
             lock (gate)
             {
                 prepared[value.CommitOid] = value;
+                FixtureDocuments[value.CommitOid] = value.Document;
                 blobs[value.BlobOid] = value.StateBytes.ToArray();
+                if (value.Event is { } publication) blobs[value.Document.Publication!.Oid] = publication.Encode();
                 trees[value.LeafTreeOid] = new(value.LeafTreeOid,
                     GitHubCoordinationObjects.LeafEntries(value));
                 trees[value.RootTreeOid] = new(value.RootTreeOid,
@@ -2918,36 +2959,48 @@ public sealed partial class GitHubCoordinationRefTests
             }
         }
 
+        internal void AppendDocument(Func<GitHubCoordinationDocument, GitHubCoordinationDocument> change)
+        {
+            var head = CoordinationHead!;
+            var document = change(FixtureDocuments[head].RetainAt(head) with { PredecessorOid = head });
+            var value = GitHubCoordinationObjects.Prepare(document);
+            SeedObjects(value);
+            ForceCoordinationHead(value.CommitOid);
+        }
+
+        internal string SeedBlob(byte[] bytes)
+        {
+            var oid = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+            lock (gate) blobs[oid] = bytes;
+            return oid;
+        }
+
         internal void SeedRaw(
             byte[] stateBytes,
             string operationCommitment,
             string stage,
             string parent)
         {
-            var blobOid = GitObjectOid("blob", stateBytes);
-            var leafOid = GitObjectOid("tree", TreeEntryBytes("100644",
-                GitHubCoordinationObjects.StatePath, blobOid));
-            var rootOid = GitObjectOid("tree", TreeEntryBytes("40000",
-                GitHubCoordinationObjects.RootPath, leafOid));
-            var message = "ContractScribe coordination v1\n"
-                + "operation=" + operationCommitment + "\n"
-                + "stage=" + stage + "\n";
-            var commitText = "tree " + rootOid + "\nparent " + parent
-                + "\nauthor ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000"
-                + "\ncommitter ContractScribe <contract-scribe@users.noreply.github.com> 946684800 +0000\n\n"
-                + message;
-            var commitOid = GitObjectOid("commit", Encoding.UTF8.GetBytes(commitText));
+            using var state = JsonDocument.Parse(stateBytes);
+            var root = state.RootElement;
+            string Field(string name, string fallback) => root.TryGetProperty(name, out var value) ? value.GetString()! : fallback;
+            var predecessor = Field("coordinationPredecessorOid", Oid('0'));
+            FixtureDocuments.TryGetValue(predecessor, out var previous);
+            var eventBytes = Encoding.UTF8.GetBytes("{\"format\":\"publication-event-v1\",\"state\":"
+                + Encoding.UTF8.GetString(stateBytes).TrimEnd('\n') + ",\"previous\":"
+                + JsonSerializer.Serialize(previous?.RetainAt(predecessor).Publication,
+                    new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }) + "}");
+            var eventOid = GitObjectOid("blob", eventBytes);
+            var document = new GitHubCoordinationDocument(GitHubCoordinationDocument.CurrentFormat,
+                Field("repositoryId", "Owner/repo"), Field("targetRef", "refs/heads/main"),
+                Field("targetCommitOid", parent), Field("campaignLineage", "campaign-1"),
+                predecessor, null, null, null, new(eventOid, GitHubCoordinationDocument.CurrentCommit), null);
+            var value = GitHubCoordinationObjects.Prepare(document);
+            SeedObjects(value);
             lock (gate)
             {
-                blobs[blobOid] = stateBytes;
-                trees[leafOid] = new(leafOid,
-                    [new(GitHubCoordinationObjects.StatePath, GitHubTreeMode.File, blobOid, null)]);
-                trees[rootOid] = new(rootOid,
-                    [new(GitHubCoordinationObjects.RootPath, GitHubTreeMode.Directory, leafOid, null)]);
-                var actor = new GitHubCommitActor(GitHubCoordinationObjects.ActorName,
-                    GitHubCoordinationObjects.ActorEmail, GitHubCoordinationObjects.ActorDate);
-                commits[commitOid] = new(commitOid, rootOid, parent, message, actor, actor);
-                CoordinationHead = commitOid;
+                blobs[eventOid] = eventBytes;
+                CoordinationHead = value.CommitOid;
             }
         }
 
@@ -2958,7 +3011,7 @@ public sealed partial class GitHubCoordinationRefTests
                 var commit = commits[head];
                 var root = trees[commit.Tree];
                 var leaf = trees[root.Entries.Single().Oid];
-                return GitHubCoordinationCodec.Decode(blobs[leaf.Entries.Single().Oid]);
+                return GitHubPublicationEvent.Decode(blobs[leaf.Entries.Single(entry => entry.Path == GitHubCoordinationObjects.EventPath).Oid]).State;
             }
         }
 
@@ -2973,13 +3026,13 @@ public sealed partial class GitHubCoordinationRefTests
                 switch (kind)
                 {
                     case ObjectTamper.Blob:
-                        blobs[leaf.Entries.Single().Oid] = [.. blobs[leaf.Entries.Single().Oid], (byte)' '];
+                        blobs[leaf.Entries.Single(entry => entry.Path == GitHubCoordinationObjects.StatePath).Oid] = [.. blobs[leaf.Entries.Single(entry => entry.Path == GitHubCoordinationObjects.StatePath).Oid], (byte)' '];
                         break;
                     case ObjectTamper.LeafTree:
                         trees[leaf.Oid] = leaf with
                         {
                             Entries = [.. leaf.Entries, new("unexpected.json", GitHubTreeMode.File,
-                                leaf.Entries.Single().Oid, null)],
+                                leaf.Entries.Single(entry => entry.Path == GitHubCoordinationObjects.StatePath).Oid, null)],
                         };
                         break;
                     case ObjectTamper.RootTree:
@@ -3016,7 +3069,7 @@ public sealed partial class GitHubCoordinationRefTests
         }
 
         internal void RemoveCommit(GitHubCoordinationState state)
-        { lock (gate) commits.Remove(GitHubCoordinationObjects.Prepare(state).CommitOid); }
+        { lock (gate) commits.Remove(PrepareFixture(state).CommitOid); }
 
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request)
         {
@@ -3084,21 +3137,25 @@ public sealed partial class GitHubCoordinationRefTests
         private HttpResponseMessage MutateBlob(JsonElement body)
         {
             var bytes = Convert.FromBase64String(body.GetProperty("content").GetString()!);
-            var value = GitHubCoordinationObjects.Prepare(GitHubCoordinationCodec.Decode(bytes));
+            var oid = GitHubCoordinationObjects.ObjectOid("blob", bytes);
             lock (gate)
             {
                 ObjectMutationAttempts++;
-                prepared[value.CommitOid] = value;
-                blobs[value.BlobOid] = bytes;
+                blobs[oid] = bytes;
+                try
+                {
+                    var value = GitHubCoordinationObjects.Prepare(GitHubCoordinationDocument.Decode(bytes));
+                    prepared[value.CommitOid] = value;
+                    FixtureDocuments[value.CommitOid] = value.Document;
+                }
+                catch (GitHubCoordinationException) { }
                 if (LoseResponse == LostMutation.Blob)
                 {
-                    if (LostBlobReadback == LostReadback.Missing)
-                        blobs.Remove(value.BlobOid);
-                    else if (LostBlobReadback == LostReadback.Mismatch)
-                        blobs[value.BlobOid] = [.. bytes, (byte)' '];
+                    if (LostBlobReadback == LostReadback.Missing) blobs.Remove(oid);
+                    else if (LostBlobReadback == LostReadback.Mismatch) blobs[oid] = [.. bytes, (byte)' '];
                 }
             }
-            return MutationResponse(LostMutation.Blob, new { sha = value.BlobOid }, HttpStatusCode.Created);
+            return MutationResponse(LostMutation.Blob, new { sha = oid }, HttpStatusCode.Created);
         }
 
         private HttpResponseMessage MutateTree(JsonElement body)
@@ -3106,20 +3163,11 @@ public sealed partial class GitHubCoordinationRefTests
             var entries = body.GetProperty("tree").EnumerateArray().Select(entry => new GitHubTreeEntry(
                 entry.GetProperty("path").GetString()!, Mode(entry.GetProperty("mode").GetString()!),
                 entry.GetProperty("sha").GetString()!, null)).ToImmutableArray();
-            var leaf = entries.Single().Path == GitHubCoordinationObjects.StatePath;
-            GitHubPreparedCoordination value;
-            lock (gate)
-            {
-                value = prepared.Values.Single(item => leaf
-                    ? item.BlobOid == entries.Single().Oid
-                    : item.LeafTreeOid == entries.Single().Oid);
-                ObjectMutationAttempts++;
-                var oid = leaf ? value.LeafTreeOid : value.RootTreeOid;
-                trees[oid] = new(oid, entries);
-            }
-            var stored = new StoredTree(leaf ? value.LeafTreeOid : value.RootTreeOid, entries);
-            return MutationResponse(leaf ? LostMutation.LeafTree : LostMutation.RootTree,
-                TreeValue(stored), HttpStatusCode.Created);
+            var leaf = entries.Any(entry => entry.Path == GitHubCoordinationObjects.StatePath);
+            var oid = GitHubCoordinationObjects.TreeOid(entries);
+            var stored = new StoredTree(oid, entries);
+            lock (gate) { ObjectMutationAttempts++; trees[oid] = stored; }
+            return MutationResponse(leaf ? LostMutation.LeafTree : LostMutation.RootTree, TreeValue(stored), HttpStatusCode.Created);
         }
 
         private HttpResponseMessage MutateCommit(JsonElement body)
@@ -3278,8 +3326,13 @@ public sealed partial class GitHubCoordinationRefTests
 
     private sealed class RemoteHandler(CoordinationRemote remote) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
-            CancellationToken cancellationToken) => remote.Reply(request);
+            CancellationToken cancellationToken)
+        {
+            var response = await remote.Reply(request);
+            if (remote.IncludeServerDate) response.Headers.Date = remote.ServerNow;
+            return response;
+        }
     }
 }

@@ -34,6 +34,165 @@ public sealed record CampaignDispatchObservation(
 
 public static partial class CampaignStateFactory
 {
+    /// <summary>Rejects loss or replacement of retained history at an immediate remote checkpoint edge.</summary>
+    public static void ValidateSuccessorHistory(CampaignCheckpointArtifact predecessor, CampaignCheckpointArtifact successor)
+    {
+        ArgumentNullException.ThrowIfNull(predecessor);
+        ArgumentNullException.ThrowIfNull(successor);
+        var before = predecessor.State;
+        var next = successor.State;
+        Require(next.CampaignLineage == before.CampaignLineage && next.ProductRevision == before.ProductRevision
+            && successor.CheckpointRevision == checked(predecessor.CheckpointRevision + 1),
+            CampaignStateValidationCode.InvalidCorrelation);
+        var oldCharges = before.LineageCharges;
+        var charges = next.LineageCharges;
+        Require(charges.OuterInvocations >= oldCharges.OuterInvocations
+            && charges.PatchValidationInvocations >= oldCharges.PatchValidationInvocations
+            && RetainsCharge(oldCharges.ProviderRequests, charges.ProviderRequests)
+            && RetainsCharge(oldCharges.InputTokens, charges.InputTokens)
+            && RetainsCharge(oldCharges.CachedInputTokens, charges.CachedInputTokens)
+            && RetainsCharge(oldCharges.UncachedInputTokens, charges.UncachedInputTokens)
+            && RetainsCharge(oldCharges.OutputTokens, charges.OutputTokens)
+            && RetainsCharge(oldCharges.ReasoningTokens, charges.ReasoningTokens)
+            && RetainsCharge(oldCharges.CostMicrounits, charges.CostMicrounits)
+            && RetainsCharge(oldCharges.ActiveElapsedMilliseconds, charges.ActiveElapsedMilliseconds)
+            && (!oldCharges.HasUnpricedCostHistory || charges.HasUnpricedCostHistory),
+            CampaignStateValidationCode.InvalidCorrelation);
+        if (next.Snapshot.ExecutionCommitmentSha256 == before.Snapshot.ExecutionCommitmentSha256)
+            ValidateRetainedProgress(predecessor, next);
+        if (next.ArchivedDispatchPrefix != before.ArchivedDispatchPrefix)
+        {
+            _ = CampaignDispatchArchive.VerifyTransition(predecessor, successor);
+            return;
+        }
+        Require(next.DispatchObservations.Length >= before.DispatchObservations.Length,
+            CampaignStateValidationCode.InvalidCorrelation);
+        for (var index = 0; index < before.DispatchObservations.Length; index++)
+        {
+            var previous = before.DispatchObservations[index];
+            var current = next.DispatchObservations[index];
+            if (previous.State == CampaignDispatchObservationState.Reserved)
+                current = current with
+                {
+                    State = previous.State,
+                    Disposition = previous.Disposition,
+                    Usage = previous.Usage,
+                    Cache = previous.Cache,
+                    ElapsedMilliseconds = previous.ElapsedMilliseconds,
+                    RetryAfterMilliseconds = previous.RetryAfterMilliseconds,
+                    Charges = previous.Charges,
+                    SettlementCommitmentSha256 = previous.SettlementCommitmentSha256,
+                };
+            Require(current == previous, CampaignStateValidationCode.InvalidCorrelation);
+        }
+    }
+
+    private static bool RetainsCharge(CampaignChargeObservation before, CampaignChargeObservation next) =>
+        (before.Observed is null || next.Observed is { } observed && observed >= before.Observed.Value)
+        && next.ConservativeUnobserved >= before.ConservativeUnobserved
+        && next.TotalCharged >= before.TotalCharged;
+
+    private static bool SameRetainedFact<T>(T before, T next) => JsonElement.DeepEquals(
+        JsonSerializer.SerializeToElement(before), JsonSerializer.SerializeToElement(next));
+
+    private static void ValidateRetainedProgress(CampaignCheckpointArtifact predecessor, CampaignCheckpointState next)
+    {
+        var before = predecessor.State;
+        Require(next.Snapshot == before.Snapshot && SameRetainedFact(before.Batch, next.Batch)
+            && before.WorkItems.Select(work => work.WorkItemKey).SequenceEqual(next.WorkItems.Select(work => work.WorkItemKey)),
+            CampaignStateValidationCode.InvalidCorrelation);
+        for (var index = 0; index < before.WorkItems.Length; index++)
+        {
+            var oldWork = before.WorkItems[index];
+            var work = next.WorkItems[index];
+            Require(work.OuterAttemptCount >= oldWork.OuterAttemptCount
+                && work.CandidateAttemptCount >= oldWork.CandidateAttemptCount,
+                CampaignStateValidationCode.InvalidCorrelation);
+            if (oldWork.Status == CampaignWorkStatus.Closed)
+                Require(work.Status == CampaignWorkStatus.Closed && SameRetainedFact(oldWork.ClosedOutcome, work.ClosedOutcome)
+                    || IsCorrelatedClosedRetry(before, next, oldWork, work), CampaignStateValidationCode.InvalidCorrelation);
+            if (oldWork.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+            {
+                // The existing reducer can close an independently rejected patch
+                // member, but never turn a completed proposal back into pending work.
+                var rejected = before.ActiveReservation is CampaignPatchReservation reservation
+                    && next.ActiveReservation is null
+                    && work is
+                    {
+                        Status: CampaignWorkStatus.Closed, TrustedProposal: null,
+                        ClosedOutcome: { Stage: CampaignWorkOutcomeStage.Patch, Code: CampaignWorkOutcomeCode.PatchRejected }
+                    }
+                    && work.ClosedOutcome.PatchRequestSha256 == reservation.PatchRequestSha256
+                    && next.CumulativeOutcome is { Kind: CampaignCumulativeOutcomeKind.Rejected } cumulative
+                    && cumulative.PatchRequestSha256 == reservation.PatchRequestSha256
+                    && cumulative.PatchResultCommitmentSha256 == work.ClosedOutcome.PatchResultCommitmentSha256;
+                Require(rejected || (work.Status == oldWork.Status
+                    || oldWork.Status == CampaignWorkStatus.ProposalComplete && work.Status == CampaignWorkStatus.Accepted)
+                    && SameRetainedFact(oldWork.TrustedProposal, work.TrustedProposal),
+                    CampaignStateValidationCode.InvalidCorrelation);
+            }
+        }
+        if (before.CandidateObservation is { } oldCandidate)
+        {
+            Require(next.CandidateObservation is { } candidate
+                && oldCandidate.AcceptedWorkItemKeys.All(key => candidate.AcceptedWorkItemKeys.Contains(key, StringComparer.Ordinal)),
+                CampaignStateValidationCode.InvalidCorrelation);
+            if (oldCandidate.AcceptedWorkItemKeys.SequenceEqual(next.CandidateObservation!.AcceptedWorkItemKeys))
+            {
+                var origin = before.AcceptedCandidateOrigin!;
+                Require(SameRetainedFact(origin with { CheckpointSha256 = origin.CheckpointSha256 ?? predecessor.Sha256 },
+                    next.AcceptedCandidateOrigin), CampaignStateValidationCode.InvalidCorrelation);
+            }
+        }
+        if (before.ScribeProgress is { } progress)
+        {
+            foreach (var member in progress.Members.Where(member => member.ContentSha256 is not null))
+                Require(next.ScribeProgress is { } nextProgress
+                    && nextProgress.Members.Any(current => SameRetainedFact(member, current)),
+                    CampaignStateValidationCode.InvalidCorrelation);
+        }
+        foreach (var operation in before.KnownCompletedOperations)
+            Require(next.KnownCompletedOperations.Any(current => SameRetainedFact(operation, current)),
+                CampaignStateValidationCode.InvalidCorrelation);
+    }
+
+    private static bool IsCorrelatedClosedRetry(CampaignCheckpointState before, CampaignCheckpointState next,
+        CampaignWorkItemState oldWork, CampaignWorkItemState work)
+    {
+        static bool Retryable(CampaignWorkItemState item) => item is
+        {
+            Status: CampaignWorkStatus.Closed, AttemptDisposition: CampaignAttemptDisposition.Open, PausedProviderAttempt: null,
+            ClosedOutcome:
+            {
+                Stage: CampaignWorkOutcomeStage.Scribe, Code: CampaignWorkOutcomeCode.ProviderFailure,
+                ProviderDisposition: CampaignProviderFinalDisposition.Retryable
+            },
+        };
+        if (!Retryable(oldWork) || before.ActiveReservation is not null || before.TerminalOutcome is not null
+            || work.Status != CampaignWorkStatus.Planned || work.ClosedOutcome is not null
+            || oldWork.OuterAttemptCount >= before.ConfiguredCeilings.CampaignBudget.MaximumAttemptsPerTarget
+            || next.ActiveReservation is not CampaignProviderReservation
+            {
+                OperationKind: CampaignProviderOperationKind.Host, HostPhase: CampaignProviderHostPhase.Preflight,
+                CurrentOperationOrdinal: 1, LastDispatchOrdinal: 0
+            } claim
+            || claim.ExecutionStartRevision != next.CheckpointRevision
+            || next.ScribeProgress?.Session is not { Ended: false } session
+            || session.AttemptId != claim.AttemptId || !session.AdmittedWorkItemKeys.Contains(work.WorkItemKey, StringComparer.Ordinal))
+            return false;
+        var anchor = before.WorkItems.Single(item => item.WorkItemKey == claim.WorkItemKey);
+        var nextAnchor = next.WorkItems.Single(item => item.WorkItemKey == claim.WorkItemKey);
+        var previousAttempt = before.ScribeProgress?.Members.SingleOrDefault(member => member.WorkItemKey == oldWork.WorkItemKey)?.AttemptId
+            ?? CreateScribeAttemptId(before.Snapshot.ExecutionCommitmentSha256,
+                before.ConfiguredCeilings.ScribeExecutionAuthority, oldWork.WorkItemKey, oldWork.OuterAttemptCount);
+        return Retryable(anchor) && previousAttempt == oldWork.ClosedOutcome!.AttemptId
+            && nextAnchor.OuterAttemptCount == checked(anchor.OuterAttemptCount + 1)
+            && work.OuterAttemptCount == oldWork.OuterAttemptCount + (work.WorkItemKey == claim.WorkItemKey ? 1 : 0)
+            && claim.AttemptId == CreateScribeAttemptId(before.Snapshot.ExecutionCommitmentSha256,
+                before.ConfiguredCeilings.ScribeExecutionAuthority, anchor.WorkItemKey, nextAnchor.OuterAttemptCount)
+            && next.LineageCharges.OuterInvocations == checked(before.LineageCharges.OuterInvocations + 1);
+    }
+
     internal static string DispatchSettlementCommitment(CampaignDispatchObservation row) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             "contract-scribe/campaign-dispatch-observation/v1\n"
@@ -43,7 +202,21 @@ public static partial class CampaignStateFactory
     {
         Require(!state.DispatchObservations.IsDefault, CampaignStateValidationCode.InvalidShape);
         var ordinals = new Dictionary<(string Execution, string Work, DocumentationScribeAttemptId Attempt), long>();
-        var reconstructed = EmptyCharges();
+        var reconstructed = state.ArchivedDispatchPrefix?.Charges ?? EmptyCharges();
+        if (state.ArchivedDispatchPrefix is { } prefix)
+        {
+            RequireSha(prefix.WitnessSha256);
+            Require(prefix.Charges is not null && prefix.Charges.OuterInvocations == 0
+                && prefix.Charges.PatchValidationInvocations == 0, CampaignStateValidationCode.InvalidCorrelation);
+            ValidateCharge(reconstructed.ProviderRequests);
+            ValidateCharge(reconstructed.InputTokens);
+            ValidateCharge(reconstructed.CachedInputTokens);
+            ValidateCharge(reconstructed.UncachedInputTokens);
+            ValidateCharge(reconstructed.OutputTokens);
+            ValidateCharge(reconstructed.ReasoningTokens);
+            ValidateCharge(reconstructed.CostMicrounits);
+            ValidateCharge(reconstructed.ActiveElapsedMilliseconds);
+        }
         var budget = state.ConfiguredCeilings.CampaignBudget;
         for (var index = 0; index < state.DispatchObservations.Length; index++)
         {

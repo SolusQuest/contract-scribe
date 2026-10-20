@@ -90,6 +90,7 @@ public sealed partial class CampaignStateContractTests
             scenario.StyleProjection, scenario.Input, scenario.Plan, scenario.Plan.WorkItems[0].WorkItemKey, fresh,
             CampaignStateFactory.CreateInvocationTargetAllowance(predecessor.State, new(0)), allowance);
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
+        CampaignStateFactory.ValidateSuccessorHistory(predecessor, retry.Artifact);
         var checkpoint = AcceptForTest(predecessor, retry);
         if (foreignTarget)
         {
