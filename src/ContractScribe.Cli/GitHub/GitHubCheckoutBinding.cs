@@ -49,7 +49,12 @@ internal static class GitHubCheckoutBinding
             if (allFiles is null) return false;
             // SDK outputs are reconstructed from the bound projects, not Git source.
             // A tracked input masquerading as such an output is not admitted.
-            if (allFiles.Keys.Any(path => semantic.Contains(path) && path.Split('/').Any(part => part is "obj" or "bin")))
+            if (allFiles.Keys.Any(path =>
+            {
+                token.ThrowIfCancellationRequested();
+                return path.Split('/').Any(part => part is "obj" or "bin")
+                    && (semantic.Contains(path) || declaredInputs.Any(pattern => pattern.IsMatch(path)));
+            }))
                 return false;
             var remote = allFiles.Where(pair => Relevant(pair.Key)).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
             var local = baseline.Entries.Where(entry => Relevant(entry.RepositoryPath))

@@ -293,6 +293,41 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("obj", true)]
+    [InlineData("bin", true)]
+    [InlineData("obj", false)]
+    [InlineData("bin", false)]
+    public async Task G3_tracked_output_cannot_hide_declared_semantic_inputs_but_unrelated_outputs_are_excluded(string output, bool declared)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var projectPath = Path.Join(fixture.Repository.Root, "App", "App.csproj");
+        var project = (await File.ReadAllTextAsync(projectPath)).Replace("</Project>",
+            $"<ItemGroup><AdditionalFiles Include=\"{output}/semantic-inputs/**/*.json\" /></ItemGroup></Project>", StringComparison.Ordinal);
+        await File.WriteAllTextAsync(projectPath, project);
+        fixture.GovernedFiles["App/App.csproj"] = (Encoding.UTF8.GetBytes(project), fixture.GovernedFiles["App/App.csproj"].Mode);
+        var path = declared ? $"App/{output}/semantic-inputs/rules.json" : $"App/{output}/unrelated.json";
+        Assert.False(File.Exists(Path.Join(fixture.Repository.Root, path)));
+        var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
+        files.Add(path, "{\"rule\":\"tracked-semantic-input\"}\n"u8.ToArray());
+        fixture.Publication["expectedBaseCommitOid"] = AdvanceTarget(fixture, files, "Add tracked semantic input under output directory\n");
+        if (!declared)
+        {
+            var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+            configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
+            await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        }
+        var result = await fixture.Run("start");
+        AssertResult(result, declared ? 4 : 0, declared ? "stale" : "no-op");
+        if (declared) Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
+        Assert.True(Observed(fixture, "sdk-discovery") > 0);
+        Assert.Equal(0, Observed(fixture, "provider-create"));
+        Assert.Equal(0, Observed(fixture, "provider-send"));
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData("integrity", "commits", 429, 3, "rate-limit")]
     [InlineData("integrity", "trees", 429, 3, "rate-limit")]
     [InlineData("integrity", "blobs", 429, 3, "rate-limit")]
