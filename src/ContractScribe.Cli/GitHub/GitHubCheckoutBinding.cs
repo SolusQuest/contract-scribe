@@ -22,10 +22,10 @@ internal static class GitHubCheckoutBinding
             var root = preflight.RepositoryRoot;
             string Relative(string path) => Path.GetRelativePath(root, path).Replace(Path.DirectorySeparatorChar, '/');
             var semantic = baseline.SemanticInputs.Select(input => input.RepositoryPath)
-                .Concat(baseline.ProtectedInputPaths).Concat(baseline.CompilerResponseFiles.Select(response => response.RepositoryPath)).ToHashSet(StringComparer.Ordinal);
+                .Concat(baseline.ProtectedInputPaths).Concat(baseline.CompilerFileInputs.Select(response => response.RepositoryPath)).ToHashSet(StringComparer.Ordinal);
             var declaredInputs = DeclaredSemanticInputs(root, baseline, token, out var compilerInputsUnverifiable);
             if (declaredInputs is null) return compilerInputsUnverifiable ? "compiler-input-unverifiable" : "checkout-mismatch";
-            if (!ScalarCompilerResponses(baseline, token)) return "compiler-input-unverifiable";
+            if (!VerifiableCompilerFiles(baseline, token)) return "compiler-input-unverifiable";
             var excluded = preflight.Configuration.Sources.Select(source => Relative(source.Path)).ToHashSet(StringComparer.Ordinal);
             excluded.Add(Relative(preflight.PolicyPath));
             bool RepositoryDeclared(string path) => declaredInputs.Any(pattern => pattern(path))
@@ -91,14 +91,32 @@ internal static class GitHubCheckoutBinding
         "features", "nologo", "utf8output", "fullpaths", "errorendlocation", "parallel", "parallel+", "parallel-",
     };
 
-    private static bool ScalarCompilerResponses(DocumentationPatchRepositoryBaseline baseline, CancellationToken token)
+    private static bool VerifiableCompilerFiles(DocumentationPatchRepositoryBaseline baseline, CancellationToken token)
     {
-        foreach (var response in baseline.CompilerResponseFiles)
+        foreach (var response in baseline.CompilerFileInputs)
         {
             token.ThrowIfCancellationRequested();
             if (response.IsOutput || response.LoadSha256 is null
                 || !baseline.TryGetEntry(response.RepositoryPath, out var file) || file.Sha256 != response.LoadSha256) return false;
             using var stream = new MemoryStream(file.Bytes.ToArray(), writable: false);
+            if (response.Kind == DocumentationPatchCompilerInputKind.RuleSet)
+            {
+                using var xml = XmlReader.Create(stream, new XmlReaderSettings
+                {
+                    DtdProcessing = DtdProcessing.Prohibit,
+                    XmlResolver = null,
+                    MaxCharactersInDocument = 16 * 1024 * 1024,
+                });
+                try
+                {
+                    var rules = XDocument.Load(xml);
+                    if (rules.Root?.Name.LocalName != "RuleSet"
+                        || rules.Descendants().Any(element => element.Name.LocalName == "Include")) return false;
+                }
+                catch (XmlException) { return false; }
+                continue;
+            }
+            if (response.Kind != DocumentationPatchCompilerInputKind.ResponseFile) return false;
             using var reader = new StreamReader(stream, new System.Text.UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
             try { if (!ScalarResponseArguments(reader, token)) return false; }
             catch (System.Text.DecoderFallbackException) { return false; }
@@ -152,25 +170,29 @@ internal static class GitHubCheckoutBinding
                 || element.Name.LocalName.Equals("HintPath", StringComparison.OrdinalIgnoreCase)
                 || declaration.ReferenceCandidateElements.Contains(ElementPath(element))))
             {
-                if (item.Name.LocalName.Equals("CompilerResponseFile", StringComparison.OrdinalIgnoreCase)
+                var compilerProperty = item.Name.LocalName.Equals("CompilerResponseFile", StringComparison.OrdinalIgnoreCase)
+                    || item.Name.LocalName.Equals("CodeAnalysisRuleSet", StringComparison.OrdinalIgnoreCase);
+                if (compilerProperty
                     && item.Ancestors().Any(element => element.Name.LocalName == "Target"))
                 {
                     compilerInputsUnverifiable = true;
                     return null;
                 }
-                var conditions = item.AncestorsAndSelf().Attributes("Condition").Select(attribute => attribute.Value).ToArray();
+                var conditions = item.AncestorsAndSelf().Where(element => element.Attribute("Condition") is not null)
+                    .Select(element => (Element: element, Text: element.Attribute("Condition")!.Value)).ToArray();
                 var presenceDependent = false;
                 foreach (var condition in conditions)
                 {
                     // A false Exists condition can become true on a remote-only
                     // input. Bind its literal candidates as well as the item.
-                    foreach (Match match in Regex.Matches(condition, @"\bExists\s*\(\s*(['""])(.*?)\1\s*\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
+                    foreach (Match match in Regex.Matches(condition.Text, @"\bExists\s*\(\s*(['""])(.*?)\1\s*\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
                     {
                         presenceDependent = true;
-                        if (!AddPattern(match.Groups[2].Value, declaration, allowExternal: true)) return null;
+                        if (!AddPattern(match.Groups[2].Value, declaration, allowExternal: true,
+                            relativeToDeclaration: condition.Element.Name.LocalName is "Import" or "ImportGroup" or "PropertyGroup")) return null;
                     }
-                    if (condition.Contains("Exists", StringComparison.OrdinalIgnoreCase)
-                        && !Regex.IsMatch(condition, @"\bExists\s*\(\s*(['""])(.*?)\1\s*\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1))) return null;
+                    if (condition.Text.Contains("Exists", StringComparison.OrdinalIgnoreCase)
+                        && !Regex.IsMatch(condition.Text, @"\bExists\s*\(\s*(['""])(.*?)\1\s*\)", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1))) return null;
                 }
                 var elementPath = ElementPath(item);
                 var referenceCandidate = declaration.ReferenceCandidateElements.Contains(elementPath);
@@ -178,21 +200,22 @@ internal static class GitHubCheckoutBinding
                     && !declaration.ActiveElements.Contains(elementPath)) continue;
                 var active = declaration.ActiveElements.Contains(elementPath);
                 var deferred = item.Ancestors().Any(element => element.Name.LocalName == "Target");
-                var values = item.Name.LocalName.Equals("HintPath", StringComparison.OrdinalIgnoreCase) ? new[] { item.Value }
+                var values = compilerProperty || item.Name.LocalName.Equals("HintPath", StringComparison.OrdinalIgnoreCase) ? new[] { item.Value }
                     : item.Name.LocalName.Equals("Reference", StringComparison.OrdinalIgnoreCase)
                     ? item.Attributes("Include").Select(attribute => attribute.Value).Where(value => value.Contains('/') || value.Contains('\\')
                         || Path.GetExtension(value).ToLowerInvariant() is ".dll" or ".exe" or ".winmd")
                     : item.Attributes().Where(attribute => new[] { "Include", "Update", "Project" }
                         .Contains(attribute.Name.LocalName, StringComparer.OrdinalIgnoreCase)).Select(attribute => attribute.Value);
-                var allowExternal = item.Name.LocalName is "Analyzer" or "Import" or "Reference" or "HintPath";
+                var allowExternal = compilerProperty || item.Name.LocalName is "Analyzer" or "Import" or "Reference" or "HintPath";
                 foreach (var value in values)
                     foreach (var pattern in value.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
                     {
-                        var recordedGlob = pattern.IndexOfAny(['*', '?']) >= 0 && item.Name.LocalName != "Reference" && active && !deferred;
+                        var recordedGlob = pattern.IndexOfAny(['*', '?']) >= 0 && item.Name.LocalName is not ("Reference" or "Import") && active && !deferred;
                         // Current evaluated items/globs honor Remove/Exclude. An
                         // inactive literal Update/removed item is not an input.
                         var include = !recordedGlob && (active || deferred || item.Name.LocalName == "Import" || presenceDependent);
-                        if (!AddPattern(pattern, declaration, allowExternal, include, referenceCandidate)) return null;
+                        if (!AddPattern(pattern, declaration, allowExternal, include, referenceCandidate,
+                            relativeToDeclaration: item.Name.LocalName == "Import")) return null;
                     }
             }
         }
@@ -201,7 +224,8 @@ internal static class GitHubCheckoutBinding
         static string ElementPath(XElement element) => string.Join("/", element.AncestorsAndSelf().Reverse().Skip(1)
             .Select(ancestor => ancestor.ElementsBeforeSelf().Count()));
 
-        bool AddPattern(string pattern, DocumentationPatchBuildDeclaration declaration, bool allowExternal, bool include = true, bool referenceCandidate = false)
+        bool AddPattern(string pattern, DocumentationPatchBuildDeclaration declaration, bool allowExternal, bool include = true,
+            bool referenceCandidate = false, bool relativeToDeclaration = false)
         {
             token.ThrowIfCancellationRequested();
             var value = pattern.Replace('\\', '/')
@@ -210,7 +234,9 @@ internal static class GitHubCheckoutBinding
             if (value.IndexOfAny(['$', '@', '%']) >= 0) return false;
             var wildcard = value.IndexOfAny(['*', '?']);
             if (wildcard >= 0 && value[wildcard..].Split('/').Contains("..", StringComparer.Ordinal)) return false;
-            var absolute = Path.GetFullPath(value, Path.GetFullPath(declaration.ProjectDirectory, root));
+            var baseDirectory = relativeToDeclaration
+                ? Path.GetDirectoryName(Path.Join(root, declaration.RepositoryPath))! : Path.GetFullPath(declaration.ProjectDirectory, root);
+            var absolute = Path.GetFullPath(value, baseDirectory);
             var relative = Path.GetRelativePath(root, absolute).Replace(Path.DirectorySeparatorChar, '/');
             if (relative == ".." || relative.StartsWith("../", StringComparison.Ordinal) || Path.IsPathRooted(relative))
                 return allowExternal; // Existing resolved SDK/package/compiler trust; never a Git blob.

@@ -233,7 +233,8 @@ public sealed class RepositoryLoader
                             state?.BuildDeclarations,
                             state?.DeclaredInputGlobs,
                             state?.RepositoryInputGlobs,
-                            state?.CompilerResponseFiles));
+                            state?.CompilerFileInputs,
+                            before));
                 }
 
                 return outcome;
@@ -933,12 +934,24 @@ internal static class PostRegistrationLoader
         {
             var absolute = Path.GetFullPath(value.Replace('\\', '/'), directory);
             var identity = IsContained(paths.PhysicalRoot, absolute) ? resolver.RelativeIdentity(paths.PhysicalRoot, absolute) : absolute;
-            state.AddCompilerResponseFile(new DocumentationPatchCompilerResponseFile(identity, resolver.RelativeIdentity(paths.PhysicalRoot, directory)));
+            state.AddCompilerFileInput(new DocumentationPatchCompilerFileInput(identity, resolver.RelativeIdentity(paths.PhysicalRoot, directory)));
+        }
+        var ruleSet = project.GetPropertyValue("CodeAnalysisRuleSet");
+        if (!string.IsNullOrWhiteSpace(ruleSet))
+        {
+            // The standard task uses this direct project-relative/absolute file
+            // first. A missing direct file may use search directories instead;
+            // leave it unrepresented so GitHub admission refuses that resolution.
+            var absolute = Path.GetFullPath(ruleSet.Replace('\\', '/'), directory);
+            var identity = IsContained(paths.PhysicalRoot, absolute) ? resolver.RelativeIdentity(paths.PhysicalRoot, absolute) : absolute;
+            state.AddCompilerFileInput(new DocumentationPatchCompilerFileInput(identity,
+                resolver.RelativeIdentity(paths.PhysicalRoot, directory), DocumentationPatchCompilerInputKind.RuleSet));
         }
         var globs = project.GetAllGlobs();
         var active = project.Items.SelectMany(item => new ProjectElement[] { item.Xml }
                 .Concat(item.Metadata.Where(metadata => metadata.Xml is not null).Select(metadata => (ProjectElement)metadata.Xml)))
             .Concat(globs.Select(glob => glob.ItemElement)).Concat(project.Imports.Select(import => import.ImportingElement))
+            .Concat(new[] { "CompilerResponseFile", "CodeAnalysisRuleSet" }.Select(name => project.GetProperty(name)?.Xml).OfType<ProjectElement>())
             .Select(element => (Owner: element.ContainingProject.FullPath, Element: BuildElementPath(element))).ToArray();
         var declarations = new[] { projectPath }.Concat(project.Imports.Select(import => import.ImportedProject.FullPath))
             .Where(path => IsContained(paths.PhysicalRoot, path)).Distinct(PathComparer())
@@ -1751,11 +1764,11 @@ internal sealed class LoaderExecutionState
     private readonly List<LoaderDiagnostic> diagnostics = [];
     private readonly HashSet<string> protectedPaths = new(
         OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal);
-    private readonly List<DocumentationPatchCompilerResponseFile> compilerResponseFiles = [];
+    private readonly List<DocumentationPatchCompilerFileInput> compilerFileInputs = [];
 
-    public IReadOnlyList<DocumentationPatchCompilerResponseFile> CompilerResponseFiles => compilerResponseFiles;
+    public IReadOnlyList<DocumentationPatchCompilerFileInput> CompilerFileInputs => compilerFileInputs;
 
-    public void AddCompilerResponseFile(DocumentationPatchCompilerResponseFile response) => compilerResponseFiles.Add(response);
+    public void AddCompilerFileInput(DocumentationPatchCompilerFileInput response) => compilerFileInputs.Add(response);
 
     private readonly Dictionary<string, Action<RoslynProject, Compilation>> buildInputBinders = new(StringComparer.Ordinal);
 

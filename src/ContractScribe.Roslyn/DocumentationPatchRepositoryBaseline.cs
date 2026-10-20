@@ -198,7 +198,7 @@ public sealed class DocumentationPatchRepositoryBaseline
         BuildDeclarations = policy.BuildDeclarations;
         DeclaredInputGlobs = policy.DeclaredInputGlobs;
         RepositoryInputGlobs = policy.RepositoryInputGlobs;
-        CompilerResponseFiles = policy.CompilerResponseFiles;
+        CompilerFileInputs = policy.CompilerFileInputs;
         this.directoryIdentities = directoryIdentities;
         byPath = entries.ToImmutableDictionary(
             entry => entry.RepositoryPath,
@@ -218,7 +218,7 @@ public sealed class DocumentationPatchRepositoryBaseline
 
     internal ImmutableArray<Func<string, bool>> RepositoryInputGlobs { get; }
 
-    internal ImmutableArray<DocumentationPatchCompilerResponseFile> CompilerResponseFiles { get; }
+    internal ImmutableArray<DocumentationPatchCompilerFileInput> CompilerFileInputs { get; }
 
     internal DocumentationPatchPhysicalIdentity RootIdentity { get; }
 
@@ -439,8 +439,12 @@ public sealed class DocumentationPatchRepositoryBaseline
             "patch.stale.repository-context");
 }
 
-internal sealed record DocumentationPatchCompilerResponseFile(
-    string RepositoryPath, string ProjectDirectory, string? LoadSha256 = null, bool IsOutput = false);
+internal sealed record DocumentationPatchCompilerFileInput(
+    string RepositoryPath, string ProjectDirectory,
+    DocumentationPatchCompilerInputKind Kind = DocumentationPatchCompilerInputKind.ResponseFile,
+    string? LoadSha256 = null, bool IsOutput = false);
+
+internal enum DocumentationPatchCompilerInputKind { ResponseFile, RuleSet }
 
 // Run-local provenance from the existing evaluation; never serialized or used
 // to evaluate a second project or authorize filesystem access.
@@ -457,7 +461,7 @@ internal sealed record DocumentationPatchBuildDeclaration(
 
     private static readonly ImmutableHashSet<string> CompilerInputs = ImmutableHashSet.Create(StringComparer.OrdinalIgnoreCase,
         "Compile", "AdditionalFiles", "EditorConfigFiles", "GlobalAnalyzerConfigFiles", "AnalyzerConfigFiles",
-        "Analyzer", "EmbeddedResource", "Resource", "LinkResource", "Reference", "CompilerResponseFile");
+        "Analyzer", "EmbeddedResource", "Resource", "LinkResource", "Reference", "CompilerResponseFile", "CodeAnalysisRuleSet");
 
     internal static bool IsCompilerInput(string itemType) => CompilerInputs.Contains(itemType);
 }
@@ -471,7 +475,7 @@ internal sealed record DocumentationPatchRepositoryPolicy(
     ImmutableArray<DocumentationPatchBuildDeclaration> BuildDeclarations,
     ImmutableArray<Func<string, bool>> DeclaredInputGlobs,
     ImmutableArray<Func<string, bool>> RepositoryInputGlobs,
-    ImmutableArray<DocumentationPatchCompilerResponseFile> CompilerResponseFiles)
+    ImmutableArray<DocumentationPatchCompilerFileInput> CompilerFileInputs)
 {
     public static StringComparer PathComparer { get; } = OperatingSystem.IsWindows()
         ? StringComparer.OrdinalIgnoreCase
@@ -490,7 +494,8 @@ internal sealed record DocumentationPatchRepositoryPolicy(
         IEnumerable<DocumentationPatchBuildDeclaration>? buildDeclarations = null,
         IEnumerable<Func<string, bool>>? declaredInputGlobs = null,
         IEnumerable<Func<string, bool>>? repositoryInputGlobs = null,
-        IEnumerable<DocumentationPatchCompilerResponseFile>? compilerResponseFiles = null)
+        IEnumerable<DocumentationPatchCompilerFileInput>? compilerFileInputs = null,
+        IReadOnlyDictionary<string, InventoryEntry>? initialInventory = null)
     {
         var protectedSet = protectedPaths.ToImmutableHashSet(PathComparer);
         var outputRoots = allowedOutputRoots
@@ -515,9 +520,9 @@ internal sealed record DocumentationPatchRepositoryPolicy(
             (buildDeclarations ?? []).ToImmutableArray(),
             (declaredInputGlobs ?? []).ToImmutableArray(),
             (repositoryInputGlobs ?? []).ToImmutableArray(),
-            (compilerResponseFiles ?? []).Select(response => response with
+            (compilerFileInputs ?? []).Select(response => response with
             {
-                LoadSha256 = inventory.TryGetValue(response.RepositoryPath, out var entry) && entry.Kind == "file" ? entry.Sha256 : null,
+                LoadSha256 = (initialInventory ?? inventory).TryGetValue(response.RepositoryPath, out var entry) && entry.Kind == "file" ? entry.Sha256 : null,
                 IsOutput = outputRoots.Any(output => response.RepositoryPath.Equals(output, PathComparison)
                     || response.RepositoryPath.StartsWith(output + "/", PathComparison)),
             }).ToImmutableArray());

@@ -792,6 +792,157 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
 
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("remote-only")]
+    [InlineData("local-only")]
+    [InlineData("matched")]
+    [InlineData("remote-extra")]
+    [InlineData("condition-remote")]
+    [InlineData("condition-matched")]
+    public async Task G3_relative_nested_import_uses_its_containing_file_while_items_use_the_project(string membership)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var root = fixture.Repository.Root;
+        var projectPath = Path.Join(root, "App/App.csproj");
+        var project = (await File.ReadAllTextAsync(projectPath)).Replace("</Project>",
+            "<Import Project=\"../Build/outer.buildinput\" /></Project>", StringComparison.Ordinal);
+        var conditional = membership.StartsWith("condition-", StringComparison.Ordinal);
+        var outer = conditional ? "<Project><Import Project=\"nested/inner.buildinput\" Condition=\"Exists('flags/enabled.input')\" /></Project>"
+            : "<Project><Import Project=\"nested/*.buildinput\" /></Project>";
+        const string inner = "<Project><PropertyGroup><DefineConstants>$(DefineConstants);NESTED_IMPORT_INPUT</DefineConstants></PropertyGroup><ItemGroup><AdditionalFiles Include=\"../Shared/*.rules\" /></ItemGroup></Project>";
+        Directory.CreateDirectory(Path.Join(root, "Build/nested"));
+        Directory.CreateDirectory(Path.Join(root, "Shared"));
+        foreach (var pair in new Dictionary<string, string>
+        {
+            ["App/App.csproj"] = project,
+            ["Build/outer.buildinput"] = outer,
+            ["Shared/input.rules"] = "project-relative additional input\n",
+        })
+        {
+            await File.WriteAllTextAsync(Path.Join(root, pair.Key), pair.Value);
+            fixture.GovernedFiles[pair.Key] = (Encoding.UTF8.GetBytes(pair.Value), null);
+        }
+        var innerPath = Path.Join(root, "Build/nested/inner.buildinput");
+        await File.WriteAllTextAsync(innerPath, inner);
+        var flagPath = Path.Join(root, "Build/flags/enabled.input");
+        if (conditional)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(flagPath)!);
+            await File.WriteAllTextAsync(flagPath, "enabled\n");
+        }
+        var loaded = await new RepositoryLoader().LoadAsync(new RepositoryLoadRequest(root, "Fixture.slnx"));
+        Assert.Equal(RepositoryLoadStatus.Success, loaded.Status);
+        await using (var session = loaded.Session!)
+        {
+            var app = Assert.Single(session.Projects, candidate => candidate.ProjectIdentity == "App/App.csproj");
+            Assert.Contains("NESTED_IMPORT_INPUT", ((Microsoft.CodeAnalysis.CSharp.CSharpParseOptions)app.Project.ParseOptions!).PreprocessorSymbolNames);
+            Assert.Contains(app.Project.AdditionalDocuments, document => document.FilePath == Path.Join(root, "Shared/input.rules"));
+        }
+        if (membership == "remote-only") File.Delete(innerPath);
+        if (membership == "condition-remote") File.Delete(flagPath);
+        var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
+        if (membership != "local-only") files["Build/nested/inner.buildinput"] = Encoding.UTF8.GetBytes(inner);
+        if (membership == "remote-extra") files["Build/nested/second.buildinput"] = Encoding.UTF8.GetBytes(inner.Replace("NESTED_IMPORT_INPUT", "SECOND_IMPORT_INPUT", StringComparison.Ordinal));
+        if (conditional) files["Build/flags/enabled.input"] = "enabled\n"u8.ToArray();
+        files["README.md"] = "unrelated remote documentation\n"u8.ToArray();
+        AdvanceTarget(fixture, files, "Bind plain relative nested import membership\n");
+        await LimitBindingInvocation(fixture);
+        var result = await fixture.Run("start");
+        var matched = membership is "matched" or "condition-matched";
+        AssertResult(result, matched ? 0 : 4, matched ? "no-op" : "stale");
+        if (!matched) Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("changed")]
+    [InlineData("matched")]
+    [InlineData("local-only")]
+    [InlineData("remote-only")]
+    [InlineData("nested")]
+    [InlineData("search-fallback")]
+    [InlineData("direct-before-search")]
+    [InlineData("condition-remote")]
+    [InlineData("condition-matched")]
+    public async Task G3_standard_ruleset_property_binds_actual_compiler_diagnostics(string mode)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var root = fixture.Repository.Root;
+        var projectPath = Path.Join(root, "App/App.csproj");
+        var conditional = mode.StartsWith("condition-", StringComparison.Ordinal);
+        var search = mode is "search-fallback" or "direct-before-search";
+        var property = search ? "<PropertyGroup><CodeAnalysisRuleSet>rules.ruleset</CodeAnalysisRuleSet><CodeAnalysisRuleSetDirectories>$(MSBuildProjectDirectory)/../Rules</CodeAnalysisRuleSetDirectories></PropertyGroup>"
+            : "<PropertyGroup><CodeAnalysisRuleSet>../rules.ruleset</CodeAnalysisRuleSet></PropertyGroup>";
+        if (conditional) property = property.Replace("CodeAnalysisRuleSet", "codeanalysisruleset", StringComparison.Ordinal);
+        var project = (await File.ReadAllTextAsync(projectPath)).Replace("</Project>",
+            (conditional ? "<Import Project=\"../Build/ruleset.buildinput\" />" : property) + "</Project>", StringComparison.Ordinal);
+        const string rules = "<RuleSet Name=\"Binding\" ToolsVersion=\"15.0\"><Rules AnalyzerId=\"Microsoft.CodeAnalysis.CSharp\" RuleNamespace=\"Microsoft.CodeAnalysis.CSharp\"><Rule Id=\"CS0168\" Action=\"None\" /></Rules></RuleSet>";
+        var sourcePath = Path.Join(root, "App/App.cs");
+        var source = (await File.ReadAllTextAsync(sourcePath)).Replace("public static void Run() { }", "public static void Run() { int unused; }", StringComparison.Ordinal);
+        foreach (var pair in new Dictionary<string, string>
+        {
+            ["App/App.csproj"] = project,
+            ["App/App.cs"] = source,
+        })
+        {
+            await File.WriteAllTextAsync(Path.Join(root, pair.Key), pair.Value);
+            fixture.GovernedFiles[pair.Key] = (Encoding.UTF8.GetBytes(pair.Value), null);
+        }
+        var rulePath = mode == "search-fallback" ? "Rules/rules.ruleset" : mode == "direct-before-search" ? "App/rules.ruleset" : "rules.ruleset";
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.Join(root, rulePath))!);
+        var carrier = mode == "nested" ? "<RuleSet Name=\"Binding\" ToolsVersion=\"15.0\"><Include Path=\"nested/rules.ruleset\" Action=\"Default\" /></RuleSet>" : rules;
+        await File.WriteAllTextAsync(Path.Join(root, rulePath), carrier);
+        fixture.GovernedFiles[rulePath] = (Encoding.UTF8.GetBytes(carrier), null);
+        if (mode == "nested")
+        {
+            Directory.CreateDirectory(Path.Join(root, "nested"));
+            await File.WriteAllTextAsync(Path.Join(root, "nested/rules.ruleset"), rules);
+            fixture.GovernedFiles["nested/rules.ruleset"] = (Encoding.UTF8.GetBytes(rules), null);
+        }
+        if (mode == "direct-before-search")
+        {
+            Directory.CreateDirectory(Path.Join(root, "Rules"));
+            await File.WriteAllTextAsync(Path.Join(root, "Rules/rules.ruleset"), rules.Replace("Action=\"None\"", "Action=\"Error\"", StringComparison.Ordinal));
+            fixture.GovernedFiles["Rules/rules.ruleset"] = (await File.ReadAllBytesAsync(Path.Join(root, "Rules/rules.ruleset")), null);
+        }
+        var flagPath = Path.Join(root, "Build/ruleset.enabled");
+        if (conditional)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(flagPath)!);
+            await File.WriteAllTextAsync(flagPath, "enabled\n");
+            var declaration = property.Replace("<PropertyGroup>", "<PropertyGroup Condition=\"Exists('ruleset.enabled')\">", StringComparison.Ordinal);
+            await File.WriteAllTextAsync(Path.Join(root, "Build/ruleset.buildinput"), "<Project>" + declaration + "</Project>");
+            fixture.GovernedFiles["Build/ruleset.buildinput"] = (await File.ReadAllBytesAsync(Path.Join(root, "Build/ruleset.buildinput")), null);
+        }
+        var loaded = await new RepositoryLoader().LoadAsync(new RepositoryLoadRequest(root, "Fixture.slnx"));
+        Assert.Equal(RepositoryLoadStatus.Success, loaded.Status);
+        await using (var session = loaded.Session!)
+        {
+            var app = Assert.Single(session.Projects, candidate => candidate.ProjectIdentity == "App/App.csproj");
+            Assert.Equal(Microsoft.CodeAnalysis.ReportDiagnostic.Suppress, app.Compilation.Options.SpecificDiagnosticOptions["CS0168"]);
+        }
+        var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
+        if (mode == "changed") files[rulePath] = Encoding.UTF8.GetBytes(rules.Replace("Action=\"None\"", "Action=\"Error\"", StringComparison.Ordinal));
+        if (mode == "local-only") files.Remove(rulePath);
+        if (mode == "remote-only") File.Delete(Path.Join(root, rulePath));
+        if (conditional) files["Build/ruleset.enabled"] = "enabled\n"u8.ToArray();
+        if (mode == "condition-remote") File.Delete(flagPath);
+        if (mode == "direct-before-search") files["Rules/rules.ruleset"] = Encoding.UTF8.GetBytes(rules);
+        files["README.md"] = "unrelated remote documentation\n"u8.ToArray();
+        AdvanceTarget(fixture, files, "Bind evaluated compiler ruleset property\n");
+        await LimitBindingInvocation(fixture);
+        var matched = mode is "matched" or "condition-matched" or "direct-before-search";
+        var result = await fixture.Run("start");
+        AssertResult(result, mode == "remote-only" ? 5 : matched ? 0 : 4,
+            mode == "remote-only" ? "host-failure" : matched ? "no-op" : "stale");
+        if (mode == "remote-only") Assert.Contains("campaign.load-failure", result.Stderr, StringComparison.Ordinal);
+        if (mode is "nested" or "search-fallback")
+            Assert.Contains("github-proposal.compiler-input-unverifiable", result.Stderr, StringComparison.Ordinal);
+        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.Equal(0, fixture.GitHub.PublicationWrites);
+    }
+
     private static async Task LimitBindingInvocation(Fixture fixture)
     {
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
