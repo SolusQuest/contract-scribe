@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Core;
 using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
@@ -122,6 +123,9 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("rate-limit", 3, "rate-limit")]
     [InlineData("incomplete-pagination", 5, "host-failure")]
     [InlineData("corrupt-coordination", 4, "human-change")]
+    [InlineData("reset-accepted", 4, "human-change")]
+    [InlineData("reset-origin", 4, "human-change")]
+    [InlineData("drop-receipts", 4, "human-change")]
     [InlineData("drop-checkpoint", 4, "human-change")]
     [InlineData("remove-publication", 4, "human-change")]
     [InlineData("older-publication", 4, "human-change")]
@@ -133,13 +137,35 @@ public sealed partial class GitHubProposalCliProcessTests
         var server = fixture.GitHub;
         lock (server.Gate)
         {
-            if (kind is "drop-checkpoint" or "remove-publication" or "older-publication")
+            if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
             {
                 var reference = server.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal));
                 var document = GitHubCoordinationDocument.Decode(JsonSerializer.SerializeToUtf8Bytes(server.CoordinationDocument()))
                     .RetainAt(reference.Value) with
                 { PredecessorOid = reference.Value };
-                if (kind == "drop-checkpoint") document = document with { Checkpoint = null, Plan = null, Archive = null };
+                if (kind is "reset-accepted" or "reset-origin" or "drop-receipts")
+                {
+                    var original = CampaignStateJson.Parse(server.Blobs[document.Checkpoint!.Oid]).Artifact!;
+                    Assert.Contains(original.State.WorkItems, work => work.Status == CampaignWorkStatus.Accepted);
+                    var state = original.State;
+                    var reset = kind == "reset-accepted";
+                    var changed = CampaignStateFactory.CreateValidated(state.ProductRevision, state.CampaignLineage,
+                        state.Snapshot, original.CheckpointRevision + 1, state.ConfiguredCeilings, state.LineageCharges,
+                        reset ? state.WorkItems.Select(work => work.Status == CampaignWorkStatus.Accepted
+                            ? work with { Status = CampaignWorkStatus.Planned, TrustedProposal = null } : work) : state.WorkItems,
+                        state.Batch, state.ActiveReservation, reset ? null : state.CandidateObservation,
+                        reset ? null : state.CumulativeOutcome, state.KnownCompletedOperations,
+                        reset ? null : state.TerminalOutcome, state.Predecessor, state.DispatchObservations,
+                        kind is "reset-accepted" or "drop-receipts" ? null : state.ScribeProgress, state.ArchivedDispatchPrefix);
+                    if (kind == "drop-receipts") changed = CampaignStateFactory.PreserveOrigin(original, changed);
+                    var artifact = CampaignStateJson.CreateArtifact(changed);
+                    Assert.True(CampaignStateJson.Parse(artifact.ExactUtf8Json.AsMemory()).IsValid);
+                    var bytes = artifact.ExactUtf8Json.ToArray();
+                    var blob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+                    server.Blobs[blob] = bytes;
+                    document = document with { Checkpoint = new(blob, artifact.Sha256, artifact.CheckpointRevision) };
+                }
+                else if (kind == "drop-checkpoint") document = document with { Checkpoint = null, Plan = null, Archive = null };
                 else if (kind == "remove-publication") document = document with { Publication = null };
                 else
                 {
@@ -201,7 +227,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var allMutations = server.Requests.Count(request => request.Method != "GET");
         AssertResult(await fixture.Run("resume"), exit, outcome);
         Assert.Equal(providerRequests, fixture.Provider.RequestCount);
-        if (kind is "drop-checkpoint" or "remove-publication" or "older-publication")
+        if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
             Assert.Equal(allMutations, server.Requests.Count(request => request.Method != "GET"));
         Assert.Equal(writes, server.PublicationWrites);
         Assert.Equal(1, server.PrAttempts);

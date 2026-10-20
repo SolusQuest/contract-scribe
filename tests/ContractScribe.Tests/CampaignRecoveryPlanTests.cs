@@ -128,6 +128,45 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(writes, remote.RefMutationAttempts);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Canonical_successor_cannot_reclassify_observed_elapsed_history(bool eraseZero, bool eraseUnknown)
+    {
+        var scenario = UnlimitedScenario();
+        var state = scenario.InitialState;
+        var elapsed = new CampaignChargeObservation(eraseZero || eraseUnknown ? 0 : 100, eraseUnknown ? 100 : 0, eraseZero ? 0 : 100);
+        var artifact = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(
+            state.ProductRevision, state.CampaignLineage, state.Snapshot, state.CheckpointRevision,
+            state.ConfiguredCeilings, state.LineageCharges with { ActiveElapsedMilliseconds = elapsed },
+            state.WorkItems, state.Batch));
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using (var client = GitHubCoordinationRefTests.CheckpointClient(remote, state.CampaignLineage))
+        await using (var store = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client))
+        {
+            Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+            Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(scenario.Plan), default));
+            Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(
+                artifact.ExactUtf8Json.AsMemory(), artifact.CheckpointRevision, artifact.Sha256, default)).Kind);
+        }
+        var changed = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(
+            state.ProductRevision, state.CampaignLineage, state.Snapshot, artifact.CheckpointRevision + 1,
+            state.ConfiguredCeilings, state.LineageCharges with
+            {
+                ActiveElapsedMilliseconds = new(eraseZero ? null : eraseUnknown ? 100 : 0, eraseUnknown ? 0 : elapsed.TotalCharged, elapsed.TotalCharged),
+            }, state.WorkItems, state.Batch));
+        remote.AppendDocument(document => document with
+        {
+            Checkpoint = new(remote.SeedBlob(changed.ExactUtf8Json.ToArray()), changed.Sha256, changed.CheckpointRevision),
+        });
+        var writes = remote.RefMutationAttempts;
+        using var freshClient = GitHubCoordinationRefTests.CheckpointClient(remote, state.CampaignLineage);
+        await using var fresh = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(freshClient);
+        Assert.Equal(CampaignCheckpointReadKind.Invalid, await fresh.AcquireCheckpointAsync(default));
+        Assert.Equal(writes, remote.RefMutationAttempts);
+    }
+
     [Fact]
     public void Recovery_projection_compares_complete_source_facts_instead_of_claimed_execution_identity()
     {

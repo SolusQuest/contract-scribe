@@ -48,16 +48,18 @@ public static partial class CampaignStateFactory
         var charges = next.LineageCharges;
         Require(charges.OuterInvocations >= oldCharges.OuterInvocations
             && charges.PatchValidationInvocations >= oldCharges.PatchValidationInvocations
-            && charges.ProviderRequests.TotalCharged >= oldCharges.ProviderRequests.TotalCharged
-            && charges.InputTokens.TotalCharged >= oldCharges.InputTokens.TotalCharged
-            && charges.CachedInputTokens.TotalCharged >= oldCharges.CachedInputTokens.TotalCharged
-            && charges.UncachedInputTokens.TotalCharged >= oldCharges.UncachedInputTokens.TotalCharged
-            && charges.OutputTokens.TotalCharged >= oldCharges.OutputTokens.TotalCharged
-            && charges.ReasoningTokens.TotalCharged >= oldCharges.ReasoningTokens.TotalCharged
-            && charges.CostMicrounits.TotalCharged >= oldCharges.CostMicrounits.TotalCharged
-            && charges.ActiveElapsedMilliseconds.TotalCharged >= oldCharges.ActiveElapsedMilliseconds.TotalCharged
+            && RetainsCharge(oldCharges.ProviderRequests, charges.ProviderRequests)
+            && RetainsCharge(oldCharges.InputTokens, charges.InputTokens)
+            && RetainsCharge(oldCharges.CachedInputTokens, charges.CachedInputTokens)
+            && RetainsCharge(oldCharges.UncachedInputTokens, charges.UncachedInputTokens)
+            && RetainsCharge(oldCharges.OutputTokens, charges.OutputTokens)
+            && RetainsCharge(oldCharges.ReasoningTokens, charges.ReasoningTokens)
+            && RetainsCharge(oldCharges.CostMicrounits, charges.CostMicrounits)
+            && RetainsCharge(oldCharges.ActiveElapsedMilliseconds, charges.ActiveElapsedMilliseconds)
             && (!oldCharges.HasUnpricedCostHistory || charges.HasUnpricedCostHistory),
             CampaignStateValidationCode.InvalidCorrelation);
+        if (next.Snapshot.ExecutionCommitmentSha256 == before.Snapshot.ExecutionCommitmentSha256)
+            ValidateRetainedProgress(predecessor, next);
         if (next.ArchivedDispatchPrefix != before.ArchivedDispatchPrefix)
         {
             _ = CampaignDispatchArchive.VerifyTransition(predecessor, successor);
@@ -83,6 +85,72 @@ public static partial class CampaignStateFactory
                 };
             Require(current == previous, CampaignStateValidationCode.InvalidCorrelation);
         }
+    }
+
+    private static bool RetainsCharge(CampaignChargeObservation before, CampaignChargeObservation next) =>
+        (before.Observed is null || next.Observed is { } observed && observed >= before.Observed.Value)
+        && next.ConservativeUnobserved >= before.ConservativeUnobserved
+        && next.TotalCharged >= before.TotalCharged;
+
+    private static bool SameRetainedFact<T>(T before, T next) => JsonElement.DeepEquals(
+        JsonSerializer.SerializeToElement(before), JsonSerializer.SerializeToElement(next));
+
+    private static void ValidateRetainedProgress(CampaignCheckpointArtifact predecessor, CampaignCheckpointState next)
+    {
+        var before = predecessor.State;
+        Require(next.Snapshot == before.Snapshot && SameRetainedFact(before.Batch, next.Batch)
+            && before.WorkItems.Select(work => work.WorkItemKey).SequenceEqual(next.WorkItems.Select(work => work.WorkItemKey)),
+            CampaignStateValidationCode.InvalidCorrelation);
+        for (var index = 0; index < before.WorkItems.Length; index++)
+        {
+            var oldWork = before.WorkItems[index];
+            var work = next.WorkItems[index];
+            Require(work.OuterAttemptCount >= oldWork.OuterAttemptCount
+                && work.CandidateAttemptCount >= oldWork.CandidateAttemptCount,
+                CampaignStateValidationCode.InvalidCorrelation);
+            if (oldWork.Status is CampaignWorkStatus.ProposalComplete or CampaignWorkStatus.Accepted)
+            {
+                // The existing reducer can close an independently rejected patch
+                // member, but never turn a completed proposal back into pending work.
+                var rejected = before.ActiveReservation is CampaignPatchReservation reservation
+                    && next.ActiveReservation is null
+                    && work is
+                    {
+                        Status: CampaignWorkStatus.Closed, TrustedProposal: null,
+                        ClosedOutcome: { Stage: CampaignWorkOutcomeStage.Patch, Code: CampaignWorkOutcomeCode.PatchRejected }
+                    }
+                    && work.ClosedOutcome.PatchRequestSha256 == reservation.PatchRequestSha256
+                    && next.CumulativeOutcome is { Kind: CampaignCumulativeOutcomeKind.Rejected } cumulative
+                    && cumulative.PatchRequestSha256 == reservation.PatchRequestSha256
+                    && cumulative.PatchResultCommitmentSha256 == work.ClosedOutcome.PatchResultCommitmentSha256;
+                Require(rejected || (work.Status == oldWork.Status
+                    || oldWork.Status == CampaignWorkStatus.ProposalComplete && work.Status == CampaignWorkStatus.Accepted)
+                    && SameRetainedFact(oldWork.TrustedProposal, work.TrustedProposal),
+                    CampaignStateValidationCode.InvalidCorrelation);
+            }
+        }
+        if (before.CandidateObservation is { } oldCandidate)
+        {
+            Require(next.CandidateObservation is { } candidate
+                && oldCandidate.AcceptedWorkItemKeys.All(key => candidate.AcceptedWorkItemKeys.Contains(key, StringComparer.Ordinal)),
+                CampaignStateValidationCode.InvalidCorrelation);
+            if (oldCandidate.AcceptedWorkItemKeys.SequenceEqual(next.CandidateObservation!.AcceptedWorkItemKeys))
+            {
+                var origin = before.AcceptedCandidateOrigin!;
+                Require(SameRetainedFact(origin with { CheckpointSha256 = origin.CheckpointSha256 ?? predecessor.Sha256 },
+                    next.AcceptedCandidateOrigin), CampaignStateValidationCode.InvalidCorrelation);
+            }
+        }
+        if (before.ScribeProgress is { } progress)
+        {
+            foreach (var member in progress.Members.Where(member => member.ContentSha256 is not null))
+                Require(next.ScribeProgress is { } nextProgress
+                    && nextProgress.Members.Any(current => SameRetainedFact(member, current)),
+                    CampaignStateValidationCode.InvalidCorrelation);
+        }
+        foreach (var operation in before.KnownCompletedOperations)
+            Require(next.KnownCompletedOperations.Any(current => SameRetainedFact(operation, current)),
+                CampaignStateValidationCode.InvalidCorrelation);
     }
 
     internal static string DispatchSettlementCommitment(CampaignDispatchObservation row) =>

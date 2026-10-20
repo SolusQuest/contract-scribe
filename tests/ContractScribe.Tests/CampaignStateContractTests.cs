@@ -727,6 +727,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignTransitionKind.Applied, reconstructed.Kind);
         Assert.Equal(CampaignTerminalKind.Complete, reconstructed.Artifact.State.TerminalOutcome!.Kind);
         Assert.Equal(CampaignWorkStatus.Accepted, reconstructed.Artifact.State.WorkItems[0].Status);
+        CampaignStateFactory.ValidateSuccessorHistory(freshReservation.Artifact, reconstructed.Artifact);
         var original = CampaignStateFactory.ProveAcceptedCandidateOrigin(completed.Artifact, historicalRequest,
             CreateAcceptedPatchResult(historicalRequest, proposal));
         var replay = CampaignStateFactory.ProveAcceptedCandidateOrigin(reconstructed.Artifact, freshRequest,
@@ -1058,6 +1059,7 @@ public sealed partial class CampaignStateContractTests
             activeElapsedMilliseconds: 500);
         Assert.Equal(CampaignTransitionKind.Applied, applied.Kind);
         Assert.Equal(scenario.Predecessor.CheckpointRevision + 1, applied.Artifact.CheckpointRevision);
+        CampaignStateFactory.ValidateSuccessorHistory(scenario.Predecessor, applied.Artifact);
         var selected = Assert.Single(applied.Artifact.State.WorkItems, item =>
             string.Equals(item.WorkItemKey, scenario.SelectedWorkItemKey, StringComparison.Ordinal));
         Assert.Equal(CampaignWorkStatus.Closed, selected.Status);
@@ -2100,6 +2102,7 @@ public sealed partial class CampaignStateContractTests
 
         Assert.Equal(CampaignTransitionKind.Applied, retry.Kind);
         Assert.Equal(CampaignWorkStatus.Planned, retry.Artifact.State.WorkItems[0].Status);
+        CampaignStateFactory.ValidateSuccessorHistory(completed.Artifact, retry.Artifact);
         Assert.Null(retry.Artifact.State.WorkItems[0].ClosedOutcome);
         Assert.NotEqual(
             firstAttempt,
