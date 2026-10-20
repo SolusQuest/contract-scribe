@@ -863,6 +863,8 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("nested")]
     [InlineData("search-fallback")]
     [InlineData("direct-before-search")]
+    [InlineData("evaluated-property")]
+    [InlineData("overwritten-property")]
     [InlineData("condition-remote")]
     [InlineData("condition-matched")]
     public async Task G3_standard_ruleset_property_binds_actual_compiler_diagnostics(string mode)
@@ -874,6 +876,8 @@ public sealed partial class GitHubProposalCliProcessTests
         var search = mode is "search-fallback" or "direct-before-search";
         var property = search ? "<PropertyGroup><CodeAnalysisRuleSet>rules.ruleset</CodeAnalysisRuleSet><CodeAnalysisRuleSetDirectories>$(MSBuildProjectDirectory)/../Rules</CodeAnalysisRuleSetDirectories></PropertyGroup>"
             : "<PropertyGroup><CodeAnalysisRuleSet>../rules.ruleset</CodeAnalysisRuleSet></PropertyGroup>";
+        if (mode == "evaluated-property") property = "<PropertyGroup><BindingRules>../rules.ruleset</BindingRules><CodeAnalysisRuleSet>$(BindingRules)</CodeAnalysisRuleSet></PropertyGroup>";
+        if (mode == "overwritten-property") property = "<PropertyGroup><CodeAnalysisRuleSet>$(UnusedRules)</CodeAnalysisRuleSet><CodeAnalysisRuleSet>../rules.ruleset</CodeAnalysisRuleSet></PropertyGroup>";
         if (conditional) property = property.Replace("CodeAnalysisRuleSet", "codeanalysisruleset", StringComparison.Ordinal);
         var project = (await File.ReadAllTextAsync(projectPath)).Replace("</Project>",
             (conditional ? "<Import Project=\"../Build/ruleset.buildinput\" />" : property) + "</Project>", StringComparison.Ordinal);
@@ -932,7 +936,7 @@ public sealed partial class GitHubProposalCliProcessTests
         files["README.md"] = "unrelated remote documentation\n"u8.ToArray();
         AdvanceTarget(fixture, files, "Bind evaluated compiler ruleset property\n");
         await LimitBindingInvocation(fixture);
-        var matched = mode is "matched" or "condition-matched" or "direct-before-search";
+        var matched = mode is "matched" or "condition-matched" or "direct-before-search" or "evaluated-property" or "overwritten-property";
         var result = await fixture.Run("start");
         AssertResult(result, mode == "remote-only" ? 5 : matched ? 0 : 4,
             mode == "remote-only" ? "host-failure" : matched ? "no-op" : "stale");

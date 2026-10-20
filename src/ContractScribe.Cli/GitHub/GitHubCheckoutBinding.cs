@@ -200,6 +200,10 @@ internal static class GitHubCheckoutBinding
                     && !declaration.ActiveElements.Contains(elementPath)) continue;
                 var active = declaration.ActiveElements.Contains(elementPath);
                 var deferred = item.Ancestors().Any(element => element.Name.LocalName == "Target");
+                // Effective compiler properties already have evaluated carrier
+                // provenance. Only inactive presence-dependent alternatives need
+                // a static candidate; overwritten values are not inputs.
+                if (compilerProperty && (active || !presenceDependent)) continue;
                 var values = compilerProperty || item.Name.LocalName.Equals("HintPath", StringComparison.OrdinalIgnoreCase) ? new[] { item.Value }
                     : item.Name.LocalName.Equals("Reference", StringComparison.OrdinalIgnoreCase)
                     ? item.Attributes("Include").Select(attribute => attribute.Value).Where(value => value.Contains('/') || value.Contains('\\')
