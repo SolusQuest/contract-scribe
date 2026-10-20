@@ -2958,6 +2958,22 @@ public sealed partial class GitHubCoordinationRefTests
             }
         }
 
+        internal void AppendDocument(Func<GitHubCoordinationDocument, GitHubCoordinationDocument> change)
+        {
+            var head = CoordinationHead!;
+            var document = change(FixtureDocuments[head].RetainAt(head) with { PredecessorOid = head });
+            var value = GitHubCoordinationObjects.Prepare(document);
+            SeedObjects(value);
+            ForceCoordinationHead(value.CommitOid);
+        }
+
+        internal string SeedBlob(byte[] bytes)
+        {
+            var oid = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+            lock (gate) blobs[oid] = bytes;
+            return oid;
+        }
+
         internal void SeedRaw(
             byte[] stateBytes,
             string operationCommitment,

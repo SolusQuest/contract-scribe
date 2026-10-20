@@ -1076,11 +1076,11 @@ internal sealed partial class GitHubCoordinationStore
     {
         try
         {
-            var document = await ReadDocumentAsync(headOid, cancellationToken).ConfigureAwait(false);
+            var document = await ReadAcceptedDocumentAsync(headOid, cancellationToken).ConfigureAwait(false);
             if (document.Publication is not { } pointer)
                 return new(GitHubCoordinationOutcome.Current);
             var anchor = pointer.Anchor == GitHubCoordinationDocument.CurrentCommit ? headOid : pointer.Anchor;
-            var eventDocument = anchor == headOid ? document : await ReadDocumentAsync(anchor, cancellationToken).ConfigureAwait(false);
+            var eventDocument = anchor == headOid ? document : await ReadAcceptedDocumentAsync(anchor, cancellationToken).ConfigureAwait(false);
             if (eventDocument.Publication != pointer with { Anchor = GitHubCoordinationDocument.CurrentCommit })
                 return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             var blob = await ReadBlobAsync(pointer.Oid, cancellationToken).ConfigureAwait(false);
@@ -1101,6 +1101,10 @@ internal sealed partial class GitHubCoordinationStore
             return new(GitHubCoordinationOutcome.Current,
                 state: new StateCapability(this, repository, target, headOid, state,
                     ImmutableArray.CreateRange(document.Encode())));
+        }
+        catch (CampaignStateValidationException)
+        {
+            return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
         }
         catch (GitHubCoordinationException exception)
         {

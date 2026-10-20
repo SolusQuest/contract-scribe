@@ -1507,7 +1507,7 @@ public static partial class CampaignStateReducer
                     ? PreservePausedAttempt(state.WorkItems, provider) : state.WorkItems,
                 state.Batch, activeReservation: null, state.CandidateObservation, state.CumulativeOutcome,
                 state.KnownCompletedOperations, terminal, state.Predecessor,
-                RetireDispatchObservation(state, charges), state.ScribeProgress);
+                RetireDispatchObservation(state, charges), state.ScribeProgress, state.ArchivedDispatchPrefix);
             var transition = Applied(predecessor, successor);
             ValidateInitialProviderReservationCapacity(transition.Artifact.State);
             return state.ActiveReservation is null ? transition

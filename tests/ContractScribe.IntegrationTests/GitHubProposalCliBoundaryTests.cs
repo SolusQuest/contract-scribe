@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
@@ -121,6 +122,9 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("rate-limit", 3, "rate-limit")]
     [InlineData("incomplete-pagination", 5, "host-failure")]
     [InlineData("corrupt-coordination", 4, "human-change")]
+    [InlineData("drop-checkpoint", 4, "human-change")]
+    [InlineData("remove-publication", 4, "human-change")]
+    [InlineData("older-publication", 4, "human-change")]
     public async Task Fresh_process_authenticates_remote_changes_and_never_repairs_them(string kind, int exit, string outcome)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
@@ -129,6 +133,36 @@ public sealed partial class GitHubProposalCliProcessTests
         var server = fixture.GitHub;
         lock (server.Gate)
         {
+            if (kind is "drop-checkpoint" or "remove-publication" or "older-publication")
+            {
+                var reference = server.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal));
+                var document = GitHubCoordinationDocument.Decode(JsonSerializer.SerializeToUtf8Bytes(server.CoordinationDocument()))
+                    .RetainAt(reference.Value) with
+                { PredecessorOid = reference.Value };
+                if (kind == "drop-checkpoint") document = document with { Checkpoint = null, Plan = null, Archive = null };
+                else if (kind == "remove-publication") document = document with { Publication = null };
+                else
+                {
+                    var publication = GitHubPublicationEvent.Decode(server.Blobs[document.Publication!.Oid]);
+                    document = document with { Publication = publication.Previous! };
+                }
+                var prepared = GitHubCoordinationObjects.Prepare(document);
+                var files = GitHubCoordinationObjects.LeafEntries(prepared).ToDictionary(
+                    entry => ".contract-scribe/" + entry.Path,
+                    entry => entry.Path == GitHubCoordinationObjects.StatePath ? prepared.StateBytes.ToArray() : server.Blobs[entry.Oid]);
+                var tree = server.BuildTree(files);
+                var parent = server.Commits[reference.Value];
+                var oid = server.AddCommit(new JsonObject
+                {
+                    ["tree"] = tree,
+                    ["parents"] = new JsonArray(reference.Value),
+                    ["message"] = prepared.Message,
+                    ["author"] = parent["author"]!.DeepClone(),
+                    ["committer"] = parent["committer"]!.DeepClone(),
+                });
+                Assert.Equal(prepared.CommitOid, oid);
+                server.Refs[reference.Key] = oid;
+            }
             if (kind is "title" or "body") server.PullRequests[0][kind] = "human change";
             if (kind == "incomplete-pagination") server.IncompletePagination = true;
             if (kind == "corrupt-coordination")
@@ -163,7 +197,12 @@ public sealed partial class GitHubProposalCliProcessTests
             }
         }
         var writes = server.PublicationWrites;
+        var providerRequests = fixture.Provider.RequestCount;
+        var allMutations = server.Requests.Count(request => request.Method != "GET");
         AssertResult(await fixture.Run("resume"), exit, outcome);
+        Assert.Equal(providerRequests, fixture.Provider.RequestCount);
+        if (kind is "drop-checkpoint" or "remove-publication" or "older-publication")
+            Assert.Equal(allMutations, server.Requests.Count(request => request.Method != "GET"));
         Assert.Equal(writes, server.PublicationWrites);
         Assert.Equal(1, server.PrAttempts);
         await fixture.AssertSourceUnchanged();

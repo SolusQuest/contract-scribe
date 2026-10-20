@@ -15,6 +15,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
     private bool checkpointStopped;
     private Task? renewal;
     private CampaignRecoveryPlan? boundPlan;
+    private readonly HashSet<GitHubEventPointer> verifiedCheckpointPublications = [];
     private const int ClaimSeconds = 300;
 
     internal CancellationToken CheckpointToken => checkpointLifetime.Token;
@@ -46,6 +47,67 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         return document;
     }
 
+    // Object hashes authenticate bytes; the immediate parent authenticates which
+    // protected facts this operation was allowed to replace. Never walk the
+    // checkpoint chain: publication history has its own immutable event graph.
+    private async ValueTask<GitHubCoordinationDocument> ReadAcceptedDocumentAsync(string head, CancellationToken token)
+    {
+        var document = await ReadDocumentAsync(head, token).ConfigureAwait(false);
+        if (document.PredecessorOid == ZeroOid)
+        {
+            if (document.Checkpoint is not null || document.Plan is not null || document.Archive is not null
+                || document.Publication is { Anchor: not GitHubCoordinationDocument.CurrentCommit }
+                || document.Claim is { Epoch: not 1 })
+                throw new GitHubCoordinationException();
+            return document;
+        }
+        var parent = (await ReadDocumentAsync(document.PredecessorOid, token).ConfigureAwait(false))
+            .RetainAt(document.PredecessorOid);
+        if (parent.Claim is { } priorClaim)
+        {
+            if (document.Claim is not { } claim
+                || !(claim.Owner == priorClaim.Owner && claim.Epoch == priorClaim.Epoch
+                    || claim.Owner != priorClaim.Owner && claim.Epoch == priorClaim.Epoch + 1))
+                throw new GitHubCoordinationException();
+        }
+        else if (document.Claim is { Epoch: not 1 }) throw new GitHubCoordinationException();
+        var publicationChanged = document.Publication is { Anchor: GitHubCoordinationDocument.CurrentCommit };
+        if (!publicationChanged && document.Publication != parent.Publication)
+            throw new GitHubCoordinationException();
+        if (document.Checkpoint == parent.Checkpoint)
+        {
+            if (document.Plan != parent.Plan || document.Archive != parent.Archive)
+                throw new GitHubCoordinationException();
+        }
+        else
+        {
+            if (publicationChanged || document.Claim != parent.Claim || document.Checkpoint is not { } pointer)
+                throw new GitHubCoordinationException();
+            var next = await ReadCheckpointBlobAsync(pointer, token).ConfigureAwait(false);
+            if (parent.Checkpoint is { } previous)
+            {
+                var before = await ReadCheckpointBlobAsync(previous, token).ConfigureAwait(false);
+                CampaignStateFactory.ValidateSuccessorHistory(before, next);
+                if (document.Plan != parent.Plan
+                    && (next.State.Snapshot.ExecutionCommitmentSha256 == before.State.Snapshot.ExecutionCommitmentSha256
+                        || next.State.Predecessor?.FinalCheckpointSha256 != before.Sha256))
+                    throw new GitHubCoordinationException();
+                if (document.Archive != parent.Archive)
+                {
+                    if (document.Archive is not { Anchor: GitHubCoordinationDocument.CurrentCommit } archive
+                        || archive.Oid != previous.Oid)
+                        throw new GitHubCoordinationException();
+                    _ = CampaignDispatchArchive.VerifyTransition(before, next);
+                }
+            }
+            else if (document.Archive is not null || next.State.ArchivedDispatchPrefix is not null)
+                throw new GitHubCoordinationException();
+        }
+        if (publicationChanged && document.Claim != parent.Claim)
+            throw new GitHubCoordinationException();
+        return document;
+    }
+
     private async ValueTask<GitHubBlob> ReadBlobAsync(string oid, CancellationToken token)
     {
         var blob = RequireRemote(await client.GetBlobAsync(oid, token).ConfigureAwait(false));
@@ -66,14 +128,29 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
 
     private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token)
     {
-        _ = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
+        var repository = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
         var current = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
         if (current.Value is null)
         {
             if (current.Failure?.Code == GitHubFailureCode.NotFound) return null;
             throw new GitHubCoordinationException(transportFailure: current.Failure);
         }
-        var document = await ReadDocumentAsync(current.Value.Oid, token).ConfigureAwait(false);
+        var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token).ConfigureAwait(false);
+        if (document.Publication is { } publication)
+        {
+            var retained = publication.Anchor == GitHubCoordinationDocument.CurrentCommit
+                ? publication with { Anchor = current.Value.Oid } : publication;
+            // Immutable event provenance can be reused within this invocation;
+            // every mutable head still passes the parent-retention check above.
+            if (!verifiedCheckpointPublications.Contains(retained))
+            {
+                var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
+                var result = await ReadStateAsync(repository.Identity, target, current.Value.Oid, token, matchAuthority: false)
+                    .ConfigureAwait(false);
+                if (result.State is null) throw new GitHubCoordinationException(transportFailure: result.Failure?.TransportFailure);
+                verifiedCheckpointPublications.Add(retained);
+            }
+        }
         CampaignCheckpointArtifact? artifact = null;
         CampaignVerifiedArchive? evidence = null;
         if (document.Checkpoint is { } pointer)
@@ -127,7 +204,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure?.Code == GitHubFailureCode.Conflict)
         { return CampaignCheckpointReadResult.LeaseConflict(); }
-        catch (GitHubCoordinationException) { return CampaignCheckpointReadResult.Invalid(); }
+        catch (Exception exception) when (exception is GitHubCoordinationException or CampaignStateValidationException)
+        { return CampaignCheckpointReadResult.Invalid(); }
         finally { checkpointGate.Release(); }
     }
 
@@ -146,7 +224,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             boundPlan = plan;
             return true;
         }
-        catch (GitHubCoordinationException) { return false; }
+        catch (Exception exception) when (exception is GitHubCoordinationException or CampaignStateValidationException)
+        { return false; }
         finally { checkpointGate.Release(); }
     }
 

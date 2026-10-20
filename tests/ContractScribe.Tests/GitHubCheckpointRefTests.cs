@@ -141,6 +141,69 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(refs, remote.RefMutationAttempts);
     }
 
+    [Theory]
+    [InlineData("remove-link")]
+    [InlineData("older-event")]
+    [InlineData("new-invalid-event")]
+    public async Task Canonical_head_must_retain_current_publication_provenance_before_checkpoint_admission(string tamper)
+    {
+        var remote = new G1Remote();
+        var chain = PublishedChain(Authority());
+        remote.Coordination.SeedChain(chain);
+        var initialHead = PrepareFixture(chain[0]).CommitOid;
+        if (tamper == "new-invalid-event")
+        {
+            // Canonical objects and a real parent do not authorize restarting an
+            // already published operation with a new initial claim event.
+            var head = remote.Coordination.CoordinationHead!;
+            var invalid = GitHubCoordinationObjects.PreparePublication(
+                GitHubCoordinationCodec.CreateClaim(Authority(), head), FixtureDocuments[head].RetainAt(head));
+            remote.Coordination.SeedObjects(invalid);
+            remote.Coordination.ForceCoordinationHead(invalid.CommitOid);
+        }
+        else remote.Coordination.AppendDocument(document => document with
+        {
+            Publication = tamper == "remove-link" ? null : FixtureDocuments[initialHead].RetainAt(initialHead).Publication,
+        });
+        var writes = remote.Coordination.RefMutationAttempts;
+        using var client = CheckpointClient(remote.Coordination);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Invalid, await store.AcquireCheckpointAsync(default));
+        Assert.Equal(writes, remote.Coordination.RefMutationAttempts);
+        using var observer = remote.Observer();
+        Assert.NotNull((await observer.ObserveAsync()).Failure);
+        Assert.Equal(writes, remote.Coordination.RefMutationAttempts);
+    }
+
+    [Theory]
+    [InlineData("drop")]
+    [InlineData("rewind")]
+    [InlineData("replace-owner")]
+    public async Task Canonical_claim_successor_cannot_erase_or_reuse_an_epoch(string tamper)
+    {
+        var remote = new CoordinationRemote();
+        for (var index = 0; index < 2; index++)
+        {
+            using var client = CheckpointClient(remote);
+            await using var store = GitHubCoordinationStore.Create(client);
+            Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        }
+        remote.AppendDocument(document => document with
+        {
+            Claim = tamper switch
+            {
+                "drop" => null,
+                "rewind" => document.Claim! with { Epoch = 1 },
+                _ => document.Claim! with { Owner = new string('f', 64) },
+            },
+        });
+        var writes = remote.RefMutationAttempts;
+        using var freshClient = CheckpointClient(remote);
+        await using var fresh = GitHubCoordinationStore.Create(freshClient);
+        Assert.Equal(CampaignCheckpointReadKind.Invalid, await fresh.AcquireCheckpointAsync(default));
+        Assert.Equal(writes, remote.RefMutationAttempts);
+    }
+
     [Fact]
     public async Task Missing_server_time_prevents_claim_creation_before_any_mutation()
     {

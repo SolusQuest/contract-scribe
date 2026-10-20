@@ -34,6 +34,57 @@ public sealed record CampaignDispatchObservation(
 
 public static partial class CampaignStateFactory
 {
+    /// <summary>Rejects loss or replacement of retained history at an immediate remote checkpoint edge.</summary>
+    public static void ValidateSuccessorHistory(CampaignCheckpointArtifact predecessor, CampaignCheckpointArtifact successor)
+    {
+        ArgumentNullException.ThrowIfNull(predecessor);
+        ArgumentNullException.ThrowIfNull(successor);
+        var before = predecessor.State;
+        var next = successor.State;
+        Require(next.CampaignLineage == before.CampaignLineage && next.ProductRevision == before.ProductRevision
+            && successor.CheckpointRevision == checked(predecessor.CheckpointRevision + 1),
+            CampaignStateValidationCode.InvalidCorrelation);
+        var oldCharges = before.LineageCharges;
+        var charges = next.LineageCharges;
+        Require(charges.OuterInvocations >= oldCharges.OuterInvocations
+            && charges.PatchValidationInvocations >= oldCharges.PatchValidationInvocations
+            && charges.ProviderRequests.TotalCharged >= oldCharges.ProviderRequests.TotalCharged
+            && charges.InputTokens.TotalCharged >= oldCharges.InputTokens.TotalCharged
+            && charges.CachedInputTokens.TotalCharged >= oldCharges.CachedInputTokens.TotalCharged
+            && charges.UncachedInputTokens.TotalCharged >= oldCharges.UncachedInputTokens.TotalCharged
+            && charges.OutputTokens.TotalCharged >= oldCharges.OutputTokens.TotalCharged
+            && charges.ReasoningTokens.TotalCharged >= oldCharges.ReasoningTokens.TotalCharged
+            && charges.CostMicrounits.TotalCharged >= oldCharges.CostMicrounits.TotalCharged
+            && charges.ActiveElapsedMilliseconds.TotalCharged >= oldCharges.ActiveElapsedMilliseconds.TotalCharged
+            && (!oldCharges.HasUnpricedCostHistory || charges.HasUnpricedCostHistory),
+            CampaignStateValidationCode.InvalidCorrelation);
+        if (next.ArchivedDispatchPrefix != before.ArchivedDispatchPrefix)
+        {
+            _ = CampaignDispatchArchive.VerifyTransition(predecessor, successor);
+            return;
+        }
+        Require(next.DispatchObservations.Length >= before.DispatchObservations.Length,
+            CampaignStateValidationCode.InvalidCorrelation);
+        for (var index = 0; index < before.DispatchObservations.Length; index++)
+        {
+            var previous = before.DispatchObservations[index];
+            var current = next.DispatchObservations[index];
+            if (previous.State == CampaignDispatchObservationState.Reserved)
+                current = current with
+                {
+                    State = previous.State,
+                    Disposition = previous.Disposition,
+                    Usage = previous.Usage,
+                    Cache = previous.Cache,
+                    ElapsedMilliseconds = previous.ElapsedMilliseconds,
+                    RetryAfterMilliseconds = previous.RetryAfterMilliseconds,
+                    Charges = previous.Charges,
+                    SettlementCommitmentSha256 = previous.SettlementCommitmentSha256,
+                };
+            Require(current == previous, CampaignStateValidationCode.InvalidCorrelation);
+        }
+    }
+
     internal static string DispatchSettlementCommitment(CampaignDispatchObservation row) =>
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
             "contract-scribe/campaign-dispatch-observation/v1\n"

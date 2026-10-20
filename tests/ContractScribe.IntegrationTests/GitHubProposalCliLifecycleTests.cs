@@ -46,6 +46,25 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Empty(archived.State.DispatchObservations);
         Assert.Equal(beforeArchive.State.LineageCharges, archived.State.LineageCharges);
         var archivePointer = fixture.GitHub.CoordinationDocument()["archive"]!.ToJsonString();
+        var requestsBeforeCapRefresh = fixture.Provider.RequestCount;
+        var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        configuration["budgets"]!["campaign"]!["maximumElapsedMilliseconds"] = 7_200_000;
+        await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
+        AssertResult(await fixture.Run("resume"), 0, "replayed");
+        var refreshed = fixture.Checkpoint();
+        Assert.Equal(7_200_000, refreshed.State.ConfiguredCeilings.CampaignBudget.MaximumElapsedMilliseconds);
+        Assert.Equal(archived.State.ArchivedDispatchPrefix, refreshed.State.ArchivedDispatchPrefix);
+        Assert.Equal(archived.State.LineageCharges with
+        {
+            ActiveElapsedMilliseconds = refreshed.State.LineageCharges.ActiveElapsedMilliseconds,
+            PatchValidationInvocations = refreshed.State.LineageCharges.PatchValidationInvocations,
+        }, refreshed.State.LineageCharges);
+        Assert.Equal(archived.State.LineageCharges.PatchValidationInvocations + 1,
+            refreshed.State.LineageCharges.PatchValidationInvocations);
+        Assert.True(refreshed.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged >=
+            archived.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged);
+        Assert.Equal(archivePointer, fixture.GitHub.CoordinationDocument()["archive"]!.ToJsonString());
+        Assert.Equal(requestsBeforeCapRefresh, fixture.Provider.RequestCount);
         fixture.GitHub.Lifecycle("closed");
         AssertResult(await fixture.Run("resume"), 4, "closed-unmerged");
         var closed = fixture.GitHub.PullRequests[0];

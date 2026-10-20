@@ -1,6 +1,7 @@
 using System.Text.Json.Nodes;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
+using ContractScribe.Cli;
 
 namespace ContractScribe.Tests;
 
@@ -60,6 +61,71 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(archived.Sha256, restored.AcceptedCheckpoint!.Artifact.Sha256);
         Assert.Equal(artifact.State.LineageCharges, restored.AcceptedCheckpoint.Artifact.State.LineageCharges);
         Assert.InRange(remote.BlobReadAttempts - readsBeforeRestore, 1, 100);
+        var input = WithBudget(scenario, scenario.Input.ExecutionPolicy.CampaignBudget with
+        {
+            MaximumProviderRequests = checked((int)artifact.State.LineageCharges.ProviderRequests.TotalCharged + 1),
+        });
+        var refresh = await ChangedBaseCampaignReconciler.RefreshLifetimeCapsAsync(restored.AcceptedCheckpoint!, resumed,
+            scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, "samples/Synthetic.csproj",
+            input, CampaignPlanner.Plan(input), () => true, default);
+        Assert.Equal(ChangedBaseCampaignReconciliationKind.Accepted, refresh.Kind);
+        var refreshed = CampaignCheckpointAcceptance.AcceptCurrent(await resumed.ReadAsync(default));
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, refreshed.Kind);
+        Assert.Equal(archived.State.ArchivedDispatchPrefix, refreshed.AcceptedCheckpoint!.Artifact.State.ArchivedDispatchPrefix);
+        Assert.Equal(archived.State.LineageCharges, refreshed.AcceptedCheckpoint.Artifact.State.LineageCharges);
+    }
+
+    [Theory]
+    [InlineData("drop-checkpoint")]
+    [InlineData("replace-plan")]
+    [InlineData("reset-history")]
+    public async Task Canonical_successor_cannot_remove_checkpoint_or_replace_its_unchanged_plan(string tamper)
+    {
+        var scenario = UnlimitedScenario();
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(scenario))]))]);
+        var (artifact, _) = await CompleteC3RuntimeAsync(scenario, exchange);
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using (var client = GitHubCoordinationRefTests.CheckpointClient(remote, artifact.State.CampaignLineage))
+        await using (var store = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client))
+        {
+            Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+            Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(scenario.Plan), default));
+            Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(
+                artifact.ExactUtf8Json.AsMemory(), artifact.CheckpointRevision, artifact.Sha256, default)).Kind);
+        }
+        remote.AppendDocument(document =>
+        {
+            if (tamper == "drop-checkpoint") return document with { Checkpoint = null, Plan = null };
+            if (tamper == "reset-history")
+            {
+                var initial = scenario.InitialState;
+                var reset = CampaignStateJson.CreateArtifact(CampaignStateFactory.CreateValidated(initial.ProductRevision,
+                    initial.CampaignLineage, initial.Snapshot, artifact.CheckpointRevision + 1, initial.ConfiguredCeilings,
+                    initial.LineageCharges, initial.WorkItems, initial.Batch));
+                return document with
+                {
+                    Checkpoint = new(remote.SeedBlob(reset.ExactUtf8Json.ToArray()),
+                    reset.Sha256, reset.CheckpointRevision)
+                };
+            }
+            var changed = JsonNode.Parse(CampaignPlanner.CreateRecoveryProjection(scenario.Plan).ExactUtf8Json.AsSpan())!;
+            changed["workItems"]![0]!["targets"]![0]!["source"]!["path"] = "substituted.cs";
+            var bytes = System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(changed);
+            return document with
+            {
+                Plan = document.Plan! with
+                {
+                    Oid = remote.SeedBlob(bytes),
+                    Sha256 = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes))
+                }
+            };
+        });
+        var writes = remote.RefMutationAttempts;
+        using var freshClient = GitHubCoordinationRefTests.CheckpointClient(remote, artifact.State.CampaignLineage);
+        await using var fresh = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(freshClient);
+        Assert.Equal(CampaignCheckpointReadKind.Invalid, await fresh.AcquireCheckpointAsync(default));
+        Assert.Equal(writes, remote.RefMutationAttempts);
     }
 
     [Fact]
