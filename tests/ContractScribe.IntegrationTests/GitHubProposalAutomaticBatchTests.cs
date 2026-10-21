@@ -292,22 +292,43 @@ public sealed partial class GitHubProposalCliProcessTests
         // Retain the ordinary per-scenario guard elsewhere and all request history.
         fixture.GitHub.MaximumRequests = 4 * 20_000;
         await SetAutomaticQuota(fixture, 5);
+        var bases = new HashSet<string>(StringComparer.Ordinal);
+        var batches = new HashSet<string>(StringComparer.Ordinal);
+        var invocations = new HashSet<string>(StringComparer.Ordinal);
         foreach (var remaining in new[] { 12, 7, 2 })
         {
             var posts = fixture.GitHub.PrAttempts;
-            AssertResult(await fixture.Run(), 0, "published");
+            var received = fixture.Provider.RequestCount;
+            Assert.True(bases.Add(fixture.GitHub.Refs["refs/heads/main"]));
+            var published = await fixture.Run();
+            AssertResult(published, 0, "published");
             var checkpoint = fixture.Checkpoint();
+            Assert.True(batches.Add(checkpoint.State.Batch.Identity));
             Assert.Equal(remaining, checkpoint.State.Batch.CompleteTargets.Length);
             Assert.Equal(Math.Min(5, remaining), checkpoint.State.WorkItems.Count(work => work.Status == CampaignWorkStatus.Accepted));
+            var usage = EvidenceUsage(published);
+            Assert.True(invocations.Add(usage.GetProperty("invocationId").GetString()!));
+            Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("selectedTargets").GetInt32());
+            Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
+            Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
+            Assert.Equal(remaining - Math.Min(5, remaining), usage.GetProperty("work").GetProperty("deferredTargets").GetInt32());
+            Assert.Equal(fixture.Provider.RequestCount - received, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+            Assert.Equal(fixture.Provider.RequestCount, usage.GetProperty("history").GetProperty("providerRequests").GetProperty("observed").GetInt64());
+            AssertObservationPrivacy(fixture, published, checkpoint);
             Assert.Equal(posts + 1, fixture.GitHub.PrAttempts);
             var requests = fixture.Provider.RequestCount;
             var counts = GateCounts(fixture);
-            AssertResult(await fixture.Run(), 0, "awaiting-review");
+            var waited = await fixture.Run();
+            AssertResult(waited, 0, "awaiting-review");
+            AssertZeroInvocationWork(waited);
+            Assert.True(invocations.Add(EvidenceUsage(waited).GetProperty("invocationId").GetString()!));
             Assert.Equal(counts, GateCounts(fixture));
             Assert.Equal(requests, fixture.Provider.RequestCount);
             await OperatorMergeLatest(fixture);
         }
-        AssertResult(await fixture.Run(), 0, "no-op");
+        var noOp = await fixture.Run();
+        AssertResult(noOp, 0, "no-op");
+        AssertZeroInvocationWork(noOp);
         Assert.Empty(fixture.Checkpoint().State.Batch.CompleteTargets);
         var finalCounts = GateCounts(fixture);
         var finalRequests = fixture.Provider.RequestCount;

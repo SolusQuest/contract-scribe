@@ -182,6 +182,8 @@ Context routing has two parts:
 
 ContractScribe does not recursively follow every Markdown link and does not interpret every source-code path as an instruction import. A directly routed file remains labeled with the role assigned by the route that selected it.
 
+A deterministic instruction route links consecutive accepted instructions. Directories without an applicable instruction file add no route node, so route depth advances by one accepted instruction rather than by the distance between directories. The physical directory walk remains independently bounded by the instruction-depth limit. Missing intermediate instruction paths remain freshness observations: introducing one invalidates the previously accepted context.
+
 A route record contains enough information to explain traversal without preserving hidden reasoning:
 
 ```text

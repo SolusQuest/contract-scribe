@@ -842,6 +842,7 @@ public sealed partial class CampaignCliProcessTests
 
         internal Uri Endpoint { get; }
         internal bool SkipProposals { get; set; }
+        internal int? DropResponseAt { get; set; }
 
         internal int RequestCount => Volatile.Read(ref requestCount);
 
@@ -873,14 +874,17 @@ public sealed partial class CampaignCliProcessTests
                     var body = await ReadHttpBodyAsync(stream, disposal.Token);
                     requestBodies.Enqueue(body);
                     var count = Interlocked.Increment(ref requestCount);
+                    // The independent server received the complete request; closing
+                    // this connection now deliberately supplies no response.
+                    if (DropResponseAt == count) continue;
                     if (scenario is "retry" or "retry-wait" && count == 1)
                     {
                         var transient = Encoding.ASCII.GetBytes("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
                         await stream.WriteAsync(transient, disposal.Token);
                         continue;
                     }
-                    var response = scenario == "shared"
-                        ? CreateSharedResponse(body)
+                    var response = scenario is "shared" or "shared-closed"
+                        ? CreateSharedResponse(body, skipAll: scenario == "shared-closed")
                         : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal" || SkipProposals);
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");

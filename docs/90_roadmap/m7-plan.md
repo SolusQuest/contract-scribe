@@ -151,6 +151,8 @@ M7 completion requires credential-free ordinary CI through production paths, plu
 
 Representative same-target comparisons report documentation quality/completeness and measured provider calls, cached/uncached input and output. Cache ratio alone proves neither savings nor quality improvement. Live comparisons are bounded opt-in evidence, not a general support or pricing guarantee.
 
+[Fresh-runner validation and opt-in observation](../20_architecture/validation/m7-fresh-runner-observation.md) maps ordinary production-path witnesses, the reusable small synthetic corpus and prospective manual commands. It prepares A5's separately authorized execution; it does not record a live run or authorize activation, credentials, spending or merges.
+
 ## Delivery and open implementation choices
 
 The [master graph](https://github.com/SolusQuest/contract-scribe/issues/208) owns live tracker dependencies and exit evidence. C1 adopts this plan; dependent leaves implement fixed selection, shared budgets, complete recovery, multi-target request/tools/runtime/patch composition, GitHub lifecycle, automatic CLI/Action integration, observations and production-path tests. Each leaf delivers one focused coherent PR at its accepted boundary, with no alternate legacy production runtime or compatibility framework retained merely for pre-release history.

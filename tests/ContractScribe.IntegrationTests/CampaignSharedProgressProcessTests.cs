@@ -173,7 +173,7 @@ public sealed partial class CampaignCliProcessTests
                     .Single(member => member.GetProperty("targetId").GetString() == id)).ToArray();
             if (pending.Length == 0)
                 return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), true, 0, true, messages.GetArrayLength());
-            if (!batch) pending = pending.Take(1).ToArray();
+            pending = pending.Take(batch ? DocumentationScribeValidation.MaximumSubmissionBatchSize : 1).ToArray();
             var references = facts.GetProperty("evidenceReferences").EnumerateArray().Select(item => item.Clone()).ToList();
             foreach (var message in messages.EnumerateArray().Where(message => message.GetProperty("role").GetString() == "tool"))
             {
