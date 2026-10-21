@@ -1046,7 +1046,9 @@ case_real_chain() {
     local invoke_rc=$?
     cat "$w/inv-out.txt" 2>/dev/null || true
     [ "$invoke_rc" -eq 0 ]
-    grep -q "^outcome=github-proposal.published$" "$w/inv-out.txt"
+    # The solution also selects the unsupported Library type/property;
+    # only the executable method is accepted and published.
+    grep -q "^outcome=github-proposal.published-partial$" "$w/inv-out.txt"
     grep -q "^exit-code=0$" "$w/inv-out.txt"
     grep -q "POST /repos/Owner/repo/pulls" "$WORK/github-requests.log"
     grep -q "POST /v1/chat/completions" "$WORK/provider-requests.log"

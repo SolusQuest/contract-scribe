@@ -1282,8 +1282,8 @@ jobs:
         run: |
           set -euo pipefail
           [ "$STATUS" = ok ]
-          [ "$OUTCOME" = github-proposal.published ]
-          python3 -c 'import json,os; e=json.loads(os.environ["RESULT"]); assert e["outcome"]=="github-proposal.published"'
+          [ "$OUTCOME" = github-proposal.published-partial ]
+          python3 -c 'import json,os; e=json.loads(os.environ["RESULT"]); assert e["outcome"]=="github-proposal.published-partial"'
           grep -q "POST /repos/Owner/repo/pulls" fakes/github.log
           test -s e2e-obs.txt && grep -q token-read e2e-obs.txt
       - name: E2E missing token (product failure, exit 4)
@@ -1517,7 +1517,7 @@ jobs:
         run: |
           set -euo pipefail
           [ "$STATUS" = ok ]
-          [ "$OUTCOME" = github-proposal.published ]
+          [ "$OUTCOME" = github-proposal.published-partial ]
           grep -q "POST /repos/Owner/repo/pulls" fakes/github.log
           test -s fakes/github-state.json
           test -s producer-obs.txt && grep -q token-read producer-obs.txt

@@ -160,19 +160,29 @@ internal static class CampaignCommandRunner
             policy = configuration.CreateExecutionPolicy();
             execution = configuration.CreateExecutionCapability(policy);
             planning = CreatePlanningInput(preflight, configuration, policy, bundle, cancellationToken, targetLimit);
-            if (existing is not null && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding == planning.Snapshot.OpaqueSnapshotBinding)
-            {
-                planning = planning with
-                {
-                    TargetLimit = new CampaignInvocationTargetLimit(existing.Artifact.State.Batch.CreationQuota),
-                    BatchStartTargetKey = existing.Artifact.State.Batch.SelectedTargetKeys.FirstOrDefault(),
-                };
-            }
+            var compatibleBinding = existing is not null
+                && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding == planning.Snapshot.OpaqueSnapshotBinding;
+            if (compatibleBinding)
+                planning = planning with { TargetLimit = new CampaignInvocationTargetLimit(existing!.Artifact.State.Batch.CreationQuota) };
             if (continuation?.OriginalOperationOnly == true && existing is not null
                 && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding != planning.Snapshot.OpaqueSnapshotBinding)
                 return new(null, GitHubProposalPresentation.Preflight(CliBuildIdentity.Current, preflight.Operation,
                     "conflict", "publication-incomplete", existing.Artifact.CheckpointRevision));
             plan = CampaignPlanner.Plan(planning);
+            if (compatibleBinding)
+            {
+                // A caller-attested offline label cannot make changed correctness
+                // compatible. Never resolve an old target key against a new plan.
+                var saved = existing!.Artifact.State;
+                if (plan.ExecutionCommitment != saved.Snapshot.ExecutionCommitmentSha256)
+                    return Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", existing);
+                var boundary = saved.Batch.SelectedTargetKeys.FirstOrDefault();
+                if (boundary != plan.Batch.SelectedTargetKeys.FirstOrDefault())
+                {
+                    planning = planning with { BatchStartTargetKey = boundary };
+                    plan = CampaignPlanner.Plan(planning);
+                }
+            }
             if (store is ICampaignRecoveryPlanStore recovery
                 && !await recovery.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(plan), cancellationToken).ConfigureAwait(false))
                 return Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", existing);
@@ -608,10 +618,10 @@ internal static class CampaignCommandRunner
             .FirstOrDefault();
 
     private static string CompletionOutcome(CampaignCheckpointState state) =>
-        state.TargetProgress.Any(progress => progress.Kind == CampaignTargetProgressKind.Deferred)
-            ? "campaign.batch-complete"
-            : (state.TerminalOutcome ?? CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems))?.Reason
-                == CampaignTerminalReason.Unresolved ? "campaign.unresolved" : "campaign.complete";
+        (state.TerminalOutcome ?? CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems))?.Reason
+            == CampaignTerminalReason.Unresolved ? "campaign.unresolved"
+            : state.TargetProgress.Any(progress => progress.Kind == CampaignTargetProgressKind.Deferred)
+                ? "campaign.batch-complete" : "campaign.complete";
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,

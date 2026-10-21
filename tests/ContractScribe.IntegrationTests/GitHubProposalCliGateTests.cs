@@ -179,7 +179,7 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         var current = AdvanceReadme(fixture);
         fixture.GitHub.PullRequests[0]["base"]!["sha"] = current;
-        // Keep the old caller expectedBase and operation: neither is a generic successor approval.
+        // Identical campaign inputs select fresh work from authenticated HEAD and terminal facts.
         var discovery = Observed(fixture, "sdk-discovery");
         var requests = fixture.Provider.RequestCount;
         AssertResult(await fixture.Run(), 0, "no-op");

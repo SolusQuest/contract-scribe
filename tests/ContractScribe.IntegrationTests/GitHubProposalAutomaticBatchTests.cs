@@ -13,7 +13,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(targetCount: 4, providerScenario: "closed-proposal");
         await SetAutomaticQuota(fixture, 2);
-        AssertResult(await fixture.Run(), 0, "no-op");
+        AssertResult(await fixture.Run(), 5, "host-failure");
         var before = fixture.Checkpoint();
         Assert.Equal(2, before.State.Batch.SelectedTargetKeys.Length);
         Assert.Equal(2, before.State.TargetProgress.Count(item => item.Kind == CampaignTargetProgressKind.Skipped));
@@ -35,6 +35,36 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(after.Sha256, fixture.Checkpoint().Sha256);
         Assert.Empty(fixture.GitHub.PullRequests);
         Assert.Equal(0, fixture.GitHub.PrAttempts);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [Fact]
+    public async Task Automatic_no_result_closed_prefix_is_retained_when_the_next_batch_publishes()
+    {
+        if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
+        await using var fixture = await Fixture.CreateAsync(targetCount: 4);
+        await SetAutomaticQuota(fixture, 2);
+        fixture.Provider.SkipProposals = true;
+        AssertResult(await fixture.Run(), 5, "host-failure");
+        var before = fixture.Checkpoint();
+        fixture.Provider.SkipProposals = false;
+        AssertResult(await fixture.Run(), 0, "published");
+        var after = fixture.Checkpoint();
+        Assert.Equal(before.State.Snapshot, after.State.Snapshot);
+        Assert.NotEqual(before.State.Batch.Identity, after.State.Batch.Identity);
+        Assert.Equal(2, after.State.TargetProgress.Count(item => item.Kind == CampaignTargetProgressKind.Skipped));
+        Assert.Equal(2, after.State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
+        Assert.Equal(CampaignTerminalReason.Unresolved, after.State.TerminalOutcome!.Reason);
+        foreach (var work in before.State.WorkItems.Where(item => item.OuterAttemptCount > 0))
+            Assert.Equal(work, after.State.WorkItems.Single(item => item.WorkItemKey == work.WorkItemKey));
+        var selected = after.State.Batch.CompleteTargets
+            .Where(target => after.State.Batch.SelectedTargetKeys.Contains(target.TargetKey))
+            .Select(target => target.WorkItemKey).ToHashSet(StringComparer.Ordinal);
+        Assert.True(selected.SetEquals(after.State.CandidateObservation!.AcceptedWorkItemKeys));
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
+        var counts = GateCounts(fixture);
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
+        Assert.Equal(counts, GateCounts(fixture));
         await fixture.AssertSourceUnchanged();
     }
 
@@ -103,13 +133,13 @@ public sealed partial class GitHubProposalCliProcessTests
         var original = fixture.GitHub.PullRequests[0].DeepClone();
         await OperatorMergeLatest(fixture);
         fixture.Provider.SkipProposals = true;
-        AssertResult(await fixture.Run(), 0, "no-op");
+        AssertResult(await fixture.Run(), 5, "host-failure");
         var before = fixture.Checkpoint();
         Assert.Equal(3, before.State.Batch.CompleteTargets.Length);
         var publication = fixture.GitHub.CoordinationDocument()["publication"]!.DeepClone();
         var head = fixture.GitHub.PullRequests[0]["head"]!.DeepClone();
         var requests = fixture.Provider.RequestCount;
-        AssertResult(await fixture.Run(), 0, "no-op");
+        AssertResult(await fixture.Run(), 5, "host-failure");
         var after = fixture.Checkpoint();
         Assert.NotEqual(before.State.Batch.Identity, after.State.Batch.Identity);
         Assert.Equal(before.State.Snapshot, after.State.Snapshot);
@@ -141,7 +171,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(targetCount: 4, providerScenario: "closed-proposal");
         await SetAutomaticQuota(fixture, 2);
-        AssertResult(await fixture.Run(), 0, "no-op");
+        AssertResult(await fixture.Run(), 5, "host-failure");
         var before = fixture.Checkpoint();
         var requests = fixture.Provider.RequestCount;
         var environment = fixture.Environment();
@@ -178,7 +208,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(targetCount: 4, providerScenario: "closed-proposal");
         await SetAutomaticQuota(fixture, 2);
-        AssertResult(await fixture.Run(), 0, "no-op");
+        AssertResult(await fixture.Run(), 5, "host-failure");
         var before = fixture.Checkpoint();
         var initialBinding = await MaterializedBinding(fixture);
         var target = fixture.GitHub.Refs["refs/heads/main"];
@@ -193,7 +223,7 @@ public sealed partial class GitHubProposalCliProcessTests
         files["AGENTS.md"] = await File.ReadAllBytesAsync(path);
         fixture.GovernedFiles["AGENTS.md"] = (files["AGENTS.md"], File.GetUnixFileMode(path));
         AdvanceTarget(fixture, files, "Operator changes the actual applicable instruction\n");
-        AssertResult(await fixture.Run(), 0, "no-op");
+        AssertResult(await fixture.Run(), 5, "host-failure");
         var after = fixture.Checkpoint();
         Assert.NotEqual(target, fixture.GitHub.Refs["refs/heads/main"]);
         Assert.NotEqual(before.State.Snapshot.OpaqueSnapshotBinding, after.State.Snapshot.OpaqueSnapshotBinding);
