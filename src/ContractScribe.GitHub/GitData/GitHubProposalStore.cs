@@ -44,23 +44,27 @@ internal sealed class GitHubProposalStore
     private readonly ValidatedGitHubPublicationAuthority authority;
     private readonly string proposalRef;
     private readonly string generationKey;
+    private readonly Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<bool>>? mutationPreflight;
     private const string Zero = GitHubPublicationContract.MissingGitObjectId;
 
-    private GitHubProposalStore(GitHubApiClient client, GitHubCoordinationStore coordination)
+    private GitHubProposalStore(GitHubApiClient client, GitHubCoordinationStore coordination,
+        Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<bool>>? mutationPreflight)
     {
         this.client = client;
         this.coordination = coordination;
+        this.mutationPreflight = mutationPreflight;
         authority = client.Authority;
         proposalRef = GitHubPublicationFactory.CreateProposalRef(authority);
         generationKey = proposalRef[(proposalRef.LastIndexOf('/') + 1)..];
     }
 
-    internal static GitHubProposalStore Create(GitHubApiClient client, GitHubCoordinationStore coordination)
+    internal static GitHubProposalStore Create(GitHubApiClient client, GitHubCoordinationStore coordination,
+        Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<bool>>? mutationPreflight = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(coordination);
         if (!coordination.UsesClient(client)) throw new ArgumentException("Invalid publication store binding.");
-        return new(client, coordination);
+        return new(client, coordination, mutationPreflight);
     }
 
     internal static bool Authenticates(IGitHubInspectedProposal proof, GitHubCoordinationStore coordination,
@@ -94,8 +98,7 @@ internal sealed class GitHubProposalStore
             Require(basis.Files.TryGetValue(file.Path, out var entry) && Regular(entry.Mode));
             await CheckBlob(entry!, file.OriginalFileSha256, token);
         }
-        var before = authority.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend
-            ? state?.ProposalCommitOid : Zero;
+        var before = Zero;
         Require(before is not null);
         var oids = bytes.ToDictionary(p => p.Key, p => ObjectOid("blob", p.Value.AsSpan()), StringComparer.Ordinal);
         var graph = Overlay(basis, oids);
@@ -115,9 +118,7 @@ internal sealed class GitHubProposalStore
         var fresh = await coordination.InspectStateAsync(current, token);
         if (fresh.State is null) CoordinationFailure(fresh);
         current = fresh.State!;
-        var source = current.OperationCommitmentSha256 == authority.OperationCommitmentSha256
-            && current.Transition == "same-snapshot-append" && current.ProposalCommitOid is null
-            ? coordination.AdmissionSource(current) : current;
+        var source = current;
         Require(source is not null && coordination.Owns(source));
         var reference = coordination.ProposalRefFor(source!)!;
         var head = await client.GetRefAsync(reference, token);
@@ -146,8 +147,7 @@ internal sealed class GitHubProposalStore
             replacements.Add(file.Path, entry.Oid);
         }
         Require(Overlay(basis, replacements).RootOid == graph.RootOid);
-        var parent = source.Transition == "same-snapshot-append"
-            ? coordination.AdmissionSource(source)?.ProposalCommitOid : source.TargetCommitOid;
+        var parent = source.TargetCommitOid;
         Require(parent is not null && ExactCommit(commit, Commit(graph.RootOid, parent!,
             source.OperationCommitmentSha256, reference[(reference.LastIndexOf('/') + 1)..])));
         Require(source.ProposalTreeOid is null || source.ProposalTreeOid == graph.RootOid);
@@ -212,42 +212,6 @@ internal sealed class GitHubProposalStore
         }
 
         var before = Zero;
-        if (authority.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend)
-        {
-            var preceding = coordination.AdmissionSource(guarded);
-            Require(preceding is not null && preceding.Stage == GitHubCoordinationStage.Published
-                && preceding.OperationId == authority.PrecedingOperationId
-                && preceding.AuthorityCommitmentSha256 == authority.PrecedingAuthorityCommitmentSha256
-                && preceding.CurrentCandidateCommitmentSha256 == authority.PrecedingCandidateCommitmentSha256
-                && preceding.GenerationId == authority.GenerationId && preceding.TargetCommitOid == authority.ExpectedBaseCommitOid);
-            before = preceding!.ProposalCommitOid!;
-            var previousCommit = Value(await client.GetCommitAsync(before, cancellationToken));
-            Require(previousCommit.Parents.Length == 1 && previousCommit.TreeOid == preceding.ProposalTreeOid);
-            var expectedParent = preceding.TargetCommitOid;
-            if (preceding.Transition == "same-snapshot-append")
-            {
-                var parentSource = coordination.AdmissionSource(preceding);
-                Require(parentSource is not null && parentSource.Stage == GitHubCoordinationStage.Published
-                    && parentSource.OperationId == preceding.PrecedingOperationId
-                    && parentSource.GenerationId == preceding.GenerationId
-                    && parentSource.TargetCommitOid == preceding.TargetCommitOid);
-                expectedParent = parentSource!.ProposalCommitOid!;
-            }
-            Require(ExactCommit(previousCommit, Commit(previousCommit.TreeOid, expectedParent,
-                preceding.OperationCommitmentSha256, generationKey)));
-            var previous = await ReadGraph(previousCommit.TreeOid, cancellationToken);
-            var replacement = new Dictionary<string, string>(StringComparer.Ordinal);
-            foreach (var file in authority.PrecedingChangedFiles)
-            {
-                Require(basis.Files.TryGetValue(file.Path, out var original) && Regular(original.Mode)
-                    && previous.Files.TryGetValue(file.Path, out var published) && published.Mode == original.Mode);
-                var publishedEntry = previous.Files[file.Path];
-                await CheckBlob(publishedEntry, file.CandidateFileSha256, cancellationToken);
-                replacement.Add(file.Path, publishedEntry.Oid);
-            }
-            Require(Overlay(basis, replacement).RootOid == previous.RootOid);
-        }
-
         var blobOids = bytes.ToDictionary(pair => pair.Key, pair => ObjectOid("blob", pair.Value.AsSpan()), StringComparer.Ordinal);
         var overlay = Overlay(basis, blobOids);
         var commit = Commit(overlay.RootOid, before == Zero ? authority.ExpectedBaseCommitOid : before,
@@ -403,6 +367,8 @@ internal sealed class GitHubProposalStore
         if (plan.ReadOnly) return oid;
         if (oid != plan.BeforeOid && !(allowSuccessor && oid == plan.Commit.ExpectedOid))
             throw new FailureException(new(GitHubProposalFailureKind.Conflict));
+        if (mutationPreflight is not null && !await mutationPreflight(guarded, token).ConfigureAwait(false))
+            throw new FailureException(new(GitHubProposalFailureKind.Conflict));
         if (guarded.Stage == GitHubCoordinationStage.ProposalRefAdvanced && oid != plan.Commit.ExpectedOid)
             throw new FailureException(new(GitHubProposalFailureKind.Conflict));
         return oid;
@@ -503,12 +469,12 @@ internal sealed class GitHubProposalStore
         throw new FailureException(new(GitHubProposalFailureKind.Transport, result.Failure, result.Delivery,
             result.Context, result.RequiredPermissions));
 
-    private static async ValueTask Readback<TMutation, TRead>(GitHubApiResult<TMutation> mutation,
+    private async ValueTask Readback<TMutation, TRead>(GitHubApiResult<TMutation> mutation,
         Func<CancellationToken, ValueTask<GitHubApiResult<TRead>>> read, Func<TRead, bool> exact)
         where TMutation : class where TRead : class
     {
         if (mutation.Delivery == GitHubDelivery.NotDispatched) Throw(mutation);
-        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var recovery = client.CreateRecoveryScope(TimeSpan.FromSeconds(30));
         var observed = await GitHubObjectReadback.ObserveAsync(read, recovery.Token);
         bool matches;
         try
@@ -523,10 +489,10 @@ internal sealed class GitHubProposalStore
                 recovery.IsCancellationRequested ? new(GitHubFailureCode.Timeout) : observed.Failure));
     }
 
-    private static async ValueTask FinalVerification<T>(GitHubApiResult<T> mutation,
+    private async ValueTask FinalVerification<T>(GitHubApiResult<T> mutation,
         Func<CancellationToken, ValueTask> verify, Func<IGitHubProposalContent?> residual) where T : class
     {
-        using var recovery = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        using var recovery = client.CreateRecoveryScope(TimeSpan.FromSeconds(30));
         try { await verify(recovery.Token); }
         catch (FailureException failure)
         {

@@ -1,10 +1,6 @@
 # GitHub Publication v1
 
-> **Status:** Accepted pre-release M5-R1 contract. This document freezes the
-> Core-owned source-free authority, policy, commitments, closed results, one
-> port, and the normative requirements handed to R2-R6. It does not implement
-> Git objects, GitHub observations, reconciliation, PR metadata, transport, or
-> mutation in Core.
+> **Status:** Current pre-release Core/adapter contract, revised by M7-G4 for one immutable publication result set per fixed batch. Core owns source-free local admission; the adapter owns authenticated remote facts and mutations.
 
 ## Boundary and ownership
 
@@ -13,7 +9,7 @@ the GitHub adapter. Core owns:
 
 1. credential-free, source-free caller authority and local validation;
 2. a separate defensive-copy byte payload correlated to that authority;
-3. domain-separated policy, authority, operation, ref-identity commitments;
+3. domain-separated result-set, authority, operation and ref-identity commitments;
 4. a closed structured result and one adapter port.
 
 Campaign State v1 remains platform-neutral. Core does not expose authenticated
@@ -23,24 +19,20 @@ authenticated transition, or reconcile remote state. Those are the independent
 R3-R6 authorities described below; adding them to Core would create a second
 production implementation and is forbidden.
 
-M5-H2 composes this boundary through [the GitHub proposal CLI](../github-proposal-cli.md). H1 still validates the exact fresh checkpoint readback and live reconstructed candidate. After proving correspondence with M4's retained accepted-candidate origin, it supplies the original checkpoint revision/SHA and original request/result/candidate commitments to the unchanged R1 factory. Fresh reconstruction continues to execute and settle accounting; the CLI displays its current revision. R1 commitment framing and R3–R6 equality, CAS, ownership and lost-entitlement behavior are unchanged.
+The [GitHub proposal CLI](../github-proposal-cli.md) validates a fresh accepted checkpoint and live M2 reconstruction against the retained accepted-candidate origin. It binds the original accepted operation identity to the exact fixed manifest and validated accepted subset. Fresh reconstruction still settles charges and displays the current checkpoint revision.
 
 ## Credential-free authority
 
 `ValidatedGitHubPublicationAuthority` binds:
 
-- repository owner/name, target ref, configured expected base commit;
+- repository owner/name, target ref and exact expected base commit;
 - campaign lineage, snapshot, execution and work-plan commitments;
-- checkpoint revision/digest, candidate, Patch Request, Patch Result and
-  accepted-projection commitments;
-- actual accepted M4 ceilings and the subordinate immutable M5 policy;
-- stable operation ID, generation, transition and predecessor identities;
-- every and only changed path with exact original/candidate full-file SHA-256
-  and cumulative M4 observations;
-- for append, the complete preceding published-path/candidate-hash map, the
-  distinct preceding candidate commitment, preceding authority commitment,
-  preceding operation ID, generation, snapshot commitment and policy commitment;
-- for a closed-unmerged successor only, the exact explicit authorization.
+- original accepted checkpoint revision/digest, candidate, Patch Request, Patch Result and accepted-projection commitments;
+- fixed batch identity, original creation quota, ordered selected target/work associations and the sorted accepted work-item subset;
+- stable operation ID, generation, transition and optional structured terminal predecessor;
+- every and only changed path, exact original/candidate full-file SHA-256 and cumulative M2 observations.
+
+The result-set commitment includes the manifest, creation quota and accepted subset. Selected target keys and their work-item keys must each be unique, matching the fixed batch's singleton selected work items. Admission requires a nonempty unique accepted subset of the selected manifest; the changed documentation block count equals that subset's size. Caller collections are bounded and copied. A partial valid subset may publish once while the remaining selected members remain unresolved. Increasing an invocation quota never adds members or replaces the frozen subset.
 
 Campaign lineage retains the M4 grammar
 `[A-Za-z0-9][A-Za-z0-9._:-]*` and its existing scalar bound. New M5 identifiers
@@ -56,23 +48,16 @@ The authority contains no tree/blob/mode observation, current remote head,
 proposal object, PR observation, token, request, response, source bytes, or
 exception.
 
-## Policy and payload
+## Fixed result set and payload
 
-M5 maxima for documentation blocks, distinct changed files and cumulative patch
-bytes are positive and no greater than the actual accepted M4 ceilings supplied
-for the checkpoint. Both projections enter the policy commitment and are
-immutable for the generation. The byte observation is the checked sum of
-`CandidateDocumentationByteCount` over the complete distinct changed-file set;
-it is not a Git blob/diff measure or the newest append delta.
+There are no campaign or PR business quotas for documentation blocks, distinct changed files or cumulative patch bytes. The cumulative byte value is an observation: the checked sum of candidate documentation bytes over all changed files. Necessary existing M2 block/file, artifact/parser and transport/payload bounds remain. Integer representation is validated before arithmetic; it is not an additional spending policy.
 
 Authority paths are canonical repository-relative paths ordered ordinally.
 Missing, extra, duplicate, ordinal-ignore-case-colliding, absolute, traversing,
 or backslash paths fail locally. An ASCII-letter drive prefix such as `C:` or
 `c:` is absolute and fails before any remote access. Hashes are exact lowercase
 SHA-256. Each member of the changed-file set is a true change, so its original
-and candidate hashes must be unequal. This inequality does not apply to the
-preceding path map, which carries only the previous candidate identity.
-Candidate documentation byte and line observations are positive, matching the
+and candidate hashes must be unequal. Candidate documentation byte and line observations are positive, matching the
 accepted M4 candidate domain; original observations remain nonnegative so a new
 nonempty documentation file may have an empty original.
 
@@ -86,39 +71,13 @@ bytes; it does not read source files or create Git objects.
 
 ## Local transition authority
 
-The closed caller transitions are:
+The closed caller transitions are `initial`, `successor-after-merge` and `successor-after-closed-unmerged`. Initial publication has no terminal predecessor. A successor requires the exact structured predecessor: logical identity, PR number, generation, head OID and terminal disposition. The old append transition, predecessor map and separate closed-unmerged unlock are rejected without aliases.
 
-- `initial`: no preceding operation/authority/candidate, path map, terminal
-  predecessor or closed authorization;
-- `same-snapshot-append`: exact preceding operation, authority, candidate,
-  generation, snapshot, policy and nonempty complete preceding path map; the
-  preceding generation/snapshot/policy must equal the current authority and no
-  terminal predecessor/authorization is present;
-- `successor-after-merge`: structured merged predecessor, fresh M4 authority,
-  new generation, and no closed authorization;
-- `successor-after-closed-unmerged`: structured closed predecessor, fresh M4
-  authority, new generation, and exact explicit authorization.
-
-Closed-unmerged authorization binds stable authorization ID, exact closed PR,
-generation/head, fresh snapshot/work-plan/candidate commitments, new generation
-and stable operation. It permits exact replay of that operation only.
-
-These are caller claims, not authenticated GitHub facts. R6 may select a
-successor transition only after R5 supplies an exact terminal capability binding
-repository, predecessor PR number, generation, head ref/OID, base, immutable
-marker, bot ownership, and the exact `merged` or `closed-unmerged` disposition,
-and after proving no active predecessor remains. A caller-supplied disposition
-alone never authorizes a successor.
+These are caller claims. R6 freshly authenticates the exact predecessor, complete campaign PR collection, ownership, head, base and terminal disposition before admitting a successor. No active campaign PR may remain. The successor has a different generation and fresh snapshot/Audit. Closed-unmerged additionally requires current HEAD to differ from the retained original-operation base; returning HEAD to any retained closed original base pauses again. Configuration changes do not unlock it.
 
 ## Commitments and ref identities
 
-Product commitments use SHA-256 with domain tags and big-endian length-framed
-strict UTF-8 fields. Every fact that can select a different future mutation
-changes the authority or operation commitment. Append's preceding candidate
-commitment is independent of the path map and is committed separately. The
-preceding generation/snapshot/policy claims are validated aliases of the equal
-current generation/snapshot/policy fields already framed by the authority; they
-are not framed a second time. Exact retry is stable.
+Product commitments use SHA-256 with domain tags and big-endian length-framed strict UTF-8 fields. Every mutation-selecting fact changes the authority or operation commitment. The result-set domain is `contract-scribe/github-publication-result-set/v1`: batch identity, creation quota, ordered selected target/work associations and sorted accepted work keys. Authority frames batch identity and result-set commitment; operation frames authority, operation ID, generation and transition. Exact original retry is stable.
 
 Ref identities contain only lowercase commitment keys:
 
@@ -142,8 +101,7 @@ R3 owns canonical state bytes, coordination Git objects/ref, their validation,
 and replay. The canonical state is strict UTF-8 without BOM, LF terminated,
 fixed-key-order JSON with no unknown keys. It persists the raw stable operation
 ID and its commitment as distinct fields, plus repository ID, target ref/base,
-authority/policy/current-candidate commitments, nullable preceding
-authority/candidate/operation, generation/transition, exact coordination and
+authority/batch/result-set/current-candidate commitments, generation/transition, exact coordination and
 proposal predecessor/result OIDs, exact PR residual identity when present, and
 the complete cumulative block count, cumulative candidate-byte count and
 changed-path/candidate-hash map. The distinct changed-file count is exactly the
@@ -169,10 +127,9 @@ defaults, is normative for byte replay.
 ```text
 version, campaignLineage, stage, repositoryId, targetRef, targetCommitOid,
 snapshotCommitmentSha256,
-authorityCommitmentSha256, policyCommitmentSha256, operationId,
+authorityCommitmentSha256, batchIdentity, resultSetCommitmentSha256, operationId,
 operationCommitmentSha256, currentCandidateCommitmentSha256,
-precedingOperationId, precedingAuthorityCommitmentSha256,
-precedingCandidateCommitmentSha256, generationId, transition,
+generationId, transition,
 coordinationPredecessorOid, contentCommitOid, proposalRefOid,
 proposalCommitOid, proposalTreeOid,
 pullRequestCreationOperationCommitmentSha256, pullRequestNumber,
@@ -226,6 +183,7 @@ Its closed stages are:
 claimed
 content-created
 proposal-ref-advanced
+pull-request-create-started
 pr-created
 published
 awaiting-review
@@ -239,15 +197,14 @@ Each stage has a closed required/forbidden field matrix. Later stages retain all
 earlier exact identities; no caller-controlled diagnostic is correctness-bearing.
 The common fields from `version` through `coordinationPredecessorOid`, plus all
 three cumulative observations, are always required and must equal the accepted
-authority. In a `claimed` initial/successor record the
-three `preceding*` fields are forbidden; in a `claimed` append they are required.
-The remaining required/forbidden matrix is:
+authority. The remaining required/forbidden matrix is:
 
 | stage | content | proposal ref/commit/tree | PR create operation/number | expected/observed base | ownership marker |
 | --- | --- | --- | --- | --- | --- |
 | `claimed` | forbidden | forbidden | forbidden | forbidden | forbidden |
 | `content-created` | required | forbidden | forbidden | forbidden | forbidden |
 | `proposal-ref-advanced` | required | required | forbidden | forbidden | forbidden |
+| `pull-request-create-started` | required | required | creation commitment required, number forbidden | required and equal | required |
 | `pr-created` | required | required | required | required and equal | required |
 | `published` | required | required | required | required and equal | required |
 | `awaiting-review` | required | required | required | required and equal | required |
@@ -278,27 +235,11 @@ are never adopted, advanced or used as the new proposal predecessor. This is the
 only continuation from pre-PR target drift; `stale-draft` remains blocking and
 cannot use it.
 
-`tests/fixtures/github/publication-contract/coordination-representation-v1.json`
-freezes canonical state and commit preimages plus blob, nested-tree, root-tree and
-commit OIDs for initial claim, byte-exact replay, append claim, content partial,
-ref partial, all three pre-PR stale residual shapes, PR-create residual,
-completed publication and quote/BMP/non-BMP/control escaping. R3 must authenticate
-those state bytes, the complete tree, commit message, actor, timestamp, parent
-and OID before producing a validated capability. The known answers form a
-predecessor-bound chain from the authenticated target commit through initial,
-content and proposal-ref states. Stale and completed publication are alternative
-successors of that proposal-ref state; append is a new operation whose parent and
-predecessor are the completed-publication coordination commit.
+`tests/fixtures/github/publication-contract/coordination-representation-v1.json` freezes initial claim, exact replay, content/ref partials, durable PR send fence, pre-PR stale residuals, PR residual, completed publication and canonical escaping. The stage fixture freezes immediate PR-created, awaiting-review and terminal edges. State bytes, complete tree, commit, actor, timestamp, actual parent and Git OID authenticate before a capability escapes.
 
-Initial admission accepts either expected absence or byte-exact same-operation
-replay. Append requires authenticated equality of preceding operation,
-authority, candidate commitment, generation, snapshot commitment, policy
-commitment and complete path map. R6 compares those caller predecessor claims
-to the validated previous R3 state before admitting the Core equality checks;
-neither an opaque preceding authority hash nor a caller claim alone proves
-same-snapshot lineage. Changing any one predecessor fact fails. Partial/restart
-states resume only the next missing bounded step. Unknown, damaged, human-edited
-or foreign state fails closed.
+An acknowledged durable Claimed event freezes batch identity, accepted result-set commitment and original candidate identity before any publication success. Its containing document retains the original checkpoint and plan pointers. Readers reauthenticate those anchors and the complete immutable publication-event graph. Same-batch checkpoint updates may reconstruct only that frozen accepted projection; they cannot reserve provider work, expand membership, replace its candidate or erase uncertain intent. Successful authenticated PR recording seals the exact proposal tree/head and published subset.
+
+Initial admission accepts expected absence or exact same-operation replay. Another operation cannot replace a sealed generation. A later generation requires freshly verified terminal/no-active facts and fresh Audit. Unknown, damaged, human-edited or foreign state yields no authority.
 
 ## Normative R4 proposal representation
 
@@ -311,15 +252,14 @@ commit metadata and immutable PR metadata.
 
 Unchanged entries are identified by authenticated Git object OID/type/mode; an
 arbitrary SHA-256 is forbidden for bytes that were not retrieved. Governed
-source paths require retrieved bytes matching the appropriate M4 original or
-authenticated preceding candidate hash. Regular modes `100644`/`100755` are
+source paths require retrieved bytes matching the exact M4 original hash. Regular modes `100644`/`100755` are
 preserved; governed links/submodules or unsupported modes fail.
 
 Git trees use raw UTF-8 name bytes and Git's comparator: bytewise `memcmp`, with
 a directory compared as if its name were followed by `/`. UTF-16 string ordering
 is forbidden. R4 fixtures include independent Git known answers for ASCII and
 Unicode names (including U+10000 versus U+E000), nested directories, modes,
-binary blobs, initial, append and merged-successor trees. Commits have exactly
+binary blobs, initial and merged-successor trees. Commits have exactly
 one nonzero parent and deterministic message/actor/time frozen by R4 fixtures.
 
 `GitHubProposalStore` implements separate preparation, content verification and
@@ -335,14 +275,7 @@ operation=<operation-commitment-sha256>
 generation=<generation-key-from-proposal-ref>
 ```
 
-The existing R3 authenticated traversal retains the preceding operation's
-admission state for R4 append reconstruction. A fresh claim reread remains
-required; a locally genuine capability alone does not establish current state.
-The preceding proposal's parent is derived from authenticated lineage, never
-from the proposal commit being verified. An initial or fresh-generation
-proposal uses its recorded target base; a preceding append uses its own
-authenticated predecessor's recorded proposal OID. R3 retains that additional
-bounded predecessor handoff without accepting an arbitrary history walk.
+Every original/fresh-generation proposal overlays the exact authenticated target-base tree and has that immutable target commit as its sole parent. No previous proposal is a new candidate's base, and no cumulative append path exists. Each mutation still rereads the current claim, target and proposal facts.
 
 Recorded-resource verification uses a separate read-only current-state check
 that remains available after publication, terminal transitions, or target
@@ -357,18 +290,11 @@ the mutation's delivery, context, and permissions. Independently verified
 content may accompany a later gate failure; expiration of the independent
 recovery budget is reported as timeout rather than caller cancellation.
 
-Only an unambiguously acknowledged winning `claimed` to `content-created` CAS,
-followed by exact readback, issues a private one-use proposal-ref entitlement.
-It binds the owning store, repository, operation, content-stage head, content
-commit and exact proposal predecessor. R4 atomically consumes it before replay
-or mutation handling. Stage replay, ambiguous CAS recovery and process restart
-can authenticate state but cannot manufacture this entitlement. The proposal update atomically advances both the coordination stage and proposal ref in one closed two-entry `updateRefs` transaction. Both expected predecessors must match; no no-op guard or single-proposal-ref fallback exists. Exact readback authenticates both effects. Ambiguity never mints a replacement PR-create entitlement.
+A fresh process may recover the next missing step of the exact frozen original operation. Fresh Core candidate/source proof, the live claim, exact deterministic Git objects and exhaustive PR absence issue a one-use proposal-ref right tied to the issuing store, operation, current content-stage head, content commit and absent original proposal ref. The paired CAS advances coordination and proposal ref atomically with both exact predecessors and `force=false`. A final absence/ownership/target check occurs before the mutation. A read-only resource proof alone grants no write.
 
-Without that entitlement, only exact successor discovery is recoverable:
-existing content with an absent/preceding proposal ref remains unresolved.
-Missing recorded content at `content-created` or later is not repaired. This
-conservative boundary provides safe recovery, not universal crash-resume
-liveness. Checkpoint updates retain publication anchors unchanged. A PR POST remains outside the Git ref transaction: the durable original-operation intent and private one-use entitlement do not imply remote cancellation or permit a replacement send after takeover.
+PR creation uses a separate durable `pull-request-create-started` fence. It binds the exact original ref/head/tree, expected base, immutable creation commitment and marker, with no PR number. Only the unambiguously acknowledged winning fence CAS, followed by exact readback, issues a private one-use POST right. Replay, restart, lost acknowledgement or losing CAS never recreate it. The right is consumed before POST. A fresh process at the fence performs exhaustive exact-marker discovery only; an absent or ambiguous result retains intent and stops. A crash between fence and POST is safe but is not universally live.
+
+Every acknowledged or uncertain mutation is read back under bounded recovery. Missing recorded objects, a foreign ref, active/changed PR, target drift or ambiguous effects stop without regenerating work, expanding scope or blindly resending. The first authenticated PR result may record base drift after the fence; later results retain that exact base observation. Checkpoint updates preserve publication anchors.
 
 ## Normative R5 PR representation and terminal capability
 
@@ -441,25 +367,26 @@ ValueTask<GitHubPublicationResult> PublishAsync(
 ```
 
 R2 owns credential/HTTP boundaries, R3 coordination, R4 proposal Git data, R5
-PR behavior, and R6 orchestration. CLI composition, live proof, automatic
-ready/merge/close/delete and release compatibility remain later work.
+PR behavior, and R6 orchestration. CLI composition uses this port. Automatic ready/merge/close/delete is outside this contract.
 
-### Creation provenance across appends
+### Bounded creation provenance
 
-The publication-event state preserves the creation-marker framing. A PR-bearing append retains the original generation's creation commitment, marker hash and PR number while its operation, proposal commit/tree and cumulative facts advance. R3 authenticates creation provenance through immutable publication-event anchors and their actual-parent linkage, including older appended terminal generations used by successor admission. It validates every needed state/object and edge before issuing a capability; original creation facts are reconstructed from the non-append creation operation and carried only in the store-owned in-process capability. They are not inferred from PR prose. Intended PR-bearing results are checked against that original source before object preparation and again on readback.
-
-The expanded read is bounded to 1,024 states and 90 seconds, retaining the per-operation transition bound. Missing, substituted, cyclic, over-bound or incomplete provenance yields no partial authority. This is a bounded read with an availability limit, not arbitrary-history scalability. It introduces no second persisted descriptor or old-shape reader.
+Each generation retains its own original Claimed/fence/PR creation chain. Terminal successors retain prior generations and authenticate the original PR creation metadata. The complete read is bounded to 1,024 publication events and 90 seconds, with at most seven same-operation transitions. Checkpoint-only commits do not consume that event budget. Missing, substituted, cyclic, over-bound or incomplete provenance yields no partial authority. Immutable object reads may be reused only within one complete history proof; every later gate starts a fresh proof and rereads mutable facts.
 
 ### Implemented R5 observations
 
 The default host publisher is Actions using its built-in `GITHUB_TOKEN` (`github-actions[bot]`). R5 receives an explicit trusted expected principal independently of the inspected PR and compares its immutable IDs, kind and login. Neither a Bot type nor a matching suffix grants ownership. R5 does not acquire credentials or require `/user`; authenticated principal composition and live credential/permission/trigger proof remain R6/H2/H3 responsibilities.
 
-The immutable title is `ContractScribe proposal <proposal-generation-key>`. The exact LF body consists of the existing ownership marker followed, in order, by `campaign`, `generation`, `snapshot`, `policy`, `headRef`, `baseRef`, and `creationOperationId` lines, each using `=sha256:<lowercase-key>`. Campaign uses the R1 coordination-ref identity key, generation uses the proposal-generation key, snapshot/policy use their commitments, ref keys hash the exact UTF-8 full refs, and creationOperationId uses the original operation commitment. No current-head/cumulative prose or optional summary is emitted. The literal fixture is `tests/fixtures/github/pull-requests/creation-metadata.json`.
+The immutable title is `ContractScribe proposal <proposal-generation-key>`. The exact LF body consists of the existing ownership marker followed, in order, by `campaign`, `generation`, `snapshot`, `batch`, `headRef`, `baseRef`, and `creationOperationId` lines, each using `=sha256:<lowercase-key>`. Campaign uses the R1 coordination-ref identity key, generation uses the proposal-generation key, snapshot uses its commitment and batch uses its exact identity, ref keys hash the exact UTF-8 full refs, and creationOperationId uses the original operation commitment. No current-head/cumulative prose or optional summary is emitted. The literal fixture is `tests/fixtures/github/pull-requests/creation-metadata.json`.
 
 Fresh creation is explicit and performs at most one draft POST. Recovery is a separate read-only operation; uncertain absence never grants a blind resend. Every authenticated result requires exhaustive campaign discovery, exact owned metadata and generic proposal observations, direct PR readback, and unchanged coordination/proposal authority. Exact duplicate list observations deduplicate; contradictory duplicates, competing active generations and removed ownership on known refs fail closed. Terminal PR recognition does not by itself authorize a successor.
 
 During unresolved creation recovery, an otherwise exact owned draft with a mismatched base OID and no retained expected-base success is `stale-base-after-create`. This describes the observed residual, not the unobserved time of base movement. Retained authenticated expected-base success distinguishes later drift. Both prohibit append, completion and replacement. Base-ref edits or additional ownership mismatches are not this residual.
 
-Retained base evidence includes the authenticated original creation source during append partials, the current PR-bearing R3 state, and a supplied store-owned prior R5 observation. A recorded stale generation does not regain active eligibility when base equality returns. Terminal recognition validates the exact retained observed base, so human closure or merge of that same stale PR can be observed without allowing an unexplained base substitution or authorizing a successor. An R5-owned recovery deadline expires as `timeout`, preserving possible POST delivery and no success capability; it is not caller cancellation. Cancellation after possible dispatch still permits the existing bounded independent readback.
+Retained base evidence includes the authenticated original creation source during incomplete publication, the current PR-bearing R3 state, and a supplied store-owned prior R5 observation. A recorded stale generation does not regain active eligibility when base equality returns. Terminal recognition validates the exact retained observed base, so human closure or merge of that same stale PR can be observed without allowing an unexplained base substitution or authorizing a successor. An R5-owned recovery deadline expires as `timeout`, preserving possible POST delivery and no success capability; it is not caller cancellation. Cancellation after possible dispatch still permits the existing bounded independent readback.
 
 Lifecycle guarantees use recorded authenticated observations only. A retained actual `Draft=false` observation can prove a later ready-to-draft contradiction; R3 `awaiting-review` is only a publication hold and does not prove ready promotion. An unchanged draft with a budget hold remains a held draft. Authenticated terminal-to-open contradictions fail closed; wholly unobserved lifecycle cycles are not detected. Ready/terminal state encountered during recovery is returned as observed without mutating human review state or inventing a draft success.
+
+## Independent host finalization
+
+The CLI starts one finite five-minute host finalization window before accepted-only M2 reconstruction or candidate-free publication recovery. It is separate from the shared model allowance, never resets between publication steps, and stays alive through checkpoint cleanup. Execution links actual caller cancellation and owner loss. Independent readback may continue after caller cancellation, but every request, uncertain-effect readback and cleanup remains bounded by the same host deadline. Caller cancellation and host deadline retain distinct outcomes.

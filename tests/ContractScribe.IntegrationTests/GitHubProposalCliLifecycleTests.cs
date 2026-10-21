@@ -40,15 +40,15 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemFact]
-    public async Task Policy_change_holds_the_verified_predecessor_with_its_generation_and_no_attempted_operation_id()
+    public async Task Correctness_change_holds_the_verified_predecessor_with_its_generation_and_no_attempted_operation_id()
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
         AssertResult(await fixture.Run("start"), 0, "published");
-        await ConfigureAppend(fixture);
-        fixture.Publication["policy"]!["maximumDocumentationBlocks"] = 127;
-        fixture.Publication["appendPredecessor"]!["policyCommitmentSha256"] = GitHubPublicationCommitments.CreatePolicy(
-            new(128, 128, 4194304), new(127, 128, 4194304));
+        await ConfigureSealedResume(fixture);
+        var changed = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        changed["planning"] = new JsonObject { ["targetProfile"] = "profile.assembly-visible" };
+        await File.WriteAllTextAsync(fixture.Configuration!, changed.ToJsonString());
         var writes = fixture.GitHub.PublicationWrites;
         var result = await fixture.Run("resume");
         AssertResult(result, 0, "awaiting-review");

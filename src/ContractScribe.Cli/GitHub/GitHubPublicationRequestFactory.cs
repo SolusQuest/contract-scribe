@@ -111,15 +111,7 @@ internal static class GitHubPublicationRequestFactory
             field = GitHubPublicationFieldId.ChangedFiles;
             var changed = CorrelateChangedFiles(observation, candidate.Result);
 
-            field = GitHubPublicationFieldId.Policy;
-            var budget = state.ConfiguredCeilings.CampaignBudget;
-            var append = configuration.AppendPredecessor;
-            Require((configuration.Transition == GitHubPublicationTransitionKind.SameSnapshotAppend)
-                == (append is not null));
-            if (append is not null)
-            {
-                Require(!append.ChangedFiles.IsDefault);
-            }
+            field = GitHubPublicationFieldId.Batch;
             Require(configuration.TargetRef.StartsWith("refs/heads/", StringComparison.Ordinal));
             var authority = GitHubPublicationFactory.CreateAuthority(new(
                 configuration.RepositoryOwner,
@@ -138,19 +130,10 @@ internal static class GitHubPublicationRequestFactory
                 observation.AcceptedProjectionCommitmentSha256,
                 configuration.OperationId,
                 configuration.GenerationId,
-                append?.OperationId,
-                append?.AuthorityCommitmentSha256,
-                append?.CandidateCommitmentSha256,
-                append?.GenerationId,
-                append?.SnapshotCommitmentSha256,
-                append?.PolicyCommitmentSha256,
-                configuration.TerminalPredecessor,
                 configuration.Transition,
-                new(budget.MaximumBlocks, budget.MaximumChangedFiles, budget.MaximumPatchBytes),
-                configuration.Policy,
+                GitHubPublicationFactory.CreateBatchInput(state),
                 changed,
-                append?.ChangedFiles ?? [],
-                configuration.ClosedUnmergedSuccessorAuthorization));
+                configuration.TerminalPredecessor));
 
             field = GitHubPublicationFieldId.Payload;
             var capture = context.Session.RepositorySession.CaptureDocumentationPatchRepositoryBaseline(

@@ -27,8 +27,12 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
     private static T RequireRemote<T>(GitHubApiResult<T> result) where T : class => result.Value
         ?? throw new GitHubCoordinationException(transportFailure: result.Failure ?? new(GitHubFailureCode.InvalidResponse));
 
-    private async ValueTask<GitHubCoordinationDocument> ReadDocumentAsync(string head, CancellationToken token)
+    private async ValueTask<GitHubCoordinationDocument> ReadDocumentAsync(string head, CancellationToken token,
+        Dictionary<string, GitHubCoordinationDocument>? proofDocuments = null)
     {
+        // Reuse immutable objects only within one complete authenticated history
+        // proof. The next gate starts a fresh proof, including its object reads.
+        if (proofDocuments?.TryGetValue(head, out var authenticated) == true) return authenticated;
         var commit = RequireRemote(await client.GetCommitAsync(head, token).ConfigureAwait(false));
         var root = RequireRemote(await client.GetTreeAsync(commit.TreeOid, token).ConfigureAwait(false));
         if (root.Entries.Length != 1 || root.Entries[0].Path != GitHubCoordinationObjects.RootPath
@@ -44,15 +48,17 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             || document.TargetRef != client.ReadAuthority.TargetRef || document.CampaignLineage != client.ReadAuthority.CampaignLineage)
             throw new GitHubCoordinationException();
         documents[head] = document;
+        if (proofDocuments is not null) proofDocuments[head] = document;
         return document;
     }
 
     // Object hashes authenticate bytes; the immediate parent authenticates which
     // protected facts this operation was allowed to replace. Never walk the
     // checkpoint chain: publication history has its own immutable event graph.
-    private async ValueTask<GitHubCoordinationDocument> ReadAcceptedDocumentAsync(string head, CancellationToken token)
+    private async ValueTask<GitHubCoordinationDocument> ReadAcceptedDocumentAsync(string head, CancellationToken token,
+        Dictionary<string, GitHubCoordinationDocument>? proofDocuments = null)
     {
-        var document = await ReadDocumentAsync(head, token).ConfigureAwait(false);
+        var document = await ReadDocumentAsync(head, token, proofDocuments).ConfigureAwait(false);
         if (document.PredecessorOid == ZeroOid)
         {
             if (document.Checkpoint is not null || document.Plan is not null || document.Archive is not null
@@ -61,7 +67,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
                 throw new GitHubCoordinationException();
             return document;
         }
-        var parent = (await ReadDocumentAsync(document.PredecessorOid, token).ConfigureAwait(false))
+        var parent = (await ReadDocumentAsync(document.PredecessorOid, token, proofDocuments).ConfigureAwait(false))
             .RetainAt(document.PredecessorOid);
         if (parent.Claim is { } priorClaim)
         {
@@ -88,6 +94,17 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             {
                 var before = await ReadCheckpointBlobAsync(previous, token).ConfigureAwait(false);
                 CampaignStateFactory.ValidateSuccessorHistory(before, next);
+                if (parent.Publication is { } retained)
+                {
+                    var publication = GitHubPublicationEvent.Decode((await ReadBlobAsync(retained.Oid, token).ConfigureAwait(false)).Bytes.AsMemory());
+                    var intent = publication.State;
+                    if (next.State.Batch.Identity == intent.BatchIdentity
+                            ? !FrozenCheckpointMatches(intent, next)
+                            : intent.Stage is not (GitHubCoordinationStage.Published or GitHubCoordinationStage.AwaitingReview
+                                or GitHubCoordinationStage.StaleDraft or GitHubCoordinationStage.Merged
+                                or GitHubCoordinationStage.ClosedUnmerged or GitHubCoordinationStage.Stale))
+                        throw new GitHubCoordinationException();
+                }
                 if (document.Plan != parent.Plan
                     && (next.State.Snapshot.ExecutionCommitmentSha256 == before.State.Snapshot.ExecutionCommitmentSha256
                         || next.State.Predecessor?.FinalCheckpointSha256 != before.Sha256))

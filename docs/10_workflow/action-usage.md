@@ -7,11 +7,11 @@ Configure these repository variables and secrets:
 | Setting | Purpose |
 | --- | --- |
 | `vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE` | Stable campaign identifier and concurrency group. |
-| `vars.CONTRACTSCRIBE_CAMPAIGN` | JSON with `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`, and `policyCeilings`. |
+| `vars.CONTRACTSCRIBE_CAMPAIGN` | JSON with `snapshot`, `operationId`, `generationId`, `targetRef`, `repositoryOwner`, `repositoryName`. |
 | `secrets.CONTRACTSCRIBE_PROVIDER_API_KEY` | Provider credential forwarded only to the Action. |
 | `secrets.CONTRACTSCRIBE_ACQUISITION_TOKEN` | Optional release-asset acquisition credential, separate from publication. |
 
-`policyCeilings` contains positive integer `maximumDocumentationBlocks`, `maximumDistinctChangedFiles`, and `maximumCumulativePatchBytes`. Set `CS_INPUT` and `CS_POLICY` to the repository input and policy paths. `CS_CONFIGURATION` may select an ordinary [consumer configuration](../20_architecture/consumer-configuration.md) layer, such as [the example layer](../../examples/github-actions/campaign-layer.example.json). Invocation identity and GitHub claims stay in the request, never in that layer.
+Set `CS_INPUT` and `CS_POLICY` to the repository input and policy paths. `CS_CONFIGURATION` may select an ordinary [consumer configuration](../20_architecture/consumer-configuration.md) layer, such as [the example layer](../../examples/github-actions/campaign-layer.example.json). Invocation identity and GitHub claims stay in the request, never in that layer.
 
 The job grants `actions: read`, `contents: write`, and `pull-requests: write`. The helper authenticates the current default-branch workflow dispatch and attempt against Actions metadata before the Action receives credentials. The product uses the job's `github.token`; a stored publication token does not substitute for the pinned Actions bot ownership policy. Checkout credentials are disabled and the checked-out HEAD must equal the selected workflow SHA.
 

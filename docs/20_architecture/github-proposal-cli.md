@@ -28,11 +28,6 @@ The four required options must appear exactly once, in any order after the opera
     "expectedBaseCommitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
     "operationId": "operation.initial",
     "generationId": "generation.initial",
-    "policy": {
-      "maximumDocumentationBlocks": 128,
-      "maximumDistinctChangedFiles": 128,
-      "maximumCumulativePatchBytes": 4194304
-    },
     "transition": "initial"
   }
 }
@@ -48,7 +43,7 @@ All illustrated fields are required exactly once.
 
 ## GitHub publication claims
 
-An initial publication supplies the `github` shape illustrated above. All illustrated `github` fields are required; the three optional predecessor/authorization fields below may be omitted or null.
+An initial publication supplies the `github` shape illustrated above. All illustrated `github` fields are required; the optional terminal predecessor below may be omitted or null.
 
 ```json
 {
@@ -58,20 +53,11 @@ An initial publication supplies the `github` shape illustrated above. All illust
   "expectedBaseCommitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   "operationId": "operation.initial",
   "generationId": "generation.initial",
-  "policy": {
-    "maximumDocumentationBlocks": 128,
-    "maximumDistinctChangedFiles": 128,
-    "maximumCumulativePatchBytes": 4194304
-  },
   "transition": "initial"
 }
 ```
 
-The expected base must be the actual immutable Git commit OID. Operation and generation IDs are explicit caller claims; H1 and R1 validate their complete correlation. GitHub policy must fit the accepted M4 ceilings and cumulative candidate. The closed transitions are `initial`, `same-snapshot-append`, `successor-after-merge`, and `successor-after-closed-unmerged`.
-
-`same-snapshot-append` requires `appendPredecessor` with `operationId`, `authorityCommitmentSha256`, `candidateCommitmentSha256`, `generationId`, `snapshotCommitmentSha256`, `policyCommitmentSha256`, and `changedFiles`. Each preceding file is exactly `{ "path": "App/App.cs", "candidateFileSha256": "<64 lowercase hex>" }`. These are claims authenticated by R3–R6, never ownership granted by configuration.
-
-Successor transitions require `terminalPredecessor`, exactly `logicalPredecessorId`, positive `pullRequestNumber`, `generationId`, `headOid`, and `disposition` (`merged` or `closed-unmerged`). A closed-unmerged successor additionally requires the complete `closedUnmergedSuccessorAuthorization` object: `authorizationId`, `logicalPredecessorId`, `closedPullRequestNumber`, `closedGenerationId`, `closedHeadOid`, `freshSnapshotCommitmentSha256`, `freshWorkPlanCommitmentSha256`, `freshCandidateCommitmentSha256`, `newGenerationId`, and `operationId`. H1 validates this against the exact accepted candidate and proposed successor; a boolean or partial object cannot authorize a retry. The scheduled H3 host must reject a non-null authorization before secret access and cannot synthesize one.
+The expected base is the actual immutable Git commit OID. Operation and generation IDs are caller claims validated against the exact accepted origin and fixed result set. The transitions are `initial`, `successor-after-merge` and `successor-after-closed-unmerged`. A successor requires `terminalPredecessor`: `logicalPredecessorId`, positive `pullRequestNumber`, `generationId`, `headOid` and `disposition` (`merged` or `closed-unmerged`). The adapter freshly authenticates these claims, no active PR, and fresh snapshot/Audit; a closed-unmerged successor also requires a different retained original base. Retired append, publication policy and extra unlock fields are unknown and rejected.
 
 ## Admission and replay
 
@@ -95,7 +81,7 @@ GitHub admission binds a directly resolved repository-owned `CodeAnalysisRuleSet
 
 GitHub admission binds each evaluated `CompilerResponseFile` carrier to its load-time bytes, repository path and authenticated target content. Response-file lines use Roslyn's lexer, including its quotes, escapes and hash comments. The supported boundary accepts explicit scalar compiler options for definitions, language/nullable settings, warning policy, checked/unsafe/optimization, deterministic/target/platform/debug settings and reporting. Unknown options, nested `@` responses, file-bearing arguments such as `/ruleset` or `/reference`, generated/unrepresented carriers and build-time mutations of the response-file property stop with `github-proposal.compiler-input-unverifiable` before planning/provider work. Ordinary evaluated project references/documents retain their existing admission. This response-file support boundary applies only to GitHub source admission; offline/local loading and campaign behavior are unchanged. It does not execute response files or add a general compiler/build-input interpreter.
 
-The effective remote snapshot binds actual target HEAD and correctness-bearing inputs independently of the caller's opaque label or Audit digest. A terminal publication identity distinguishes fresh post-terminal Audit from compatible later unpublished recovery. Compatible unpublished recovery retains the original complete plan, creation quota, selected membership and accepted progress. Invocation quota or lifetime-cap changes do not expand membership. Changed base/policy/profile/style, retry authority or non-lifetime campaign block/file/patch/attempt/candidate controls create fresh work authority without migrating proposals or subtracting unmerged accepted counts, preserving predecessor, archive and known/unknown usage history.
+The effective remote snapshot binds actual target HEAD and correctness-bearing inputs independently of the caller's opaque label or Audit digest. A terminal publication identity distinguishes fresh post-terminal Audit from compatible later unpublished recovery. Compatible unpublished recovery retains the original complete plan, creation quota, selected membership and accepted progress. Invocation quota or lifetime-cap changes do not expand membership. Changed base/policy/profile/style, retry authority or finite attempt/candidate controls create fresh work authority without migrating proposals or subtracting unmerged accepted counts, preserving predecessor, archive and known/unknown usage history.
 
 The inert process-observation seam records actual SDK discovery, deferred provider construction and physical exchange entry in confined tests. Wait/pause regressions assert all three are zero, alongside zero provider requests. Lifecycle success uses the existing `awaiting-review` outcome and authenticated PR linkage; stopped paths use a specific sanitized reason. The richer per-invocation usage envelope remains A3 work.
 
@@ -103,9 +89,9 @@ The inert process-observation seam records actual SDK discovery, deferred provid
 
 One optional accepted-candidate continuation uses the existing M4 executor. It receives only a real `Accepted`/`Reconstructed` candidate while the repository session is alive, plus an exact fresh checkpoint-store acceptance. A validated accepted candidate can be eligible under selected-batch Complete/AllWorkClosed or Complete/Unresolved; its proposal does not resolve remaining documentation. No-work, exhausted/stopped, failed, stale, candidate-less, and mismatched states cannot publish. Ordinary `campaign` behavior is unchanged when the continuation is absent.
 
-For admitted unpublished initial/successor resume, accepted work is reconstructed before advancing remaining work. Progress is checked again against exact checkpoint readback before publication. Deferred future work stays outside this batch and produces batch-complete/no-op; unresolved selected work remains unresolved/host-failure. A persisted failed, rejected, or stale reconstruction retains its authoritative failure and current revision even when an older accepted candidate remains. Accepted-only retry reuses the existing retry reservation/settlement owner and validates the accepted projection under the fresh process context. The current lower-level append admission remains for G4's publication-contract cutover; a caller's append request cannot pass the CLI's open-PR lifecycle gate or authorize more targets in a published PR.
+For admitted unpublished initial/successor resume, accepted work is reconstructed before advancing remaining work. Progress is checked again against exact checkpoint readback before publication. Deferred future work stays outside this batch and produces batch-complete/no-op; unresolved selected work remains unresolved/host-failure. A persisted failed, rejected, or stale reconstruction retains its authoritative failure and current revision even when an older accepted candidate remains. Accepted-only retry reuses the existing retry reservation/settlement owner and validates the accepted projection under the fresh process context. Durable publication intent freezes the selected manifest and exact validated result subset. Same-batch reconstruction cannot start more provider work or replace that subset. The first authenticated PR seals its actual published head/tree permanently.
 
-The [campaign origin](contracts/campaign-state-v1.md) retains the first accepted checkpoint and historical M2 identity. Every fresh reconstruction still executes, validates current evidence and candidate bytes, settles its budget, and conditionally accepts/readbacks a new checkpoint. H1 proves full correspondence with the retained origin before using that original checkpoint/request/result identity in unchanged R1 commitment framing. This makes a real fresh-process resume the same publication operation without reusing stale current-candidate authority. The displayed revision is always the current checkpoint, not the origin revision.
+The [campaign origin](contracts/campaign-state-v1.md) retains the first accepted checkpoint and historical M2 identity. Every fresh reconstruction still executes, validates current evidence and candidate bytes, settles its budget, and conditionally accepts/readbacks a new checkpoint. H1 proves full correspondence with the retained origin before using that original checkpoint/request/result identity in the result-set-bound R1 authority. This makes a real fresh-process resume the same publication operation without reusing stale current-candidate authority. The displayed revision is always the current checkpoint, not the origin revision.
 
 The request and configuration are validated before one read of `CONTRACTSCRIBE_GITHUB_TOKEN`. That credential initially grants only the exact campaign checkpoint object/ref scope, without candidate or PR rights. The invocation acquires a bounded remote owner/epoch claim and uses the same client/store for checkpoint execution and publication. H1 remains credential-free and independently validates the fresh accepted checkpoint and reconstructed candidate before publication authority is bound. The provider credential channel remains separate. Help, usage and local request/configuration failures do not read the GitHub credential; remote-state admission, no-work and resume validation require it.
 
@@ -127,7 +113,9 @@ dotnet <payload>/ContractScribe.Cli.dll github-proposal <start|resume> \
 
 The caller materializes the invocation request and any override to bounded files and passes their locations. Product policy, campaign resolution, runtime authority and publication admission all stay inside the production CLI.
 
-The GitHub facade pins the trusted publisher independently of inspected PRs: `github-actions[bot]`, numeric ID `41898282`, node ID `MDM6Qm90NDE4OTgyODI=`, type `Bot`. This is expected ownership identity, not token-kind proof. One lifetime retains the same authority, payload, HTTP client and reconciler for at most two calls. A first `RecoveredRefPartial` may spend its retained private PR-create entitlement in the second call. A new process reconstructs observations and never reconstructs a lost remote write entitlement.
+The GitHub facade pins the trusted Actions publisher independently of inspected PRs: `github-actions[bot]`, numeric ID `41898282`, node ID `MDM6Qm90NDE4OTgyODI=`, type `Bot`. One facade may make two bounded calls when the first stops at the original proposal ref. Each call freshly validates the next missing original-operation step. A process restart may recover deterministic Git objects/ref and a not-yet-fenced PR operation through fresh narrow capabilities. Only the acknowledged winning durable send-fence CAS issues one POST right; existing fences and ambiguous acknowledgement allow exact discovery only. Absence after the fence remains unresolved.
+
+One finite five-minute host finalization deadline starts before accepted-only reconstruction or candidate-free publication recovery, independent of the model allowance. It is shared across publication, independent uncertain-effect readback and checkpoint cleanup; it never renews per stage. It bounds unfinished work without replacing an already selected exact terminal during teardown. Actual caller or claim cancellation retains its distinct outcome.
 
 ## Output
 
@@ -149,11 +137,11 @@ Envelope version is `1`. Layers are `usage`, `preflight`, `campaign`, `publicati
 | owner | Reconciler, Transport, Coordination, GitData, PullRequests |
 | coordinationFailure | InvalidInput, MissingPredecessor, DifferentOperation, StageConflict, TargetMoved, HumanChange, Conflict, ObjectMismatch, Bounds, Unresolved, Transport |
 | proposalFailure | InvalidInput, Integrity, Bounds, Conflict, Unresolved, Transport |
-| pullRequestOutcome | Absent, Appendable, HeldDraft, Ready, Merged, ClosedUnmerged, StaleDraft, Conflict, Unresolved, Failed |
+| pullRequestOutcome | Absent, OpenDraft, HeldDraft, Ready, Merged, ClosedUnmerged, StaleDraft, Conflict, Unresolved, Failed |
 | transportCode, recoveryCode | InvalidRequest, Authentication, Permission, NotFound, Conflict, Validation, RateLimit, Cancelled, Timeout, ResponseLost, InvalidResponse, HostFailure |
 | delivery | NotDispatched, Read, NeedsReadback, Ambiguous |
 | objectKind | Blob, Tree, Commit |
-| predicate | InvalidCorrelation, Cancelled, UnhandledException, RepositoryUnavailable, DifferentOperation, TargetMoved, SuccessorMismatch, AppendMismatch, TransitionMismatch, UnexpectedProposalRef, ClaimMismatch, CurrentMismatch, ClaimedRefPresent, StaleStage, UnexpectedStage, AppendCreateForbidden, CompletionHeadChanged, ObservationLimit, LifecycleOutcome, MissingOrUnexpectedComponent |
+| predicate | InvalidCorrelation, Cancelled, UnhandledException, RepositoryUnavailable, DifferentOperation, TargetMoved, SuccessorMismatch, TransitionMismatch, UnexpectedProposalRef, ClaimMismatch, CurrentMismatch, ClaimedRefPresent, StaleStage, UnexpectedStage, CompletionHeadChanged, ObservationLimit, LifecycleOutcome, MissingOrUnexpectedComponent |
 
 The adapter pairs this observation with one invocation's unchanged Core result. Original transport and recovery observations remain separate even when the existing result mapping gives one precedence. Owners that retain only one error do not invent a second; missing owner components use the reconciler's closed predicate without inventing an owner failure. The facade emits only the selected call's pair, including its existing second call after `RecoveredRefPartial`. No diagnostic affects request sequencing, recovery, permissions or capabilities. These fields are observations, not retry instructions or proof of a historical failure's cause. They contain no context identity, OID, body, permission header, exception or retry metadata.
 

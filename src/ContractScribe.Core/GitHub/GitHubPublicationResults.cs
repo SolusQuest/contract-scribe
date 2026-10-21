@@ -46,10 +46,9 @@ public enum GitHubPublicationFieldId
     Operation,
     Generation,
     Predecessor,
-    Policy,
+    Batch,
     ChangedFiles,
     Payload,
-    Authorization,
     RemoteObservation,
 }
 

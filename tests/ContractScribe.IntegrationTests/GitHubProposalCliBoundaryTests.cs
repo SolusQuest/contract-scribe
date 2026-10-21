@@ -99,6 +99,22 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(1, fixture.TokenReads());
     }
 
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("before-publication", 7, "timeout")]
+    [InlineData("after-terminal", 0, "published")]
+    public async Task Host_finalization_deadline_respects_the_real_process_terminal_boundary(
+        string boundary, int exit, string outcome)
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        AssertResult(await fixture.Run("start", fault: "deadline-" + boundary), exit, outcome);
+        Assert.Equal(1, Observed(fixture, "finalization-deadline-expired"));
+        Assert.NotNull(fixture.Checkpoint().State.CandidateObservation);
+        Assert.Null(fixture.Checkpoint().State.ActiveReservation);
+        Assert.Equal(exit == 0 ? 1 : 0, fixture.GitHub.PrAttempts);
+        Assert.Equal(exit == 0 ? 1 : 0, fixture.GitHub.PullRequests.Count);
+        await fixture.AssertSourceUnchanged();
+    }
+
     [Fact]
     public async Task Pre_emission_failure_has_one_sanitized_fallback_after_checkpoint_claim()
     {

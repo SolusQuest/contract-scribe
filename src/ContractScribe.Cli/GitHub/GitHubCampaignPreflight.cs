@@ -43,11 +43,13 @@ internal static class GitHubCampaignPreflight
             && row.OriginalBaseOid == observed.TargetOid))
             return Stop("closed-unmerged", "closed-same-base");
         if (NeedsPublicationRecovery(observed)) return null;
+        if (observed.Ledger?.Stage == GitHubCoordinationStage.PullRequestCreateStarted)
+            return Stop("conflict", "publication-incomplete");
         // An incomplete publication cannot be replaced by a changed caller operation/base.
         if (observed.Ledger is
             {
                 Stage: GitHubCoordinationStage.Claimed or GitHubCoordinationStage.ContentCreated
-                or GitHubCoordinationStage.ProposalRefAdvanced
+                or GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreateStarted
             } ledger
             && (ledger.OperationId != request.GitHub.OperationId || ledger.OriginalBaseOid != observed.TargetOid))
             return Stop("conflict", "publication-incomplete");
@@ -56,7 +58,7 @@ internal static class GitHubCampaignPreflight
 
     internal static bool NeedsPublicationRecovery(GitHubCampaignObservation observed) =>
         observed.Failure is null && observed.Ledger is
-        { Stage: GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreated } ledger
+        { Stage: GitHubCoordinationStage.PullRequestCreateStarted or GitHubCoordinationStage.PullRequestCreated } ledger
         && observed.PullRequests.Any(row => row.OwnershipVerified && row.GenerationId == ledger.GenerationId
             && "refs/heads/" + row.Head.Ref == ledger.ExpectedProposalRef);
 
@@ -86,9 +88,6 @@ internal static class GitHubCampaignPreflight
             configuration.ScribeRequest,
             campaignCorrectness = new
             {
-                configuration.Budgets.Campaign.MaximumBlocks,
-                configuration.Budgets.Campaign.MaximumChangedFiles,
-                configuration.Budgets.Campaign.MaximumPatchBytes,
                 configuration.Budgets.Campaign.MaximumAttemptsPerTarget,
                 configuration.Budgets.Campaign.MaximumCandidatesPerBlock,
             },

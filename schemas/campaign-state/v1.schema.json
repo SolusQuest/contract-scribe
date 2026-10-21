@@ -655,11 +655,8 @@
     },
     "campaignBudget": {
       "type": "object", "additionalProperties": false,
-      "required": ["maximumBlocks", "maximumChangedFiles", "maximumPatchBytes", "maximumProviderRequests", "maximumAttemptsPerTarget", "maximumInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens", "maximumCostMicrounits", "maximumElapsedMilliseconds", "maximumCandidatesPerBlock", "costEnforced", "costCurrency", "costRatePolicyId", "costRatePolicySha256", "costRates"],
+      "required": ["maximumProviderRequests", "maximumAttemptsPerTarget", "maximumInputTokens", "maximumUncachedInputTokens", "maximumOutputTokens", "maximumCostMicrounits", "maximumElapsedMilliseconds", "maximumCandidatesPerBlock", "costEnforced", "costCurrency", "costRatePolicyId", "costRatePolicySha256", "costRates"],
       "properties": {
-        "maximumBlocks": { "type": "integer", "minimum": 0, "maximum": 4096 },
-        "maximumChangedFiles": { "type": "integer", "minimum": 0, "maximum": 512 },
-        "maximumPatchBytes": { "type": "integer", "minimum": 0, "maximum": 1099511627776 },
         "maximumProviderRequests": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000 },
         "maximumAttemptsPerTarget": { "type": "integer", "minimum": 0, "maximum": 1000 },
         "maximumInputTokens": { "type": ["integer", "null"], "minimum": 0, "maximum": 1000000000000 },

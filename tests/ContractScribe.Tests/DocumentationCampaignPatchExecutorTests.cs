@@ -152,9 +152,6 @@ public sealed class DocumentationCampaignPatchExecutorTests
             maximumCostMicrounits: 5_000_000,
             maximumElapsedMilliseconds: 120_000);
         var budget = new CampaignPlanningBudgetPolicy(
-            maximumBlocks: 32,
-            maximumChangedFiles: 8,
-            maximumPatchBytes: 1_000_000,
             maximumProviderRequests: 64,
             maximumAttemptsPerTarget: 3,
             maximumInputTokens: 1_000_000,

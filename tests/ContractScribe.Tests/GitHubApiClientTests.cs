@@ -54,7 +54,7 @@ public sealed class GitHubApiClientTests
         var read = GitHubPublicationFactory.CreateCampaignReadAuthority("owner", "REPO", "refs/heads/main", "campaign-1");
         Assert.Equal(GitHubPublicationFactory.CreateCoordinationRef(publication), GitHubPublicationFactory.CreateCoordinationRef(read));
         Assert.Equal(GitHubPublicationFactory.CreateProposalRef(publication), GitHubPublicationFactory.CreateProposalRef(read,
-            publication.GenerationId, publication.SnapshotCommitmentSha256, publication.PolicyCommitmentSha256));
+            publication.GenerationId, publication.SnapshotCommitmentSha256, publication.Batch.Identity));
         Assert.StartsWith(GitHubPublicationFactory.CreateProposalRefPrefix(read), GitHubPublicationFactory.CreateProposalRef(publication), StringComparison.Ordinal);
         Assert.Equal(nameof(ValidatedGitHubCampaignReadAuthority), read.ToString());
         foreach (var bad in new[] { "", "../owner", "owner/private", "owner\n" })
@@ -1342,11 +1342,26 @@ public sealed class GitHubApiClientTests
             .Invoke(null, [uri, handler, timeout])!;
 
     private static ValidatedGitHubPublicationAuthority Authority(string owner = "Owner", string name = "repo", string operation = "operation-1") =>
-        GitHubPublicationFactory.CreateAuthority(new(
-            owner, name, "refs/heads/main", Oid('1'), "campaign-1", Hash('1'), Hash('2'), Hash('3'), 7,
-            Hash('4'), Hash('5'), Hash('6'), Hash('7'), Hash('8'), operation, "generation-1",
-            null, null, null, null, null, null, null, GitHubPublicationTransitionKind.Initial,
-            new(10, 10, 1000), new(10, 10, 1000), [new("docs/readme.md", Hash('1'), Hash('2'), 1, 10, 12, 1, 1)], []));
+        GitHubPublicationFactory.CreateAuthority(new(owner,
+            name,
+            "refs/heads/main",
+            Oid('1'),
+            "campaign-1",
+            Hash('1'),
+            Hash('2'),
+            Hash('3'),
+            7,
+            Hash('4'),
+            Hash('5'),
+            Hash('6'),
+            Hash('7'),
+            Hash('8'),
+            operation,
+            "generation-1",
+            GitHubPublicationTransitionKind.Initial,
+            Batch: GitHubPublicationTestBatch.ForFiles([new("docs/readme.md", Hash('1'), Hash('2'), 1, 10, 12, 1, 1)]),
+            [new("docs/readme.md", Hash('1'), Hash('2'), 1, 10, 12, 1, 1)],
+            null));
 
     private static GitHubCreateCommit CommitRequest() => new(Oid('2'), Oid('3'), Oid('1'), "private commit message",
         new("Synthetic", "synthetic@example.invalid", DateTimeOffset.Parse("2026-09-03T08:00:00Z")),

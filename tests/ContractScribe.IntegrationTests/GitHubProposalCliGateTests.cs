@@ -100,7 +100,7 @@ public sealed partial class GitHubProposalCliProcessTests
             // GitHub's live base.sha can advance while immutable operation base stays unchanged.
             fixture.GitHub.PullRequests[0]["base"]!["sha"] = head;
         }
-        await ConfigureAppend(fixture);
+        await ConfigureSealedResume(fixture);
         fixture.Snapshot = "changed-caller-snapshot";
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         configuration["provider"]!["model"] = "changed-model";

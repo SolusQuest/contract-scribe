@@ -1,8 +1,8 @@
 {
   "version": 1,
-  "policyCommitmentSha256": "5d862f9db95a70e142aea77ea21b03cf118523a3828415781aded1481f51b0fc",
-  "authorityCommitmentSha256": "de467ae1a97d890c8c9223fa6675deb840802f0c707d739b0839c98628f706c5",
-  "operationCommitmentSha256": "2f872f22c76fff5db32bd566708b5a922ca26a863f507ed2a329c06102f877ee",
+  "resultSetCommitmentSha256": "79db5d739291e4c2fe1384cbd8ed2965b91786a14992c30b4c2fd3cdec5d6cb0",
+  "authorityCommitmentSha256": "0491d626d92fee7e8a53e2ba777e595b04f2f2565faead0824d00ccd1ba41ef4",
+  "operationCommitmentSha256": "34f83da9b734bb85460fff844bb09d2a86e8434891e2c7ff4eaa430f4647d22f",
   "coordinationRef": "refs/heads/contract-scribe/coordination/404efb6240fbf2366734ed219829f582403c4f44aaa13deaf044a48c38fb268a",
-  "proposalRef": "refs/heads/contract-scribe/proposals/8cf6f04f38e8d0716678d9f13ac97d9f6bfa6785db7cf479aea69328e1e161e5/da8d04097102c481b7da2555a29fa84a517de71ee8f6f1e1c0e42e746a99bc4f"
+  "proposalRef": "refs/heads/contract-scribe/proposals/8cf6f04f38e8d0716678d9f13ac97d9f6bfa6785db7cf479aea69328e1e161e5/6a0e3a156879b20814b7093a0660f05d5d0a8c89c5d0a985ce59d0aade5240ea"
 }

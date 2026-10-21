@@ -14,22 +14,8 @@ internal sealed record GitHubPublicationConfiguration(
     string ExpectedBaseCommitOid,
     string OperationId,
     string GenerationId,
-    GitHubPublicationPolicy Policy,
     GitHubPublicationTransitionKind Transition,
-    GitHubPublicationAppendPredecessor? AppendPredecessor = null,
-    GitHubPublicationPredecessorAuthority? TerminalPredecessor = null,
-    GitHubClosedUnmergedSuccessorAuthorization? ClosedUnmergedSuccessorAuthorization = null);
-
-// These are caller claims. The adapter must authenticate them against remote
-// state; passing local admission does not establish a published predecessor.
-internal sealed record GitHubPublicationAppendPredecessor(
-    string OperationId,
-    string AuthorityCommitmentSha256,
-    string CandidateCommitmentSha256,
-    string GenerationId,
-    string SnapshotCommitmentSha256,
-    string PolicyCommitmentSha256,
-    ImmutableArray<GitHubPrecedingChangedFileAuthority> ChangedFiles);
+    GitHubPublicationPredecessorAuthority? TerminalPredecessor = null);
 
 internal sealed record GitHubPublicationContext
 {

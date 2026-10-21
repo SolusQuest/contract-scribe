@@ -705,8 +705,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         });
         var executionPolicy = new CampaignPlanningExecutionPolicy(
             fixture.Request.Limits,
-            new CampaignPlanningBudgetPolicy(
-                32, 8, 1_000_000, 64, 3, 1_000_000, 500_000, 100_000,
+            new CampaignPlanningBudgetPolicy(64, 3, 1_000_000, 500_000, 100_000,
                 null, 300_000, 8, false, null, null),
             PatchContent(CampaignPlanningContentFamily.ProposalContract, "proposal", new { value = "proposal-v1" }),
             PatchContent(CampaignPlanningContentFamily.AgentProtocol, "agent", agentProjection),

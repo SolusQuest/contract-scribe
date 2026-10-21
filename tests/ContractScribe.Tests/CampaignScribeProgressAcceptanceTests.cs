@@ -20,29 +20,28 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Theory]
-    [InlineData(false, false, false, false, null, null)]
-    [InlineData(true, false, false, false, null, null)]
-    [InlineData(false, true, false, false, null, null)]
-    [InlineData(true, true, false, false, null, null)]
-    [InlineData(false, false, true, false, null, null)]
-    [InlineData(false, false, false, true, null, null)]
-    [InlineData(false, false, true, false, "ProposalInvalid", null)]
-    [InlineData(false, false, true, false, "BudgetExhausted", null)]
-    [InlineData(false, false, true, false, "Timeout", null)]
-    [InlineData(false, false, true, false, "HostFailure", null)]
-    [InlineData(false, false, true, false, "CallerCancelled", null)]
-    [InlineData(false, false, true, false, "ShutdownCancelled", null)]
-    [InlineData(false, false, false, false, null, "equality")]
-    [InlineData(false, false, false, false, null, "overrun")]
-    [InlineData(false, false, false, false, null, "elapsed")]
-    [InlineData(false, false, false, false, null, "finished-subset")]
-    [InlineData(false, false, true, false, "TimeoutNoSibling", null)]
-    public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, bool projectionCapacity, string? hostRejection, string? pauseBoundary)
+    [InlineData(false, false, false, null, null)]
+    [InlineData(true, false, false, null, null)]
+    [InlineData(false, true, false, null, null)]
+    [InlineData(true, true, false, null, null)]
+    [InlineData(false, false, true, null, null)]
+    [InlineData(false, false, true, "ProposalInvalid", null)]
+    [InlineData(false, false, true, "BudgetExhausted", null)]
+    [InlineData(false, false, true, "Timeout", null)]
+    [InlineData(false, false, true, "HostFailure", null)]
+    [InlineData(false, false, true, "CallerCancelled", null)]
+    [InlineData(false, false, true, "ShutdownCancelled", null)]
+    [InlineData(false, false, false, null, "equality")]
+    [InlineData(false, false, false, null, "overrun")]
+    [InlineData(false, false, false, null, "elapsed")]
+    [InlineData(false, false, false, null, "finished-subset")]
+    [InlineData(false, false, true, "TimeoutNoSibling", null)]
+    public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, string? hostRejection, string? pauseBoundary)
     {
         var noSibling = hostRejection == "TimeoutNoSibling";
         var subset = pauseBoundary == "finished-subset";
         var scenario = CreateProposalScenario(workItemCount: subset ? 3 : 2, targetLimit: subset ? 3 : 2, maximumElapsedMilliseconds: pauseBoundary == "elapsed" || hostRejection is not null ? 1000 : null,
-            maximumProviderRequests: pauseBoundary == "equality" ? 1 : 100, maximumOutputTokens: pauseBoundary == "overrun" ? 7 : 100000, maximumBlocks: projectionCapacity ? 1 : 100);
+            maximumProviderRequests: pauseBoundary == "equality" ? 1 : 100, maximumOutputTokens: pauseBoundary == "overrun" ? 7 : 100000);
         var exchanges = scenario.Plan.WorkItems.Select(work => skipSecond && work == scenario.Plan.WorkItems[1]
             ? CreateNonProposalExchange(work, scenario) : CreateScribeExchange(work, scenario: scenario)).ToArray();
         var first = exchanges[0].Request;
@@ -198,23 +197,7 @@ public sealed partial class CampaignStateContractTests
                 Assert.True(CampaignStateJson.Parse(paused.Artifact.ExactUtf8Json.AsMemory()).IsValid);
                 return;
             }
-            if (projectionCapacity && index == 0)
-            {
-                Assert.Equal(CampaignWorkOutcomeCode.CompletedOverBound, state.WorkItems[0].ClosedOutcome!.Code);
-                Assert.Null(state.WorkItems[0].TrustedProposal);
-                Assert.Equal(CampaignWorkStatus.ProposalComplete, state.WorkItems[1].Status);
-                Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
-                var paused = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
-                    lifetimeStop: false, projectionCapacityStop: true);
-                Assert.Equal(CampaignTransitionKind.Applied, paused.Kind);
-                Assert.Null(paused.Artifact.State.TerminalOutcome);
-                Assert.Null(paused.Artifact.State.ActiveReservation);
-                Assert.Equal(CampaignWorkStatus.ProposalComplete, paused.Artifact.State.WorkItems[1].Status);
-                Assert.Equal(charges.ProviderRequests, paused.Artifact.State.LineageCharges.ProviderRequests);
-                Assert.Equal(charges.InputTokens, paused.Artifact.State.LineageCharges.InputTokens);
-                Assert.True(CampaignStateJson.Parse(paused.Artifact.ExactUtf8Json.AsMemory()).IsValid);
-                return;
-            }
+
             Assert.IsType<CampaignProviderReservation>(state.ActiveReservation);
             Assert.True(invocation.DispatchStarted);
             Assert.Equal(charges.ProviderRequests, state.LineageCharges.ProviderRequests);

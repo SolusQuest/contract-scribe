@@ -74,9 +74,6 @@ internal sealed record CampaignConfigurationDocument(
 
         var campaign = Budgets.Campaign;
         var campaignBudget = new CampaignPlanningBudgetPolicy(
-            campaign.MaximumBlocks,
-            campaign.MaximumChangedFiles,
-            campaign.MaximumPatchBytes,
             campaign.MaximumProviderRequests,
             campaign.MaximumAttemptsPerTarget,
             campaign.MaximumInputTokens,
@@ -143,9 +140,6 @@ internal sealed record CampaignBudgetConfiguration(
     DocumentationScribeInvocationLimits Invocation);
 
 internal sealed record CampaignAggregateBudgetConfiguration(
-    int MaximumBlocks,
-    int MaximumChangedFiles,
-    long MaximumPatchBytes,
     int? MaximumProviderRequests,
     int MaximumAttemptsPerTarget,
     long? MaximumInputTokens,
@@ -320,9 +314,6 @@ internal static class CampaignConfiguration
         var campaign = value.GetProperty("campaign");
         Expect(campaign,
         [
-            "maximumBlocks",
-            "maximumChangedFiles",
-            "maximumPatchBytes",
             "maximumProviderRequests",
             "maximumAttemptsPerTarget",
             "maximumInputTokens",
@@ -339,9 +330,6 @@ internal static class CampaignConfiguration
             throw Invalid();
         }
         var aggregate = new CampaignAggregateBudgetConfiguration(
-            Int(campaign, "maximumBlocks", 1, 16_384),
-            Int(campaign, "maximumChangedFiles", 1, 16_384),
-            Long(campaign, "maximumPatchBytes", 1, CampaignStateContract.MaximumPatchBytes),
             NullableInt(campaign, "maximumProviderRequests", 1_000_000),
             Int(campaign, "maximumAttemptsPerTarget", 1, 1_000),
             campaignInput,

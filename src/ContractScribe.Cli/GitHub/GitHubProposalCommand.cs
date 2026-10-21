@@ -57,6 +57,7 @@ internal static class GitHubProposalCommand
             catch (Exception exception) when (exception is ArgumentException or GitHubProtocolException)
             { return GitHubProposalPresentation.Local(identity, arguments.Operation, "permission"); }
             using var clientLifetime = client;
+            using var finalization = new GitHubPublicationFinalization(cancellationToken, GitHubProposalProcessHooks.FinalizationClock);
             await using var checkpoint = GitHubCoordinationStore.Create(client);
             var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, cancellationToken).ConfigureAwait(false);
             if (observed.Failure is not null
@@ -96,15 +97,26 @@ internal static class GitHubProposalCommand
                 accepted?.Artifact?.CheckpointRevision) is { } claimedStop) return claimedStop;
             if (GitHubCampaignPreflight.NeedsPublicationRecovery(claimed))
             {
-                claimed = await checkpoint.RecoverObservedPublicationAsync(execution.Token).ConfigureAwait(false);
+                var recoveryToken = finalization.Begin(execution.Token);
+                client.BindFinalizationDeadline(finalization.DeadlineToken);
+                claimed = await checkpoint.RecoverObservedPublicationAsync(recoveryToken).ConfigureAwait(false);
+                GitHubProposalProcessHooks.Reach("after-publication-recovery");
+                if (finalization.TimedOut && claimed.Failure?.Transport?.Code == GitHubFailureCode.Cancelled)
+                    return GitHubProposalPresentation.Local(identity, arguments.Operation, "timeout", accepted?.Artifact?.CheckpointRevision);
                 if (GitHubCampaignPreflight.Select(identity, arguments.Operation, request.Request, claimed,
                     accepted?.Artifact?.CheckpointRevision) is { } recoveredStop) return recoveredStop;
+                if (finalization.TimedOut) return GitHubProposalPresentation.Local(identity, arguments.Operation, "timeout", accepted?.Artifact?.CheckpointRevision);
             }
             if (claimed.TargetOid != observed.TargetOid)
                 return GitHubProposalPresentation.Preflight(identity, arguments.Operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
             if (!request.Revalidate() || !preflight.Configuration.Revalidate())
                 return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
             preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Request, claimed) };
+            var originalOnly = claimed.Ledger?.Stage is GitHubCoordinationStage.Claimed
+                or GitHubCoordinationStage.ContentCreated or GitHubCoordinationStage.ProposalRefAdvanced;
+            if (originalOnly && accepted?.Artifact is { } frozen
+                && preflight.SnapshotBinding != frozen.State.Snapshot.OpaqueSnapshotBinding)
+                return GitHubProposalPresentation.Preflight(identity, arguments.Operation, "conflict", "publication-incomplete", frozen.CheckpointRevision);
             var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request, accessor,
                 (publication, payload, token) => GitHubPublicationFacade.PublishCheckpointAsync(client, checkpoint,
                     publication, payload, token),
@@ -124,7 +136,8 @@ internal static class GitHubProposalCommand
                             GitHubCampaignPreflight.TransportOutcome(exception.TransportFailure), accepted?.Artifact?.CheckpointRevision);
                     }
                 },
-                authenticatedBaseOid: claimed.TargetOid);
+                authenticatedBaseOid: claimed.TargetOid, finalization: finalization,
+                bindFinalizationDeadline: client.BindFinalizationDeadline, originalOperationOnly: originalOnly);
             return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
                 accessor, continuation, checkpointStore: checkpoint).ConfigureAwait(false);
         }
@@ -156,8 +169,11 @@ internal static class GitHubProposalProcessHooks
 {
     private static Action<string>? observer;
     private static (string Source, long? Revision)? terminal;
+    private static TimeProvider? finalizationClock;
     private static void Register(Action<string> callback) => observer = callback;
     private static void RegisterTerminal(string source, long? revision) => terminal = (source, revision);
+    private static void RegisterFinalizationClock(TimeProvider clock) => finalizationClock = clock;
+    internal static TimeProvider? FinalizationClock => finalizationClock;
     internal static CampaignTerminal? Terminal(CampaignOperation operation) => terminal is { } selected
         ? new("campaign", operation, selected.Source, selected.Revision) : null;
     internal static void Reach(string boundary) => observer?.Invoke(boundary);

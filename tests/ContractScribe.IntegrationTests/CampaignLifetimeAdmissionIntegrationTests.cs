@@ -167,7 +167,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         if (dimension != "cost") return original;
         var b = original.PlanningInput.ExecutionPolicy.CampaignBudget;
         var rates = new CampaignCostRates(0, 0, 1_000_000, 1_000_000);
-        var budget = new CampaignPlanningBudgetPolicy(b.MaximumBlocks, b.MaximumChangedFiles, b.MaximumPatchBytes,
+        var budget = new CampaignPlanningBudgetPolicy(
             b.MaximumProviderRequests, b.MaximumAttemptsPerTarget, b.MaximumInputTokens, b.MaximumUncachedInputTokens,
             b.MaximumOutputTokens, cap, b.MaximumElapsedMilliseconds, b.MaximumCandidatesPerBlock, true,
             "currency.synthetic", rates.CreateAuthority("currency.synthetic", "rate.synthetic"), rates);

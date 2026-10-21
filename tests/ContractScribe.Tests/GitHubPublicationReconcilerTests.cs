@@ -17,6 +17,47 @@ namespace ContractScribe.Tests;
 [Collection("GitHub transport hook")]
 public sealed partial class GitHubPublicationReconcilerTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Original_send_fence_rechecks_the_proposal_ref_after_immutable_preparation(bool deleted)
+    {
+        var remote = new Remote();
+        var authority = Branch.Authority(remote.Git);
+        using var session = new Session(remote, authority);
+        Assert.Equal(GitHubPublicationResultKind.RecoveredRefPartial, (await session.Publish()).Kind);
+        var before = remote.State(authority);
+        var head = remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)];
+        var reference = GitHubPublicationFactory.CreateProposalRef(authority);
+        var injected = false;
+        remote.AfterMutation = (_, body) =>
+        {
+            var request = JsonNode.Parse(body ?? "null");
+            if (request?["message"]?.GetValue<string>() != "ContractScribe campaign coordination v1\n") return;
+            var root = remote.Git.Trees[request["tree"]!.GetValue<string>()];
+            var leaf = remote.Git.Trees[Assert.Single(root).Oid];
+            var publication = leaf.SingleOrDefault(entry => entry.Path == GitHubCoordinationObjects.EventPath);
+            if (publication is null || GitHubPublicationEvent.Decode(remote.Git.Blobs[publication.Oid]).State.Stage
+                != GitHubCoordinationStage.PullRequestCreateStarted) return;
+            if (deleted) remote.Git.Refs.Remove(reference);
+            else remote.Git.Refs[reference] = authority.ExpectedBaseCommitOid;
+            injected = true;
+            remote.AfterMutation = null;
+        };
+        Assert.Equal(GitHubPublicationResultKind.Conflict, (await session.Publish()).Kind);
+        Assert.True(injected);
+        Assert.Equal(head, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)]);
+        Assert.Equal(before.ResultSetCommitmentSha256, remote.State(authority).ResultSetCommitmentSha256);
+        Assert.Equal(GitHubCoordinationStage.ProposalRefAdvanced, remote.State(authority).Stage);
+        Assert.Equal(0, remote.PrAttempts);
+        var writes = remote.Writes;
+        using var restart = new Session(remote, authority);
+        Assert.Contains((await restart.Publish()).Kind,
+            new[] { GitHubPublicationResultKind.Conflict, GitHubPublicationResultKind.HumanChange });
+        Assert.Equal(writes, remote.Writes);
+        Assert.Equal(0, remote.PrAttempts);
+    }
+
     private static readonly GitHubActor Publisher = new(99, "BOT_99", "github-actions[bot]", GitHubActorKind.Bot);
 
     [Theory]
@@ -167,74 +208,58 @@ public sealed partial class GitHubPublicationReconcilerTests
     }
 
     [Fact]
-    public async Task Lost_live_creation_entitlement_never_becomes_a_blind_post()
+    public async Task Fresh_original_ref_recovery_revalidates_and_sends_once_before_the_durable_fence()
     {
         var remote = new Remote();
         var authority = Branch.Authority(remote.Git);
         using (var first = new Session(remote, authority))
             Assert.Equal(GitHubPublicationResultKind.RecoveredRefPartial, (await first.Publish()).Kind);
-        var writes = remote.Writes;
         using var restart = new Session(remote, authority);
-        Assert.Equal(GitHubPublicationResultKind.Conflict, (await restart.Publish()).Kind);
-        Assert.Equal(GitHubPublicationResultKind.Conflict, (await restart.Publish()).Kind);
-        Assert.Equal(writes, remote.Writes);
-        Assert.Equal(0, remote.Posts);
-    }
-
-    [Fact]
-    public async Task Append_runs_real_git_authority_and_retains_original_pr_metadata()
-    {
-        var remote = new Remote();
-        var first = Branch.Authority(remote.Git);
-        using (var session = new Session(remote, first))
-        {
-            await session.Publish();
-            Assert.Equal(GitHubPublicationResultKind.Published, (await session.Publish()).Kind);
-        }
-        var metadata = remote.Prs[0]["body"]!.GetValue<string>();
-        var title = remote.Prs[0]["title"]!.GetValue<string>();
-        var previous = first;
-        for (var i = 0; i < 3; i++)
-        {
-            byte[] bytes = [3, 4, (byte)i];
-            var next = Branch.Authority(remote.Git, "append-" + i, previous, bytes);
-            using var append = new Session(remote, next, Branch.Payload(next, bytes));
-            Assert.Equal(GitHubPublicationResultKind.Published, (await append.Publish()).Kind);
-            Assert.Equal(metadata, remote.Prs[0]["body"]!.GetValue<string>());
-            Assert.Equal(title, remote.Prs[0]["title"]!.GetValue<string>());
-            Assert.Equal(next.OperationCommitmentSha256, remote.State(next).OperationCommitmentSha256);
-            Assert.Equal(next.CandidateCommitmentSha256, remote.State(next).CurrentCandidateCommitmentSha256);
-            using var cold = new Session(remote, next, Branch.Payload(next, bytes));
-            Assert.Equal(GitHubPublicationResultKind.ReplayNoOp, (await cold.Publish()).Kind);
-            previous = next;
-        }
-        Assert.Equal(1, remote.Posts);
-        Assert.Equal(4, remote.Git.ProposalWrites);
-    }
-
-    [Fact]
-    public async Task Append_adds_a_path_to_the_cumulative_candidate_and_cold_replays_without_pr_prose_updates()
-    {
-        var remote = new Remote();
-        var first = Branch.Authority(remote.Git);
-        using (var initial = new Session(remote, first))
-        {
-            await initial.Publish();
-            Assert.Equal(GitHubPublicationResultKind.Published, (await initial.Publish()).Kind);
-        }
-        var body = remote.Prs[0]["body"]!.GetValue<string>();
-        byte[] bytes = [4, 5, 6];
-        var next = Branch.Authority(remote.Git, "append-new-path", first, bytes, includeNew: true);
-        var payload = Branch.Payload(next, bytes, includeNew: true);
-        using (var append = new Session(remote, next, payload))
-            Assert.Equal(GitHubPublicationResultKind.Published, (await append.Publish()).Kind);
-        Assert.Equal(2, remote.State(next).CumulativeChangedFiles.Length);
-        Assert.Equal(body, remote.Prs[0]["body"]!.GetValue<string>());
+        Assert.Equal(GitHubPublicationResultKind.Published, (await restart.Publish()).Kind);
         var writes = remote.Writes;
-        using var cold = new Session(remote, next, payload);
-        Assert.Equal(GitHubPublicationResultKind.ReplayNoOp, (await cold.Publish()).Kind);
+        Assert.Equal(GitHubPublicationResultKind.ReplayNoOp, (await restart.Publish()).Kind);
         Assert.Equal(writes, remote.Writes);
         Assert.Equal(1, remote.Posts);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Sealed_publication_refuses_changed_result_and_new_path_without_mutation(bool includeNew)
+    {
+        var remote = new Remote();
+        var first = Branch.Authority(remote.Git);
+        using (var session = new Session(remote, first)) { await session.Publish(); await session.Publish(); }
+        var original = remote.Prs[0].ToJsonString();
+        var head = remote.Git.ProposalHead(first);
+        var writes = remote.Writes;
+        byte[] bytes = [4, 5, 6];
+        var next = Branch.Authority(remote.Git, "replacement", first, bytes, includeNew: includeNew);
+        for (var attempt = 0; attempt < 2; attempt++)
+        {
+            using var replacement = new Session(remote, next, Branch.Payload(next, bytes, includeNew));
+            Assert.Equal(GitHubPublicationResultKind.Conflict, (await replacement.Publish()).Kind);
+            Assert.Equal(writes, remote.Writes);
+            Assert.Equal(head, remote.Git.ProposalHead(first));
+            Assert.Equal(original, remote.Prs[0].ToJsonString());
+        }
+        Assert.Equal(1, remote.Posts);
+        Assert.Equal(1, remote.Git.ProposalWrites);
+    }
+
+    [Fact]
+    public async Task A_new_operation_with_identical_bytes_still_cannot_reopen_a_sealed_result_set()
+    {
+        var remote = new Remote();
+        var first = Branch.Authority(remote.Git);
+        using var initial = new Session(remote, first);
+        await initial.Publish(); await initial.Publish();
+        var writes = remote.Writes;
+        var next = Branch.Authority(remote.Git, "new-operation");
+        using var replacement = new Session(remote, next);
+        Assert.Equal(GitHubPublicationResultKind.Conflict, (await replacement.Publish()).Kind);
+        Assert.Equal(writes, remote.Writes);
+        Assert.Single(remote.Prs);
     }
 
     [Theory]
@@ -360,13 +385,12 @@ public sealed partial class GitHubPublicationReconcilerTests
     }
 
     [Fact]
-    public async Task Append_recovers_atomically_recorded_ref_successor_after_failed_readback()
+    public async Task Original_operation_recovers_atomically_recorded_ref_after_failed_readback()
     {
         var remote = new Remote();
         var first = Branch.Authority(remote.Git);
-        using (var initial = new Session(remote, first)) { await initial.Publish(); await initial.Publish(); }
         byte[] bytes = [9, 8, 7];
-        var next = Branch.Authority(remote.Git, "append-partial", first, bytes);
+        var next = Branch.Authority(remote.Git, "original-partial", candidate: bytes);
         // Stop the first read after the paired CAS; both remote effects must remain recoverable.
         var failReads = false;
         remote.AfterMutation = (_, body) =>
@@ -374,8 +398,8 @@ public sealed partial class GitHubPublicationReconcilerTests
             if (body?.Contains("/proposals/", StringComparison.Ordinal) == true) failReads = true;
         };
         remote.RejectRead = _ => failReads ? HttpStatusCode.Forbidden : null;
-        using (var append = new Session(remote, next, Branch.Payload(next, bytes)))
-            Assert.Equal(GitHubPublicationResultKind.Permission, (await append.Publish()).Kind);
+        using (var original = new Session(remote, next, Branch.Payload(next, bytes)))
+            Assert.Equal(GitHubPublicationResultKind.Permission, (await original.Publish()).Kind);
         Assert.Equal(GitHubCoordinationStage.ProposalRefAdvanced, remote.State(next).Stage);
         remote.RejectRead = null; remote.AfterMutation = null;
         var refWrites = remote.Git.ProposalWrites;
@@ -395,6 +419,7 @@ public sealed partial class GitHubPublicationReconcilerTests
         using (var initial = new Session(remote, first)) { await initial.Publish(); await initial.Publish(); }
         remote.Lifecycle(closed ? "closed" : "merged");
         if (!closed) remote.Git.Refs["refs/heads/main"] = remote.Git.ProposalHead(first)!;
+        else remote.Git.AdvanceUnchangedBase();
         byte[] bytes = [9, 8, 7];
         var prior = new GitHubPublicationPredecessorAuthority("prior", 1, first.GenerationId, remote.Git.ProposalHead(first)!,
             closed ? GitHubPublicationPredecessorDisposition.ClosedUnmerged : GitHubPublicationPredecessorDisposition.Merged);
@@ -409,14 +434,10 @@ public sealed partial class GitHubPublicationReconcilerTests
             TerminalPredecessor = prior,
             Transition = closed ? GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged : GitHubPublicationTransitionKind.SuccessorAfterMerge,
             ChangedFiles = [first.ChangedFiles[0] with { OriginalFileSha256 = Hash(closed ? Branch.Original : Branch.Candidate), CandidateFileSha256 = Hash(bytes) }],
-            ClosedUnmergedSuccessorAuthorization = closed ? new("authorization", "prior", 1, first.GenerationId, prior.HeadOid,
-                new string('a', 64), new string('b', 64), Hash(bytes), "generation-next", "successor") : null,
         };
         var staleInput = input with
         {
             SnapshotCommitmentSha256 = first.SnapshotCommitmentSha256,
-            ClosedUnmergedSuccessorAuthorization = input.ClosedUnmergedSuccessorAuthorization is { } authorization
-                ? authorization with { FreshSnapshotCommitmentSha256 = first.SnapshotCommitmentSha256 } : null,
         };
         var staleAuthority = GitHubPublicationFactory.CreateAuthority(staleInput);
         var oldWrites = remote.Writes;
@@ -433,40 +454,29 @@ public sealed partial class GitHubPublicationReconcilerTests
     }
 
     [Fact]
-    public async Task Equal_ceiling_publishes_but_next_append_and_policy_change_hold_without_writes()
+    public async Task Sealed_publication_refuses_a_new_result_even_when_the_creation_quota_changes()
     {
-        foreach (var exhausted in new[] { false, true })
+        var remote = new Remote();
+        var first = Branch.Authority(remote.Git);
+        using (var initial = new Session(remote, first))
+        { await initial.Publish(); Assert.Equal(GitHubPublicationResultKind.Published, (await initial.Publish()).Kind); }
+        var writes = remote.Writes;
+        byte[] bytes = [8, 7];
+        foreach (var quota in new[] { 100, 101 })
         {
-            var remote = new Remote();
-            var firstInput = Input(Branch.Authority(remote.Git));
-            if (exhausted) firstInput = firstInput with { Policy = new(1, 1, 2) };
-            var first = GitHubPublicationFactory.CreateAuthority(firstInput);
-            using (var initial = new Session(remote, first))
-            { await initial.Publish(); Assert.Equal(GitHubPublicationResultKind.Published, (await initial.Publish()).Kind); }
-            byte[] bytes = [8, 7];
-            var policy = exhausted ? first.Policy : new GitHubPublicationPolicy(9, 9, 999);
-            var policyCommitment = GitHubPublicationFactory.CreateAuthority(firstInput with { Policy = policy }).PolicyCommitmentSha256;
-            var next = GitHubPublicationFactory.CreateAuthority(firstInput with
+            var input = Input(first);
+            var next = GitHubPublicationFactory.CreateAuthority(input with
             {
-                OperationId = "append-hold",
+                OperationId = "replacement",
                 CandidateCommitmentSha256 = Hash(bytes),
-                Policy = policy,
-                Transition = GitHubPublicationTransitionKind.SameSnapshotAppend,
-                PrecedingOperationId = first.OperationId,
-                PrecedingAuthorityCommitmentSha256 = first.AuthorityCommitmentSha256,
-                PrecedingCandidateCommitmentSha256 = first.CandidateCommitmentSha256,
-                PrecedingGenerationId = first.GenerationId,
-                PrecedingSnapshotCommitmentSha256 = first.SnapshotCommitmentSha256,
-                PrecedingPolicyCommitmentSha256 = policyCommitment,
-                PrecedingChangedFiles = [new("file.bin", first.ChangedFiles[0].CandidateFileSha256)],
+                Batch = input.Batch with { CreationQuota = quota },
                 ChangedFiles = [first.ChangedFiles[0] with { CandidateFileSha256 = Hash(bytes) }],
             });
-            var writes = remote.Writes;
-            using var append = new Session(remote, next, Branch.Payload(next, bytes));
-            var held = await append.Publish();
-            Assert.Equal(GitHubPublicationResultKind.AwaitingReview, held.Kind);
-            Assert.Equal(first.OperationCommitmentSha256, held.PullRequest!.OperationCommitmentSha256);
+            using var replacement = new Session(remote, next, Branch.Payload(next, bytes));
+            Assert.Equal(GitHubPublicationResultKind.Conflict, (await replacement.Publish()).Kind);
             Assert.Equal(writes, remote.Writes);
+            Assert.Single(remote.Prs);
+            Assert.Equal(1, remote.PrAttempts);
         }
     }
 
@@ -540,9 +550,8 @@ public sealed partial class GitHubPublicationReconcilerTests
     {
         var remote = new Remote();
         var first = Branch.Authority(remote.Git);
-        using (var initial = new Session(remote, first)) { await initial.Publish(); await initial.Publish(); }
         byte[] bytes = [6, 7];
-        var next = Branch.Authority(remote.Git, "rewind", first, bytes);
+        var next = Branch.Authority(remote.Git, "rewind", candidate: bytes);
         string? claimOid = null;
         var injected = false;
         remote.BeforeMutation = (_, body) =>
@@ -564,15 +573,15 @@ public sealed partial class GitHubPublicationReconcilerTests
                 { remote.Git.Refs[reference] = remote.Git.BaseOid; injected = true; }
             }
         };
-        using (var append = new Session(remote, next, Branch.Payload(next, bytes)))
-            Assert.Contains((await append.Publish()).Kind, new[] { GitHubPublicationResultKind.Conflict, GitHubPublicationResultKind.HumanChange });
+        using (var original = new Session(remote, next, Branch.Payload(next, bytes)))
+            Assert.Contains((await original.Publish()).Kind, new[] { GitHubPublicationResultKind.Conflict, GitHubPublicationResultKind.HumanChange });
         Assert.True(injected);
         remote.BeforeMutation = null;
         var writes = remote.Writes;
         using var restart = new Session(remote, next, Branch.Payload(next, bytes));
         Assert.Contains((await restart.Publish()).Kind, new[] { GitHubPublicationResultKind.Conflict, GitHubPublicationResultKind.HumanChange });
         Assert.Equal(writes, remote.Writes);
-        Assert.Equal(1, remote.Posts);
+        Assert.Equal(0, remote.Posts);
     }
 
     [Theory]
@@ -654,8 +663,6 @@ public sealed partial class GitHubPublicationReconcilerTests
         var authority = Branch.Authority(remote.Git);
         using var session = new Session(remote, authority);
         await session.Publish();
-        var right = (IGitHubPullRequestEntitlement)typeof(GitHubPublicationReconciler)
-            .GetField("createRight", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(session.Reconciler)!;
         var owner = GitHubCoordinationStore.Create(session.Client);
         using var foreign = new Session(remote, authority);
         Assert.Throws<ArgumentException>(() => GitHubProposalStore.Create(session.Client, GitHubCoordinationStore.Create(foreign.Client)));
@@ -665,8 +672,6 @@ public sealed partial class GitHubPublicationReconcilerTests
         var writes = remote.Writes;
         Assert.Equal(ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Conflict,
             (await store.CreateAuthorizedAsync(state, head, new CounterfeitRight())).Outcome);
-        Assert.Equal(ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Conflict,
-            (await store.CreateAuthorizedAsync(state, head, right)).Outcome);
         Assert.Equal(writes, remote.Writes);
         Assert.Equal(GitHubPublicationResultKind.Published, (await session.Publish()).Kind);
         var read = await owner.ReadCurrentAsync();
@@ -842,8 +847,9 @@ public sealed partial class GitHubPublicationReconcilerTests
         Assert.Equal(GitHubPublicationResultKind.Stale, (await session.Publish()).Kind);
         Assert.True(recording);
         Assert.True(targets >= driftRead);
-        Assert.Equal(previousHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)]);
-        Assert.Equal(GitHubCoordinationStage.ProposalRefAdvanced, remote.State(authority).Stage);
+        Assert.NotEqual(previousHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)]);
+        Assert.Null(remote.State(authority).PullRequestNumber);
+        Assert.Equal(GitHubCoordinationStage.PullRequestCreateStarted, remote.State(authority).Stage);
         remote.BeforeRead = null; remote.AfterRead = null; remote.AfterMutation = null;
         var writes = remote.Writes;
         await session.Publish();
@@ -931,7 +937,7 @@ public sealed partial class GitHubPublicationReconcilerTests
     [InlineData("timeout", (int)GitHubPublicationResultKind.Timeout)]
     [InlineData("failed-recovery", (int)GitHubPublicationResultKind.HostFailure)]
     [InlineData("divergent", (int)GitHubPublicationResultKind.Conflict)]
-    [InlineData("exact", (int)GitHubPublicationResultKind.RecoveredContentPartial)]
+    [InlineData("exact", (int)GitHubPublicationResultKind.RecoveredRefPartial)]
     public async Task Coordination_cas_recovery_distinguishes_unchanged_divergent_and_exact_heads(string scenario, int expected)
     {
         var remote = new Remote();
@@ -948,6 +954,7 @@ public sealed partial class GitHubPublicationReconcilerTests
         {
             var update = JsonNode.Parse(body!)?["variables"]?["input"]?["refUpdates"]?[0];
             if (update is null) return;
+            if (remote.Git.CoordinationState(update["afterOid"]!.GetValue<string>()).Stage != GitHubCoordinationStage.ContentCreated) return;
             Assert.Equal(reference, update["name"]!.GetValue<string>());
             Assert.Equal(claim.HeadOid, update["beforeOid"]!.GetValue<string>());
             attempts++;
@@ -965,7 +972,10 @@ public sealed partial class GitHubPublicationReconcilerTests
         remote.AfterMutation = (_, body) =>
         {
             if (scenario == "exact" && JsonNode.Parse(body!)?["variables"] is not null)
+            {
+                remote.AfterMutation = null;
                 throw new IOException("synthetic acknowledged-state response loss");
+            }
         };
         var actual = await session.Observe(cancel.Token);
         Assert.Equal((GitHubPublicationResultKind)expected, actual.Result.Kind);
@@ -983,18 +993,26 @@ public sealed partial class GitHubPublicationReconcilerTests
             }
         }
         Assert.Equal(1, attempts);
-        Assert.Equal(0, remote.Git.ProposalWrites);
+        Assert.Equal(scenario == "exact" ? 1 : 0, remote.Git.ProposalWrites);
         Assert.Equal(0, remote.PrAttempts);
-        if (scenario == "exact") Assert.Equal(GitHubCoordinationStage.ContentCreated, remote.State(authority).Stage);
+        if (scenario == "exact") Assert.Equal(GitHubCoordinationStage.ProposalRefAdvanced, remote.State(authority).Stage);
         else Assert.Equal(scenario == "divergent" ? authority.ExpectedBaseCommitOid : claim.HeadOid, remote.Git.Refs[reference]);
         remote.BeforeMutation = null; remote.BeforeCas = null; remote.AfterMutation = null;
         remote.RejectMutation = null; remote.RejectRead = null;
         var writes = remote.Writes;
         using var restart = new Session(remote, authority);
-        await restart.Publish();
-        Assert.Equal(writes, remote.Writes);
-        Assert.Equal(0, remote.Git.ProposalWrites);
-        Assert.Equal(0, remote.PrAttempts);
+        var resumed = await restart.Publish();
+        if (scenario == "exact")
+        {
+            Assert.Equal(GitHubPublicationResultKind.Published, resumed.Kind);
+            Assert.Equal(1, remote.PrAttempts);
+        }
+        else
+        {
+            Assert.Equal(writes, remote.Writes);
+            Assert.Equal(0, remote.PrAttempts);
+        }
+        Assert.Equal(scenario == "exact" ? 1 : 0, remote.Git.ProposalWrites);
     }
 
     private sealed class CounterfeitRight : IGitHubPullRequestEntitlement;
@@ -1031,48 +1049,37 @@ public sealed partial class GitHubPublicationReconcilerTests
     [InlineData("classification", "base-ref")]
     [InlineData("classification", "head-repository")]
     [InlineData("first-proposal", "permission")]
-    public async Task Partial_append_observation_preserves_only_the_genuine_forward_content_proof(string window, string change)
+    public async Task Sealed_result_observation_preserves_only_the_genuine_original_content_proof(string window, string change)
     {
         var remote = new Remote();
         var first = Branch.Authority(remote.Git);
         using var initial = new Session(remote, first);
         await initial.Publish(); await initial.Publish();
-        byte[] bytes = [9, 8];
-        var next = Branch.Authority(remote.Git, "partial-observation", first, bytes);
-        using var writer = new Session(remote, next, Branch.Payload(next, bytes));
+        var next = first;
+        using var writer = new Session(remote, next);
         var coordination = GitHubCoordinationStore.Create(writer.Client);
-        var git = GitHubProposalStore.Create(writer.Client, coordination);
-        var read = await coordination.ReadCurrentAsync();
-        var claim = (await coordination.ClaimAsync(read.Read!)).State!;
-        var prepared = await git.PrepareAsync(claim, writer.Payload);
-        var content = (await git.CreateContentAsync(prepared.Prepared!, claim)).Content!;
-        var stage = await coordination.AdvanceAsync(claim, GitHubCoordinationStageUpdate.ContentCreated(content.CommitOid));
-        Assert.NotNull(stage.ProposalRefEntitlement);
+        var currentWriter = (await coordination.ReadCurrentAsync()).State!;
         var reference = GitHubPublicationFactory.CreateProposalRef(next);
-        var before = remote.Git.Refs[reference];
-        var advancedHead = stage.State!.HeadOid;
+        var before = next.ExpectedBaseCommitOid;
+        var advancedHead = currentWriter.HeadOid;
         var advanceWrites = 0;
         async Task Advance()
         {
-            var beforeWrites = remote.Writes;
-            var advanced = await git.AdvanceRefAsync(content, stage.State!, stage.ProposalRefEntitlement);
-            Assert.Null(advanced.Failure);
-            advancedHead = advanced.Coordination!.State!.HeadOid;
-            Assert.NotEqual(stage.State!.HeadOid, advancedHead);
-            advanceWrites = remote.Writes - beforeWrites;
-            Assert.Equal(advancedHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
-            Assert.Equal(content.CommitOid, remote.Git.Refs[reference]);
+            var writesBefore = remote.Writes;
+            var advanced = await coordination.AdvanceAsync(currentWriter, GitHubCoordinationStageUpdate.AwaitingReview());
+            Assert.NotNull(advanced.State);
+            advancedHead = advanced.State!.HeadOid;
+            advanceWrites = remote.Writes - writesBefore;
         }
-        if (change == "rewind") await Advance();
         using var observer = new Session(remote, next, writer.Payload);
         var owner = GitHubCoordinationStore.Create(observer.Client);
         var current = await owner.ReadCurrentAsync();
         var inspection = (await GitHubProposalStore.Create(observer.Client, owner).InspectAsync(current.Read!, observer.Payload)).Inspection!;
         Assert.NotNull(inspection);
         Assert.True(inspection.ContentExists);
-        Assert.Equal(content.CommitOid, inspection.CommitOid);
-        Assert.Equal(before, inspection.BeforeOid);
-        Assert.Equal(change == "rewind" ? content.CommitOid : before, inspection.ObservedRefOid);
+        Assert.Equal(currentWriter.ProposalCommitOid, inspection.CommitOid);
+        Assert.Equal(GitHubPublicationContract.MissingGitObjectId, inspection.BeforeOid);
+        Assert.Equal(currentWriter.ProposalCommitOid, inspection.ObservedRefOid);
         var store = GitHubProposalPullRequestStore.Create(observer.Client, owner, Publisher);
         var requests = remote.Attempts.Count;
         Assert.Null((await store.ObserveVerifiedAsync(current.State!, new CounterfeitInspection(inspection))).Observation);
@@ -1103,27 +1110,22 @@ public sealed partial class GitHubPublicationReconcilerTests
         var result = await store.ObserveVerifiedAsync(current.State!, inspection);
 
         Assert.Null(remote.BeforeReadAsync);
-        Assert.Null(result.Observation);
+        if (change == "forward" && window == "final-proposal")
+            Assert.NotNull(result.Observation); // A verified same-result hold is safe to observe.
+        else Assert.Null(result.Observation);
         Assert.Equal(advancedHead, remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(next)]);
         Assert.Equal(writes + (change == "rewind" ? 0 : advanceWrites), remote.Writes);
         Assert.Equal(1, remote.PrAttempts);
         Assert.Single(remote.Prs);
-        Assert.Equal(change == "permission" ? ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Failed
+        if (change == "forward" && window == "final-proposal")
+            Assert.Equal(ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.OpenDraft, result.Outcome);
+        else Assert.Equal(change == "permission" ? ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Failed
             : ContractScribe.GitHub.PullRequests.GitHubProposalOutcome.Conflict, result.Outcome);
-        Assert.Equal(change is "forward" or "foreign" ? (GitHubCoordinationFailureKind?)null
-            : change == "permission" ? GitHubCoordinationFailureKind.Transport : GitHubCoordinationFailureKind.HumanChange, result.Cause);
         if (change == "permission") Assert.Equal(403, result.Failure!.HttpStatus);
     }
 
     private static string Hash(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
-    private static GitHubPublicationAuthorityInput Input(ValidatedGitHubPublicationAuthority a) => new(
-        a.RepositoryOwner, a.RepositoryName, a.TargetRef, a.ExpectedBaseCommitOid, a.CampaignLineage,
-        a.SnapshotCommitmentSha256, a.ExecutionCommitmentSha256, a.WorkPlanCommitmentSha256, a.CheckpointRevision,
-        a.CheckpointSha256, a.CandidateCommitmentSha256, a.PatchRequestSha256, a.PatchResultCommitmentSha256,
-        a.AcceptedProjectionCommitmentSha256, a.OperationId, a.GenerationId, a.PrecedingOperationId,
-        a.PrecedingAuthorityCommitmentSha256, a.PrecedingCandidateCommitmentSha256, a.PrecedingGenerationId,
-        a.PrecedingSnapshotCommitmentSha256, a.PrecedingPolicyCommitmentSha256, a.TerminalPredecessor, a.Transition,
-        a.AcceptedM4Ceilings, a.Policy, a.ChangedFiles, a.PrecedingChangedFiles, a.ClosedUnmergedSuccessorAuthorization);
+    private static GitHubPublicationAuthorityInput Input(ValidatedGitHubPublicationAuthority a) => GitHubPublicationTestBatch.Copy(a);
 
     private sealed class Session : IDisposable
     {

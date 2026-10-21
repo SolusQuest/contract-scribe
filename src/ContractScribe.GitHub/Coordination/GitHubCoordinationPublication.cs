@@ -1,4 +1,5 @@
 using ContractScribe.GitHub.Transport;
+using ContractScribe.GitHub.PullRequests;
 
 namespace ContractScribe.GitHub.Coordination;
 
@@ -24,7 +25,7 @@ internal sealed partial class GitHubCoordinationStore
             var read = await ReadObservedStateAsync(observed.Repository, target, remote.Head, token).ConfigureAwait(false);
             if (read.State is not StateCapability current)
                 throw new GitHubCoordinationException(transportFailure: read.Failure?.TransportFailure);
-            if (current.Stage is not (GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreated)) return observed;
+            if (current.Stage is not (GitHubCoordinationStage.PullRequestCreateStarted or GitHubCoordinationStage.PullRequestCreated)) return observed;
             var generation = ObservedCurrentGeneration(current) ?? throw new GitHubCoordinationException();
             var pr = observed.PullRequests.SingleOrDefault(row => row.OwnershipVerified
                 && row.GenerationId == generation.GenerationId && "refs/heads/" + row.Head.Ref == generation.Ref)
@@ -85,12 +86,15 @@ internal sealed partial class GitHubCoordinationStore
             // Keep the prepared physical parent stable through the paired CAS.
             guard = await ReadClaimAsync(current, token, renewClaim: false).ConfigureAwait(false);
             if (guard.Guard is null) return guard;
+            if (right.Absence is not null && !await GitHubProposalPullRequestStore.RevalidateAbsenceAsync(
+                right.Absence, this, current, token).ConfigureAwait(false))
+                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
             var proposalRef = ProposalRef(current.State);
             var update = await client.UpdatePublicationRefsAsync(
                 new(coordinationRef, current.HeadOid, prepared.CommitOid, false),
                 new(proposalRef, beforeProposalOid, contentOid, beforeProposalOid == ZeroOid), token).ConfigureAwait(false);
             if (update.Delivery == GitHubDelivery.NotDispatched) return Failed(update);
-            using var recovery = new CancellationTokenSource(RecoveryTimeout);
+            using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
             var head = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
             var proposal = await client.GetRefAsync(proposalRef, recovery.Token).ConfigureAwait(false);
             if (head.Value is null || proposal.Value is null)
@@ -104,8 +108,7 @@ internal sealed partial class GitHubCoordinationStore
             if (read.State is not StateCapability accepted) return read;
             var acknowledged = update.Value is not null && update.Failure is null && update.Delivery == GitHubDelivery.NeedsReadback;
             return new(GitHubCoordinationOutcome.Advanced, state: accepted,
-                pullRequestEntitlement: acknowledged && next.Transition != "same-snapshot-append"
-                    ? new PullRequestEntitlement(this, accepted) : null, publicationMutation: update);
+                publicationMutation: update);
         }
         catch (GitHubCoordinationException) { return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch); }
         catch (OperationCanceledException) { return DomainFailure(GitHubCoordinationFailureKind.Transport, new(GitHubFailureCode.Cancelled)); }

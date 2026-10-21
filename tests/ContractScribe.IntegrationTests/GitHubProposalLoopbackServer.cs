@@ -131,7 +131,8 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             Request request;
             lock (Gate)
             {
-                Assert.True(Requests.Count < 20_000);
+                if (Requests.Count >= 20_000)
+                    Assert.Fail($"Request guard: {method} {path}; mutations={Mutations}; PR attempts={PrAttempts}; ledger={CoordinationDocument().ToJsonString()}");
                 request = new(method, path, kind, method == "POST" ? ++Mutations : 0);
                 Requests.Add(request);
                 if (method == "POST" && path == "/repos/Owner/repo/pulls") PrAttempts++;

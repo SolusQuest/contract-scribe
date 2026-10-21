@@ -45,7 +45,7 @@ public sealed class GitHubArchitectureTests
         Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
-        Assert.Equal(new[] { "BindCheckpointWrite", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateTreeAsync",
+        Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
             "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
@@ -129,10 +129,9 @@ public sealed class GitHubArchitectureTests
         var requiredSnapshotProperties = new HashSet<string>(StringComparer.Ordinal)
         {
             "Repository", "TargetRef", "TargetCommitOid", "SnapshotCommitmentSha256",
-            "AuthorityCommitmentSha256", "PolicyCommitmentSha256", "OperationId",
+            "AuthorityCommitmentSha256", "BatchIdentity", "ResultSetCommitmentSha256", "OperationId",
             "OperationCommitmentSha256", "CurrentCandidateCommitmentSha256",
-            "PrecedingOperationId", "PrecedingAuthorityCommitmentSha256",
-            "PrecedingCandidateCommitmentSha256", "GenerationId", "Transition", "Stage",
+            "GenerationId", "Transition", "Stage",
             "HeadOid", "CoordinationPredecessorOid", "ContentCommitOid", "ProposalRefOid",
             "ProposalCommitOid", "ProposalTreeOid",
             "PullRequestCreationOperationCommitmentSha256", "PullRequestNumber",

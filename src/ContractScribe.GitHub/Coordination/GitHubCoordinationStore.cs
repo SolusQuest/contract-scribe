@@ -50,13 +50,11 @@ internal interface IGitHubCoordinationStateCapability
     string TargetCommitOid { get; }
     string SnapshotCommitmentSha256 { get; }
     string AuthorityCommitmentSha256 { get; }
-    string PolicyCommitmentSha256 { get; }
+    string BatchIdentity { get; }
+    string ResultSetCommitmentSha256 { get; }
     string OperationId { get; }
     string OperationCommitmentSha256 { get; }
     string CurrentCandidateCommitmentSha256 { get; }
-    string? PrecedingOperationId { get; }
-    string? PrecedingAuthorityCommitmentSha256 { get; }
-    string? PrecedingCandidateCommitmentSha256 { get; }
     string GenerationId { get; }
     string Transition { get; }
     string CoordinationPredecessorOid { get; }
@@ -143,7 +141,7 @@ internal sealed partial class GitHubCoordinationStore
 {
     private static readonly string ZeroOid = GitHubPublicationContract.MissingGitObjectId;
     private static readonly TimeSpan RecoveryTimeout = TimeSpan.FromSeconds(30);
-    private const int MaximumSameOperationTransitions = 6;
+    private const int MaximumSameOperationTransitions = 7;
     internal const int MaximumHistoryStates = 1024;
     private readonly GitHubApiClient client;
     private ValidatedGitHubPublicationAuthority authority => client.Authority;
@@ -229,26 +227,23 @@ internal sealed partial class GitHubCoordinationStore
     internal GitHubCampaignGeneration? ObservedCurrentGeneration(IGitHubCoordinationStateCapability state) =>
         state is StateCapability owned && ReferenceEquals(owned.Owner, this)
             && CreationSource(owned) is StateCapability source && source.ProposalCommitOid is not null
-            ? ObserveGeneration(owned.State, source.State,
-                owned.Transition == "same-snapshot-append" ? owned.AdmissionSource?.State : null) : null;
+            ? ObserveGeneration(owned.State, source.State) : null;
 
     internal string? ObservedProposalOid(IGitHubCoordinationStateCapability state) =>
         state is StateCapability owned && ReferenceEquals(owned.Owner, this)
-            ? owned.ProposalRefOid ?? (owned.Transition == "same-snapshot-append"
-                ? owned.AdmissionSource?.ProposalCommitOid : null) : null;
+            ? owned.ProposalRefOid : null;
 
-    private GitHubCampaignGeneration ObserveGeneration(GitHubCoordinationState latest, GitHubCoordinationState creation,
-        GitHubCoordinationState? admission = null)
+    private GitHubCampaignGeneration ObserveGeneration(GitHubCoordinationState latest, GitHubCoordinationState creation)
     {
         var reference = ProposalRef(creation);
         var commitment = GitHubCoordinationCodec.PullRequestCreationCommitment(creation, reference);
         var metadata = GitHubProposalPullRequestStore.CreateMetadata(client.ReadAuthority, reference,
-            creation.SnapshotCommitmentSha256, creation.PolicyCommitmentSha256, creation.TargetRef,
+            creation.SnapshotCommitmentSha256, creation.BatchIdentity, creation.TargetRef,
             creation.OperationCommitmentSha256, commitment);
-        return new(reference, (latest.ProposalCommitOid ?? admission?.ProposalCommitOid)!,
-            (latest.ProposalTreeOid ?? admission?.ProposalTreeOid)!, creation.TargetCommitOid,
-            latest.ObservedBaseOid ?? admission?.ObservedBaseOid ?? latest.TargetCommitOid,
-            latest.PullRequestNumber ?? admission?.PullRequestNumber, latest.Stage, metadata, creation.GenerationId,
+        return new(reference, latest.ProposalCommitOid!,
+            latest.ProposalTreeOid!, creation.TargetCommitOid,
+            latest.ObservedBaseOid ?? latest.TargetCommitOid,
+            latest.PullRequestNumber, latest.Stage, metadata, creation.GenerationId,
             latest.CumulativeChangedFiles);
     }
 
@@ -368,7 +363,7 @@ internal sealed partial class GitHubCoordinationStore
             var admittedState = (StateCapability)admitted.State;
 
             using var postRecovery = cancellationToken.IsCancellationRequested
-                ? new CancellationTokenSource(RecoveryTimeout)
+                ? client.CreateRecoveryScope(RecoveryTimeout)
                 : null;
             var postTarget = await client.GetRefAsync(authority.TargetRef,
                 postRecovery?.Token ?? cancellationToken).ConfigureAwait(false);
@@ -409,7 +404,7 @@ internal sealed partial class GitHubCoordinationStore
         CancellationToken cancellationToken = default)
     {
         if (current is not StateCapability owned || update is null
-            || !ReferenceEquals(owned.Owner, this))
+            || !ReferenceEquals(owned.Owner, this) || update.Stage == GitHubCoordinationStage.PullRequestCreateStarted)
             return ValueTask.FromResult(DomainFailure(GitHubCoordinationFailureKind.InvalidInput));
         return AdvanceCoreAsync(owned, update, cancellationToken, checkTarget: true);
     }
@@ -471,7 +466,7 @@ internal sealed partial class GitHubCoordinationStore
         return expected.TargetOid == actual.TargetOid ? current : DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
     }
 
-    // Read-only verification of a current operation or its retained append source.
+    // Read-only verification of an original operation and its retained publication source.
     // This does not relax the authority predicate on ReadClaimAsync.
     internal async ValueTask<GitHubCoordinationResult> InspectStateAsync(
         IGitHubCoordinationStateCapability state, CancellationToken token = default)
@@ -488,7 +483,7 @@ internal sealed partial class GitHubCoordinationStore
         IGitHubCoordinationStateCapability state) =>
         entitlement is PullRequestEntitlement owned && ReferenceEquals(owned.Owner, this)
         && state is StateCapability current && ReferenceEquals(current.Owner, this)
-        && current.Stage == GitHubCoordinationStage.ProposalRefAdvanced
+        && current.Stage == GitHubCoordinationStage.PullRequestCreateStarted
         && SameState(owned.State, current) && Interlocked.CompareExchange(ref owned.Consumed, 1, 0) == 0;
 
     internal ValueTask<GitHubCoordinationResult> RecordObservationAsync(
@@ -529,12 +524,12 @@ internal sealed partial class GitHubCoordinationStore
                     && observation.Outcome == GitHubProposalOutcome.Merged)
                 || (authority.Transition == GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged
                     && observation.Outcome == GitHubProposalOutcome.ClosedUnmerged
-                    && authority.ClosedUnmergedSuccessorAuthorization is not null));
+                    && authority.ExpectedBaseCommitOid != state.TargetCommitOid));
     }
 
     internal IGitHubCoordinationStateCapability? CreationSource(IGitHubCoordinationStateCapability capability) =>
         capability is StateCapability owned && ReferenceEquals(owned.Owner, this)
-            ? owned.Creation ?? (owned.State.Transition != "same-snapshot-append" ? owned : null)
+            ? owned.Creation ?? owned
             : null;
 
     internal string? ProposalRefFor(IGitHubCoordinationStateCapability capability) =>
@@ -591,15 +586,6 @@ internal sealed partial class GitHubCoordinationStore
     {
         var read = await ReadStateAsync(repository, target, head, cancellationToken).ConfigureAwait(false);
         if (read.State is not StateCapability current) return read;
-        // An immediately preceding append needs its own authenticated admission context.
-        // Revalidate through the bounded ancestry reader; this is not a general history API.
-        if (current.AdmissionSource is { Transition: "same-snapshot-append" } source)
-        {
-            var previous = await ReadStateAsync(repository, target, source.PhysicalHeadOid, cancellationToken).ConfigureAwait(false);
-            if (previous.State is not StateCapability authenticated) return previous;
-            if (!SameState(source, authenticated)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-            current.AdmissionSource = authenticated;
-        }
         return read;
     }
 
@@ -617,7 +603,8 @@ internal sealed partial class GitHubCoordinationStore
         CancellationToken cancellationToken,
         bool checkTarget,
         bool observedPredecessor = false,
-        bool requireExpectedTarget = false)
+        bool requireExpectedTarget = false,
+        Func<CancellationToken, ValueTask<bool>>? mutationGuard = null)
     {
         try
         {
@@ -754,6 +741,8 @@ internal sealed partial class GitHubCoordinationStore
                 objects = await CreateObjectsAsync(prepared, cancellationToken).ConfigureAwait(false);
                 if (objects is not null) return objects;
             }
+            if (mutationGuard is not null && !await mutationGuard(cancellationToken).ConfigureAwait(false))
+                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
             var result = await UpdateAndReadAsync(repository.Value.Identity, finalTarget.Value,
                 prepared, current.HeadOid, preparedIntended, cancellationToken).ConfigureAwait(false);
             if (result.State is null) return result;
@@ -895,7 +884,7 @@ internal sealed partial class GitHubCoordinationStore
         if (mutation.Delivery is not (GitHubDelivery.NeedsReadback or GitHubDelivery.Ambiguous))
             return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
                 mutation.Failure, mutation.Delivery, mutation.Context, mutation.RequiredPermissions);
-        using var recovery = new CancellationTokenSource(RecoveryTimeout);
+        using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
         var observed = await GitHubObjectReadback.ObserveAsync(read, recovery.Token).ConfigureAwait(false);
         var readbackFailure = RecoveryFailure(observed.Failure, recovery);
         if (observed.Value is not null)
@@ -928,7 +917,7 @@ internal sealed partial class GitHubCoordinationStore
             && update.Delivery is not (GitHubDelivery.NeedsReadback or GitHubDelivery.Ambiguous))
             return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
                 update.Failure, update.Delivery, update.Context, update.RequiredPermissions);
-        using var recovery = new CancellationTokenSource(RecoveryTimeout);
+        using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
         var read = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
         var readbackFailure = RecoveryFailure(read.Failure, recovery);
         if (read.Value is null)
@@ -964,8 +953,7 @@ internal sealed partial class GitHubCoordinationStore
             proposalRefEntitlement: entitlement,
             pullRequestEntitlement: update.Value is not null && update.Failure is null
                 && update.Delivery == GitHubDelivery.NeedsReadback && candidate.CommitOid == prepared.CommitOid
-                && prepared.State.Stage == GitHubCoordinationStage.ProposalRefAdvanced
-                && prepared.State.Transition != "same-snapshot-append"
+                && prepared.State.Stage == GitHubCoordinationStage.PullRequestCreateStarted
                 ? new PullRequestEntitlement(this, (StateCapability)state.State) : null);
     }
 
@@ -993,7 +981,8 @@ internal sealed partial class GitHubCoordinationStore
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(90));
-        var current = await ReadStateObjectAsync(repository, target, headOid, deadline.Token).ConfigureAwait(false);
+        var proofDocuments = new Dictionary<string, GitHubCoordinationDocument>(StringComparer.Ordinal);
+        var current = await ReadStateObjectAsync(repository, target, headOid, deadline.Token, proofDocuments).ConfigureAwait(false);
         if (current.State is null) return Normalize(current);
         var currentState = (StateCapability)current.State;
         var cursor = currentState;
@@ -1015,7 +1004,6 @@ internal sealed partial class GitHubCoordinationStore
                     || cursor.PullRequestCreationOperationCommitmentSha256 != generationMarker.PullRequestCreationOperationCommitmentSha256
                     || cursor.OwnershipMarkerSha256 != generationMarker.OwnershipMarkerSha256)
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-                if (cursor.Transition != "same-snapshot-append")
                 {
                     try
                     {
@@ -1045,7 +1033,7 @@ internal sealed partial class GitHubCoordinationStore
             if (!visited.Add(predecessorOid)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             // Only publication events are traversed; checkpoint frequency has no lifetime cap.
             if (visited.Count > MaximumHistoryStates) return DomainFailure(GitHubCoordinationFailureKind.Bounds);
-            var predecessor = await ReadStateObjectAsync(repository, target, predecessorOid, deadline.Token).ConfigureAwait(false);
+            var predecessor = await ReadStateObjectAsync(repository, target, predecessorOid, deadline.Token, proofDocuments).ConfigureAwait(false);
             if (predecessor.State is null) return Normalize(predecessor);
             var previous = (StateCapability)predecessor.State;
             if (!ValidEdge(previous.State, cursor.State))
@@ -1059,7 +1047,6 @@ internal sealed partial class GitHubCoordinationStore
                 operationState.AdmissionSource = previous;
                 operationState = previous;
                 sameOperationTransitions = 0;
-                if (cursor.Transition != "same-snapshot-append")
                 {
                     if (generationMarker is not null && !sourceFound)
                         return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
@@ -1085,15 +1072,16 @@ internal sealed partial class GitHubCoordinationStore
         GitHubRepositoryIdentity repository,
         GitHubRef target,
         string headOid,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Dictionary<string, GitHubCoordinationDocument>? proofDocuments = null)
     {
         try
         {
-            var document = await ReadAcceptedDocumentAsync(headOid, cancellationToken).ConfigureAwait(false);
+            var document = await ReadAcceptedDocumentAsync(headOid, cancellationToken, proofDocuments).ConfigureAwait(false);
             if (document.Publication is not { } pointer)
                 return new(GitHubCoordinationOutcome.Current);
             var anchor = pointer.Anchor == GitHubCoordinationDocument.CurrentCommit ? headOid : pointer.Anchor;
-            var eventDocument = anchor == headOid ? document : await ReadAcceptedDocumentAsync(anchor, cancellationToken).ConfigureAwait(false);
+            var eventDocument = anchor == headOid ? document : await ReadAcceptedDocumentAsync(anchor, cancellationToken, proofDocuments).ConfigureAwait(false);
             if (eventDocument.Publication != pointer with { Anchor = GitHubCoordinationDocument.CurrentCommit })
                 return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             var blob = await ReadBlobAsync(pointer.Oid, cancellationToken).ConfigureAwait(false);
@@ -1103,10 +1091,17 @@ internal sealed partial class GitHubCoordinationStore
                 || state.RepositoryId != eventDocument.RepositoryId || state.TargetRef != eventDocument.TargetRef
                 || state.TargetCommitOid != eventDocument.TargetCommitOid || state.CampaignLineage != eventDocument.CampaignLineage)
                 return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            if (state.Stage == GitHubCoordinationStage.Claimed && client.CheckpointAuthority is not null)
+            {
+                if (eventDocument.Checkpoint is not { } checkpoint || eventDocument.Plan?.BatchIdentity != state.BatchIdentity)
+                    return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+                var accepted = await ReadCheckpointBlobAsync(checkpoint, cancellationToken).ConfigureAwait(false);
+                if (!FrozenCheckpointMatches(state, accepted)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            }
             GitHubEventPointer? previous = null;
             if (eventDocument.PredecessorOid != ZeroOid)
             {
-                var parent = await ReadDocumentAsync(eventDocument.PredecessorOid, cancellationToken).ConfigureAwait(false);
+                var parent = await ReadDocumentAsync(eventDocument.PredecessorOid, cancellationToken, proofDocuments).ConfigureAwait(false);
                 previous = parent.RetainAt(eventDocument.PredecessorOid).Publication;
             }
             if (previous != publication.Previous) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
@@ -1161,22 +1156,14 @@ internal sealed partial class GitHubCoordinationStore
             return false;
         return (predecessor.Stage, current.Transition) switch
         {
-            (GitHubCoordinationStage.Published, "same-snapshot-append") =>
-                current.PrecedingOperationId == predecessor.OperationId
-                && current.PrecedingAuthorityCommitmentSha256 == predecessor.AuthorityCommitmentSha256
-                && current.PrecedingCandidateCommitmentSha256 == predecessor.CurrentCandidateCommitmentSha256
-                && current.GenerationId == predecessor.GenerationId
-                && current.SnapshotCommitmentSha256 == predecessor.SnapshotCommitmentSha256
-                && current.PolicyCommitmentSha256 == predecessor.PolicyCommitmentSha256
-                && current.TargetCommitOid == predecessor.TargetCommitOid
-                && current.RepositoryId.Equals(predecessor.RepositoryId,
-                    StringComparison.OrdinalIgnoreCase)
-                && current.TargetRef == predecessor.TargetRef,
             (GitHubCoordinationStage.Merged, "successor-after-merge") =>
                 current.GenerationId != predecessor.GenerationId
+                && current.SnapshotCommitmentSha256 != predecessor.SnapshotCommitmentSha256
                 && SameRepositoryAndRef(predecessor, current),
             (GitHubCoordinationStage.ClosedUnmerged, "successor-after-closed-unmerged") =>
                 current.GenerationId != predecessor.GenerationId
+                && current.SnapshotCommitmentSha256 != predecessor.SnapshotCommitmentSha256
+                && current.TargetCommitOid != predecessor.TargetCommitOid
                 && SameRepositoryAndRef(predecessor, current),
             (GitHubCoordinationStage.Stale, "initial") =>
                 current.GenerationId != predecessor.GenerationId
@@ -1198,8 +1185,6 @@ internal sealed partial class GitHubCoordinationStore
         {
             (GitHubPublicationTransitionKind.Initial, null) => true,
             (GitHubPublicationTransitionKind.Initial, GitHubCoordinationStage.Stale) => true,
-            (GitHubPublicationTransitionKind.SameSnapshotAppend, GitHubCoordinationStage.Published) =>
-                MatchesAppendPredecessor(predecessor),
             (GitHubPublicationTransitionKind.SuccessorAfterMerge, GitHubCoordinationStage.Merged) =>
                 MatchesTerminalPredecessor(predecessor),
             (GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged,
@@ -1222,12 +1207,10 @@ internal sealed partial class GitHubCoordinationStore
         && first.TargetCommitOid == second.TargetCommitOid
         && first.SnapshotCommitmentSha256 == second.SnapshotCommitmentSha256
         && first.AuthorityCommitmentSha256 == second.AuthorityCommitmentSha256
-        && first.PolicyCommitmentSha256 == second.PolicyCommitmentSha256
+        && first.BatchIdentity == second.BatchIdentity
+        && first.ResultSetCommitmentSha256 == second.ResultSetCommitmentSha256
         && first.OperationCommitmentSha256 == second.OperationCommitmentSha256
         && first.CurrentCandidateCommitmentSha256 == second.CurrentCandidateCommitmentSha256
-        && first.PrecedingOperationId == second.PrecedingOperationId
-        && first.PrecedingAuthorityCommitmentSha256 == second.PrecedingAuthorityCommitmentSha256
-        && first.PrecedingCandidateCommitmentSha256 == second.PrecedingCandidateCommitmentSha256
         && first.GenerationId == second.GenerationId
         && first.Transition == second.Transition
         && first.CumulativeDocumentationBlocks == second.CumulativeDocumentationBlocks
@@ -1246,7 +1229,12 @@ internal sealed partial class GitHubCoordinationStore
         && (predecessor.PullRequestNumber is null
             || predecessor.PullRequestNumber == current.PullRequestNumber)
         && Retains(predecessor.ExpectedBaseOid, current.ExpectedBaseOid)
-        && Retains(predecessor.ObservedBaseOid, current.ObservedBaseOid)
+        // The fence observes the target before POST; the first authenticated PR
+        // result may observe a later base. Once a PR result is retained, its
+        // original observation remains immutable, including stale-draft history.
+        && (predecessor.Stage == GitHubCoordinationStage.PullRequestCreateStarted
+                && predecessor.PullRequestNumber is null && current.PullRequestNumber is not null
+            || Retains(predecessor.ObservedBaseOid, current.ObservedBaseOid))
         && Retains(predecessor.OwnershipMarkerSha256, current.OwnershipMarkerSha256);
 
     private static bool ValidStageEdge(
@@ -1289,6 +1277,11 @@ internal sealed partial class GitHubCoordinationStore
             GitHubCoordinationStage.ProposalRefAdvanced => GitHubCoordinationCodec.WithStage(
                 current, update.Stage, predecessor, update.ContentCommitOid,
                 update.ProposalRefOid, update.ProposalCommitOid, update.ProposalTreeOid),
+            GitHubCoordinationStage.PullRequestCreateStarted => GitHubCoordinationCodec.WithStage(
+                current, update.Stage, predecessor, current.ContentCommitOid,
+                current.ProposalRefOid, current.ProposalCommitOid, current.ProposalTreeOid,
+                update.PullRequestCreationOperationCommitmentSha256, null,
+                update.ExpectedBaseOid, update.ObservedBaseOid, update.OwnershipMarkerSha256),
             GitHubCoordinationStage.PullRequestCreated or GitHubCoordinationStage.Published
                 or GitHubCoordinationStage.StaleDraft
                 or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged
@@ -1311,25 +1304,15 @@ internal sealed partial class GitHubCoordinationStore
         };
     }
 
-    private bool MatchesAppendPredecessor(GitHubCoordinationState state) =>
-        authority.PrecedingOperationId == state.OperationId
-        && authority.PrecedingAuthorityCommitmentSha256 == state.AuthorityCommitmentSha256
-        && authority.PrecedingCandidateCommitmentSha256 == state.CurrentCandidateCommitmentSha256
-        && authority.PrecedingGenerationId == state.GenerationId
-        && authority.PrecedingSnapshotCommitmentSha256 == state.SnapshotCommitmentSha256
-        && authority.PrecedingPolicyCommitmentSha256 == state.PolicyCommitmentSha256
-        && authority.ExpectedBaseCommitOid == state.TargetCommitOid
-        && authority.PrecedingChangedFiles.Length == state.CumulativeChangedFiles.Length
-        && authority.PrecedingChangedFiles.Zip(state.CumulativeChangedFiles)
-            .All(pair => pair.First.Path == pair.Second.Path
-                && pair.First.CandidateFileSha256 == pair.Second.CandidateSha256);
-
     private bool MatchesTerminalPredecessor(GitHubCoordinationState state)
     {
         var predecessor = authority.TerminalPredecessor;
         return predecessor is not null && predecessor.PullRequestNumber == state.PullRequestNumber
             && predecessor.GenerationId == state.GenerationId
             && predecessor.HeadOid == state.ProposalCommitOid
+            && authority.GenerationId != state.GenerationId
+            && authority.SnapshotCommitmentSha256 != state.SnapshotCommitmentSha256
+            && (state.Stage != GitHubCoordinationStage.ClosedUnmerged || authority.ExpectedBaseCommitOid != state.TargetCommitOid)
             && predecessor.Disposition == (state.Stage == GitHubCoordinationStage.Merged
                 ? GitHubPublicationPredecessorDisposition.Merged
                 : GitHubPublicationPredecessorDisposition.ClosedUnmerged);
@@ -1341,13 +1324,11 @@ internal sealed partial class GitHubCoordinationStore
         && state.TargetCommitOid == authority.ExpectedBaseCommitOid
         && state.SnapshotCommitmentSha256 == authority.SnapshotCommitmentSha256
         && state.AuthorityCommitmentSha256 == authority.AuthorityCommitmentSha256
-        && state.PolicyCommitmentSha256 == authority.PolicyCommitmentSha256
+        && state.BatchIdentity == authority.Batch.Identity
+        && state.ResultSetCommitmentSha256 == authority.Batch.ResultSetCommitmentSha256
         && state.OperationId == authority.OperationId
         && state.OperationCommitmentSha256 == authority.OperationCommitmentSha256
         && state.CurrentCandidateCommitmentSha256 == authority.CandidateCommitmentSha256
-        && state.PrecedingOperationId == authority.PrecedingOperationId
-        && state.PrecedingAuthorityCommitmentSha256 == authority.PrecedingAuthorityCommitmentSha256
-        && state.PrecedingCandidateCommitmentSha256 == authority.PrecedingCandidateCommitmentSha256
         && state.GenerationId == authority.GenerationId
         && state.Transition == Transition(authority.Transition)
         && state.CumulativeDocumentationBlocks == authority.CumulativeDocumentationBlocks
@@ -1362,10 +1343,12 @@ internal sealed partial class GitHubCoordinationStore
         {
             (GitHubCoordinationStage.Claimed, GitHubCoordinationStage.ContentCreated or GitHubCoordinationStage.Stale) => true,
             (GitHubCoordinationStage.ContentCreated, GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.Stale) => true,
-            (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.PullRequestCreated
+            (GitHubCoordinationStage.ProposalRefAdvanced, GitHubCoordinationStage.PullRequestCreateStarted
+                or GitHubCoordinationStage.Stale) => true,
+            (GitHubCoordinationStage.PullRequestCreateStarted, GitHubCoordinationStage.PullRequestCreated
                 or GitHubCoordinationStage.Published or GitHubCoordinationStage.StaleDraft
                 or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged
-                or GitHubCoordinationStage.Stale) => true,
+                ) => true,
             (GitHubCoordinationStage.PullRequestCreated, GitHubCoordinationStage.Published
                 or GitHubCoordinationStage.AwaitingReview or GitHubCoordinationStage.Merged or GitHubCoordinationStage.ClosedUnmerged) => true,
             (GitHubCoordinationStage.Published, GitHubCoordinationStage.AwaitingReview
@@ -1383,7 +1366,7 @@ internal sealed partial class GitHubCoordinationStore
 
     private static bool PermitsCreate(GitHubCoordinationStage stage) => stage is
         GitHubCoordinationStage.Claimed or GitHubCoordinationStage.ContentCreated
-        or GitHubCoordinationStage.ProposalRefAdvanced;
+        or GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreateStarted;
 
     private static bool ExactLeaf(GitHubTree tree, GitHubPreparedCoordination prepared) =>
         tree.Oid == prepared.LeafTreeOid
@@ -1412,7 +1395,7 @@ internal sealed partial class GitHubCoordinationStore
     private string ProposalRef(GitHubCoordinationState state)
     {
         return GitHubPublicationFactory.CreateProposalRef(client.ReadAuthority,
-            state.GenerationId, state.SnapshotCommitmentSha256, state.PolicyCommitmentSha256);
+            state.GenerationId, state.SnapshotCommitmentSha256, state.BatchIdentity);
     }
 
     private static bool RepositoryMatches(string repositoryId, GitHubRepositoryIdentity repository) =>
@@ -1425,7 +1408,6 @@ internal sealed partial class GitHubCoordinationStore
     private static string Transition(GitHubPublicationTransitionKind transition) => transition switch
     {
         GitHubPublicationTransitionKind.Initial => "initial",
-        GitHubPublicationTransitionKind.SameSnapshotAppend => "same-snapshot-append",
         GitHubPublicationTransitionKind.SuccessorAfterMerge => "successor-after-merge",
         GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged => "successor-after-closed-unmerged",
         _ => throw new GitHubCoordinationException(),
@@ -1498,13 +1480,11 @@ internal sealed partial class GitHubCoordinationStore
         public string TargetCommitOid => state.TargetCommitOid;
         public string SnapshotCommitmentSha256 => state.SnapshotCommitmentSha256;
         public string AuthorityCommitmentSha256 => state.AuthorityCommitmentSha256;
-        public string PolicyCommitmentSha256 => state.PolicyCommitmentSha256;
+        public string BatchIdentity => state.BatchIdentity;
+        public string ResultSetCommitmentSha256 => state.ResultSetCommitmentSha256;
         public string OperationId => state.OperationId;
         public string OperationCommitmentSha256 => state.OperationCommitmentSha256;
         public string CurrentCandidateCommitmentSha256 => state.CurrentCandidateCommitmentSha256;
-        public string? PrecedingOperationId => state.PrecedingOperationId;
-        public string? PrecedingAuthorityCommitmentSha256 => state.PrecedingAuthorityCommitmentSha256;
-        public string? PrecedingCandidateCommitmentSha256 => state.PrecedingCandidateCommitmentSha256;
         public string GenerationId => state.GenerationId;
         public string Transition => state.Transition;
         public string CoordinationPredecessorOid => state.CoordinationPredecessorOid;
@@ -1533,16 +1513,18 @@ internal sealed partial class GitHubCoordinationStore
 
     private sealed class ProposalRefEntitlement : IGitHubProposalRefEntitlement
     {
-        internal ProposalRefEntitlement(GitHubCoordinationStore owner, StateCapability state)
+        internal ProposalRefEntitlement(GitHubCoordinationStore owner, StateCapability state,
+            IGitHubProposalAbsence? absence = null)
         {
             Owner = owner;
             State = state;
-            BeforeOid = state.Transition == "same-snapshot-append"
-                ? state.AdmissionSource!.ProposalCommitOid! : ZeroOid;
+            Absence = absence;
+            BeforeOid = ZeroOid;
         }
         internal GitHubCoordinationStore Owner { get; }
         internal StateCapability State { get; }
         internal string BeforeOid { get; }
+        internal IGitHubProposalAbsence? Absence { get; }
         internal int Consumed;
         public override string ToString() => nameof(ProposalRefEntitlement);
     }

@@ -332,7 +332,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 {
                     campaign = new { maximumCandidatesPerBlock = 30, maximumElapsedMilliseconds = 3_600_000 },
                     // Keep both original members, but publish only the first durable
-                    // proposal before an explicitly authorized append invocation.
+                    // proposal; publication seals that subset permanently.
                     invocation = new { maximumProviderRequests = twoWorks ? 1 : 64 },
                 },
             }), new UTF8Encoding(false, true));
@@ -344,12 +344,6 @@ public sealed partial class GitHubProposalCliProcessTests
                 ["expectedBaseCommitOid"] = github.BaseOid,
                 ["operationId"] = "operation.initial",
                 ["generationId"] = "generation.initial",
-                ["policy"] = new JsonObject
-                {
-                    ["maximumDocumentationBlocks"] = 128,
-                    ["maximumDistinctChangedFiles"] = 128,
-                    ["maximumCumulativePatchBytes"] = 4194304,
-                },
                 ["transition"] = "initial",
             };
             return new Fixture

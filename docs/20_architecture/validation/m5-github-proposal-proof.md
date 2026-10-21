@@ -2,6 +2,10 @@
 
 This is the pre-run protocol for [issue #166](https://github.com/SolusQuest/contract-scribe/issues/166). The workflow, driver, and tests are source for one development proof. They do not establish that a live run has occurred. The corrective source PR references #166 without closing it and stays draft until the complete proof succeeds on its reviewed head, before human merge. The single issue-completion comment follows merge and verified content correspondence.
 
+Current development CI preserves the genuine local Core campaign checkpoint/reconstruction and private-copy/parser checks separately from the current `github-proposal` credential gate. That command now requires `checkpointStore: coordination-ref`: absent credentials stop in preflight before SDK discovery, provider traffic or product writes. The Linux process recovery suite exercises its actual frozen original-operation recovery against the loopback GitHub service; a permission failure is not recovery evidence.
+
+The retained M5 live protocol below uses an older product tuple. Its local checkpoint ZIP export/import in `prepare`/`invoke` and the workflow, and its flattened coordination-state readback, do not qualify current remote coordination checkpoints. M7-A5 must reconcile those live transfer/readback paths with a freshly authorized current revision tuple before execution; M7-A1 owns the automatic caller integration. G4 updates current request and batch-metadata shapes and offline checks only. It neither activates this live protocol nor replaces its historical acceptance with current-platform evidence.
+
 ## Authority and the prepared target
 
 The maintainer authorized preparation of public `SolusQuest/contract-scribe-sandbox` within #166 and one ContractScribe implementation PR. The sandbox has repository ID `1361354906`, node ID `R_kgDOUSSgmg`, and default branch `main`. Its bootstrap commit is `b4fdbb719974f6182cde137e5c900f91435424e7`; the original five files were read back byte-for-byte. The fixture intentionally has one undocumented `Synthetic.Run` method. Broader inheritance, abstract/virtual, and inherited-documentation cases belong to later concrete requirements.

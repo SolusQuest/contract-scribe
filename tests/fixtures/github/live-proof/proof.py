@@ -213,16 +213,15 @@ def preflight():
     print('gate:' + role)
 
 
-def request_document(config, state, base):
+def request_document(config, base):
     nonce = config['activation']
     return {'githubProposalRequestVersion': 1,
             'campaignLineage': 'campaign.issue166.' + nonce,
             'snapshot': 'snapshot.issue166.' + nonce,
-            'state': str(state),
+            'checkpointStore': 'coordination-ref',
             'github': {'repositoryOwner': 'SolusQuest', 'repositoryName': 'contract-scribe-sandbox',
                        'targetRef': 'refs/heads/main', 'expectedBaseCommitOid': base,
                        'operationId': 'operation.issue166.' + nonce, 'generationId': 'generation.issue166.' + nonce,
-                       'policy': {'maximumDocumentationBlocks': 1, 'maximumDistinctChangedFiles': 1, 'maximumCumulativePatchBytes': 4096},
                        'transition': 'initial'}}
 
 
@@ -235,9 +234,9 @@ def write_configuration(config, directory):
              'budgets': {'campaign': {'maximumCandidatesPerBlock': 30, 'maximumElapsedMilliseconds': 3600000}}}
     (directory / 'layer.json').write_bytes(canonical(layer))
     (directory / 'request-positive.json').write_bytes(
-        canonical(request_document(config, directory / 'positive/checkpoint.json', config['base_sha'])))
+        canonical(request_document(config, config['base_sha'])))
     (directory / 'request-negative.json').write_bytes(
-        canonical(request_document(config, directory / 'negative/checkpoint.json', BOOTSTRAP)))
+        canonical(request_document(config, BOOTSTRAP)))
 
 
 def check_checkpoint(path, checker):
@@ -360,7 +359,7 @@ def published_facts(config, api, *, inspect_trees=False):
     generation = proposals[0]['ref'].split('/')[-1]
     marker = '<!-- contract-scribe-publication-v1 ownership=sha256:' + state['pullRequestCreationOperationCommitmentSha256'] + ' -->\n'
     body = marker + 'campaign=sha256:' + key + '\ngeneration=sha256:' + generation + '\nsnapshot=sha256:' + state['snapshotCommitmentSha256']
-    body += '\npolicy=sha256:' + state['policyCommitmentSha256'] + '\nheadRef=sha256:' + sha(proposals[0]['ref'].encode())
+    body += '\nbatch=sha256:' + state['batchIdentity'] + '\nheadRef=sha256:' + sha(proposals[0]['ref'].encode())
     body += '\nbaseRef=sha256:' + sha(b'refs/heads/main') + '\ncreationOperationId=sha256:' + state['operationCommitmentSha256'] + '\n'
     require(pr.get('body') == body and pr.get('title') == 'ContractScribe proposal ' + generation
             and sha(marker.encode()) == state.get('ownershipMarkerSha256'), 'publication-marker')

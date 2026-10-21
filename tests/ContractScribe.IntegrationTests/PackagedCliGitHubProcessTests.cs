@@ -112,12 +112,6 @@ public sealed class PackagedCliGitHubProcessTests
                 ["expectedBaseCommitOid"] = github.BaseOid,
                 ["operationId"] = "operation.packed",
                 ["generationId"] = "generation.packed",
-                ["policy"] = new JsonObject
-                {
-                    ["maximumDocumentationBlocks"] = 128,
-                    ["maximumDistinctChangedFiles"] = 128,
-                    ["maximumCumulativePatchBytes"] = 4194304,
-                },
                 ["transition"] = "initial",
             },
         };

@@ -11,9 +11,6 @@
   },
   "budgets": {
     "campaign": {
-      "maximumBlocks": 128,
-      "maximumChangedFiles": 128,
-      "maximumPatchBytes": 4194304,
       "maximumProviderRequests": null,
       "maximumAttemptsPerTarget": 2,
       "maximumInputTokens": null,

@@ -128,7 +128,7 @@ public sealed class LayeredConfigurationProcessTests
                             { ["styleProfileTemplate"] = new JsonObject { ["maximumContentUnits"] = 8 } } },
                 new() { ["provider"] = new JsonObject { ["endpoint"] = server.Endpoint.AbsoluteUri },
                         ["budgets"] = new JsonObject
-                            { ["campaign"] = new JsonObject { ["maximumBlocks"] = 64 } } },
+                            { ["campaign"] = new JsonObject { ["maximumCandidatesPerBlock"] = 64 } } },
             })
             {
                 var driftLayer = new JsonObject { ["consumerConfigurationVersion"] = 1 };

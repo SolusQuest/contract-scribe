@@ -19,9 +19,9 @@ internal enum GitHubPublicationOwner { Reconciler, Transport, Coordination, GitD
 internal enum GitHubPublicationPredicate
 {
     InvalidCorrelation, Cancelled, UnhandledException, RepositoryUnavailable, DifferentOperation,
-    TargetMoved, SuccessorMismatch, AppendMismatch, TransitionMismatch, UnexpectedProposalRef,
+    TargetMoved, SuccessorMismatch, TransitionMismatch, UnexpectedProposalRef,
     ClaimMismatch, CurrentMismatch, ClaimedRefPresent, StaleStage, UnexpectedStage,
-    AppendCreateForbidden, CompletionHeadChanged, ObservationLimit, LifecycleOutcome,
+    CompletionHeadChanged, ObservationLimit, LifecycleOutcome,
     MissingOrUnexpectedComponent,
 }
 

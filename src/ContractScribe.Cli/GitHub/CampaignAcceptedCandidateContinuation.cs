@@ -14,29 +14,27 @@ internal sealed class CampaignAcceptedCandidateContinuation(
     GitHubProposalRequestSnapshot request, Func<string, string?> credentialAccessor,
     Func<ValidatedGitHubPublicationAuthority, ValidatedGitHubChangedFilePayload, CancellationToken, Task<GitHubPublicationObservation>>? publish = null,
     Func<ProductionRepositorySessionBundle, CancellationToken, Task<CliExecutionResult?>>? beforePlanning = null,
-    string? authenticatedBaseOid = null)
+    string? authenticatedBaseOid = null,
+    GitHubPublicationFinalization? finalization = null,
+    Action<CancellationToken>? bindFinalizationDeadline = null,
+    bool originalOperationOnly = false)
 {
+    internal bool OriginalOperationOnly => originalOperationOnly;
+    internal CancellationToken BeginFinalization(CancellationToken token)
+    {
+        if (finalization is null) return token;
+        var execution = finalization.Begin(token);
+        bindFinalizationDeadline?.Invoke(finalization.DeadlineToken);
+        return execution;
+    }
+    internal CliExecutionResult? FinalizationFailure(long? revision) => finalization?.TimedOut == true
+        ? GitHubProposalPresentation.Local(identity, preflight.Operation, "timeout", revision) : null;
     internal bool RevalidateInputs() => request.Revalidate() && preflight.Configuration.Revalidate();
     internal Task<CliExecutionResult?> BeforePlanningAsync(ProductionRepositorySessionBundle bundle, CancellationToken token) =>
         beforePlanning?.Invoke(bundle, token) ?? Task.FromResult<CliExecutionResult?>(null);
     internal CliExecutionResult Present(CampaignTerminal terminal) => GitHubProposalPresentation.Campaign(identity, terminal);
 
-    internal bool ReconstructAccepted(CampaignCheckpointState state)
-    {
-        if (state.CandidateObservation is null) return false;
-        var configuration = request.Request.GitHub;
-        return configuration.Transition != GitHubPublicationTransitionKind.SameSnapshotAppend
-            || configuration.AppendPredecessor?.CandidateCommitmentSha256
-                != state.AcceptedCandidateOrigin?.CandidateObservation.PatchResultCommitmentSha256;
-    }
-
-    internal bool HasNoAppendWork(CampaignCheckpointState state) =>
-        state.CandidateObservation is not null && !ReconstructAccepted(state)
-        && state.CumulativeOutcome?.Kind == CampaignCumulativeOutcomeKind.Accepted
-        && state.TerminalOutcome is null or { Kind: CampaignTerminalKind.Complete }
-        && state.ActiveReservation is null
-        && CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems) is
-        { Kind: CampaignTerminalKind.Complete };
+    internal bool ReconstructAccepted(CampaignCheckpointState state) => state.CandidateObservation is not null;
 
     internal CampaignTerminal? PersistedStop(CampaignCheckpointState state)
     {
@@ -80,6 +78,7 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             var admitted = GitHubPublicationRequestFactory.Create(context, outcome, request.Request.GitHub);
             if (!admitted.IsValid)
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
+            GitHubProposalProcessHooks.Reach("before-publication");
             context.CancellationToken.ThrowIfCancellationRequested();
             // Revalidate after candidate capture too; no ambient credential access occurs in H1.
             if (!preflight.Configuration.Revalidate() || !request.Revalidate())
@@ -88,11 +87,15 @@ internal sealed class CampaignAcceptedCandidateContinuation(
                 ? await publish(admitted.Authority!, admitted.Payload!, context.CancellationToken).ConfigureAwait(false)
                 : await GitHubPublicationFacade.PublishAsync(admitted.Authority!, admitted.Payload!,
                     () => credentialAccessor("CONTRACTSCRIBE_GITHUB_TOKEN"), context.CancellationToken).ConfigureAwait(false);
+            if (observed.Result.Kind == GitHubPublicationResultKind.Cancelled
+                && FinalizationFailure(revision) is { } publicationDeadline)
+                return new(null, publicationDeadline);
             return new(null, GitHubProposalPresentation.Publication(identity, preflight.Operation, revision, observed));
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
-            return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "cancelled", revision));
+            return new(null, FinalizationFailure(revision)
+                ?? GitHubProposalPresentation.Local(identity, preflight.Operation, "cancelled", revision));
         }
     }
 }

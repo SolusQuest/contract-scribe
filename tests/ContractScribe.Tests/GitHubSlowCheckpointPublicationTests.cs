@@ -14,7 +14,17 @@ public sealed partial class GitHubPublicationReconcilerTests
     public async Task Slow_checkpoint_publication_renews_through_real_guards_and_atomic_ref_publication()
     {
         var remote = new Remote { ServerNow = DateTimeOffset.UtcNow };
-        var authority = Branch.Authority(remote.Git);
+        var artifact = GitHubCoordinationRefTests.PublicationCheckpointFixture("campaign");
+        var file = Assert.Single(artifact.State.CandidateObservation!.ChangedFiles);
+        var original = Assert.Single(Enumerable.Range(0, 2).Select(index =>
+            System.Text.Encoding.UTF8.GetBytes($"public void Operation{index:D3}(string value) {{ }}")),
+            bytes => Convert.ToHexStringLower(SHA256.HashData(bytes)) == file.OriginalFileSha256);
+        byte[] candidate = System.Text.Encoding.UTF8.GetBytes(file.Path + ":candidate");
+        Assert.Equal(file.OriginalFileSha256, Convert.ToHexStringLower(SHA256.HashData(original)));
+        Assert.Equal(file.CandidateFileSha256, Convert.ToHexStringLower(SHA256.HashData(candidate)));
+        remote.Git.SetCheckpointFixtureFile(file.Path, original);
+        var authority = GitHubPublicationTestBatch.BindCheckpoint(Branch.Authority(remote.Git), artifact);
+        var payload = GitHubPublicationFactory.CreatePayload(authority, [new(file.Path, candidate)]);
         using var hook = (IDisposable)typeof(GitHubTransportTestHook).GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
             .Invoke(null, [new Uri("http://127.0.0.1:43219/"), new Handler(remote), 30_000])!;
         using var client = GitHubApiClient.CreateCheckpoint(ValidatedGitHubCheckpointAuthority.Create(
@@ -30,7 +40,6 @@ public sealed partial class GitHubPublicationReconcilerTests
             var leaf = remote.Git.Trees[commit.TreeOid].Single().Oid;
             var document = GitHubCoordinationDocument.Decode(remote.Git.Blobs[
                 remote.Git.Trees[leaf].Single(entry => entry.Path == GitHubCoordinationObjects.StatePath).Oid]);
-            var artifact = GitHubCoordinationRefTests.PublicationCheckpointFixture(authority.CampaignLineage);
             var bytes = artifact.ExactUtf8Json.ToArray();
             var blobOid = GitHubCoordinationObjects.ObjectOid("blob", bytes);
             remote.Git.Blobs[blobOid] = bytes;
@@ -59,9 +68,9 @@ public sealed partial class GitHubPublicationReconcilerTests
                 try
                 {
                     var reconciler = GitHubPublicationReconciler.Create(client, Publisher, store);
-                    var result = await reconciler.PublishObservedAsync(authority, Branch.Payload(authority));
+                    var result = await reconciler.PublishObservedAsync(authority, payload);
                     if (result.Result.Kind == GitHubPublicationResultKind.RecoveredRefPartial)
-                        result = await reconciler.PublishObservedAsync(authority, Branch.Payload(authority));
+                        result = await reconciler.PublishObservedAsync(authority, payload);
                     return result;
                 }
                 finally { client.UnbindPublication(); }
