@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """fake_actions_api.py — loopback substitute for the GitHub Actions REST
-metadata surface that handoff.py authenticates (tests/action-workflows).
+metadata surface that caller.py authenticates (tests/action-workflows).
 
 Serves, from a per-request-reloaded JSON config:
 

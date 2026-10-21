@@ -26,7 +26,7 @@ def inputs():
               'workflow_digest': sha((proof.SOURCE / WORKFLOW).read_bytes()), 'workflow_id': 123,
               'activation': 'c' * 32, 'not_before': '2026-09-09T01:00:00Z', 'not_after': '2026-09-09T03:00:00Z',
               'manual_run_number': 7, 'scheduled_run_number': 8, 'actor_id': 16307884, 'actor_login': 'Yuee98',
-              'owner': 'Yuee98', 'issue': 166, 'scenarios': ['stale', 'published', 'replayed']}
+              'owner': 'Yuee98', 'issue': 166, 'scenarios': ['local-invalid', 'published', 'awaiting-review']}
     ctx = {'repository': REPOSITORY, 'repository_id': REPOSITORY_ID, 'event': 'workflow_dispatch',
            'ref': 'refs/heads/main', 'cron': '', 'workflow_sha': config['workflow_sha'], 'sha': config['base_sha'],
            'run_id': 100, 'run_number': 7, 'attempt': 1}
@@ -301,9 +301,9 @@ class TransferTests(unittest.TestCase):
 
 class ResultTests(unittest.TestCase):
     def test_only_the_three_exact_publication_results_satisfy_scenarios(self):
-        for scenario, exit_code, outcome, operation in [('negative', 4, 'stale', 'start'),
-                                                        ('positive', 0, 'published', 'start'), ('replay', 0, 'replayed', 'resume')]:
-            result = {'terminalLayer': 'publication', 'outcome': 'github-proposal.' + outcome,
+        for scenario, exit_code, outcome, operation, layer in [('negative', 4, 'local-invalid', None, 'preflight'),
+                ('positive', 0, 'published', 'start', 'publication'), ('replay', 0, 'awaiting-review', 'resume', 'preflight')]:
+            result = {'terminalLayer': layer, 'outcome': 'github-proposal.' + outcome,
                       'campaignOperation': operation, 'cliContractBaseline': PRODUCT}
             self.assertEqual(result, scenario_result(scenario, exit_code, canonical(result)))
             for key, value in [('outcome', 'github-proposal.no-op'), ('terminalLayer', 'campaign'),
@@ -468,10 +468,10 @@ class GenuineCheckpointTests(unittest.TestCase):
             environment.update(DOTNET_STARTUP_HOOKS=str(hook),
                                CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS=str(observation),
                                CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT='http://127.0.0.1:48265/')
-            for operation in ('start', 'resume'):
-                result = subprocess.run(['dotnet', str(cli), 'github-proposal', operation,
+            for _ in range(2):
+                result = subprocess.run(['dotnet', str(cli), 'github-proposal',
                                          '--repository-root', str(target), '--input', 'Synthetic.csproj',
-                                         '--policy', 'policy.json', '--request', str(root / 'request-positive.json'),
+                                         '--policy', 'policy.json', '--campaign', str(root / 'request-positive.json'),
                                          '--configuration', str(root / 'layer.json')],
                                         env=environment, capture_output=True, timeout=180)
                 envelope = parse_json(result.stdout)

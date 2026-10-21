@@ -6,25 +6,23 @@ using ContractScribe.Core;
 
 namespace ContractScribe.Cli;
 
-// Caller-owned invocation authority for one github-proposal execution: the
-// campaign lineage, immutable snapshot binding, state location and GitHub
-// runtime claims required by the M5 publication contract. Passing local
-// admission never establishes remote truth; H1/R1-R6 authenticate the claims.
-internal sealed record GitHubProposalRequest(
-    [property: JsonPropertyName("githubProposalRequestVersion")] int Version,
+// Stable consumer identity only. The CLI derives snapshot, batch and publication
+// authority after authenticating the coordination ref and current target.
+internal sealed record GitHubCampaignConfiguration(
+    [property: JsonPropertyName("githubCampaignVersion")] int Version,
     string CampaignLineage,
-    string Snapshot,
-    string CheckpointStore,
-    [property: JsonPropertyName("github")] GitHubPublicationConfiguration GitHub);
+    [property: JsonPropertyName("github")] GitHubCampaignDestination GitHub);
 
-internal sealed record GitHubProposalRequestSnapshot(
-    string Path, byte[] Digest, GitHubProposalRequest Request)
+internal sealed record GitHubCampaignDestination(string RepositoryOwner, string RepositoryName, string TargetRef);
+
+internal sealed record GitHubCampaignConfigurationSnapshot(
+    string Path, byte[] Digest, GitHubCampaignConfiguration Configuration)
 {
     internal bool Revalidate()
     {
         try
         {
-            return SHA256.HashData(GitHubProposalRequestReader.ReadBounded(Path)).AsSpan().SequenceEqual(Digest);
+            return SHA256.HashData(GitHubCampaignConfigurationReader.ReadBounded(Path)).AsSpan().SequenceEqual(Digest);
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
@@ -33,10 +31,9 @@ internal sealed record GitHubProposalRequestSnapshot(
     }
 }
 
-internal static class GitHubProposalRequestReader
+internal static class GitHubCampaignConfigurationReader
 {
     internal const int MaximumBytes = 262_144;
-    private const int MaximumSnapshotScalars = 128;
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
@@ -48,7 +45,7 @@ internal static class GitHubProposalRequestReader
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.KebabCaseLower, allowIntegerValues: false) },
     };
 
-    internal static GitHubProposalRequestSnapshot Read(string path, string currentDirectory)
+    internal static GitHubCampaignConfigurationSnapshot Read(string path, string currentDirectory)
     {
         path = System.IO.Path.GetFullPath(path, currentDirectory);
         var bytes = ReadBounded(path);
@@ -58,24 +55,14 @@ internal static class GitHubProposalRequestReader
         using var document = JsonDocument.Parse(bytes, new() { MaxDepth = 16 });
         if (document.RootElement.ValueKind != JsonValueKind.Object) throw new JsonException();
         ValidateClosedJson(document.RootElement);
-        if (!document.RootElement.TryGetProperty("githubProposalRequestVersion", out var version)
+        if (!document.RootElement.TryGetProperty("githubCampaignVersion", out var version)
             || version.ValueKind != JsonValueKind.Number
             || !version.TryGetInt32(out var number) || number != 1)
             throw new JsonException();
-        if (!document.RootElement.TryGetProperty("github", out var github) || github.ValueKind != JsonValueKind.Object)
-            throw new JsonException();
-        if (!github.TryGetProperty("transition", out var transition)
-            || transition.ValueKind != JsonValueKind.String
-            || transition.GetString() is not ("initial" or "successor-after-merge" or "successor-after-closed-unmerged"))
-            throw new JsonException();
-        if (github.TryGetProperty("terminalPredecessor", out var terminal) && terminal.ValueKind != JsonValueKind.Null
-            && (terminal.ValueKind != JsonValueKind.Object
-                || !terminal.TryGetProperty("disposition", out var disposition) || disposition.ValueKind != JsonValueKind.String
-                || disposition.GetString() is not ("merged" or "closed-unmerged"))) throw new JsonException();
-        var request = document.RootElement.Deserialize<GitHubProposalRequest>(Options)
+        var request = document.RootElement.Deserialize<GitHubCampaignConfiguration>(Options)
             ?? throw new JsonException();
         ValidateShape(request);
-        var snapshot = new GitHubProposalRequestSnapshot(path, SHA256.HashData(bytes), request);
+        var snapshot = new GitHubCampaignConfigurationSnapshot(path, SHA256.HashData(bytes), request);
         if (!snapshot.Revalidate()) throw new JsonException();
         return snapshot;
     }
@@ -127,23 +114,13 @@ internal static class GitHubProposalRequestReader
         catch (InvalidOperationException) { throw new JsonException("Invalid escaped Unicode property name."); }
     }
 
-    private static void ValidateShape(GitHubProposalRequest request)
+    private static void ValidateShape(GitHubCampaignConfiguration request)
     {
-        if (request.Version != 1 || request.CheckpointStore != "coordination-ref"
-            || !GitHubPublicationFactory.IsCampaignLineage(request.CampaignLineage)
-            || !CampaignStateFactory.IsOpaqueId(request.Snapshot, MaximumSnapshotScalars))
+        if (request.Version != 1 || !GitHubPublicationFactory.IsCampaignLineage(request.CampaignLineage))
             throw new JsonException();
         var configuration = request.GitHub;
-        // Current-candidate facts are deliberately absent here; H1 supplies and verifies them.
-        // Validate the independently decidable scalar and transition shape before campaign work.
-        if (!GitHubPublicationFactory.IsOpaqueIdentifier(configuration.OperationId)
-            || !GitHubPublicationFactory.IsOpaqueIdentifier(configuration.GenerationId)
-            || !GitHubPublicationFactory.IsRefName(configuration.TargetRef)
-            || !configuration.TargetRef.StartsWith("refs/heads/", StringComparison.Ordinal)
-            || !GitHubPublicationFactory.IsGitOid(configuration.ExpectedBaseCommitOid, allowMissing: false)
-            || ((configuration.Transition is GitHubPublicationTransitionKind.SuccessorAfterMerge
-                    or GitHubPublicationTransitionKind.SuccessorAfterClosedUnmerged)
-                != (configuration.TerminalPredecessor is not null)))
+        if (!GitHubPublicationFactory.IsRefName(configuration.TargetRef)
+            || !configuration.TargetRef.StartsWith("refs/heads/", StringComparison.Ordinal))
             throw new JsonException();
         foreach (var part in new[] { configuration.RepositoryOwner, configuration.RepositoryName })
             if (part is null || part.Length is 0 or > 100

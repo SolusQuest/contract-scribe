@@ -18,6 +18,37 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Fact]
+    public async Task Checkpoint_proof_reuses_authenticated_blobs_only_until_the_next_read_gate()
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new CheckpointInterceptHandler(remote);
+        using var client = CheckpointClient(remote, handler: handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        var checkpoint = SeedPublicationCheckpoint(remote);
+        var blobReads = new Dictionary<string, int>(StringComparer.Ordinal);
+        handler.BeforeRequest = request =>
+        {
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/git/blobs/", StringComparison.Ordinal))
+            {
+                var path = request.RequestUri.AbsolutePath;
+                blobReads[path] = blobReads.GetValueOrDefault(path) + 1;
+            }
+            return Task.CompletedTask;
+        };
+        Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
+        Assert.Equal(1, blobReads.Single(pair => pair.Key.EndsWith(checkpoint.Oid, StringComparison.Ordinal)).Value);
+        Assert.All(blobReads.Values, count => Assert.Equal(1, count));
+        var first = blobReads.ToDictionary();
+        Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
+        Assert.All(first, pair => Assert.Equal(pair.Value + 1, blobReads[pair.Key]));
+        var mutations = remote.RefMutationAttempts;
+        remote.Tamper(ObjectTamper.Blob);
+        Assert.Equal(CampaignCheckpointReadKind.Invalid, (await store.ReadAsync(default)).Kind);
+        Assert.Equal(mutations, remote.RefMutationAttempts);
+    }
+
+    [Fact]
     public async Task Disposal_waits_for_inflight_renewal_then_releases_claim_for_immediate_successor()
     {
         var remote = new CoordinationRemote();

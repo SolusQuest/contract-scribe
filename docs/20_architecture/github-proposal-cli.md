@@ -1,69 +1,40 @@
-# GitHub proposal CLI (M5-H2)
+# Automatic GitHub proposal CLI
 
-`github-proposal` composes the existing campaign runner, live H1 admission, and the GitHub publication adapter. The two ordinal, case-sensitive command forms are:
+`github-proposal` composes the campaign runner, live H1 admission and GitHub publication adapter through one ordinal, case-sensitive command:
 
 ```text
-contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
-contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
+contract-scribe github-proposal --repository-root <path> --input <path> --policy <path> --campaign <path> [--configuration <path>] [--configuration-override <path>]
 ```
 
-The four required options must appear exactly once, in any order after the operation; the two configuration layers are optional. Both `--name value` and `--name=value` are accepted. There are no defaults, short option aliases, response files, extra operands, or unknown options. Standalone family/operation `--help` or `-h` is supported; combining help with work options is invalid. The exact UTF-8/LF help is [the fixture](../../tests/fixtures/github-proposal/cli/help.txt).
+Each required option appears exactly once, in any order. Both `--name value` and `--name=value` are accepted. There are no defaults, short option aliases, response files, extra operands or unknown options. Standalone `--help` or `-h` is supported; combining help with work options is invalid. The exact UTF-8/LF help is [the fixture](../../tests/fixtures/github-proposal/cli/help.txt).
 
-`--configuration` and `--configuration-override` carry the ordinary [consumer configuration](consumer-configuration.md) layers, resolved as payload defaults < `--configuration` < `--configuration-override`. Repository/input/policy resolution retains the [campaign contract](campaign-cli.md). The campaign lineage, snapshot binding, checkpoint-store selection, and GitHub publication claims are caller-owned invocation authority carried by the separately validated `--request` document — never by option values or configuration layers. GitHub invocations persist through the campaign coordination ref; the standalone offline `campaign` command retains its local-file store. The request is bounded to 262,144 UTF-8 bytes, has no BOM, comments, duplicate or unknown properties, and uses exact camel-case property names and lowercase kebab-case enum values. Missing required fields, null required values, invalid types and non-object authorization fail locally. Neither the request nor a configuration layer contains a GitHub token, source/candidate bytes, or an alternate GitHub endpoint.
+`--configuration` and `--configuration-override` carry ordinary [consumer configuration](consumer-configuration.md) layers, resolved as payload defaults < configuration < override. Repository/input/policy resolution retains the [campaign contract](campaign-cli.md). GitHub checkpoints persist through the coordination ref; the standalone offline `campaign` command retains its local-file interface.
 
-## Invocation request
+## Stable campaign configuration
 
-`github-proposal-request-v1` is one bounded JSON object:
+Every trigger supplies the same bounded, non-secret configuration:
 
 ```json
 {
-  "githubProposalRequestVersion": 1,
+  "githubCampaignVersion": 1,
   "campaignLineage": "campaign.example",
-  "snapshot": "snapshot.example",
-  "checkpointStore": "coordination-ref",
   "github": {
     "repositoryOwner": "Owner",
     "repositoryName": "repo",
-    "targetRef": "refs/heads/main",
-    "expectedBaseCommitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-    "operationId": "operation.initial",
-    "generationId": "generation.initial",
-    "transition": "initial"
+    "targetRef": "refs/heads/main"
   }
 }
 ```
 
-All illustrated fields are required exactly once.
+All illustrated fields are required exactly once. The version is integer `1`; lineage uses the existing opaque-identifier grammar, and targetRef names a branch under `refs/heads/`. The reader accepts at most 262,144 UTF-8 bytes, with no BOM, duplicate or unknown properties, comments, invalid Unicode, null required values or credentials. It rejects the retired manual request, snapshot/base/operation/generation/transition/predecessor claims and local state fields. There is no start/resume operand, `--request` alias or alternate runtime reader. This replaces the unreleased integer-v1 draft in place; no released consumer compatibility is promised.
 
-- `githubProposalRequestVersion` — the integer `1`.
-- `campaignLineage` — the caller-attested campaign lineage under the frozen opaque-identifier grammar. This is the single lineage source; no `--campaign-lineage` option exists on this command.
-- `snapshot` — the caller-attested immutable snapshot binding under the grammar the retired `--snapshot` option enforced (1–128 opaque-identifier characters).
-- `checkpointStore` — exactly `"coordination-ref"`. Local checkpoint paths and the retired `state` property are rejected by the current draft reader.
-- `github` — the GitHub publication configuration below.
-
-## GitHub publication claims
-
-An initial publication supplies the `github` shape illustrated above. All illustrated `github` fields are required; the optional terminal predecessor below may be omitted or null.
-
-```json
-{
-  "repositoryOwner": "Owner",
-  "repositoryName": "repo",
-  "targetRef": "refs/heads/main",
-  "expectedBaseCommitOid": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-  "operationId": "operation.initial",
-  "generationId": "generation.initial",
-  "transition": "initial"
-}
-```
-
-The expected base is the actual immutable Git commit OID. Operation and generation IDs are caller claims validated against the exact accepted origin and fixed result set. The transitions are `initial`, `successor-after-merge` and `successor-after-closed-unmerged`. A successor requires `terminalPredecessor`: `logicalPredecessorId`, positive `pullRequestNumber`, `generationId`, `headOid` and `disposition` (`merged` or `closed-unmerged`). The adapter freshly authenticates these claims, no active PR, and fresh snapshot/Audit; a closed-unmerged successor also requires a different retained original base. Retired append, publication policy and extra unlock fields are unknown and rejected.
+The CLI authenticates current HEAD, checkpoint and exhaustive PR/history facts. It selects initial or resumed execution, compatible fixed-batch continuation, original publication recovery, wait, pause or no-op. Internal operation/generation identifiers derive from the accepted campaign/snapshot/batch; predecessors derive from authenticated terminal generations. Caller run IDs, artifacts and clocks supply none of that authority.
 
 ## Admission and replay
 
 ### Lifecycle admission before Audit
 
-The CLI authenticates the campaign's complete coordination/publication history, current target ref, exhaustively enumerated PRs and their ownership before entering SDK/Roslyn discovery or constructing a provider. It reads the GitHub credential once, after local request/configuration admission. A missing ledger is a first-run possibility only after the managed-PR search proves absence; corrupt or incomplete established recovery authority stops. Observation conveys no publication or mutation entitlement.
+The CLI authenticates the campaign's complete coordination/publication history, current target ref, exhaustively enumerated PRs and their ownership before entering SDK/Roslyn discovery or constructing a provider. It reads the GitHub credential once, after local campaign/configuration admission. A missing ledger is a first-run possibility only after the managed-PR search proves absence; corrupt or incomplete established recovery authority stops. Observation conveys no publication or mutation entitlement.
 
 An owned, durably recorded open draft or ready PR on its immutable original base returns `awaiting-review` without Audit, provider construction, new targets, checkpoint replacement or publication writes. An open PR whose target HEAD moved returns `stale` with `github-proposal.changed-base`, including for README-only commits and when GitHub's mutable PR `base.sha` advances. Ownership changes, missing active refs, conflicting or multiple active matches and unstable observations stop conservatively. Current terminal facts are always rechecked; a cached terminal cannot hide a reopened PR. A verified terminal PR may retain its head identity after its proposal branch is deleted; an existing branch must still match.
 
@@ -73,7 +44,7 @@ Checkpoint reads, recovery-plan binding and known undispatched write steps prese
 
 Every retained closed-unmerged generation blocks its immutable original-operation base with `closed-unmerged` and `github-proposal.closed-same-base`, before quota or configuration reconciliation. The gate applies again if HEAD returns to an older closed base. The live PR `base.sha` is never the closure identity. With no active PR, merge or closure on a different HEAD permits fresh exact-current Audit without a generic successor approval. This permission does not supply a new publication operation or bypass the existing downstream publication contract.
 
-After a permitted observation the checkpoint client pins the authenticated current target and acquires its existing owner/epoch claim; a second lifecycle observation checks the pre-discovery read window. Caller publication base claims remain separate. Before planning/provider work, the loaded repository's existing safe baseline is compared to the authenticated target Git tree in both directions: missing remote-only and extra local-only analysis inputs both fail with `github-proposal.checkout-mismatch`. Relevant project/semantic/build inputs must have matching content and supported regular-file Git modes. SDK-generated outputs are reconstructed from bound projects; explicitly repository-declared inputs still participate under output directories, so a local-only semantic input cannot hide behind that exclusion. Tracked semantic inputs masquerading as build outputs are rejected. Separately admitted policy/configuration/style inputs and unrelated repository files are not a whole-checkout cleanliness gate. The binding uses the loader's sealed repository input provenance, including actual imports of any extension, compiler metadata references and analyzer/source-generator assemblies. The existing MSBuild evaluation records active item/glob provenance; default and explicit globs retain their evaluated project base, exclusions and removals, including empty globs. Static declarations in that actual repository import closure additionally bind literal import, compiler and reference paths and file-presence conditions. Inactive conditional items and unrelated None/Content files do not become compiler inputs. Unresolved dynamic input paths fail closed rather than omit possible remote members. Resolved external SDK/framework/package inputs retain the existing toolchain boundary and are not compared to Git blobs. This does not claim hermetic observation of arbitrary task or generator file I/O. Existing native confinement and baseline rebind checks remain mandatory. Failed authenticated object reads retain permission, rate-limit, cancellation, timeout or host-failure outcomes instead of being presented as ownership/source mismatches.
+After a permitted observation the checkpoint client pins the authenticated current target and acquires its existing owner/epoch claim; a second lifecycle observation checks the pre-discovery read window. Before planning/provider work, the loaded repository's existing safe baseline is compared to the authenticated target Git tree in both directions: missing remote-only and extra local-only analysis inputs both fail with `github-proposal.checkout-mismatch`. Relevant project/semantic/build inputs must have matching content and supported regular-file Git modes. SDK-generated outputs are reconstructed from bound projects; explicitly repository-declared inputs still participate under output directories, so a local-only semantic input cannot hide behind that exclusion. Tracked semantic inputs masquerading as build outputs are rejected. Separately admitted policy/configuration/style inputs and unrelated repository files are not a whole-checkout cleanliness gate. The binding uses the loader's sealed repository input provenance, including actual imports of any extension, compiler metadata references and analyzer/source-generator assemblies. The existing MSBuild evaluation records active item/glob provenance; default and explicit globs retain their evaluated project base, exclusions and removals, including empty globs. Static declarations in that actual repository import closure additionally bind literal import, compiler and reference paths and file-presence conditions. Inactive conditional items and unrelated None/Content files do not become compiler inputs. Unresolved dynamic input paths fail closed rather than omit possible remote members. Resolved external SDK/framework/package inputs retain the existing toolchain boundary and are not compared to Git blobs. This does not claim hermetic observation of arbitrary task or generator file I/O. Existing native confinement and baseline rebind checks remain mandatory. Failed authenticated object reads retain permission, rate-limit, cancellation, timeout or host-failure outcomes instead of being presented as ownership/source mismatches.
 
 Relative `Import Project` paths and Import/ImportGroup/PropertyGroup file-presence conditions use the containing declaration file; ordinary imported item paths retain the evaluated project base. Active import wildcards also bind additional remote members.
 
@@ -81,7 +52,7 @@ GitHub admission binds a directly resolved repository-owned `CodeAnalysisRuleSet
 
 GitHub admission binds each evaluated `CompilerResponseFile` carrier to its load-time bytes, repository path and authenticated target content. Response-file lines use Roslyn's lexer, including its quotes, escapes and hash comments. The supported boundary accepts explicit scalar compiler options for definitions, language/nullable settings, warning policy, checked/unsafe/optimization, deterministic/target/platform/debug settings and reporting. Unknown options, nested `@` responses, file-bearing arguments such as `/ruleset` or `/reference`, generated/unrepresented carriers and build-time mutations of the response-file property stop with `github-proposal.compiler-input-unverifiable` before planning/provider work. Ordinary evaluated project references/documents retain their existing admission. This response-file support boundary applies only to GitHub source admission; offline/local loading and campaign behavior are unchanged. It does not execute response files or add a general compiler/build-input interpreter.
 
-The effective remote snapshot binds actual target HEAD and correctness-bearing inputs independently of the caller's opaque label or Audit digest. A terminal publication identity distinguishes fresh post-terminal Audit from compatible later unpublished recovery. Compatible unpublished recovery retains the original complete plan, creation quota, selected membership and accepted progress. Invocation quota or lifetime-cap changes do not expand membership. Changed base/policy/profile/style, retry authority or finite attempt/candidate controls create fresh work authority without migrating proposals or subtracting unmerged accepted counts, preserving predecessor, archive and known/unknown usage history.
+The effective remote snapshot binds actual target HEAD and correctness-bearing inputs and materialized applicable instruction/context commitments, independently of an Audit digest alone. A terminal publication identity distinguishes fresh post-terminal Audit from compatible later unpublished recovery. Compatible unpublished recovery retains the original complete plan, creation quota, selected membership and accepted progress. Invocation quota or lifetime-cap changes do not expand membership. Changed base/policy/profile/style, retry authority or finite attempt/candidate controls create fresh work authority without migrating proposals or subtracting unmerged accepted counts, preserving predecessor, archive and known/unknown usage history.
 
 The inert process-observation seam records actual SDK discovery, deferred provider construction and physical exchange entry in confined tests. Wait/pause regressions assert all three are zero, alongside zero provider requests. Lifecycle success uses the existing `awaiting-review` outcome and authenticated PR linkage; stopped paths use a specific sanitized reason. The richer per-invocation usage envelope remains A3 work.
 
@@ -93,25 +64,25 @@ For admitted unpublished initial/successor resume, accepted work is reconstructe
 
 The [campaign origin](contracts/campaign-state-v1.md) retains the first accepted checkpoint and historical M2 identity. Every fresh reconstruction still executes, validates current evidence and candidate bytes, settles its budget, and conditionally accepts/readbacks a new checkpoint. H1 proves full correspondence with the retained origin before using that original checkpoint/request/result identity in the result-set-bound R1 authority. This makes a real fresh-process resume the same publication operation without reusing stale current-candidate authority. The displayed revision is always the current checkpoint, not the origin revision.
 
-The request and configuration are validated before one read of `CONTRACTSCRIBE_GITHUB_TOKEN`. That credential initially grants only the exact campaign checkpoint object/ref scope, without candidate or PR rights. The invocation acquires a bounded remote owner/epoch claim and uses the same client/store for checkpoint execution and publication. H1 remains credential-free and independently validates the fresh accepted checkpoint and reconstructed candidate before publication authority is bound. The provider credential channel remains separate. Help, usage and local request/configuration failures do not read the GitHub credential; remote-state admission, no-work and resume validation require it.
+The campaign configuration and layers are validated before one read of `CONTRACTSCRIBE_GITHUB_TOKEN`. That credential initially grants only the exact campaign checkpoint object/ref scope, without candidate or PR rights. The invocation acquires a bounded remote owner/epoch claim and uses the same client/store for checkpoint execution and publication. H1 remains credential-free and independently validates the fresh accepted checkpoint and reconstructed candidate before publication authority is bound. The provider credential channel remains separate. Help, usage and local campaign/configuration failures do not read the GitHub credential; remote-state admission, no-work and resume validation require it.
 
-The source-free saved plan projection must exactly equal freshly validated planning facts before execution. Durable reservations precede provider dispatch. Archive witnesses retain original known and unknown charges without repricing, while ordinary restore reads the directly referenced archive transition and actual predecessor rather than replaying the lifetime. Local files and Action artifacts are not recovery authority.
+The source-free saved complete-plan projection must exactly equal freshly validated planning facts before execution. The checkpoint and authenticated plan pointer identify the current fixed batch separately. A later trigger can advance a terminal batch with no accepted candidate or active reservation to exactly its first deferred target on the same snapshot. It retains prior closed outcomes, attempts, completed operations, dispatch/archive history and charges; closed skipped/failed members are not retried. One trigger advances at most one batch. A zero quota remains zero; a later positive quota can create a distinct initial nonempty batch. Current publication intent never uses this transition: its manifest and POST fence remain frozen. Historical terminal publication pointers are retained and independently checked against exhaustive lifecycle admission. Durable reservations precede provider dispatch. Archive witnesses retain original known and unknown charges without repricing, while ordinary restore reads the directly referenced archive transition and actual predecessor rather than replaying the lifetime. Local files and Action artifacts are not recovery authority.
 
 ## Caller contract
 
 A downstream caller — the composite Action or a shell step — invokes the complete path with file locations and options only. It must not merge JSON, derive product or publication policy, choose predecessors, inspect GitHub state, manage provider behavior, or implement retries:
 
 ```bash
-dotnet <payload>/ContractScribe.Cli.dll github-proposal <start|resume> \
+dotnet <payload>/ContractScribe.Cli.dll github-proposal \
   --repository-root <path> \
   --input <path> \
   --policy <path> \
-  --request <path> \
+  --campaign <path> \
   [--configuration <path>] \
   [--configuration-override <path>]
 ```
 
-The caller materializes the invocation request and any override to bounded files and passes their locations. Product policy, campaign resolution, runtime authority and publication admission all stay inside the production CLI.
+The caller materializes stable campaign configuration and any override to bounded files and passes their locations. Product policy, campaign resolution, runtime authority and publication admission all stay inside the production CLI.
 
 The GitHub facade pins the trusted Actions publisher independently of inspected PRs: `github-actions[bot]`, numeric ID `41898282`, node ID `MDM6Qm90NDE4OTgyODI=`, type `Bot`. One facade may make two bounded calls when the first stops at the original proposal ref. Each call freshly validates the next missing original-operation step. A process restart may recover deterministic Git objects/ref and a not-yet-fenced PR operation through fresh narrow capabilities. Only the acknowledged winning durable send-fence CAS issues one POST right; existing fences and ambiguous acknowledgement allow exact discovery only. Absence after the fence remains unresolved.
 
@@ -126,6 +97,8 @@ githubProposalEnvelopeVersion, terminalLayer, cliContractBaseline, toolVersion,
 campaignOperation, publicationOperationId, generationId, outcome, diagnosticCodes,
 checkpointRevision, pullRequestUrl, publicationDiagnostic
 ```
+
+A successful publication with unresolved selected members reports `published-partial` (exit 0), retaining the PR URL and operation/generation. It does not claim those members are resolved or authorize another PR for the batch. A complete selected result reports `published`.
 
 Envelope version is `1`. Layers are `usage`, `preflight`, `campaign`, `publication`, or `presentation`. Campaign operation is `start`, `resume`, or null when unavailable. Unavailable operation ID, generation, revision, and PR URL are explicitly null. Successful results have no stderr; controlled failures have exactly one closed, sanitized stderr line. No raw HTTP/header/exception, credential, source, candidate, private path or provider data is emitted.
 
@@ -147,7 +120,7 @@ The adapter pairs this observation with one invocation's unchanged Core result. 
 
 | Outcome suffix (`github-proposal.` prefix) | Exit |
 | --- | --- |
-| published, replayed, no-op, awaiting-review, merged | 0 |
+| published, published-partial, replayed, no-op, awaiting-review, merged | 0 |
 | usage (local-invalid with existing `cli.usage.*` diagnostic) | 2 |
 | stale-base-after-create, rate-limit, conflict | 3 |
 | local-invalid, stale, human-change, permission, closed-unmerged | 4 |

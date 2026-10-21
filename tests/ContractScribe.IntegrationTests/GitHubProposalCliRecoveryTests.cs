@@ -17,7 +17,7 @@ public sealed partial class GitHubProposalCliProcessTests
         foreach (var pair in CampaignCliProcessTests.HookEnvironment(boundary, acknowledgement,
             Path.Join(fixture.Outside, "never-released"))) environment[pair.Key] = pair.Value;
         CampaignCheckpointArtifact interruptedState;
-        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args("start"), environment))
+        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args(), environment))
         {
             try
             {
@@ -29,7 +29,7 @@ public sealed partial class GitHubProposalCliProcessTests
             finally { await CampaignCliProcessTests.StopAsync(interrupted); }
         }
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
-        AssertResult(await fixture.Run("resume"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var restored = fixture.Checkpoint();
         var prior = Assert.Single(interruptedState.State.DispatchObservations);
         var retained = Assert.Single(restored.State.DispatchObservations,
@@ -61,7 +61,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 created.TrySetResult();
             }
         };
-        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args("start"), fixture.Environment()))
+        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args(), fixture.Environment()))
         {
             try { await created.Task.WaitAsync(TimeSpan.FromMinutes(3)); }
             finally { await CampaignCliProcessTests.StopAsync(interrupted); }
@@ -73,13 +73,13 @@ public sealed partial class GitHubProposalCliProcessTests
         var before = GateCounts(fixture);
         if (!terminalBeforeRecovery)
         {
-            AssertResult(await fixture.Run("resume", fault: deadlineAfterRecovery ? "deadline-after-publication-recovery" : null), 0, "awaiting-review");
+            AssertResult(await fixture.Run(fault: deadlineAfterRecovery ? "deadline-after-publication-recovery" : null), 0, "awaiting-review");
             if (deadlineAfterRecovery) Assert.Equal(1, Observed(fixture, "finalization-deadline-expired"));
             Assert.Equal(before, GateCounts(fixture));
             Assert.Equal("published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
             Assert.Equal(1, fixture.GitHub.PrAttempts);
             var writes = fixture.GitHub.PublicationWrites;
-            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            AssertResult(await fixture.Run(), 0, "awaiting-review");
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         }
         if (deadlineAfterRecovery) fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
@@ -88,7 +88,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
-        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        AssertResult(await fixture.Run(), 0, "no-op");
         Assert.Equal(terminalBeforeRecovery ? "merged" : "published", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
         Assert.Equal(before.Physical, fixture.Provider.RequestCount);
         Assert.Equal(before.Discovery + 1, Observed(fixture, "sdk-discovery"));
@@ -109,7 +109,7 @@ public sealed partial class GitHubProposalCliProcessTests
         foreach (var pair in CampaignCliProcessTests.HookEnvironment(
             ContractScribe.Cli.CampaignProcessBoundaryHooks.PatchAfterReservationReadback, acknowledgement,
             Path.Join(fixture.Outside, "never-released"))) environment[pair.Key] = pair.Value;
-        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args("resume"), environment))
+        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args(), environment))
         {
             try
             {
@@ -123,7 +123,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var reserved = fixture.Checkpoint();
         var requests = fixture.Provider.RequestCount;
         Assert.Equal(accepted.Sha256, reserved.State.AcceptedCandidateOrigin!.CheckpointSha256);
-        AssertResult(await fixture.Run("resume"), 0, "published");
+        AssertResult(await fixture.Run(), 0, twoWorks ? "published-partial" : "published");
         var retried = fixture.Checkpoint();
         Assert.Null(retried.State.ActiveReservation);
         Assert.True(retried.State.LineageCharges.PatchValidationInvocations > reserved.State.LineageCharges.PatchValidationInvocations);
@@ -140,13 +140,13 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: newPath);
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published-partial");
         var prior = fixture.Checkpoint();
         await ConfigureSealedResume(fixture);
         var before = GateCounts(fixture);
         var writes = fixture.GitHub.Mutations;
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
         Assert.Equal(prior.Sha256, fixture.Checkpoint().Sha256);
         Assert.Equal(before, GateCounts(fixture));
         Assert.Equal(writes, fixture.GitHub.Mutations);
@@ -156,29 +156,21 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemTheory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task Independent_processes_compete_for_the_same_ref_claim_without_duplicate_publication(bool differentOperation, bool published)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Identical_automatic_processes_compete_for_the_same_ref_claim_without_duplicate_publication(bool published)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: published);
         if (published)
         {
-            AssertResult(await fixture.Run("start"), 0, "published");
+            AssertResult(await fixture.Run(), 0, "published-partial");
             await ConfigureSealedResume(fixture);
         }
         var otherRequest = Path.Join(fixture.Outside, "other-request.json");
-        var otherArgs = fixture.Args(published ? "resume" : "start", requestPath: otherRequest);
-        if (differentOperation)
-        {
-            var request = JsonNode.Parse(await File.ReadAllTextAsync(otherRequest))!;
-            request["github"]!["operationId"] = "operation.other";
-            await File.WriteAllTextAsync(otherRequest, request.ToJsonString());
-        }
+        var otherArgs = fixture.Args(requestPath: otherRequest);
         fixture.GitHub.Barrier("/git/ref/heads/contract-scribe/");
-        using var first = CampaignCliProcessTests.Start(fixture.Args(published ? "resume" : "start"), fixture.Environment());
+        using var first = CampaignCliProcessTests.Start(fixture.Args(), fixture.Environment());
         var otherEnvironment = fixture.Environment();
         otherEnvironment["CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS"] = Path.Join(fixture.Outside, "other-observations.txt");
         using var second = CampaignCliProcessTests.Start(otherArgs, otherEnvironment);

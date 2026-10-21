@@ -131,7 +131,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             Request request;
             lock (Gate)
             {
-                if (Requests.Count >= 20_000)
+                if (Requests.Count >= MaximumRequests)
                     Assert.Fail($"Request guard: {method} {path}; mutations={Mutations}; PR attempts={PrAttempts}; ledger={CoordinationDocument().ToJsonString()}");
                 request = new(method, path, kind, method == "POST" ? ++Mutations : 0);
                 Requests.Add(request);
@@ -304,11 +304,13 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         return response;
     }
 
-    internal void Lifecycle(string kind)
+    internal int MaximumRequests { get; set; } = 20_000;
+
+    internal void Lifecycle(string kind, int index = 0)
     {
         lock (Gate)
         {
-            var pr = PullRequests[0];
+            var pr = PullRequests[index];
             var closed = kind is "closed" or "merged";
             pr["state"] = closed ? "closed" : "open"; pr["draft"] = kind == "draft";
             pr["merged"] = kind == "merged";

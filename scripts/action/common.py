@@ -30,7 +30,7 @@ BOUND_DEPTH = 16
 BOUND_METADATA = 4 * 1024 * 1024
 
 # --- Action transport bounds ---
-BOUND_INLINE_OBJECT = 64 * 1024          # request / configuration-override inputs
+BOUND_INLINE_OBJECT = 64 * 1024          # campaign / configuration-override inputs
 BOUND_METADATA_JSON = 2 * 1024 * 1024    # release API documents
 BOUND_STDOUT = 1024 * 1024               # captured CLI stdout
 BOUND_STDERR = 4 * 1024                  # captured CLI stderr

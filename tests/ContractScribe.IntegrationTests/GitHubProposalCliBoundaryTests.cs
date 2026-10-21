@@ -22,7 +22,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var release = Path.Join(fixture.Outside, "physical-output.release");
         environment["CONTRACTSCRIBE_TEST_GITHUB_PAUSE"] = "before-physical-output";
         environment["CONTRACTSCRIBE_TEST_GITHUB_RELEASE"] = release;
-        using var running = CampaignCliProcessTests.Start(outcome == "usage" ? ["github-proposal", "invalid"] : fixture.Args("start"), environment);
+        using var running = CampaignCliProcessTests.Start(outcome == "usage" ? ["github-proposal", "invalid"] : fixture.Args(), environment);
         try
         {
             await Observed("before-physical-output");
@@ -76,7 +76,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 "tests", "fixtures", "github-proposal", "cli", "help.txt")), result.Stdout);
         }
         finally { await CampaignCliProcessTests.StopAsync(help); }
-        using var run = CampaignCliProcessTests.Start(fixture.Args("start"), environment);
+        using var run = CampaignCliProcessTests.Start(fixture.Args(), environment);
         try
         {
             await run.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(3));
@@ -94,7 +94,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start", fault: boundary), 0, "published");
+        AssertResult(await fixture.Run(fault: boundary), 0, "published");
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.TokenReads());
     }
@@ -106,7 +106,7 @@ public sealed partial class GitHubProposalCliProcessTests
         string boundary, int exit, string outcome)
     {
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start", fault: "deadline-" + boundary), exit, outcome);
+        AssertResult(await fixture.Run(fault: "deadline-" + boundary), exit, outcome);
         Assert.Equal(1, Observed(fixture, "finalization-deadline-expired"));
         Assert.NotNull(fixture.Checkpoint().State.CandidateObservation);
         Assert.Null(fixture.Checkpoint().State.ActiveReservation);
@@ -119,7 +119,7 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task Pre_emission_failure_has_one_sanitized_fallback_after_checkpoint_claim()
     {
         await using var fixture = await Fixture.CreateAsync(required: false);
-        var result = await fixture.Run("start", fault: "before-presentation");
+        var result = await fixture.Run(fault: "before-presentation");
         AssertResult(result, 5, "host-failure");
         Assert.Equal("github proposal stopped before publication: github-proposal.campaign-contract-error\n", result.Stderr);
         Assert.Equal(1, fixture.TokenReads());
@@ -151,7 +151,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var server = fixture.GitHub;
         lock (server.Gate)
         {
@@ -246,7 +246,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var providerRequests = fixture.Provider.RequestCount;
         var gates = GateCounts(fixture);
         var allMutations = server.Requests.Count(request => request.Method != "GET");
-        AssertResult(await fixture.Run("resume"), exit, outcome);
+        AssertResult(await fixture.Run(), exit, outcome);
         Assert.Equal(providerRequests, fixture.Provider.RequestCount);
         Assert.Equal(gates, GateCounts(fixture));
         if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
@@ -266,7 +266,7 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.GitHub.DelayResponses = true;
         var environment = fixture.Environment();
         environment["CONTRACTSCRIBE_TEST_GITHUB_TIMEOUT"] = cancel ? "30000" : "100";
-        using var running = CampaignCliProcessTests.Start(fixture.Args("start"), environment);
+        using var running = CampaignCliProcessTests.Start(fixture.Args(), environment);
         try
         {
             if (cancel)
@@ -335,7 +335,7 @@ public sealed partial class GitHubProposalCliProcessTests
         {
             var environment = fixture.Environment();
             environment["CONTRACTSCRIBE_TEST_GITHUB_TERMINAL"] = "campaign." + source;
-            using var process = CampaignCliProcessTests.Start(fixture.Args("start"), environment);
+            using var process = CampaignCliProcessTests.Start(fixture.Args(), environment);
             try
             {
                 await process.Process.WaitForExitAsync().WaitAsync(TimeSpan.FromMinutes(1));

@@ -21,6 +21,14 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
     internal CancellationToken CheckpointToken => checkpointLifetime.Token;
     internal GitHubFailure? CheckpointFailure { get; private set; }
 
+    // One complete read proof only. Mutable resources are never stored here;
+    // every subsequent gate creates a new proof and reauthenticates its objects.
+    private sealed class ReadProof
+    {
+        internal Dictionary<string, GitHubCoordinationDocument> Documents { get; } = new(StringComparer.Ordinal);
+        internal Dictionary<string, GitHubBlob> Blobs { get; } = new(StringComparer.Ordinal);
+    }
+
     private sealed record RemoteCheckpoint(string Head, GitHubCoordinationDocument Document,
         CampaignCheckpointArtifact? Artifact, CampaignVerifiedArchive? ArchiveEvidence);
 
@@ -28,11 +36,12 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         ?? throw new GitHubCoordinationException(transportFailure: result.Failure ?? new(GitHubFailureCode.InvalidResponse));
 
     private async ValueTask<GitHubCoordinationDocument> ReadDocumentAsync(string head, CancellationToken token,
-        Dictionary<string, GitHubCoordinationDocument>? proofDocuments = null)
+        ReadProof? proof = null)
     {
+        token.ThrowIfCancellationRequested();
         // Reuse immutable objects only within one complete authenticated history
         // proof. The next gate starts a fresh proof, including its object reads.
-        if (proofDocuments?.TryGetValue(head, out var authenticated) == true) return authenticated;
+        if (proof?.Documents.TryGetValue(head, out var authenticated) == true) return authenticated;
         var commit = RequireRemote(await client.GetCommitAsync(head, token).ConfigureAwait(false));
         var root = RequireRemote(await client.GetTreeAsync(commit.TreeOid, token).ConfigureAwait(false));
         if (root.Entries.Length != 1 || root.Entries[0].Path != GitHubCoordinationObjects.RootPath
@@ -40,7 +49,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         var leaf = RequireRemote(await client.GetTreeAsync(root.Entries[0].Oid, token).ConfigureAwait(false));
         var stateEntry = leaf.Entries.SingleOrDefault(entry => entry.Path == GitHubCoordinationObjects.StatePath)
             ?? throw new GitHubCoordinationException();
-        var blob = await ReadBlobAsync(stateEntry.Oid, token).ConfigureAwait(false);
+        var blob = await ReadBlobAsync(stateEntry.Oid, token, proof).ConfigureAwait(false);
         var document = GitHubCoordinationDocument.Decode(blob.Bytes.AsMemory());
         var prepared = GitHubCoordinationObjects.Prepare(document);
         GitHubCoordinationObjects.Authenticate(prepared, commit, root, leaf, blob);
@@ -48,7 +57,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             || document.TargetRef != client.ReadAuthority.TargetRef || document.CampaignLineage != client.ReadAuthority.CampaignLineage)
             throw new GitHubCoordinationException();
         documents[head] = document;
-        if (proofDocuments is not null) proofDocuments[head] = document;
+        if (proof is not null) proof.Documents[head] = document;
         return document;
     }
 
@@ -56,9 +65,9 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
     // protected facts this operation was allowed to replace. Never walk the
     // checkpoint chain: publication history has its own immutable event graph.
     private async ValueTask<GitHubCoordinationDocument> ReadAcceptedDocumentAsync(string head, CancellationToken token,
-        Dictionary<string, GitHubCoordinationDocument>? proofDocuments = null)
+        ReadProof? proof = null)
     {
-        var document = await ReadDocumentAsync(head, token, proofDocuments).ConfigureAwait(false);
+        var document = await ReadDocumentAsync(head, token, proof).ConfigureAwait(false);
         if (document.PredecessorOid == ZeroOid)
         {
             if (document.Checkpoint is not null || document.Plan is not null || document.Archive is not null
@@ -67,7 +76,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
                 throw new GitHubCoordinationException();
             return document;
         }
-        var parent = (await ReadDocumentAsync(document.PredecessorOid, token, proofDocuments).ConfigureAwait(false))
+        var parent = (await ReadDocumentAsync(document.PredecessorOid, token, proof).ConfigureAwait(false))
             .RetainAt(document.PredecessorOid);
         if (parent.Claim is { } priorClaim)
         {
@@ -89,14 +98,14 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         {
             if (publicationChanged || document.Claim != parent.Claim || document.Checkpoint is not { } pointer)
                 throw new GitHubCoordinationException();
-            var next = await ReadCheckpointBlobAsync(pointer, token).ConfigureAwait(false);
+            var next = await ReadCheckpointBlobAsync(pointer, token, proof).ConfigureAwait(false);
             if (parent.Checkpoint is { } previous)
             {
-                var before = await ReadCheckpointBlobAsync(previous, token).ConfigureAwait(false);
+                var before = await ReadCheckpointBlobAsync(previous, token, proof).ConfigureAwait(false);
                 CampaignStateFactory.ValidateSuccessorHistory(before, next);
                 if (parent.Publication is { } retained)
                 {
-                    var publication = GitHubPublicationEvent.Decode((await ReadBlobAsync(retained.Oid, token).ConfigureAwait(false)).Bytes.AsMemory());
+                    var publication = GitHubPublicationEvent.Decode((await ReadBlobAsync(retained.Oid, token, proof).ConfigureAwait(false)).Bytes.AsMemory());
                     var intent = publication.State;
                     if (next.State.Batch.Identity == intent.BatchIdentity
                             ? !FrozenCheckpointMatches(intent, next)
@@ -106,6 +115,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
                         throw new GitHubCoordinationException();
                 }
                 if (document.Plan != parent.Plan
+                    && !CampaignStateFactory.IsNoResultBatchSuccessor(before, next)
                     && (next.State.Snapshot.ExecutionCommitmentSha256 == before.State.Snapshot.ExecutionCommitmentSha256
                         || next.State.Predecessor?.FinalCheckpointSha256 != before.Sha256))
                     throw new GitHubCoordinationException();
@@ -125,17 +135,20 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         return document;
     }
 
-    private async ValueTask<GitHubBlob> ReadBlobAsync(string oid, CancellationToken token)
+    private async ValueTask<GitHubBlob> ReadBlobAsync(string oid, CancellationToken token, ReadProof? proof = null)
     {
+        token.ThrowIfCancellationRequested();
+        if (proof?.Blobs.TryGetValue(oid, out var authenticated) == true) return authenticated;
         var blob = RequireRemote(await client.GetBlobAsync(oid, token).ConfigureAwait(false));
         if (blob.Oid != oid || GitHubCoordinationObjects.ObjectOid("blob", blob.Bytes.AsSpan()) != oid)
             throw new GitHubCoordinationException();
+        if (proof is not null) proof.Blobs[oid] = blob;
         return blob;
     }
 
-    private async ValueTask<CampaignCheckpointArtifact> ReadCheckpointBlobAsync(GitHubCheckpointPointer pointer, CancellationToken token)
+    private async ValueTask<CampaignCheckpointArtifact> ReadCheckpointBlobAsync(GitHubCheckpointPointer pointer, CancellationToken token, ReadProof? proof = null)
     {
-        var blob = await ReadBlobAsync(pointer.Oid, token).ConfigureAwait(false);
+        var blob = await ReadBlobAsync(pointer.Oid, token, proof).ConfigureAwait(false);
         var parsed = CampaignStateJson.Parse(blob.Bytes.AsMemory());
         if (!parsed.IsValid || parsed.Artifact is not { } artifact || artifact.Sha256 != pointer.Sha256
             || artifact.CheckpointRevision != pointer.Revision || !blob.Bytes.AsSpan().SequenceEqual(artifact.ExactUtf8Json.AsSpan()))
@@ -152,7 +165,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             if (current.Failure?.Code == GitHubFailureCode.NotFound) return null;
             throw new GitHubCoordinationException(transportFailure: current.Failure);
         }
-        var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token).ConfigureAwait(false);
+        var proof = new ReadProof();
+        var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token, proof).ConfigureAwait(false);
         if (document.Publication is { } publication)
         {
             var retained = publication.Anchor == GitHubCoordinationDocument.CurrentCommit
@@ -162,7 +176,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             if (!verifiedCheckpointPublications.Contains(retained))
             {
                 var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
-                var result = await ReadStateAsync(repository.Identity, target, current.Value.Oid, token, matchAuthority: false)
+                var result = await ReadStateAsync(repository.Identity, target, current.Value.Oid, token, matchAuthority: false, proof: proof)
                     .ConfigureAwait(false);
                 if (result.State is null) throw new GitHubCoordinationException(transportFailure: result.Failure?.TransportFailure);
                 verifiedCheckpointPublications.Add(retained);
@@ -172,9 +186,9 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         CampaignVerifiedArchive? evidence = null;
         if (document.Checkpoint is { } pointer)
         {
-            artifact = await ReadCheckpointBlobAsync(pointer, token).ConfigureAwait(false);
+            artifact = await ReadCheckpointBlobAsync(pointer, token, proof).ConfigureAwait(false);
             var plan = document.Plan ?? throw new GitHubCoordinationException();
-            var planBlob = await ReadBlobAsync(plan.Oid, token).ConfigureAwait(false);
+            var planBlob = await ReadBlobAsync(plan.Oid, token, proof).ConfigureAwait(false);
             if (Convert.ToHexStringLower(SHA256.HashData(planBlob.Bytes.AsSpan())) != plan.Sha256
                 || artifact.State.CampaignLineage != document.CampaignLineage
                 || artifact.State.Snapshot.ExecutionCommitmentSha256 != plan.ExecutionCommitment
@@ -183,19 +197,19 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             {
                 var archive = document.Archive ?? throw new GitHubCoordinationException();
                 var anchor = archive.Anchor == GitHubCoordinationDocument.CurrentCommit ? current.Value.Oid : archive.Anchor;
-                var archiveDocument = anchor == current.Value.Oid ? document : await ReadDocumentAsync(anchor, token).ConfigureAwait(false);
+                var archiveDocument = anchor == current.Value.Oid ? document : await ReadDocumentAsync(anchor, token, proof).ConfigureAwait(false);
                 if (archiveDocument.Archive != archive with { Anchor = GitHubCoordinationDocument.CurrentCommit }
                     || archive.WitnessSha256 != prefix.WitnessSha256
                     || archiveDocument.PredecessorOid == ZeroOid) throw new GitHubCoordinationException();
-                var before = await ReadDocumentAsync(archiveDocument.PredecessorOid, token).ConfigureAwait(false);
+                var before = await ReadDocumentAsync(archiveDocument.PredecessorOid, token, proof).ConfigureAwait(false);
                 if (before.Checkpoint is not { } beforePointer || beforePointer.Oid != archive.Oid)
                     throw new GitHubCoordinationException();
-                var predecessor = await ReadCheckpointBlobAsync(beforePointer, token).ConfigureAwait(false);
+                var predecessor = await ReadCheckpointBlobAsync(beforePointer, token, proof).ConfigureAwait(false);
                 if ((predecessor.State.ArchivedDispatchPrefix?.WitnessSha256) != before.Archive?.WitnessSha256)
                     throw new GitHubCoordinationException();
                 if (archiveDocument.Checkpoint is not { } transitionPointer) throw new GitHubCoordinationException();
                 var transition = anchor == current.Value.Oid ? artifact
-                    : await ReadCheckpointBlobAsync(transitionPointer, token).ConfigureAwait(false);
+                    : await ReadCheckpointBlobAsync(transitionPointer, token, proof).ConfigureAwait(false);
                 _ = CampaignDispatchArchive.VerifyTransition(predecessor, transition);
                 evidence = CampaignDispatchArchive.Verify(predecessor, artifact);
             }

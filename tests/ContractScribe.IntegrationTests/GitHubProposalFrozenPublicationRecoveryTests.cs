@@ -9,31 +9,20 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task Closed_unmerged_different_base_publishes_a_fresh_Audit_generation_without_an_extra_unlock()
     {
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var previous = fixture.GitHub.Coordination();
         fixture.GitHub.Lifecycle("closed");
         var requests = fixture.Provider.RequestCount;
-        AssertResult(await fixture.Run("resume"), 4, "closed-unmerged");
+        AssertResult(await fixture.Run(), 4, "closed-unmerged");
         Assert.Equal(requests, fixture.Provider.RequestCount);
-        fixture.Publication["expectedBaseCommitOid"] = AdvanceReadme(fixture);
-        fixture.Publication["operationId"] = "operation.fresh";
-        fixture.Publication["generationId"] = "generation.fresh";
-        fixture.Publication["transition"] = "successor-after-closed-unmerged";
-        fixture.Publication["terminalPredecessor"] = new JsonObject
-        {
-            ["logicalPredecessorId"] = "previous",
-            ["pullRequestNumber"] = previous["pullRequestNumber"]!.DeepClone(),
-            ["generationId"] = previous["generationId"]!.DeepClone(),
-            ["headOid"] = previous["proposalCommitOid"]!.DeepClone(),
-            ["disposition"] = "closed-unmerged",
-        };
-        AssertResult(await fixture.Run("resume"), 0, "published");
+        AdvanceReadme(fixture);
+        AssertResult(await fixture.Run(), 0, "published");
         Assert.Equal(2, fixture.GitHub.PrAttempts);
         Assert.Equal(2, fixture.GitHub.PullRequests.Count);
         Assert.Single(fixture.GitHub.PullRequests, pr => pr["state"]!.GetValue<string>() == "open");
         Assert.NotEqual(previous["batchIdentity"]!.GetValue<string>(), fixture.Checkpoint().State.Batch.Identity);
         Assert.True(fixture.Provider.RequestCount > requests);
-        Assert.Equal("generation.fresh", fixture.GitHub.Coordination()["generationId"]!.GetValue<string>());
+        Assert.NotEqual(previous["generationId"]!.GetValue<string>(), fixture.GitHub.Coordination()["generationId"]!.GetValue<string>());
         await fixture.AssertSourceUnchanged();
     }
 
@@ -57,7 +46,7 @@ public sealed partial class GitHubProposalCliProcessTests
             reached.TrySetResult();
         };
         JsonObject intent;
-        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args("start"), fixture.Environment()))
+        using (var interrupted = CampaignCliProcessTests.Start(fixture.Args(), fixture.Environment()))
         {
             try
             {
@@ -74,14 +63,14 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
         var requests = fixture.Provider.RequestCount;
         await ConfigureSealedResume(fixture);
-        var resumed = await fixture.Run("resume");
+        var resumed = await fixture.Run();
         if (stage == "pull-request-create-started")
         {
             AssertResult(resumed, 3, "conflict");
             Assert.Empty(fixture.GitHub.PullRequests);
             Assert.Equal(0, fixture.GitHub.PrAttempts);
             Assert.Equal(stage, fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
-            AssertResult(await fixture.Run("resume"), 3, "conflict");
+            AssertResult(await fixture.Run(), 3, "conflict");
             Assert.Equal(0, fixture.GitHub.PrAttempts);
         }
         else
@@ -89,7 +78,7 @@ public sealed partial class GitHubProposalCliProcessTests
             AssertResult(resumed, 0, "published");
             Assert.Single(fixture.GitHub.PullRequests);
             Assert.Equal(1, fixture.GitHub.PrAttempts);
-            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            AssertResult(await fixture.Run(), 0, "awaiting-review");
             Assert.Equal(1, fixture.GitHub.PrAttempts);
         }
         var recovered = fixture.GitHub.Coordination();

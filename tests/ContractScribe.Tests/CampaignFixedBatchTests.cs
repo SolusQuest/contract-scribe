@@ -8,6 +8,78 @@ namespace ContractScribe.Tests;
 public sealed partial class CampaignStateContractTests
 {
     [Theory]
+    [InlineData(2, 2)]
+    [InlineData(2, 4)]
+    [InlineData(3, 1)]
+    [InlineData(6, 2)]
+    public void No_result_batches_exhaust_interleaved_families_across_quota_changes(int initialQuota, int nextQuota)
+    {
+        var scenario = CreateProposalScenario(workItemCount: 7, targetLimit: initialQuota,
+            containingType: index => index < 6 ? "T:Synthetic.Widget" : "T:Synthetic.Widget.Nested",
+            memberFamily: index => "abbaabn"[index].ToString(), maximumElapsedMilliseconds: 1_000_000);
+        var plan = scenario.Plan;
+        var input = scenario.Input;
+        var current = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var initialKeys = plan.Batch.SelectedTargetKeys;
+        var permuted = CampaignPlanner.Plan(input with
+        { OwnerAuthority = new(input.OwnerAuthority.Owners.Reverse().ToImmutableArray()) });
+        Assert.Equal(plan.Batch.Identity, permuted.Batch.Identity);
+        if (initialQuota == 6)
+            Assert.Equal(plan.Batch.CompleteTargets.Where(target => target.GroupIdentity == plan.Batch.CompleteTargets[0].GroupIdentity)
+                .Select(target => target.TargetKey), initialKeys);
+        else
+            Assert.Single(plan.Batch.CompleteTargets.Where(target => initialKeys.Contains(target.TargetKey))
+                .Select(target => target.MemberFamilyIdentity).Distinct());
+        var completedKeys = new HashSet<string>(StringComparer.Ordinal);
+        while (true)
+        {
+            Assert.Null(CampaignStateFactory.NextNoResultBatch(current.State, new(nextQuota)));
+            foreach (var key in current.State.Batch.SelectedTargetKeys)
+            {
+                Assert.True(completedKeys.Add(key), "A closed member was selected again.");
+                var target = current.State.Batch.CompleteTargets.Single(item => item.TargetKey == key);
+                var work = plan.WorkItems.Single(item => item.WorkItemKey == target.WorkItemKey);
+                var context = scenario with { Input = input, Plan = plan, InitialState = current.State };
+                var exchange = CreateNonProposalExchange(work, scenario: context);
+                var admitted = CampaignStateReducer.AdmitProviderInvocation(current, scenario.ExecutionAuthority,
+                    "style.synthetic", scenario.StyleProjection, input, plan, work.WorkItemKey, exchange.Request,
+                    CampaignStateFactory.CreateInvocationTargetAllowance(current.State, new(4096)),
+                    CampaignInvocationTestPolicy.Create(exchange.Request.Limits));
+                Assert.Equal(CampaignTransitionKind.Applied, admitted.Kind);
+                var invocation = CampaignStateReducer.CreateProviderInvocationAuthority(AcceptForTest(current, admitted),
+                    scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, input, plan, exchange.Request);
+                Assert.True(invocation.BindInvocationAllowance(CampaignInvocationTestPolicy.Create(invocation.Request.Limits)));
+                Assert.True(invocation.TryBeginDispatch(out var attempt));
+                var completion = OrdinaryCompletion(invocation,
+                    DocumentationScribeValidation.BindValidatedRunOutcome(exchange.Request, attempt, exchange.Result),
+                    exchange.Result.RunEnvelope.ElapsedMilliseconds);
+                var closed = CampaignStateReducer.CompleteProviderInvocation(completion.Invocation.AcceptedCheckpoint.Artifact,
+                    completion, scenario.ExecutionAuthority, "style.synthetic", scenario.StyleProjection, input, plan);
+                Assert.Equal(CampaignTransitionKind.Applied, closed.Kind);
+                current = closed.Artifact;
+            }
+            Assert.Equal(CampaignTerminalReason.Unresolved, current.State.TerminalOutcome!.Reason);
+            var next = CampaignStateFactory.NextNoResultBatch(current.State, new(nextQuota));
+            if (completedKeys.Count == 7) { Assert.Null(next); break; }
+            Assert.NotNull(next);
+            input = input with { TargetLimit = new(nextQuota), BatchStartTargetKey = next.SelectedTargetKeys[0] };
+            plan = CampaignPlanner.Plan(input);
+            Assert.Equal(next.Identity, plan.Batch.Identity);
+            Assert.Equal(scenario.Plan.ExecutionCommitment, plan.ExecutionCommitment);
+            Assert.Equal(CampaignPlanner.CreateRecoveryProjection(scenario.Plan).ExactUtf8Json.ToArray(),
+                CampaignPlanner.CreateRecoveryProjection(plan).ExactUtf8Json.ToArray());
+            var advanced = CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(current), plan);
+            Assert.Equal(CampaignTransitionKind.Applied, advanced.Kind);
+            CampaignStateFactory.ValidateSuccessorHistory(current, advanced.Artifact);
+            Assert.Equal(current.State.WorkItems.ToArray(), advanced.Artifact.State.WorkItems.ToArray());
+            Assert.Equal(current.State.LineageCharges, advanced.Artifact.State.LineageCharges);
+            current = CampaignStateJson.Parse(advanced.Artifact.ExactUtf8Json.AsMemory()).Artifact!;
+        }
+        Assert.All(current.State.TargetProgress, item => Assert.Equal(CampaignTargetProgressKind.Skipped, item.Kind));
+        Assert.All(current.State.WorkItems, item => Assert.Equal(1, item.OuterAttemptCount));
+    }
+
+    [Theory]
     [InlineData(2)]
     [InlineData(12)]
     public void Zero_creation_quota_keeps_deferred_targets_without_unresolved_work(int targetCount)
@@ -42,6 +114,76 @@ public sealed partial class CampaignStateContractTests
             Assert.Equal(0, rejected.Artifact.State.LineageCharges.OuterInvocations);
             Assert.Null(rejected.Artifact.State.ActiveReservation);
         }
+    }
+
+    [Fact]
+    public void No_result_batch_successor_rejects_skipped_boundaries_and_unfinished_or_accepted_work()
+    {
+        var scenario = CreateProposalScenario(workItemCount: 4, targetLimit: 0);
+        var before = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var input = scenario.Input with { TargetLimit = new(2) };
+        var plan = CampaignPlanner.Plan(input);
+        var next = CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(before), plan);
+        Assert.Equal(CampaignTransitionKind.Applied, next.Kind);
+        Assert.True(CampaignStateFactory.IsNoResultBatchSuccessor(before, next.Artifact));
+        CampaignStateFactory.ValidateSuccessorHistory(before, next.Artifact);
+        Assert.Equal(CampaignPlanner.CreateRecoveryProjection(scenario.Plan).ExactUtf8Json.ToArray(),
+            CampaignPlanner.CreateRecoveryProjection(plan).ExactUtf8Json.ToArray());
+        var skipped = CampaignPlanner.Plan(input with { BatchStartTargetKey = plan.Batch.CompleteTargets[2].TargetKey });
+        Assert.Equal(CampaignTransitionKind.Rejected,
+            CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(before), skipped).Kind);
+        Assert.Null(CampaignStateFactory.NextNoResultBatch(next.Artifact.State, new(2)));
+        var accepted = AcceptedPublicationCheckpoint("campaign.synthetic");
+        Assert.Null(CampaignStateFactory.NextNoResultBatch(accepted.State, new(2)));
+    }
+
+    [Fact]
+    public void No_result_batch_preserves_patch_rejection_attempts_but_deferred_work_stays_unattempted()
+    {
+        var scenario = CreateProposalScenario(workItemCount: 3, targetLimit: 1);
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchange(work, scenario: scenario);
+        var proposal = AdmitProposal(scenario,
+            WithState(scenario.InitialState, scenario.InitialState.WorkItems, ProviderReservation(work.WorkItemKey, exchange)),
+            work, exchange);
+        var complete = WithState(scenario.InitialState,
+            ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.ProposalComplete, proposal), null);
+        var request = CampaignStateFactory.ReconstructPatchRequest(complete, PatchContext(exchange.Request), CurrentEvidence(exchange));
+        var predecessor = CampaignStateJson.CreateArtifact(complete);
+        var reserved = CampaignStateReducer.ReservePatchInvocation(predecessor, request, elapsedMilliseconds: 1_000);
+        Assert.Equal(CampaignTransitionKind.Applied, reserved.Kind);
+        var rejection = CampaignStateFactory.CreatePatchRejectionReduction(reserved.Artifact, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, "samples/Synthetic.csproj", scenario.Input, scenario.Plan,
+            request, CreateRejectedPatchResult(request, work.WorkItemKey, "patch.rejected.unsafe-change"), work.WorkItemKey);
+        Assert.Equal(CampaignPatchRejectionDecisionKind.Removable, rejection.Kind);
+        var authority = CampaignStateReducer.CreatePatchInvocationAuthority(AcceptForTest(predecessor, reserved), request);
+        Assert.True(authority.TryBeginDispatch());
+        var reduced = CampaignStateReducer.ApplyPatchRejection(reserved.Artifact, authority, rejection.Reduction!);
+        Assert.Equal(CampaignTransitionKind.Applied, reduced.Kind);
+        Assert.Equal(CampaignTerminalKind.Complete, reduced.Artifact.State.TerminalOutcome!.Kind);
+        var closed = reduced.Artifact.State.WorkItems[0];
+        Assert.Equal(CampaignWorkOutcomeCode.PatchRejected, closed.ClosedOutcome!.Code);
+        Assert.Equal(1, closed.CandidateAttemptCount);
+
+        var plan = CampaignPlanner.Plan(scenario.Input with
+        { BatchStartTargetKey = scenario.Plan.Batch.CompleteTargets[1].TargetKey });
+        var next = CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(reduced.Artifact), plan);
+        Assert.Equal(CampaignTransitionKind.Applied, next.Kind);
+        Assert.Equal(closed, next.Artifact.State.WorkItems[0]);
+        Assert.Equal(reduced.Artifact.State.LineageCharges, next.Artifact.State.LineageCharges);
+        Assert.True(CampaignStateFactory.IsNoResultBatchSuccessor(reduced.Artifact, next.Artifact));
+        CampaignStateFactory.ValidateSuccessorHistory(reduced.Artifact, next.Artifact);
+        AssertPublishedCampaignRoundTrip(next.Artifact.State);
+        AssertMutationFailure(next.Artifact.State,
+            root => root["workItems"]![2]!["candidateAttemptCount"] = 1, CampaignStateValidationCode.InvalidCorrelation);
+        AssertMutationFailure(next.Artifact.State,
+            root => root["workItems"]![2]!["outerAttemptCount"] = 1, CampaignStateValidationCode.InvalidCorrelation);
+        var resetArtifact = CampaignStateJson.CreateArtifact(WithState(next.Artifact.State,
+            next.Artifact.State.WorkItems.Select(item => item.WorkItemKey == closed.WorkItemKey
+                ? item with { CandidateAttemptCount = 0 } : item), null));
+        Assert.False(CampaignStateFactory.IsNoResultBatchSuccessor(reduced.Artifact, resetArtifact));
+        Assert.Throws<CampaignStateValidationException>(() =>
+            CampaignStateFactory.ValidateSuccessorHistory(reduced.Artifact, resetArtifact));
     }
 
     [Fact]

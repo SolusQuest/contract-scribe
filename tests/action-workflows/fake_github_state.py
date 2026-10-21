@@ -13,7 +13,7 @@ Same publication wire contract as tests/action/fake_github_api.py:
 A3 additions:
   seed_repo   import every git object reachable from a real repository's
               HEAD so refs/heads/main == that checkout's base commit and
-              request.expectedBaseCommitOid == git rev-parse HEAD holds on
+              the authenticated target equals git rev-parse HEAD on
               the production request code path.
   state_file  dump the full object/ref/PR state after every mutation so the
               producer's published coordination/proposal/PR state can cross

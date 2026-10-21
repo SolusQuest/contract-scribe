@@ -24,7 +24,7 @@ public sealed partial class GitHubProposalCliProcessTests
             acknowledgement, release)) environment[pair.Key] = pair.Value;
         environment["CONTRACTSCRIBE_TEST_GITHUB_TIMEOUT"] = "30000";
         var responseRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var running = CampaignCliProcessTests.Start(fixture.Args("start"), environment);
+        using var running = CampaignCliProcessTests.Start(fixture.Args(), environment);
         try
         {
             await CampaignCliProcessTests.WaitForFileAsync(acknowledgement, running,
@@ -87,9 +87,9 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task G3_open_PR_lifecycle_precedes_discovery_and_provider_even_with_changed_configuration(bool ready, bool changedHead)
     {
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
-        var initial = await fixture.Run("start");
+        var initial = await fixture.Run();
         Assert.True(initial.ExitCode == 0, initial.Stdout + initial.Stderr + await File.ReadAllTextAsync(fixture.Observations));
-        AssertResult(initial, 0, "published");
+        AssertResult(initial, 0, "published-partial");
         var checkpoint = fixture.Checkpoint();
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
         Assert.True(Observed(fixture, "provider-create") > 0);
@@ -101,14 +101,14 @@ public sealed partial class GitHubProposalCliProcessTests
             fixture.GitHub.PullRequests[0]["base"]!["sha"] = head;
         }
         await ConfigureSealedResume(fixture);
-        fixture.Snapshot = "changed-caller-snapshot";
+
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         configuration["provider"]!["model"] = "changed-model";
         configuration["budgets"]!["invocation"]!["maximumTargets"] = 200;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var before = GateCounts(fixture);
         var writes = fixture.GitHub.Mutations;
-        AssertResult(await fixture.Run("resume"), changedHead ? 4 : 0, changedHead ? "stale" : "awaiting-review");
+        AssertResult(await fixture.Run(), changedHead ? 4 : 0, changedHead ? "stale" : "awaiting-review");
         Assert.Equal(before, GateCounts(fixture));
         Assert.Equal(writes, fixture.GitHub.Mutations);
         Assert.Equal(checkpoint.Sha256, fixture.Checkpoint().Sha256);
@@ -147,7 +147,7 @@ public sealed partial class GitHubProposalCliProcessTests
             Directory.CreateDirectory(Path.GetDirectoryName(path)!);
             await File.WriteAllBytesAsync(path, source);
         }
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, 4, "stale");
         Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
@@ -163,7 +163,7 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task G3_terminal_deleted_branch_allows_fresh_Audit_and_retained_closed_base_blocks_a_return(bool merged)
     {
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var prior = fixture.Checkpoint();
         fixture.GitHub.Lifecycle(merged ? "merged" : "closed");
         var proposal = fixture.GitHub.Refs.Keys.Single(key => key.Contains("/proposals/", StringComparison.Ordinal));
@@ -174,15 +174,15 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!merged)
         {
             var before = GateCounts(fixture);
-            AssertResult(await fixture.Run("resume"), 4, "closed-unmerged");
+            AssertResult(await fixture.Run(), 4, "closed-unmerged");
             Assert.Equal(before, GateCounts(fixture));
         }
         var current = AdvanceReadme(fixture);
         fixture.GitHub.PullRequests[0]["base"]!["sha"] = current;
-        // Keep the old caller expectedBase and operation: neither is a generic successor approval.
+        // Identical campaign inputs select fresh work from authenticated HEAD and terminal facts.
         var discovery = Observed(fixture, "sdk-discovery");
         var requests = fixture.Provider.RequestCount;
-        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        AssertResult(await fixture.Run(), 0, "no-op");
         var fresh = fixture.Checkpoint();
         Assert.Equal(discovery + 1, Observed(fixture, "sdk-discovery"));
         Assert.Equal(requests, fixture.Provider.RequestCount);
@@ -196,7 +196,7 @@ public sealed partial class GitHubProposalCliProcessTests
         {
             fixture.GitHub.Refs["refs/heads/main"] = fixture.GitHub.BaseOid;
             var before = GateCounts(fixture);
-            AssertResult(await fixture.Run("resume"), 4, "closed-unmerged");
+            AssertResult(await fixture.Run(), 4, "closed-unmerged");
             Assert.Equal(before, GateCounts(fixture));
             Assert.Equal(fresh.Sha256, fixture.Checkpoint().Sha256);
         }
@@ -215,7 +215,7 @@ public sealed partial class GitHubProposalCliProcessTests
         configuration["budgets"]!["invocation"]!["maximumProviderRequests"] = 64;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var requests = fixture.Provider.RequestCount;
-        AssertResult(await fixture.Run("resume"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published-partial");
         var restored = fixture.Checkpoint();
         Assert.Equal(prior.State.Batch.Identity, restored.State.Batch.Identity);
         Assert.Equal(prior.State.Batch.SelectedTargetKeys.ToArray(), restored.State.Batch.SelectedTargetKeys.ToArray());
@@ -255,23 +255,23 @@ public sealed partial class GitHubProposalCliProcessTests
         ? File.ReadAllLines(fixture.Observations).Count(line => line == name) : 0;
 
     [ContractScribe.TestSupport.NativeFileSystemFact]
-    public async Task G3_actual_Audit_base_does_not_rewrite_the_callers_publication_authority()
+    public async Task Automatic_publication_binds_the_actual_Audit_base_without_caller_base_authority()
     {
         await using var fixture = await Fixture.CreateAsync();
         var actual = AdvanceReadme(fixture);
-        AssertResult(await fixture.Run("start"), 4, "local-invalid");
+        var inputs = fixture.Args();
+        var campaignBytes = await File.ReadAllBytesAsync(fixture.Request);
+        AssertResult(await fixture.RunArgs(inputs, fixture.Environment()), 0, "published");
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
         Assert.NotNull(fixture.Checkpoint().State.CandidateObservation);
-        Assert.Empty(fixture.GitHub.PullRequests);
-        Assert.Equal(0, fixture.GitHub.PublicationWrites);
+        Assert.Equal(actual, fixture.GitHub.Coordination()["targetCommitOid"]!.GetValue<string>());
+        Assert.Equal(actual, Assert.Single(fixture.GitHub.PullRequests)["base"]!["sha"]!.GetValue<string>());
         var requests = fixture.Provider.RequestCount;
-        fixture.Publication["expectedBaseCommitOid"] = actual;
-        AssertResult(await fixture.Run("resume"), 0, "published");
-        Assert.Equal(requests, fixture.Provider.RequestCount);
-        Assert.Single(fixture.GitHub.PullRequests);
         var before = GateCounts(fixture);
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
         Assert.Equal(before, GateCounts(fixture));
+        Assert.Equal(requests, fixture.Provider.RequestCount);
+        Assert.Equal(campaignBytes, await File.ReadAllBytesAsync(fixture.Request));
         await fixture.AssertSourceUnchanged();
     }
 
@@ -307,7 +307,7 @@ public sealed partial class GitHubProposalCliProcessTests
             CampaignCliProcessTests.OptionalPolicy);
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var requests = fixture.Provider.RequestCount;
-        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        AssertResult(await fixture.Run(), 0, "no-op");
         var fresh = fixture.Checkpoint();
         Assert.NotEqual(prior.State.Snapshot, fresh.State.Snapshot);
         Assert.Null(fresh.State.CandidateObservation);
@@ -328,7 +328,7 @@ public sealed partial class GitHubProposalCliProcessTests
         configuration["retry"] = new JsonObject { ["retryPolicyId"] = "retry.changed", ["retryPolicyVersion"] = 1 };
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var before = GateCounts(fixture);
-        AssertResult(await fixture.Run("resume"), 4, "local-invalid");
+        AssertResult(await fixture.Run(), 4, "local-invalid");
         Assert.Equal(before, GateCounts(fixture));
         Assert.Equal(prior.Sha256, fixture.Checkpoint().Sha256);
     }
@@ -393,7 +393,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
         if (membership != "matched") Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
@@ -450,7 +450,7 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         AdvanceTarget(fixture, files, "Bind nested custom imports and semantic input membership\n");
         await LimitBindingInvocation(fixture);
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
         if (membership != "matched") Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
         Assert.Equal(0, fixture.Provider.RequestCount);
@@ -484,7 +484,7 @@ public sealed partial class GitHubProposalCliProcessTests
         files[path] = "Unrelated remote-only input.\n"u8.ToArray();
         AdvanceTarget(fixture, files, "Add inactive or noncompiler files\n");
         await LimitBindingInvocation(fixture);
-        AssertResult(await fixture.Run("start"), 0, "no-op");
+        AssertResult(await fixture.Run(), 0, "no-op");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
@@ -506,7 +506,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await File.WriteAllTextAsync(input, "{\"rule\":\"unbound-local-input\"}");
         AdvanceTarget(fixture, fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes), "Declare semantic output input without committing its bytes\n");
         await LimitBindingInvocation(fixture);
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, 4, "stale");
         Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
         Assert.Equal(0, fixture.Provider.RequestCount);
@@ -531,7 +531,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!external) files["References/Dependency.dll"] = await File.ReadAllBytesAsync(typeof(RepositoryLoader).Assembly.Location);
         AdvanceTarget(fixture, files, "Bind direct reference paths\n");
         await LimitBindingInvocation(fixture);
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, external ? 0 : 4, external ? "no-op" : "stale");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
@@ -572,7 +572,7 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         AdvanceTarget(fixture, files, "Bind compiler metadata documentation input\n");
         await LimitBindingInvocation(fixture);
-        AssertResult(await fixture.Run("start"), membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
+        AssertResult(await fixture.Run(), membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
@@ -608,7 +608,7 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         AdvanceTarget(fixture, files, "Bind a compiler reference resolution candidate\n");
         await LimitBindingInvocation(fixture);
-        AssertResult(await fixture.Run("start"), membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
+        AssertResult(await fixture.Run(), membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
@@ -686,7 +686,7 @@ public sealed partial class GitHubProposalCliProcessTests
         AdvanceTarget(fixture, files, "Bind only applicable reference-resolution inputs\n");
         await LimitBindingInvocation(fixture);
         var blocked = mode is "candidate-first" or "two-remote" or "search-path" or "extension";
-        AssertResult(await fixture.Run("start"), blocked ? 4 : 0, blocked ? "stale" : "no-op");
+        AssertResult(await fixture.Run(), blocked ? 4 : 0, blocked ? "stale" : "no-op");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
@@ -731,7 +731,7 @@ public sealed partial class GitHubProposalCliProcessTests
         else files["rules.ruleset"] = Encoding.UTF8.GetBytes(Encoding.UTF8.GetString(files["rules.ruleset"]).Replace("Action=\"None\"", "Action=\"Error\"", StringComparison.Ordinal));
         AdvanceTarget(fixture, files, "Change actual compiler response input closure\n");
         await LimitBindingInvocation(fixture);
-        AssertResult(await fixture.Run("start"), 4, "stale");
+        AssertResult(await fixture.Run(), 4, "stale");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.GitHub.PublicationWrites);
     }
@@ -783,7 +783,7 @@ public sealed partial class GitHubProposalCliProcessTests
         AdvanceTarget(fixture, files, "Bind compiler response carrier and supported scalar arguments\n");
         await LimitBindingInvocation(fixture);
         var blocked = mode is "local-only" or "remote-only" or "unknown" or "nested";
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, blocked ? 4 : 0, blocked ? "stale" : "no-op");
         if (mode is "remote-only" or "unknown" or "nested")
             Assert.Contains("github-proposal.compiler-input-unverifiable", result.Stderr, StringComparison.Ordinal);
@@ -847,7 +847,7 @@ public sealed partial class GitHubProposalCliProcessTests
         files["README.md"] = "unrelated remote documentation\n"u8.ToArray();
         AdvanceTarget(fixture, files, "Bind plain relative nested import membership\n");
         await LimitBindingInvocation(fixture);
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         var matched = membership is "matched" or "condition-matched";
         AssertResult(result, matched ? 0 : 4, matched ? "no-op" : "stale");
         if (!matched) Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
@@ -937,7 +937,7 @@ public sealed partial class GitHubProposalCliProcessTests
         AdvanceTarget(fixture, files, "Bind evaluated compiler ruleset property\n");
         await LimitBindingInvocation(fixture);
         var matched = mode is "matched" or "condition-matched" or "direct-before-search" or "evaluated-property" or "overwritten-property";
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, mode == "remote-only" ? 5 : matched ? 0 : 4,
             mode == "remote-only" ? "host-failure" : matched ? "no-op" : "stale");
         if (mode == "remote-only") Assert.Contains("campaign.load-failure", result.Stderr, StringComparison.Ordinal);
@@ -979,7 +979,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, membership == "matched" ? 0 : 4, membership == "matched" ? "no-op" : "stale");
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
         Assert.Equal(0, Observed(fixture, "provider-create"));
@@ -992,7 +992,7 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task G3_documentation_only_change_inside_a_project_directory_allows_fresh_Audit()
     {
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var prior = fixture.Checkpoint();
         fixture.GitHub.Lifecycle("merged");
         var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
@@ -1002,7 +1002,7 @@ public sealed partial class GitHubProposalCliProcessTests
         configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var before = GateCounts(fixture);
-        AssertResult(await fixture.Run("resume"), 0, "no-op");
+        AssertResult(await fixture.Run(), 0, "no-op");
         Assert.Equal(before.Discovery + 1, Observed(fixture, "sdk-discovery"));
         Assert.Equal(before.Physical, fixture.Provider.RequestCount);
         Assert.NotEqual(prior.State.Snapshot, fixture.Checkpoint().State.Snapshot);
@@ -1027,14 +1027,14 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.False(File.Exists(Path.Join(fixture.Repository.Root, path)));
         var files = fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes);
         files.Add(path, "{\"rule\":\"tracked-semantic-input\"}\n"u8.ToArray());
-        fixture.Publication["expectedBaseCommitOid"] = AdvanceTarget(fixture, files, "Add tracked semantic input under output directory\n");
+        AdvanceTarget(fixture, files, "Add tracked semantic input under output directory\n");
         if (!declared)
         {
             var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
             configuration["budgets"]!["invocation"]!["maximumTargets"] = 0;
             await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         }
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, declared ? 4 : 0, declared ? "stale" : "no-op");
         if (declared) Assert.Contains("github-proposal.checkout-mismatch", result.Stderr, StringComparison.Ordinal);
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
@@ -1057,7 +1057,7 @@ public sealed partial class GitHubProposalCliProcessTests
         string phase, string kind, int status, int exit, string outcome)
     {
         await using var fixture = await Fixture.CreateAsync();
-        if (phase == "integrity") AssertResult(await fixture.Run("start"), 0, "published");
+        if (phase == "integrity") AssertResult(await fixture.Run(), 0, "published");
         var before = GateCounts(fixture);
         var detailSeen = false;
         var rejected = false;
@@ -1072,7 +1072,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 rejected = true;
             }
         };
-        AssertResult(await fixture.Run(phase == "integrity" ? "resume" : "start"), exit, outcome);
+        AssertResult(await fixture.Run(), exit, outcome);
         Assert.True(rejected);
         var after = GateCounts(fixture);
         Assert.Equal(before.Created, after.Created);
@@ -1117,7 +1117,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var environment = fixture.Environment();
         foreach (var pair in CampaignCliProcessTests.HookEnvironment(CampaignProcessBoundaryHooks.PatchAfterAcceptedReadback,
             acknowledgement, Path.Join(fixture.Outside, "unpublished-never-release"))) environment[pair.Key] = pair.Value;
-        using var interrupted = CampaignCliProcessTests.Start(fixture.Args("start"), environment);
+        using var interrupted = CampaignCliProcessTests.Start(fixture.Args(), environment);
         CampaignCheckpointArtifact accepted;
         try
         {

@@ -47,7 +47,7 @@ internal static class GitHubProposalPresentation
         Result(identity, operation, "preflight", outcome, revision,
             [new("github-proposal." + outcome, "github proposal stopped before publication: github-proposal." + outcome)]);
 
-    internal static CliExecutionResult Preflight(CliBuildIdentity identity, CampaignOperation operation,
+    internal static CliExecutionResult Preflight(CliBuildIdentity identity, CampaignOperation? operation,
         string outcome, string reason, long? revision, GitHubCampaignPreflightLink? link = null) =>
         Result(identity, operation, "preflight", outcome, revision,
             Exit(outcome) == 0 ? [] : [new("github-proposal." + reason,
@@ -55,7 +55,7 @@ internal static class GitHubProposalPresentation
             generation: link?.GenerationId, url: link?.Url);
 
     internal static CliExecutionResult Publication(CliBuildIdentity identity, CampaignOperation operation,
-        long revision, GitHubPublicationObservation observation)
+        long revision, GitHubPublicationObservation observation, bool hasUnresolvedSelectedWork = false)
     {
         var outcome = observation.Result.Kind switch
         {
@@ -63,7 +63,7 @@ internal static class GitHubProposalPresentation
             GitHubPublicationResultKind.ReplayNoOp => "replayed",
             GitHubPublicationResultKind.Admitted or GitHubPublicationResultKind.RecoveredContentPartial
                 or GitHubPublicationResultKind.RecoveredRefPartial => "conflict",
-            GitHubPublicationResultKind.Published => "published",
+            GitHubPublicationResultKind.Published => hasUnresolvedSelectedWork ? "published-partial" : "published",
             GitHubPublicationResultKind.AwaitingReview => "awaiting-review",
             GitHubPublicationResultKind.Merged => "merged",
             GitHubPublicationResultKind.ClosedUnmerged => "closed-unmerged",
@@ -93,7 +93,7 @@ internal static class GitHubProposalPresentation
 
     private static int Exit(string outcome) => outcome switch
     {
-        "published" or "replayed" or "no-op" or "awaiting-review" or "merged" => 0,
+        "published" or "published-partial" or "replayed" or "no-op" or "awaiting-review" or "merged" => 0,
         "stale-base-after-create" or "rate-limit" or "conflict" => 3,
         "local-invalid" or "stale" or "human-change" or "permission" or "closed-unmerged" => 4,
         "cancelled" => 6,

@@ -24,11 +24,8 @@ public sealed partial class CampaignStateContractTests
             basis.Batch,
             null, basis.CandidateObservation, basis.CumulativeOutcome, basis.KnownCompletedOperations, null, null)
         { AcceptedCandidateOrigin = basis.AcceptedCandidateOrigin };
-        var configuration = new GitHubPublicationConfiguration("Owner", "repo", "refs/heads/main", new('a', 40),
-            "original", "generation", GitHubPublicationTransitionKind.Initial);
         var continuation = new CampaignAcceptedCandidateContinuation(null!, null!,
-            new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
-            _ => throw new InvalidOperationException("Selection must not access credentials."));
+            new("unused", [], new(1, "campaign.unused", new("Owner", "repo", "refs/heads/main"))));
         Assert.True(continuation.ReconstructAccepted(state));
         Assert.Equal(noWork, CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems) is { Kind: CampaignTerminalKind.Complete });
     }
@@ -38,11 +35,8 @@ public sealed partial class CampaignStateContractTests
     {
         var state = CreateAcceptedCandidateScenario(targetLimit: 1).State;
         Assert.Contains(state.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
-        var configuration = new GitHubPublicationConfiguration("Owner", "repo", "refs/heads/main", new('a', 40),
-            "original", "generation", GitHubPublicationTransitionKind.Initial);
         var continuation = new CampaignAcceptedCandidateContinuation(null!, null!,
-            new("unused", [], new(1, "campaign.unused", "snapshot.unused", "unused", configuration)),
-            _ => throw new InvalidOperationException("Selection must not access credentials."));
+            new("unused", [], new(1, "campaign.unused", new("Owner", "repo", "refs/heads/main"))));
         Assert.True(continuation.ReconstructAccepted(state));
         Assert.Single(state.CandidateObservation!.AcceptedWorkItemKeys);
     }

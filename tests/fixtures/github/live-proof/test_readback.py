@@ -169,8 +169,8 @@ class ReadbackTests(unittest.TestCase):
         candidate = original.replace(b'    public static void Run()', b'    /// <summary>Runs the synthetic operation.</summary>\n    public static void Run()')
         marker = '<!-- contract-scribe-publication-v1 ownership=sha256:' + '1' * 64 + ' -->\n'
         state = {'stage': 'published', 'repositoryId': REPOSITORY, 'targetRef': 'refs/heads/main',
-                 'targetCommitOid': config['base_sha'], 'operationId': 'operation.issue166.' + config['activation'],
-                 'generationId': 'generation.issue166.' + config['activation'], 'transition': 'initial',
+                 'targetCommitOid': config['base_sha'], 'operationId': 'operation.' + 'a' * 64,
+                 'generationId': 'generation.' + 'a' * 64, 'transition': 'initial',
                  'expectedBaseOid': config['base_sha'], 'observedBaseOid': config['base_sha'],
                  'proposalRefOid': 'f' * 40, 'proposalCommitOid': 'f' * 40, 'contentCommitOid': 'f' * 40,
                  'pullRequestNumber': 2, 'pullRequestCreationOperationCommitmentSha256': '1' * 64,

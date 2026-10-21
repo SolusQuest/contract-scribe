@@ -59,7 +59,11 @@ public static partial class CampaignStateFactory
             && (!oldCharges.HasUnpricedCostHistory || charges.HasUnpricedCostHistory),
             CampaignStateValidationCode.InvalidCorrelation);
         if (next.Snapshot.ExecutionCommitmentSha256 == before.Snapshot.ExecutionCommitmentSha256)
-            ValidateRetainedProgress(predecessor, next);
+        {
+            if (next.Batch.Identity != before.Batch.Identity)
+                Require(IsNoResultBatchSuccessor(predecessor, successor), CampaignStateValidationCode.InvalidCorrelation);
+            else ValidateRetainedProgress(predecessor, next);
+        }
         if (next.ArchivedDispatchPrefix != before.ArchivedDispatchPrefix)
         {
             _ = CampaignDispatchArchive.VerifyTransition(predecessor, successor);

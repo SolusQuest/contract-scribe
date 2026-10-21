@@ -2,10 +2,10 @@
 """prepare.py — validate Action host inputs and materialize private files.
 
 Runs as the step entry process (action.yml execs it). Validates only
-host-owned concerns: operation name, required input presence, transport
+host-owned concerns: required input presence, transport
 bounds/encoding, runner support, .NET prerequisites, private file
 materialization, and test-seam legality. Product-level validation
-(repository/input/policy/request semantics) is the CLI's contract — this
+(repository/input/policy/campaign semantics) is the CLI's contract — this
 wrapper passes values as data and never classifies product input.
 
 Inputs arrive as CS_INPUT_* environment variables (mapped by action.yml);
@@ -23,10 +23,8 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
 
-OPERATIONS = ("github-proposal-start", "github-proposal-resume")
-
 PATH_INPUTS = ("repository-root", "input", "policy", "configuration")
-OBJECT_INPUTS = ("request", "configuration-override")
+OBJECT_INPUTS = ("campaign", "configuration-override")
 
 
 def fail_prepare(reason):
@@ -89,11 +87,8 @@ def main():
     if runner_arch not in ("X64", "x86_64", "AMD64"):
         fail_prepare("unsupported-runner-arch")
 
-    operation = C.env_input("CS_INPUT_OPERATION")
-    check(operation in OPERATIONS, "operation")
-
     values = {}
-    for name in ("repository-root", "input", "policy", "request"):
+    for name in ("repository-root", "input", "policy", "campaign"):
         value = C.env_input("CS_INPUT_" + name.replace("-", "_").upper())
         check(value is not None, f"missing-{name}")
         values[name] = value
@@ -113,7 +108,7 @@ def main():
     C.write_env("CS_WORK_DIR", work)
     os.environ["CS_WORK_DIR"] = work
 
-    values["request"] = materialize("request", values["request"])
+    values["campaign"] = materialize("campaign", values["campaign"])
     if values["configuration-override"] is not None:
         values["configuration-override"] = materialize(
             "configuration-override", values["configuration-override"])
@@ -133,11 +128,10 @@ def main():
     os.makedirs(install_root, exist_ok=True)
 
     plan = {
-        "operation": "start" if operation == "github-proposal-start" else "resume",
         "repositoryRoot": repository_root,
         "input": values["input"],
         "policy": values["policy"],
-        "request": values["request"],
+        "campaign": values["campaign"],
         "configuration": values["configuration"],
         "configurationOverride": values["configuration-override"],
         "dotnet": dotnet,

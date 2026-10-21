@@ -86,7 +86,7 @@ public static partial class CampaignPlanner
     private static CampaignFixedBatch SelectBatch(
         string commitment,
         ImmutableArray<CampaignPlanningWorkItem> workItems,
-        CampaignInvocationTargetLimit limit)
+        CampaignInvocationTargetLimit limit, string? startTargetKey)
     {
         var complete = workItems.SelectMany(work => work.Targets.Select(target =>
         {
@@ -98,14 +98,39 @@ public static partial class CampaignPlanner
                 group, eligible ? target.GroupingAuthority!.MemberFamilySha256 : null);
         })).ToImmutableArray();
 
+        return SelectBatchFromTargets(commitment, complete, limit, startTargetKey);
+    }
+
+    internal static ImmutableArray<CampaignBatchTarget> OrderedEligibleTargets(CampaignFixedBatch batch) =>
+        OrderedEligibleTargets(batch.CompleteTargets);
+
+    // Boundaries follow family subdivision order even when a later quota fits the whole remainder.
+    private static ImmutableArray<CampaignBatchTarget> OrderedEligibleTargets(ImmutableArray<CampaignBatchTarget> complete) =>
+        complete.Where(target => target.BatchEligible).GroupBy(target => target.GroupIdentity, StringComparer.Ordinal)
+            .SelectMany(InFamilyOrder).ToImmutableArray();
+
+    private static IEnumerable<CampaignBatchTarget> InFamilyOrder(IEnumerable<CampaignBatchTarget> group) =>
+        group.GroupBy(target => target.MemberFamilyIdentity, StringComparer.Ordinal).SelectMany(family => family);
+
+    internal static CampaignFixedBatch SelectBatchFromTargets(string commitment,
+        ImmutableArray<CampaignBatchTarget> complete, CampaignInvocationTargetLimit limit, string? startTargetKey)
+    {
+        var eligible = OrderedEligibleTargets(complete);
+        var start = startTargetKey is null ? 0 : Array.FindIndex(eligible.ToArray(), target => target.TargetKey == startTargetKey);
+        Require(start >= 0, CampaignPlanningValidationCode.InvalidRoot, "Batch boundary must name a complete-plan target.");
         var selected = ImmutableArray.CreateBuilder<string>();
         if (limit.MaximumTargets > 0)
         {
-            // GroupBy preserves first occurrence and member order from the canonical complete plan.
-            foreach (var group in complete.Where(target => target.BatchEligible)
-                         .GroupBy(target => target.GroupIdentity, StringComparer.Ordinal))
+            var remaining = eligible.Skip(start).Select(target => target.TargetKey).ToHashSet(StringComparer.Ordinal);
+            foreach (var group in complete.Where(target => target.BatchEligible).GroupBy(target => target.GroupIdentity, StringComparer.Ordinal))
             {
-                var members = group.ToImmutableArray();
+                var whole = group.ToImmutableArray();
+                var members = whole.Where(target => remaining.Contains(target.TargetKey)).ToImmutableArray();
+                if (members.IsEmpty) continue;
+                // An untouched whole group retains its original selected order. A suffix uses the
+                // same family traversal as the boundary so a changed quota cannot reopen old members.
+                if (members.Length != whole.Length)
+                    members = InFamilyOrder(whole).Where(target => remaining.Contains(target.TargetKey)).ToImmutableArray();
                 ImmutableArray<ImmutableArray<CampaignBatchTarget>> subdivisions = members.Length <= limit.MaximumTargets
                     ? [members]
                     : members.GroupBy(target => target.MemberFamilyIdentity, StringComparer.Ordinal)
@@ -114,9 +139,7 @@ public static partial class CampaignPlanner
                 foreach (var subdivision in subdivisions)
                 {
                     if (selected.Count + subdivision.Length > limit.MaximumTargets)
-                    {
                         return new CampaignFixedBatch(commitment, limit.MaximumTargets, complete, selected.ToImmutable());
-                    }
                     selected.AddRange(subdivision.Select(target => target.TargetKey));
                 }
             }

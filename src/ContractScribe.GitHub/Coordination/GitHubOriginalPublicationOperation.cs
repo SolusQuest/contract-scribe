@@ -35,8 +35,9 @@ internal sealed partial class GitHubCoordinationStore
                     ? next.State.Snapshot == before.State.Snapshot
                         && JsonElement.DeepEquals(JsonSerializer.SerializeToElement(next.State.Predecessor),
                             JsonSerializer.SerializeToElement(before.State.Predecessor))
-                    : next.State.Predecessor?.FinalCheckpointSha256 == before.Sha256
-                        && next.State.Snapshot != before.State.Snapshot);
+                    : CampaignStateFactory.IsNoResultBatchSuccessor(before, next)
+                        || next.State.Predecessor?.FinalCheckpointSha256 == before.Sha256
+                            && next.State.Snapshot != before.State.Snapshot);
         }
         return FrozenCheckpointMatches(intent, next);
     }

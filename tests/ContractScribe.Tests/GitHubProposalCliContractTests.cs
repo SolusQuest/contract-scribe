@@ -27,9 +27,7 @@ public sealed class GitHubProposalCliContractTests
         Assert.NotEqual(original.CreateExecutionPolicy().RetryPolicy, changed.CreateExecutionPolicy().RetryPolicy);
         var preflight = new CampaignPreflightResult(CampaignOperation.Resume, root, "Fixture.slnx", "Fixture.slnx",
             "{}"u8.ToArray(), "snapshot.test", "unused", new([], original));
-        var request = new GitHubProposalRequest(1, "campaign.test", "snapshot.test", "coordination-ref",
-            new("Owner", "repo", "refs/heads/main", new('a', 40), "operation.test", "generation.test",
-                GitHubPublicationTransitionKind.Initial));
+        var request = new GitHubCampaignConfiguration(1, "campaign.test", new("Owner", "repo", "refs/heads/main"));
         var observation = new GitHubCampaignObservation(GitHubCampaignKind.FirstRun, GitHubCampaignLedgerKind.Missing,
             null, "refs/heads/main", new('a', 40), "refs/heads/coordination", null, null, null, [], true, 1);
         Assert.NotEqual(GitHubCampaignPreflight.SnapshotBinding(preflight, request, observation),
@@ -117,6 +115,23 @@ public sealed class GitHubProposalCliContractTests
         Assert.Empty(result.Diagnostics);
     }
 
+    [Theory]
+    [InlineData(false, "published")]
+    [InlineData(true, "published-partial")]
+    public void Publication_reports_unresolved_selected_work_without_losing_the_successful_PR(bool partial, string outcome)
+    {
+        var observation = new GitHubPublicationObservation(GitHubPublicationResult.Published(
+            new(1, "generation.test", "refs/heads/proposal", new('a', 40), new('b', 64))),
+            "operation.test", "generation.test", "https://github.com/Owner/repo/pull/1");
+        var result = GitHubProposalPresentation.Publication(Identity, CampaignOperation.Resume, 15, observation, partial);
+        using var json = JsonDocument.Parse(result.StandardOutput);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("github-proposal." + outcome, json.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(observation.PullRequestUrl, json.RootElement.GetProperty("pullRequestUrl").GetString());
+        Assert.Equal(observation.GenerationId, json.RootElement.GetProperty("generationId").GetString());
+    }
+
     private static CliExecutionResult Present(GitHubPublicationDiagnostic diagnostic) =>
         GitHubProposalPresentation.Publication(Identity, CampaignOperation.Start, 14,
             new(GitHubPublicationResult.FromRemoteFailure(GitHubPublicationRemoteFailureKind.Conflict), null, null, null, diagnostic));
@@ -183,8 +198,8 @@ public sealed class GitHubProposalCliContractTests
     [InlineData(true)]
     public void Options_accept_both_forms_and_any_order(bool equals)
     {
-        var required = new[] { "--repository-root", "--input", "--policy", "--request" };
-        var args = new List<string> { "resume" };
+        var required = new[] { "--repository-root", "--input", "--policy", "--campaign" };
+        var args = new List<string>();
         foreach (var name in required.Concat(["--configuration", "--configuration-override"]).Reverse())
             if (equals) args.Add(name + "=value");
             else args.AddRange([name, "value"]);
@@ -201,34 +216,37 @@ public sealed class GitHubProposalCliContractTests
     }
 
     [Fact]
-    public void Configuration_layers_are_optional_while_the_request_is_required()
+    public void Configuration_layers_are_optional_while_the_stable_campaign_is_required()
     {
-        var required = new[] { "--repository-root", "r", "--input", "i", "--policy", "p", "--request", "request.json" };
-        var parsed = GitHubProposalCommandParser.Parse(new[] { "start" }.Concat(required).ToArray());
+        var required = new[] { "--repository-root", "r", "--input", "i", "--policy", "p", "--campaign", "campaign.json" };
+        var parsed = GitHubProposalCommandParser.Parse(required);
         Assert.Null(parsed.Failure);
         Assert.Null(parsed.Arguments!.Configuration);
         Assert.Null(parsed.Arguments.ConfigurationOverride);
-        foreach (var name in new[] { "--repository-root", "--input", "--policy", "--request" })
+        foreach (var name in new[] { "--repository-root", "--input", "--policy", "--campaign" })
         {
             var index = Array.IndexOf(required, name);
             var missing = required.Take(index).Concat(required.Skip(index + 2)).ToArray();
             Assert.Equal("missing-required-option",
-                GitHubProposalCommandParser.Parse(new[] { "start" }.Concat(missing).ToArray()).Failure!.UsageClass);
+                GitHubProposalCommandParser.Parse(missing).Failure!.UsageClass);
         }
     }
 
     [Theory]
-    [InlineData("Start", "unknown-command")]
-    [InlineData("@response", "unknown-command")]
-    [InlineData("start --wat x", "unknown-option")]
-    [InlineData("start -r x", "unknown-option")]
-    [InlineData("start --snapshot s", "unknown-option")]
-    [InlineData("start --state s", "unknown-option")]
-    [InlineData("start --github-configuration g", "unknown-option")]
-    [InlineData("start --campaign-lineage l", "unknown-option")]
-    [InlineData("start operand", "unexpected-operand")]
-    [InlineData("start --request=", "missing-option-value")]
-    [InlineData("start --help --request=x", "forbidden-combination")]
+    [InlineData("Start", "unexpected-operand")]
+    [InlineData("start", "unexpected-operand")]
+    [InlineData("resume", "unexpected-operand")]
+    [InlineData("@response", "unexpected-operand")]
+    [InlineData("--wat x", "unknown-option")]
+    [InlineData("-r x", "unknown-option")]
+    [InlineData("--snapshot s", "unknown-option")]
+    [InlineData("--state s", "unknown-option")]
+    [InlineData("--request r", "unknown-option")]
+    [InlineData("--github-configuration g", "unknown-option")]
+    [InlineData("--campaign-lineage l", "unknown-option")]
+    [InlineData("operand", "unexpected-operand")]
+    [InlineData("--campaign=", "missing-option-value")]
+    [InlineData("--help --campaign=x", "forbidden-combination")]
     public void Parser_is_ordinal_and_closed(string text, string usage) =>
         Assert.Equal(usage, GitHubProposalCommandParser.Parse(text.Split(' ')).Failure!.UsageClass);
 
