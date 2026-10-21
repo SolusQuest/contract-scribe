@@ -7,6 +7,59 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("historical")]
+    [InlineData("deferred")]
+    [InlineData("none")]
+    public async Task Automatic_batch_terminal_counts_processed_unsupported_targets_without_counting_future_work(string unsupported)
+    {
+        await using var fixture = await Fixture.CreateAsync(twoWorks: unsupported != "none", newPath: unsupported != "none");
+        if (unsupported != "none")
+        {
+            var relative = unsupported == "historical" ? "App/App.cs" : "App/Other.cs";
+            var path = Path.Join(fixture.Repository.Root, relative);
+            var source = await File.ReadAllTextAsync(path);
+            await File.WriteAllTextAsync(path, source.Replace("    public static void Run() { }",
+                "    public static int Value { get; set; }", StringComparison.Ordinal));
+            fixture.GovernedFiles[relative] = (await File.ReadAllBytesAsync(path), fixture.GovernedFiles[relative].Mode);
+            fixture.Source = fixture.GovernedFiles["App/App.cs"].Bytes;
+            AdvanceTarget(fixture, fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes),
+                "Synthetic property and method in canonical file order\n");
+        }
+        await SetAutomaticQuota(fixture, 1);
+        CampaignWorkItemState? historical = null;
+        if (unsupported == "historical")
+        {
+            AssertResult(await fixture.Run(), 5, "host-failure");
+            var before = fixture.Checkpoint();
+            Assert.Equal(CampaignTerminalReason.Unresolved, before.State.TerminalOutcome!.Reason);
+            historical = Assert.Single(before.State.WorkItems, work => work.Status == CampaignWorkStatus.Closed);
+            Assert.Equal(0, historical.OuterAttemptCount);
+            Assert.Equal(0, historical.CandidateAttemptCount);
+            Assert.Single(before.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.UnsupportedCurrentExecutor);
+            Assert.Single(before.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
+            Assert.Equal(0, fixture.Provider.RequestCount);
+        }
+        AssertResult(await fixture.Run(), 0, "published");
+        var after = fixture.Checkpoint();
+        Assert.Single(after.State.WorkItems, work => work.Status == CampaignWorkStatus.Accepted);
+        Assert.Equal(unsupported == "historical" ? CampaignTerminalReason.Unresolved : CampaignTerminalReason.AllWorkClosed,
+            after.State.TerminalOutcome!.Reason);
+        if (historical is not null)
+        {
+            Assert.Equal(historical, after.State.WorkItems.Single(work => work.WorkItemKey == historical.WorkItemKey));
+            Assert.Single(after.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.UnsupportedCurrentExecutor);
+            Assert.DoesNotContain(after.State.DispatchObservations, row => row.WorkItemKey == historical.WorkItemKey);
+        }
+        if (unsupported == "deferred")
+            Assert.Single(after.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred && !item.Target.Dispatchable);
+        var counts = GateCounts(fixture);
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
+        Assert.Equal(counts, GateCounts(fixture));
+        Assert.Equal(after.Sha256, fixture.Checkpoint().Sha256);
+        await fixture.AssertSourceUnchanged();
+    }
+
     [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Automatic_patch_rejected_no_result_batch_preserves_attempts_through_next_batch_recovery()
     {

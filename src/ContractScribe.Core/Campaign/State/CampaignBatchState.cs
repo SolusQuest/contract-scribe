@@ -94,10 +94,7 @@ public static partial class CampaignStateFactory
     {
         var selected = state.Batch.SelectedTargetKeys.ToHashSet(StringComparer.Ordinal);
         var workByKey = state.WorkItems.ToDictionary(work => work.WorkItemKey, StringComparer.Ordinal);
-        var prior = state.Batch.SelectedTargetKeys.IsEmpty ? new HashSet<string>(StringComparer.Ordinal)
-            : CampaignPlanner.OrderedEligibleTargets(state.Batch)
-                .TakeWhile(target => target.TargetKey != state.Batch.SelectedTargetKeys[0])
-                .Select(target => target.TargetKey).ToHashSet(StringComparer.Ordinal);
+        var prior = PriorBatchTargets(state.Batch).Select(target => target.TargetKey).ToHashSet(StringComparer.Ordinal);
         return state.Batch.CompleteTargets.Select(target =>
         {
             var work = workByKey[target.WorkItemKey];
@@ -143,13 +140,16 @@ public static partial class CampaignStateFactory
                 || byKey[target.WorkItemKey].ClosedOutcome is
                 { Code: CampaignWorkOutcomeCode.ProviderFailure, ProviderDisposition: CampaignProviderFinalDisposition.Retryable })))
             return null;
-        var unresolved = targets.Any(target => !target.Dispatchable
+        var unresolved = targets.Concat(PriorBatchTargets(batch)).Any(target => !target.Dispatchable
             || byKey[target.WorkItemKey].Status != CampaignWorkStatus.Accepted)
-            || batch.CompleteTargets.Any(target => !target.BatchEligible)
-            || workItems.Any(work => work.OuterAttemptCount > 0 && work.Status == CampaignWorkStatus.Closed);
+            || batch.CompleteTargets.Any(target => !target.BatchEligible);
         return new(CampaignTerminalKind.Complete, unresolved
             ? CampaignTerminalReason.Unresolved : CampaignTerminalReason.AllWorkClosed);
     }
+
+    private static ImmutableArray<CampaignBatchTarget> PriorBatchTargets(CampaignFixedBatch batch) =>
+        batch.SelectedTargetKeys.IsEmpty ? [] : CampaignPlanner.OrderedEligibleTargets(batch)
+            .TakeWhile(target => target.TargetKey != batch.SelectedTargetKeys[0]).ToImmutableArray();
 
     private static bool IsClosedNoResult(CampaignWorkItemState work) =>
         work.Status == CampaignWorkStatus.Closed && work.TrustedProposal is null && work.PausedProviderAttempt is null
@@ -241,8 +241,7 @@ public static partial class CampaignStateFactory
         var canonical = CampaignPlanner.SelectBatchFromTargets(batch.PlanCommitment, batch.CompleteTargets,
             new CampaignInvocationTargetLimit(batch.CreationQuota), batch.SelectedTargetKeys.FirstOrDefault());
         Require(canonical.SelectedTargetKeys.SequenceEqual(batch.SelectedTargetKeys), CampaignStateValidationCode.InvalidCorrelation);
-        var prior = batch.SelectedTargetKeys.IsEmpty ? [] : CampaignPlanner.OrderedEligibleTargets(batch)
-            .TakeWhile(target => target.TargetKey != batch.SelectedTargetKeys[0]).ToImmutableArray();
+        var prior = PriorBatchTargets(batch);
         Require(prior.All(target => !target.Dispatchable || IsClosedNoResult(state.WorkItems[workIndices[target.WorkItemKey]])),
             CampaignStateValidationCode.InvalidCorrelation);
         var priorWork = prior.Where(target => target.Dispatchable)
