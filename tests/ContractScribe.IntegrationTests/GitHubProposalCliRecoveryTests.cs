@@ -25,11 +25,16 @@ public sealed partial class GitHubProposalCliProcessTests
                 interruptedState = fixture.Checkpoint();
                 Assert.Equal(settled ? CampaignDispatchObservationState.Settled : CampaignDispatchObservationState.Reserved,
                     Assert.Single(interruptedState.State.DispatchObservations).State);
+                Assert.Equal(settled ? 1 : 0, fixture.Provider.RequestCount);
             }
             finally { await CampaignCliProcessTests.StopAsync(interrupted); }
         }
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
-        AssertResult(await fixture.Run(), 0, "published");
+        var received = fixture.Provider.RequestCount;
+        var fresh = await fixture.Run();
+        AssertResult(fresh, 0, "published");
+        Assert.Equal(fixture.Provider.RequestCount - received,
+            EvidenceUsage(fresh).GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
         var restored = fixture.Checkpoint();
         var prior = Assert.Single(interruptedState.State.DispatchObservations);
         var retained = Assert.Single(restored.State.DispatchObservations,
@@ -41,6 +46,14 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.True(restored.State.LineageCharges.ProviderRequests.TotalCharged >= interruptedState.State.LineageCharges.ProviderRequests.TotalCharged);
         Assert.False(File.Exists(fixture.State));
         Assert.Single(fixture.GitHub.PullRequests);
+        var history = restored.State.LineageCharges.ProviderRequests;
+        var counts = GateCounts(fixture);
+        var waited = await fixture.Run();
+        AssertResult(waited, 0, "awaiting-review");
+        AssertZeroInvocationWork(waited);
+        Assert.Equal(counts, GateCounts(fixture));
+        Assert.Equal(history, fixture.Checkpoint().State.LineageCharges.ProviderRequests);
+        AssertObservationPrivacy(fixture, fresh, restored);
         await fixture.AssertSourceUnchanged();
     }
 

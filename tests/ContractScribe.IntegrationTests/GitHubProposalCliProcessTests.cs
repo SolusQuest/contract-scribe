@@ -311,7 +311,7 @@ public sealed partial class GitHubProposalCliProcessTests
         internal required Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)> GovernedFiles;
 
         internal static async Task<Fixture> CreateAsync(bool required = true, bool twoWorks = false, bool newPath = false, bool rejectNewPath = false,
-            bool unsupportedProperty = false, int targetCount = 0, string providerScenario = "accepted")
+            bool unsupportedProperty = false, int targetCount = 0, string providerScenario = "accepted", bool includeUsage = true)
         {
             var repository = await LoaderFixture.CreateAsync();
             await CampaignCliProcessTests.SetSingleWorkItemSourceAsync(repository.Root);
@@ -345,7 +345,7 @@ public sealed partial class GitHubProposalCliProcessTests
             var outside = Path.Join(Path.GetTempPath(), "contract-scribe-github-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(outside);
             if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) File.SetUnixFileMode(outside, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var provider = new CampaignCliProcessTests.ProposalLoopbackServer(providerScenario);
+            var provider = new CampaignCliProcessTests.ProposalLoopbackServer(providerScenario, includeUsage: includeUsage);
             var source = await File.ReadAllBytesAsync(Path.Join(repository.Root, "App", "App.cs"));
             var governed = new Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)>(StringComparer.Ordinal);
             foreach (var path in Directory.EnumerateFiles(repository.Root, "*", SearchOption.AllDirectories)

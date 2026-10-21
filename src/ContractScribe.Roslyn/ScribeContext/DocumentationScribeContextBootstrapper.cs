@@ -1204,7 +1204,10 @@ public sealed class DocumentationScribeContextBootstrapper
                 hasBom);
             facts.Add(DocumentationScribeContextValidation.CreateInstructionFact(
                 candidate.Role,
-                candidate.Depth,
+                // Routes connect accepted instructions, not every directory.
+                // The directory walk above still enforces its physical depth
+                // bound and retains observations for absent instruction files.
+                facts.Count == 0 ? candidate.Depth : facts[facts.Count - 1].Depth + 1,
                 commitment,
                 text));
         }

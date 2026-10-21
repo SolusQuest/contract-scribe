@@ -122,6 +122,48 @@ public sealed class DocumentationScribeContextIntegrationTests
                 route.Selection));
     }
 
+    [Theory]
+    [InlineData("root")]
+    [InlineData("scoped")]
+    [InlineData("configured")]
+    public void Sparse_instruction_directories_keep_exact_routes_and_absent_path_freshness(string entry)
+    {
+        const string source = "src/App/Deep/Widget.cs";
+        using var fixture = ContextFixture.Create(new SourceInput(source, "namespace Fixture; public class Widget { }"));
+        var first = entry == "scoped" ? "src/AGENTS.md" : entry == "configured" ? "custom-agent.md" : "AGENTS.md";
+        const string leaf = "src/App/Deep/AGENTS.md";
+        fixture.WriteText(first, "Shared synthetic instruction.\n");
+        fixture.WriteText(leaf, "Selected synthetic leaf instruction.\n");
+        var selection = fixture.CreateSelection(configuredAgentEntrypoint: entry == "configured" ? first : null,
+            sourcePath: source);
+        var result = new DocumentationScribeContextBootstrapper().Bootstrap(fixture.ClassifiedSession, selection);
+        Assert.Equal(entry == "scoped" ? DocumentationScribeContextBootstrapStatus.Incomplete
+            : DocumentationScribeContextBootstrapStatus.Succeeded, result.Status);
+        var loaded = Assert.IsType<DocumentationScribeLoadedContext>(result.Context);
+        Assert.Equal(new[] { first, leaf }, loaded.Facts.Instructions.Select(instruction => instruction.Commitment.RepositoryPath));
+        var origin = loaded.Facts.Instructions[0];
+        var destination = loaded.Facts.Instructions[1];
+        Assert.Equal(entry == "scoped" ? 1 : 0, origin.Depth);
+        Assert.Equal(origin.Depth + 1, destination.Depth);
+        var route = Assert.Single(loaded.Facts.Routes);
+        Assert.Equal(origin.InstructionId, route.OriginInstructionId);
+        Assert.Equal(destination.Depth, route.Depth);
+        Assert.Equal(leaf, route.DestinationPath);
+        Assert.Equal(destination.Commitment, route.SourceCommitment);
+        Assert.True(loaded.VerifyFreshness());
+        var l = selection.Limits;
+        var limits = DocumentationScribeContextValidation.CreateLimits(l.MaximumInstructionFiles, 2,
+            l.MaximumInstructionFileUtf8Bytes, l.MaximumDeclarationReferences, l.MaximumDeclarationFiles,
+            l.MaximumInspectedSourceUtf8Bytes, l.MaximumSourceFileUtf8Bytes, l.MaximumIncludedSourceUtf8Bytes,
+            l.MaximumTotalContextUtf8Bytes, l.MaximumElapsedMilliseconds);
+        var bounded = fixture.Bootstrap(entry == "configured" ? first : null, selectionPath: source, limits: limits);
+        Assert.Equal(DocumentationScribeContextBootstrapStatus.BudgetExhausted, bounded.Status);
+        Assert.Equal("context.budget.instruction-depth", bounded.Failure!.Code);
+        Assert.Null(bounded.Context);
+        fixture.WriteText("src/App/AGENTS.md", "A newly introduced intermediate instruction.\n");
+        Assert.False(loaded.VerifyFreshness());
+    }
+
     [Fact]
     public void MissingOptionalRootDefaultProducesIncompleteFactsWithoutFailure()
     {

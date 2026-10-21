@@ -33,7 +33,8 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("pull-request-create-started")]
     public async Task Fresh_process_recovers_only_the_frozen_original_operation_after_durable_publication_boundary(string stage)
     {
-        await using var fixture = await Fixture.CreateAsync();
+        await using var fixture = await Fixture.CreateAsync(targetCount: 6, providerScenario: "shared");
+        await SetAutomaticQuota(fixture, 5);
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.GitHub.After = request =>
         {
@@ -54,6 +55,8 @@ public sealed partial class GitHubProposalCliProcessTests
                 intent = fixture.GitHub.Coordination();
                 Assert.Equal(stage, intent["stage"]!.GetValue<string>());
                 Assert.Equal(fixture.Checkpoint().State.Batch.Identity, intent["batchIdentity"]!.GetValue<string>());
+                Assert.Equal(5, fixture.Checkpoint().State.WorkItems.Count(work => work.Status == CampaignWorkStatus.Accepted));
+                Assert.Equal(5, fixture.Checkpoint().State.CandidateObservation!.AcceptedWorkItemKeys.Length);
                 Assert.Equal(0, fixture.GitHub.PrAttempts);
             }
             finally { await CampaignCliProcessTests.StopAsync(interrupted); }
@@ -62,6 +65,7 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.GitHub.DelayResponses = false;
         fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
         var requests = fixture.Provider.RequestCount;
+        var accepted = fixture.Checkpoint();
         await ConfigureSealedResume(fixture);
         var resumed = await fixture.Run();
         if (stage == "pull-request-create-started")
@@ -86,6 +90,10 @@ public sealed partial class GitHubProposalCliProcessTests
             "operationId", "operationCommitmentSha256", "currentCandidateCommitmentSha256" })
             Assert.True(JsonNode.DeepEquals(intent[key], recovered[key]), key);
         Assert.Equal(requests, fixture.Provider.RequestCount);
+        Assert.Equal(accepted.State.LineageCharges.ProviderRequests, fixture.Checkpoint().State.LineageCharges.ProviderRequests);
+        Assert.Equal(accepted.State.LineageCharges.InputTokens, fixture.Checkpoint().State.LineageCharges.InputTokens);
+        Assert.Equal(accepted.State.CandidateObservation!.AcceptedWorkItemKeys.ToArray(),
+            fixture.Checkpoint().State.CandidateObservation!.AcceptedWorkItemKeys.ToArray());
         Assert.Null(fixture.Checkpoint().State.ActiveReservation);
         await fixture.AssertSourceUnchanged();
     }
