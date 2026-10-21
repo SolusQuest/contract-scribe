@@ -17,10 +17,11 @@ public sealed partial class GitHubProposalCliProcessTests
         static string Type(string name, int count) =>
             "/// <summary>Provides synthetic grouped operations.</summary>\npublic static class " + name + "\n{\n"
             + string.Join("\n", Enumerable.Range(0, count).Select(index => $"    public static void M{index:D3}() {{ }}")) + "\n}\n";
+        var declaredGroups = oversized ? new[] { (Name: "AFirst", Count: 230) }
+            : new[] { (Name: "AFirst", Count: 95), (Name: "BSecond", Count: 11), (Name: "CThird", Count: 1) };
         await ApplyEvidenceSources(fixture, new Dictionary<string, string>
         {
-            ["App/App.cs"] = "namespace Fixture;\n" + (oversized ? Type("AFirst", 230)
-                : Type("AFirst", 95) + Type("BSecond", 11) + Type("CThird", 1)),
+            ["App/App.cs"] = "namespace Fixture;\n" + string.Concat(declaredGroups.Select(group => Type(group.Name, group.Count))),
         });
         await SetAutomaticQuota(fixture, 100);
         var sizes = oversized ? new[] { 100, 100, 30 } : new[] { 95, 12 };
@@ -39,9 +40,8 @@ public sealed partial class GitHubProposalCliProcessTests
             // Complete-plan order may interleave types. The fixture declares the
             // whole AFirst group before BSecond and CThird; each retains its order.
             var complete = current.State.Batch.CompleteTargets;
-            var grouped = oversized ? complete.AsEnumerable() : new[] { "AFirst", "BSecond", "CThird" }
-                .SelectMany(type => complete.Where(target => target.SymbolRef.DocumentationCommentId
-                    .StartsWith($"M:Fixture.{type}.", StringComparison.Ordinal)));
+            var grouped = declaredGroups.SelectMany(group => complete.Where(target => target.SymbolRef.DocumentationCommentId
+                .StartsWith($"M:Fixture.{group.Name}.", StringComparison.Ordinal)));
             var expected = grouped.Where(target => !seen.Contains(target.TargetKey)).Take(size).Select(target => target.TargetKey);
             Assert.Equal(expected, current.State.Batch.SelectedTargetKeys);
             foreach (var key in current.State.Batch.SelectedTargetKeys) Assert.True(seen.Add(key));
@@ -61,11 +61,14 @@ public sealed partial class GitHubProposalCliProcessTests
             }
             else
             {
-                Assert.Single(current.State.Batch.CompleteTargets.Where(target => seen.Contains(target.TargetKey))
-                    .Select(target => target.GroupIdentity).Distinct());
-                if (!oversized)
-                    Assert.Equal(new[] { 11, 1 }, current.State.Batch.CompleteTargets.Where(target => !seen.Contains(target.TargetKey))
-                        .GroupBy(target => target.GroupIdentity).Select(group => group.Count()));
+                foreach (var group in declaredGroups)
+                {
+                    var members = complete.Where(target => target.SymbolRef.DocumentationCommentId
+                        .StartsWith($"M:Fixture.{group.Name}.", StringComparison.Ordinal)).ToArray();
+                    Assert.Equal(group.Count, members.Length);
+                    Assert.Single(members.Select(target => target.GroupIdentity).Distinct());
+                }
+                Assert.Equal(declaredGroups.Length, complete.Select(target => target.GroupIdentity).Distinct().Count());
             }
             var usage = EvidenceUsage(result);
             Assert.Equal(fixture.Provider.RequestCount - received, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
