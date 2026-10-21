@@ -350,6 +350,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                 // prevents this callback from reporting again. Keep the channel conservatively Unknown.
                 var before = owner.State.Scope.PhysicalProviderRequestCount;
                 var product = owner.ProductRequest(request, token);
+                owner.State.Scope.ObserveProviderAttempt(request.Attempt.LogicalCallId, request.Attempt.AttemptNumber);
                 var response = await exchange.SendAsync(product, owner.State.Scope, token);
                 owner.State.ProviderRequestCount = owner.State.Scope.PhysicalProviderRequestCount;
                 var validObservations = owner.State.TryApplyObservations(response);

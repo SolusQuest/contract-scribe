@@ -29,8 +29,17 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(settlement && applied ? CampaignProviderOperationKind.Host
             : !settlement && !applied ? CampaignProviderOperationKind.Host : CampaignProviderOperationKind.Dispatch, claim.OperationKind);
         var resumedStore = new MemoryCampaignStore(CampaignStateJson.Parse(interrupted.ExactUtf8Json.AsMemory()).Artifact!);
+        var resumedUsage = new InvocationUsage();
         var recovered = await DocumentationCampaignProposalExecutor.ExecuteAsync(
-            campaign.Input(fixture, resumedStore, new ProposalExchange(fixture.Request), RuntimeOptions()));
+            campaign.Input(fixture, resumedStore, new ProposalExchange(fixture.Request), RuntimeOptions()) with { Usage = resumedUsage });
+        using var usageJson = System.Text.Json.JsonDocument.Parse(GitHubProposalPresentation.WithUsage(
+            GitHubProposalPresentation.Campaign(CliBuildIdentity.Current, new("execution", CampaignOperation.Resume,
+                "campaign.provider-retryable", resumedStore.Current!.CheckpointRevision)), resumedUsage).StandardOutput);
+        var usage = usageJson.RootElement.GetProperty("invocationUsage");
+        Assert.Equal(0, usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
+        Assert.Equal(1, usage.GetProperty("work").GetProperty("resumedTargets").GetInt32());
+        Assert.Equal(2, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+        Assert.True(usage.GetProperty("history").GetProperty("providerRequests").GetProperty("totalCharged").GetInt64() >= 2);
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, recovered.Kind);
         var state = resumedStore.Current!.State;
         Assert.Equal(1, state.LineageCharges.OuterInvocations);

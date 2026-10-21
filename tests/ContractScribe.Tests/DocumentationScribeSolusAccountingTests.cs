@@ -33,6 +33,11 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(physicalRequests, trial.Store.Dispatches);
         Assert.Equal(physicalRequests, trial.Store.Settlements);
         Assert.Equal(physicalRequests, trial.Coordinator.Scope.PhysicalProviderRequestCount);
+        var invocationUsage = trial.Coordinator.Scope.Allowance.Observe();
+        Assert.Equal(physicalRequests, invocationUsage.PhysicalProviderDispatches);
+        Assert.Equal(physicalRequests > attempts ? 2 : 1, invocationUsage.LogicalProviderCalls);
+        Assert.Equal(attempts - 1, invocationUsage.RetryDispatches);
+        Assert.Equal(0, invocationUsage.UncorrelatedDispatches);
         Assert.Equal(attempts - 1, trial.Authority.AcceptedCheckpoint.Artifact.State.ActiveReservation is CampaignProviderReservation reservation
             ? reservation.RetryProgress.RetryableFailureCount : -1);
         Assert.Equal(Enumerable.Range(1, attempts).Concat(attempts < 128 ? new[] { attempts } : []), session.Requests.Select(request => request.AttemptNumber));
@@ -308,6 +313,21 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(1, trial.Store.Settlements);
         Assert.True(trial.Store.Current.State.LineageCharges.OutputTokens.ConservativeUnobserved > 0);
         Assert.Equal(1, trial.Store.Current.State.LineageCharges.ProviderRequests.Observed);
+        var measured = trial.Coordinator.Scope.Allowance.Observe();
+        Assert.Equal(1, measured.PhysicalProviderDispatches);
+        Assert.Equal(new(null, 1), measured.Input);
+        Assert.Equal(new(null, 1), measured.Output);
+        Assert.Equal(new(null, 1), measured.Reasoning);
+        Assert.True(measured.OutputCharge.ConservativeUnobserved > 0);
+        var usage = new InvocationUsage();
+        usage.Bind(trial.Coordinator.Scope.Allowance);
+        using var json = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(
+            GitHubProposalPresentation.Local(CliBuildIdentity.Current, CampaignOperation.Resume, "timeout"), usage).StandardOutput);
+        var projected = json.RootElement.GetProperty("invocationUsage");
+        Assert.Equal("unknown", projected.GetProperty("completeness").GetString());
+        Assert.Equal("timeout", projected.GetProperty("termination").GetProperty("stopReason").GetString());
+        Assert.Equal(1, projected.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+        Assert.Equal(JsonValueKind.Null, projected.GetProperty("tokens").GetProperty("input").GetProperty("observed").ValueKind);
         if (lost) Assert.DoesNotContain(result.Submissions, item => item.Stage >= DocumentationScribeAcknowledgementStage.Validated && item.Result is DocumentationScribeProposalTerminal);
     }
 

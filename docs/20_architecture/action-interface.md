@@ -1,14 +1,12 @@
 # Action Interface v1
 
-> **Status:** Pre-release contract under M6-A2 (#185). The Action is not yet a
-> published or supported distribution; this document freezes the external
-> contract so M6-A3 examples and M6-R1 promotion build against it.
+> **Status:** Current pre-release automatic CLI/Action draft, including M7-A3 invocation usage. The Action is not a published or supported distribution; repository revisions identify exact draft semantics.
 
 ## Automatic campaign boundary
 
-The Action invokes one automatic `github-proposal` command with stable campaign configuration. CLI authentication of coordination-ref state and PR facts selects initial work, compatible unpublished recovery, exact original publication recovery, no-op, wait or pause before new Audit/provider work. Manual dispatch, optional best-effort native schedule and external workflow dispatch use identical inputs. Rich per-invocation usage JSON remains separate M7-A3 work.
+The Action invokes one automatic `github-proposal` command with stable campaign configuration. CLI authentication of coordination-ref state and PR facts selects initial work, compatible unpublished recovery, exact original publication recovery, no-op, wait or pause before new Audit/provider work. Manual dispatch, optional best-effort native schedule and external workflow dispatch use identical inputs. Versioned invocation usage and its human summary project the CLI observations without recomputing accounting.
 
-This is an in-place replacement of an unreleased draft. Retired operation/request inputs have no translation or fallback. A real integrity-valid old runtime rejects the automatic grammar before provider/product GitHub effects; this semantic refusal is distinct from acquisition digest/identity rejection. Production `payload: null` remains refused.
+This is an in-place replacement of an unreleased draft. Retired operation/request inputs have no translation or fallback. A real integrity-valid old runtime rejects the automatic grammar before provider/product GitHub effects. Its retired envelope also lacks mandatory current usage and is rejected as `action.envelope-shape`; acquisition integrity and current envelope acceptance are separate checks. Production `payload: null` remains refused.
 
 ## What the Action is
 
@@ -55,6 +53,8 @@ wrapper's own closed vocabulary and never replaces the product outcome.
 | output | source |
 |---|---|
 | `result` | complete CLI envelope JSON (unmodified) |
+| `usage-json` | complete envelope `invocationUsage` object, compact JSON; same measurements and linkage |
+| `invoke-elapsed-milliseconds` | wrapper-measured child invocation wall time; includes process start/drain, excludes preparation/acquisition/install and is separate from product usage |
 | `outcome` | envelope `outcome` |
 | `exit-code` | CLI exit code |
 | `terminal-layer` | envelope `terminalLayer` |
@@ -74,13 +74,13 @@ Outputs are always emitted where definable: a wrapper failure yields
 
 The wrapper validates only the physical envelope shape it depends on to
 project outputs: a single compact JSON object plus LF within the byte bound,
-`githubProposalEnvelopeVersion` 1, the twelve documented keys present, the
+`githubProposalEnvelopeVersion` 1, the thirteen documented root keys present, including versioned `invocationUsage`, the
 projected fields typed as string/int/null/list-of-codes, and stderr empty on
 exit 0 and at most one bounded control-free line otherwise. It does **not**
 check outcome/exit-code/layer/diagnostic consistency, does not interpret
 stderr text, and tolerates additional keys — product semantics are the CLI's
 contract alone, so CLI contract evolution (new outcomes, enum members,
-fields, or messages) requires no Action change.
+fields, or messages) requires no semantic Action interpreter. Required projection shapes, including usage version/fields, change coherently with the producer. Missing or physically malformed usage yields `action.envelope-invocation-usage-shape` (missing root keys yield `action.envelope-shape`); product outputs stay empty. On invalid envelope, the diagnostic-only `action-invoke stage=child-exit result=ok reason=exit-<code>` marker records the reaped child's exit; `ok` here means the child exited, not that its envelope or product operation succeeded. Boolean values are not integer measurements; nullable subtotals remain null. Additional root keys remain tolerated.
 
 The `action-status` vocabulary is closed: `<stage>` is one of `guard`,
 `prepare`, `acquire`, `install`, `invoke`, `envelope`, `emit`, and HTTP
@@ -90,6 +90,12 @@ transport failures surface only as the fixed classes `http-auth`,
 never enter the public output. Runner cancellation reports
 `action.<stage>-cancelled` (stages `prepare`, `acquire`, `install`, `invoke`)
 with exit 130.
+
+## Usage summary
+
+The always-running emitter renders fixed rows for available work, physical sends/logical calls/retries/tools, reported token subtotals and missing-send counts, stop and scoped elapsed time. It uses only checked numeric fields and closed vocabulary, never raw identities, diagnostic text, provider data or caller configuration. Unknown values render as `unknown`; without valid usage it renders `unavailable`, not zero. Success, no-op, wait, pause and valid controlled product failure all retain their usage. A wrapper failure without a valid envelope has empty product outputs and an unavailable-usage row. A hard kill cannot promise an emitter or final product output.
+
+The complete CLI envelope and `usage-json` each use the existing 16 KiB bound (the latter explicitly overrides the ordinary 1,024-character output default); the fixed summary remains within 4 KiB. The wrapper does not change budgets, infer missing usage, price requests or subtract historical totals. Definitions and precedence belong to [the CLI usage contract](github-proposal-cli.md#invocation-usage-v1). No new wrapper timeout or scheduler is introduced.
 
 ## Annotations
 

@@ -16,10 +16,32 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync();
         var started = await fixture.Run();
         AssertResult(started, 0, "published");
+        using (var measured = JsonDocument.Parse(started.Stdout))
+        {
+            var usage = measured.RootElement.GetProperty("invocationUsage");
+            Assert.Equal(fixture.Provider.RequestCount, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+            Assert.Equal(2, usage.GetProperty("calls").GetProperty("logicalProviderCalls").GetInt32());
+            Assert.Equal(0, usage.GetProperty("calls").GetProperty("retryDispatches").GetInt32());
+            Assert.Equal(31, usage.GetProperty("tokens").GetProperty("input").GetProperty("observed").GetInt64());
+            Assert.Equal(29, usage.GetProperty("tokens").GetProperty("cachedInput").GetProperty("observed").GetInt64());
+            Assert.Equal(2, usage.GetProperty("tokens").GetProperty("uncachedInput").GetProperty("observed").GetInt64());
+            Assert.Equal(1, usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
+            Assert.Equal(1, usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
+        }
         Assert.False(File.Exists(fixture.State));
         var before = fixture.Checkpoint();
         var resumed = await fixture.Run();
         AssertResult(resumed, 0, "awaiting-review");
+        using (var measured = JsonDocument.Parse(resumed.Stdout))
+        {
+            var usage = measured.RootElement.GetProperty("invocationUsage");
+            Assert.Equal(0, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+            Assert.Equal(0, usage.GetProperty("tokens").GetProperty("input").GetProperty("observed").GetInt64());
+            Assert.Equal(0, usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
+            Assert.Equal(0, usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
+            Assert.Equal("awaiting-review", usage.GetProperty("termination").GetProperty("stopReason").GetString());
+            Assert.Equal(2, usage.GetProperty("history").GetProperty("providerRequests").GetProperty("observed").GetInt64());
+        }
         Assert.False(File.Exists(fixture.State));
         Assert.Equal(before.Sha256, fixture.Checkpoint().Sha256);
         Assert.Single(fixture.GitHub.PullRequests);
@@ -262,7 +284,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("github-proposal." + outcome, json.RootElement.GetProperty("outcome").GetString());
         Assert.Equal(new[] { "githubProposalEnvelopeVersion", "terminalLayer", "cliContractBaseline", "toolVersion",
             "campaignOperation", "publicationOperationId", "generationId", "outcome", "diagnosticCodes",
-            "checkpointRevision", "pullRequestUrl", "publicationDiagnostic" }, json.RootElement.EnumerateObject().Select(p => p.Name));
+            "checkpointRevision", "pullRequestUrl", "publicationDiagnostic", "invocationUsage" }, json.RootElement.EnumerateObject().Select(p => p.Name));
         Assert.EndsWith("}\n", result.Stdout);
         Assert.DoesNotContain('\r', result.Stdout);
         if (exit == 0)

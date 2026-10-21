@@ -10,19 +10,21 @@ empty and only action_status describes the failure.
 """
 
 import os
+import json
 import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
+import usage as U
 
 PRODUCT_OUTPUTS = (
     "result", "outcome", "exit-code", "terminal-layer", "diagnostic-codes",
     "checkpoint-revision", "pull-request-url", "tool-version",
     "campaign-operation", "publication-operation-id", "generation-id",
-    "publication-diagnostic",
+    "publication-diagnostic", "usage-json",
 )
-WRAPPER_OUTPUTS = ("payload-version", "payload-sha256", "install-dir")
+WRAPPER_OUTPUTS = ("payload-version", "payload-sha256", "install-dir", "invoke-elapsed-milliseconds")
 
 STATUS_ORDER = ("cs_status_guard", "cs_status_prepare", "cs_status_acquire",
                 "cs_status_install", "cs_status_invoke")
@@ -57,6 +59,14 @@ def main():
         f"| exit-code | `{exit_code}` |",
         f"| payload | `{payload}` |",
     ]
+    try:
+        usage = json.loads(os.environ.get("CS_OUT_USAGE_JSON", ""))
+    except (ValueError, TypeError):
+        usage = None
+    rows += U.summary_rows(usage)
+    elapsed = os.environ.get("CS_OUT_INVOKE_ELAPSED_MILLISECONDS", "")
+    if elapsed.isascii() and elapsed.isdigit() and len(elapsed) <= 16:
+        rows.append(f"| Action child invocation elapsed ms | {elapsed} |")
     summary = "### contract-scribe\n\n" + "\n".join(rows) + "\n"
     summary = summary[:C.BOUND_SUMMARY]
     path = os.environ.get("GITHUB_STEP_SUMMARY")

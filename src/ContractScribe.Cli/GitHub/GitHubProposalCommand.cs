@@ -34,7 +34,16 @@ internal static class GitHubProposalCommand
         "  7  Timeout.\n";
 
     internal static async Task<CliExecutionResult> RunAsync(GitHubProposalCommandArguments arguments,
-        string currentDirectory, CancellationToken cancellationToken, Func<string, string?>? credentialAccessor = null)
+        string currentDirectory, CancellationToken cancellationToken, Func<string, string?>? credentialAccessor = null,
+        InvocationUsage? usage = null)
+    {
+        usage ??= new InvocationUsage();
+        var result = await RunCoreAsync(arguments, currentDirectory, cancellationToken, credentialAccessor, usage).ConfigureAwait(false);
+        return GitHubProposalPresentation.WithUsage(result, usage);
+    }
+
+    private static async Task<CliExecutionResult> RunCoreAsync(GitHubProposalCommandArguments arguments,
+        string currentDirectory, CancellationToken cancellationToken, Func<string, string?>? credentialAccessor, InvocationUsage usage)
     {
         var identity = CliBuildIdentity.Current;
         CampaignOperation? operation = null;
@@ -71,6 +80,7 @@ internal static class GitHubProposalCommand
                 || read.Kind == CampaignCheckpointReadKind.Found && accepted?.Kind != CampaignCheckpointAcceptanceKind.Accepted
                 || read.Kind == CampaignCheckpointReadKind.NotFound && observed.Ledger is not null)
                 return GitHubProposalPresentation.Preflight(identity, operation, "human-change", "invalid-recovery-authority", null);
+            usage.ObserveState(accepted?.Artifact);
             operation = read.Kind == CampaignCheckpointReadKind.Found ? CampaignOperation.Resume : CampaignOperation.Start;
             preflight = preflight with { Operation = operation.Value };
             if (GitHubCampaignPreflight.Select(identity, operation, observed,
@@ -140,7 +150,7 @@ internal static class GitHubProposalCommand
                 finalization: finalization,
                 bindFinalizationDeadline: client.BindFinalizationDeadline, originalOperationOnly: originalOnly);
             return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
-                accessor, continuation, checkpointStore: checkpoint).ConfigureAwait(false);
+                accessor, continuation, checkpointStore: checkpoint, usage: usage).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

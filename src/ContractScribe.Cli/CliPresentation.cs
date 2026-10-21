@@ -11,6 +11,7 @@ internal sealed record CliExecutionResult(
     string StandardOutput,
     IReadOnlyList<CliDiagnostic> Diagnostics)
 {
+    internal GitHubProposalEnvelope? GitHubEnvelope { get; init; }
     internal bool IsPublication { get; init; }
     internal long? AuthoritativeCheckpointRevision { get; init; }
 }

@@ -118,11 +118,54 @@ def cmd_prepare(argv):
         [sys.executable, os.path.join(ACTION, "prepare.py")], env=env))
 
 
+def read_outputs(path):
+    """Decode the actual GitHub output file, preserving the product's final LF."""
+    values = {}
+    with open(path, encoding="utf-8") as stream:
+        lines = iter(stream)
+        for line in lines:
+            if "<<" in line:
+                name, delimiter = line.rstrip("\n").split("<<", 1)
+                body = []
+                for item in lines:
+                    if item == delimiter + "\n":
+                        break
+                    body.append(item)
+                values[name] = "".join(body)[:-1]
+            else:
+                name, _, value = line.rstrip("\n").partition("=")
+                values[name] = value
+    return values
+
+
+def cmd_usage_roundtrip(argv):
+    source, emitted, summary, expected_sends = argv
+    outputs = read_outputs(source)
+    result = json.loads(outputs["result"])
+    usage = json.loads(outputs["usage-json"])
+    assert result["invocationUsage"] == usage
+    assert usage["calls"]["physicalProviderDispatches"] == int(expected_sends)
+    assert outputs["result"].endswith("\n")
+    env = dict(os.environ, GITHUB_OUTPUT=emitted, GITHUB_STEP_SUMMARY=summary,
+               CS_STATUS_INVOKE=outputs["action-status"])
+    for name, value in outputs.items():
+        env["CS_OUT_" + name.upper().replace("-", "_")] = value
+    subprocess.run([sys.executable, os.path.join(ACTION, "emit.py")], env=env, check=True)
+    forwarded = read_outputs(emitted)
+    assert forwarded["result"] == outputs["result"]
+    assert forwarded["usage-json"] == outputs["usage-json"]
+    with open(summary, encoding="utf-8") as stream:
+        text = stream.read()
+    assert "provider sends / logical calls / retries" in text
+    assert usage["termination"]["stopReason"] in text
+    assert len(text.encode()) <= C.BOUND_SUMMARY
+
+
 def main():
     command = sys.argv[1]
     {"init": cmd_init, "acquire": cmd_acquire, "install": cmd_install,
      "install-archive": cmd_install_archive, "invoke": cmd_invoke,
-     "prepare": cmd_prepare}[command](sys.argv[2:])
+     "prepare": cmd_prepare, "usage-roundtrip": cmd_usage_roundtrip}[command](sys.argv[2:])
 
 
 if __name__ == "__main__":
