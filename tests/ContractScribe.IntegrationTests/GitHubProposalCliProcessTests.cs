@@ -197,19 +197,26 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    [Fact]
-    public async Task Resume_with_missing_remote_checkpoint_stops_before_provider_execution()
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Automatic_first_invocation_starts_only_after_observing_an_empty_remote_campaign()
     {
-        if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
+        Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.DoesNotContain(fixture.GitHub.Refs.Keys,
+            reference => reference.Contains("/coordination/", StringComparison.Ordinal));
         var result = await fixture.Run();
-        AssertResult(result, 4, "local-invalid");
-        Assert.Equal("github proposal stopped before publication: campaign.state-missing\n", result.Stderr);
+        AssertResult(result, 0, "published");
+        using var json = JsonDocument.Parse(result.Stdout);
+        Assert.Equal("start", json.RootElement.GetProperty("campaignOperation").GetString());
+        Assert.Empty(result.Stderr);
         Assert.False(File.Exists(fixture.State));
-        Assert.Equal(0, fixture.Provider.RequestCount);
+        Assert.True(fixture.Provider.RequestCount > 0);
         Assert.Equal(1, fixture.TokenReads());
         Assert.NotEmpty(fixture.GitHub.Requests);
-        Assert.Equal(0, fixture.GitHub.PublicationWrites);
+        Assert.Single(fixture.GitHub.PullRequests);
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
+        Assert.NotNull(fixture.Checkpoint().State.CandidateObservation);
+        await fixture.AssertSourceUnchanged();
     }
 
     [Fact]

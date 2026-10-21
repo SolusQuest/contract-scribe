@@ -123,7 +123,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var reserved = fixture.Checkpoint();
         var requests = fixture.Provider.RequestCount;
         Assert.Equal(accepted.Sha256, reserved.State.AcceptedCandidateOrigin!.CheckpointSha256);
-        AssertResult(await fixture.Run(), 0, "published");
+        AssertResult(await fixture.Run(), 0, twoWorks ? "published-partial" : "published");
         var retried = fixture.Checkpoint();
         Assert.Null(retried.State.ActiveReservation);
         Assert.True(retried.State.LineageCharges.PatchValidationInvocations > reserved.State.LineageCharges.PatchValidationInvocations);

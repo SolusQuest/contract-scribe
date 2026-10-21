@@ -977,12 +977,12 @@ internal sealed partial class GitHubCoordinationStore
         GitHubRepositoryIdentity repository,
         GitHubRef target,
         string headOid,
-        CancellationToken cancellationToken, bool matchAuthority = true)
+        CancellationToken cancellationToken, bool matchAuthority = true, ReadProof? proof = null)
     {
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         deadline.CancelAfter(TimeSpan.FromSeconds(90));
-        var proofDocuments = new Dictionary<string, GitHubCoordinationDocument>(StringComparer.Ordinal);
-        var current = await ReadStateObjectAsync(repository, target, headOid, deadline.Token, proofDocuments).ConfigureAwait(false);
+        proof ??= new ReadProof();
+        var current = await ReadStateObjectAsync(repository, target, headOid, deadline.Token, proof).ConfigureAwait(false);
         if (current.State is null) return Normalize(current);
         var currentState = (StateCapability)current.State;
         var cursor = currentState;
@@ -1033,7 +1033,7 @@ internal sealed partial class GitHubCoordinationStore
             if (!visited.Add(predecessorOid)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             // Only publication events are traversed; checkpoint frequency has no lifetime cap.
             if (visited.Count > MaximumHistoryStates) return DomainFailure(GitHubCoordinationFailureKind.Bounds);
-            var predecessor = await ReadStateObjectAsync(repository, target, predecessorOid, deadline.Token, proofDocuments).ConfigureAwait(false);
+            var predecessor = await ReadStateObjectAsync(repository, target, predecessorOid, deadline.Token, proof).ConfigureAwait(false);
             if (predecessor.State is null) return Normalize(predecessor);
             var previous = (StateCapability)predecessor.State;
             if (!ValidEdge(previous.State, cursor.State))
@@ -1073,18 +1073,18 @@ internal sealed partial class GitHubCoordinationStore
         GitHubRef target,
         string headOid,
         CancellationToken cancellationToken,
-        Dictionary<string, GitHubCoordinationDocument>? proofDocuments = null)
+        ReadProof? proof = null)
     {
         try
         {
-            var document = await ReadAcceptedDocumentAsync(headOid, cancellationToken, proofDocuments).ConfigureAwait(false);
+            var document = await ReadAcceptedDocumentAsync(headOid, cancellationToken, proof).ConfigureAwait(false);
             if (document.Publication is not { } pointer)
                 return new(GitHubCoordinationOutcome.Current);
             var anchor = pointer.Anchor == GitHubCoordinationDocument.CurrentCommit ? headOid : pointer.Anchor;
-            var eventDocument = anchor == headOid ? document : await ReadAcceptedDocumentAsync(anchor, cancellationToken, proofDocuments).ConfigureAwait(false);
+            var eventDocument = anchor == headOid ? document : await ReadAcceptedDocumentAsync(anchor, cancellationToken, proof).ConfigureAwait(false);
             if (eventDocument.Publication != pointer with { Anchor = GitHubCoordinationDocument.CurrentCommit })
                 return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-            var blob = await ReadBlobAsync(pointer.Oid, cancellationToken).ConfigureAwait(false);
+            var blob = await ReadBlobAsync(pointer.Oid, cancellationToken, proof).ConfigureAwait(false);
             var publication = GitHubPublicationEvent.Decode(blob.Bytes.AsMemory());
             var state = publication.State;
             if (state.CoordinationPredecessorOid != eventDocument.PredecessorOid
@@ -1095,13 +1095,13 @@ internal sealed partial class GitHubCoordinationStore
             {
                 if (eventDocument.Checkpoint is not { } checkpoint || eventDocument.Plan?.BatchIdentity != state.BatchIdentity)
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-                var accepted = await ReadCheckpointBlobAsync(checkpoint, cancellationToken).ConfigureAwait(false);
+                var accepted = await ReadCheckpointBlobAsync(checkpoint, cancellationToken, proof).ConfigureAwait(false);
                 if (!FrozenCheckpointMatches(state, accepted)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             }
             GitHubEventPointer? previous = null;
             if (eventDocument.PredecessorOid != ZeroOid)
             {
-                var parent = await ReadDocumentAsync(eventDocument.PredecessorOid, cancellationToken, proofDocuments).ConfigureAwait(false);
+                var parent = await ReadDocumentAsync(eventDocument.PredecessorOid, cancellationToken, proof).ConfigureAwait(false);
                 previous = parent.RetainAt(eventDocument.PredecessorOid).Publication;
             }
             if (previous != publication.Previous) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
