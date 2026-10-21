@@ -74,6 +74,12 @@ outputs:
   publication-diagnostic:
     description: "Product publicationDiagnostic (compact JSON or empty)"
     value: ${{ steps.emit.outputs['publication-diagnostic'] }}
+  usage-json:
+    description: "Product invocationUsage (versioned compact JSON; empty without a valid envelope)"
+    value: ${{ steps.emit.outputs['usage-json'] }}
+  invoke-elapsed-milliseconds:
+    description: "Action child invocation wall time in milliseconds; separate from product usage"
+    value: ${{ steps.emit.outputs['invoke-elapsed-milliseconds'] }}
   action-status:
     description: "Wrapper status: ok | action.<stage>-<reason> (never a product outcome)"
     value: ${{ steps.emit.outputs['action-status'] }}
@@ -172,6 +178,8 @@ runs:
         CS_OUT_PUBLICATION_OPERATION_ID: ${{ steps.invoke.outputs['publication-operation-id'] }}
         CS_OUT_GENERATION_ID: ${{ steps.invoke.outputs['generation-id'] }}
         CS_OUT_PUBLICATION_DIAGNOSTIC: ${{ steps.invoke.outputs['publication-diagnostic'] }}
+        CS_OUT_USAGE_JSON: ${{ steps.invoke.outputs['usage-json'] }}
+        CS_OUT_INVOKE_ELAPSED_MILLISECONDS: ${{ steps.invoke.outputs['invoke-elapsed-milliseconds'] }}
         CS_OUT_PAYLOAD_VERSION: ${{ steps.acquire.outputs['payload-version'] }}
         CS_OUT_PAYLOAD_SHA256: ${{ steps.acquire.outputs['payload-sha256'] }}
         CS_OUT_INSTALL_DIR: ${{ steps.install.outputs['install-dir'] }}

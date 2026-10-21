@@ -7,6 +7,11 @@ using ContractScribe.GitHub.Publication;
 
 namespace ContractScribe.Cli;
 
+internal sealed record GitHubProposalEnvelope(CliBuildIdentity Identity, CampaignOperation? Operation,
+    string Layer, string Outcome, long? Revision, IReadOnlyList<CliDiagnostic> Diagnostics,
+    string? PublicationOperation, string? Generation, string? Url,
+    GitHubPublicationDiagnostic? PublicationDiagnostic, string StopSource);
+
 internal static class GitHubProposalPresentation
 {
     internal static CliExecutionResult Campaign(CliBuildIdentity identity, CampaignTerminal terminal)
@@ -30,7 +35,7 @@ internal static class GitHubProposalPresentation
         if (outcome is null) return ContractError(identity, terminal.Operation, terminal.CheckpointRevision);
         var diagnostics = outcome == "no-op" ? Array.Empty<CliDiagnostic>() :
             [new CliDiagnostic(terminal.Outcome, "github proposal stopped before publication: " + terminal.Outcome)];
-        return Result(identity, terminal.Operation, "campaign", outcome, terminal.CheckpointRevision, diagnostics);
+        return Result(identity, terminal.Operation, "campaign", outcome, terminal.CheckpointRevision, diagnostics, stopSource: terminal.Outcome);
     }
 
     internal static CliExecutionResult ContractError(CliBuildIdentity identity, CampaignOperation? operation, long? revision) =>
@@ -52,7 +57,7 @@ internal static class GitHubProposalPresentation
         Result(identity, operation, "preflight", outcome, revision,
             Exit(outcome) == 0 ? [] : [new("github-proposal." + reason,
                 "github proposal stopped before publication: github-proposal." + reason)],
-            generation: link?.GenerationId, url: link?.Url);
+            generation: link?.GenerationId, url: link?.Url, stopSource: reason);
 
     internal static CliExecutionResult Publication(CliBuildIdentity identity, CampaignOperation operation,
         long revision, GitHubPublicationObservation observation, bool hasUnresolvedSelectedWork = false)
@@ -104,8 +109,21 @@ internal static class GitHubProposalPresentation
     private static CliExecutionResult Result(CliBuildIdentity identity, CampaignOperation? operation,
         string layer, string outcome, long? revision, IReadOnlyList<CliDiagnostic> diagnostics,
         string? publicationOperation = null, string? generation = null, string? url = null, int? exitOverride = null,
-        GitHubPublicationDiagnostic? publicationDiagnostic = null)
+        GitHubPublicationDiagnostic? publicationDiagnostic = null, string? stopSource = null)
     {
+        var envelope = new GitHubProposalEnvelope(identity, operation, layer, outcome, revision, diagnostics,
+            publicationOperation, generation, url, publicationDiagnostic, stopSource ?? outcome);
+        return new CliExecutionResult(exitOverride ?? Exit(outcome), Serialize(envelope, InvocationUsage.Unavailable), diagnostics)
+        { AuthoritativeCheckpointRevision = revision, GitHubEnvelope = envelope };
+    }
+
+    internal static CliExecutionResult WithUsage(CliExecutionResult result, InvocationUsage usage) =>
+        result.GitHubEnvelope is { } envelope ? result with { StandardOutput = Serialize(envelope, usage.Snapshot(envelope)) } : result;
+
+    private static string Serialize(GitHubProposalEnvelope envelope, JsonElement usage)
+    {
+        var (identity, operation, layer, outcome, revision, diagnostics, publicationOperation, generation, url,
+            publicationDiagnostic, _) = envelope;
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
@@ -130,10 +148,11 @@ internal static class GitHubProposalPresentation
             else writer.WriteNumber("checkpointRevision", revision.Value);
             writer.WriteString("pullRequestUrl", url);
             WriteDiagnostic(writer, publicationDiagnostic);
+            writer.WritePropertyName("invocationUsage");
+            usage.WriteTo(writer);
             writer.WriteEndObject();
         }
-        return new CliExecutionResult(exitOverride ?? Exit(outcome), Encoding.UTF8.GetString(buffer.WrittenSpan) + "\n", diagnostics)
-        { AuthoritativeCheckpointRevision = revision };
+        return Encoding.UTF8.GetString(buffer.WrittenSpan) + "\n";
     }
 
     private static void WriteDiagnostic(Utf8JsonWriter writer, GitHubPublicationDiagnostic? diagnostic)

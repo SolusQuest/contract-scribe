@@ -96,6 +96,10 @@ Every source is admitted through the same bounded regular-file, no-follow, size,
 
 `github-proposal` consumes the same layered resolution through optional `--configuration` and `--configuration-override`. Stable lineage and destination belong to the separate `--campaign` configuration; CLI derives snapshot, current HEAD and publication operation from authenticated remote facts. See [github-proposal-cli.md](github-proposal-cli.md). `campaign-configuration-v1` remains the resolved authority produced by this resolver, with no competing public low-level runtime reader.
 
+## Invocation observations
+
+Automatic CLI results expose versioned `invocationUsage`; the Action forwards it as `usage-json` and renders a bounded summary. These are observations of the existing invocation allowance, separate from configuration and historical campaign charges. They do not add a budget layer or correctness identity. Missing provider usage is explicit; no-provider gates report zero new sends and tokens. See [field definitions](github-proposal-cli.md#invocation-usage-v1) before comparing counts or token subtotals across triggers.
+
 ## Non-goals
 
 No environment-variable configuration precedence, hot reload, remote includes, a YAML merge engine, compatibility readers, aliases, migrations, deprecation periods, or a second public consumer shape. No new model/provider capability, M4 state-semantics change, or GitHub-publication behavior is introduced here.

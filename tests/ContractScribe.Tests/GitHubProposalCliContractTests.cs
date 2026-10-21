@@ -48,7 +48,7 @@ public sealed class GitHubProposalCliContractTests
             + "\"transportHttpStatus\":null,\"delivery\":\"NeedsReadback\",\"recoveryCode\":\"NotFound\","
             + "\"recoveryHttpStatus\":404,\"objectKind\":\"Tree\",\"predicate\":null}",
             json.RootElement.GetProperty("publicationDiagnostic").GetRawText());
-        Assert.Equal("publicationDiagnostic", json.RootElement.EnumerateObject().Last().Name);
+        Assert.Equal("invocationUsage", json.RootElement.EnumerateObject().Last().Name);
         Assert.Equal(3, result.ExitCode);
         Assert.Equal("github-proposal.conflict", json.RootElement.GetProperty("outcome").GetString());
         Assert.Equal("github proposal publication stopped: github-proposal.conflict", Assert.Single(result.Diagnostics).Message);
@@ -168,7 +168,10 @@ public sealed class GitHubProposalCliContractTests
             + "\",\"cliContractBaseline\":\"" + new string('a', 40) + "\",\"toolVersion\":\"test+" + new string('a', 40)
             + "\",\"campaignOperation\":\"resume\",\"publicationOperationId\":null,\"generationId\":null,\"outcome\":\"github-proposal."
             + outcome + "\",\"diagnosticCodes\":[" + (exit == 0 ? "" : "\"" + code + "\"")
-            + "],\"checkpointRevision\":12,\"pullRequestUrl\":null,\"publicationDiagnostic\":null}\n";
+            + "],\"checkpointRevision\":12,\"pullRequestUrl\":null,\"publicationDiagnostic\":null,\"invocationUsage\":"
+            + "{\"invocationUsageVersion\":1,\"invocationId\":null,\"campaignLineage\":null,\"snapshotId\":null,\"batchId\":null,"
+            + "\"checkpointRevision\":null,\"publicationOperationId\":null,\"generationId\":null,\"pullRequestUrl\":null,"
+            + "\"work\":null,\"calls\":null,\"tokens\":null,\"accounting\":null,\"history\":null,\"timing\":null,\"termination\":null,\"completeness\":\"unknown\"}}\n";
         Assert.Equal(expected, stdout.ToString());
         Assert.Equal(exit == 0 ? "" : "github proposal stopped before publication: " + code + "\n", stderr.ToString());
     }

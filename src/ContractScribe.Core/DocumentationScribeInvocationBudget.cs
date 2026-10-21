@@ -118,6 +118,11 @@ public sealed class DocumentationScribeInvocationProviderPermit
     public bool DispatchStarted => Volatile.Read(ref started) == 1;
     public int RemainingMilliseconds => Math.Max(0, Exposure.ElapsedMilliseconds - owner.ElapsedSince(StartedAt));
     internal long StartedAt { get; }
+    internal Guid? LogicalCallId { get; set; }
+    internal int? PhysicalAttemptNumber { get; set; }
+    internal DocumentationScribeDispatchUsage? ObservedUsage { get; set; }
+    internal bool MeasurementCaptured { get; set; }
+    internal bool ChargeCommitted { get; set; }
     internal bool OwnedBy(DocumentationScribeInvocationAllowance allowance) => ReferenceEquals(owner, allowance);
     internal bool TrySettle() => Interlocked.CompareExchange(ref settled, 1, 0) == 0;
     internal bool TryStart() => Interlocked.CompareExchange(ref started, 1, 0) == 0;
@@ -127,7 +132,7 @@ public sealed class DocumentationScribeInvocationProviderPermit
 }
 
 /// <summary>One process-local counter/clock owner, shared by every target and retry.</summary>
-public sealed class DocumentationScribeInvocationAllowance
+public sealed partial class DocumentationScribeInvocationAllowance
 {
     private readonly object gate = new();
     private readonly long startedAt;
@@ -249,6 +254,8 @@ public sealed class DocumentationScribeInvocationAllowance
                     usage?.OutputTokens, exposure.OutputTokens, usage?.ReasoningTokens ?? 0) : output;
                 var nextCost = sent ? checked(observedCost + (usage?.CostMicrounits ?? 0)) : observedCost;
                 if (!permit.TrySettle()) return false;
+                ObserveProviderUsage(permit, usage);
+                permit.ChargeCommitted = true;
                 input = nextInput; cached = nextCached; uncached = nextUncached; output = nextOutput;
                 observedCost = nextCost;
                 hasObservedCost |= sent && usage?.CostMicrounits is not null;
@@ -276,6 +283,7 @@ public sealed class DocumentationScribeInvocationAllowance
                 || permit.RemainingMilliseconds <= 0 || RemainingMilliseconds <= 0
                 || requests >= Limits.MaximumProviderRequests || !permit.TryStart()) return false;
             requests = checked(requests + 1);
+            sentPermits.Add(permit);
             return true;
         }
     }

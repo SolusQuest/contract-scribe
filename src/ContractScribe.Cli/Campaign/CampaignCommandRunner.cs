@@ -21,7 +21,8 @@ internal static class CampaignCommandRunner
         Func<string, string?>? credentialAccessor = null,
         CampaignAcceptedCandidateContinuation? continuation = null,
         CampaignInvocationTargetLimit? targetLimit = null,
-        ICampaignCheckpointStore? checkpointStore = null)
+        ICampaignCheckpointStore? checkpointStore = null,
+        InvocationUsage? usage = null)
     {
         ArgumentNullException.ThrowIfNull(identity);
         ArgumentNullException.ThrowIfNull(preflight);
@@ -73,6 +74,7 @@ internal static class CampaignCommandRunner
                     AcceptanceOutcome(accepted.Kind), null);
             }
             existing = checkpoint;
+            usage?.ObserveState(checkpoint.Artifact);
             if (!MatchesProductRevision(configuration.Planning, checkpoint.Artifact.State))
             {
                 return PresentCampaign(identity, preflight.Operation, "state",
@@ -104,7 +106,7 @@ internal static class CampaignCommandRunner
                     credentialAccessor ?? Environment.GetEnvironmentVariable,
                     continuation,
                     targetLimit ?? new CampaignInvocationTargetLimit(configuration.Budgets.Invocation.MaximumTargets),
-                    token).ConfigureAwait(false);
+                    token, usage).ConfigureAwait(false);
                 if (continuation is not null) GitHubProposalProcessHooks.Reach("after-terminal");
             }),
             cancellationToken).ConfigureAwait(false);
@@ -141,8 +143,13 @@ internal static class CampaignCommandRunner
         Func<string, string?> credentialAccessor,
         CampaignAcceptedCandidateContinuation? continuation,
         CampaignInvocationTargetLimit targetLimit,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, InvocationUsage? usage)
     {
+        CampaignTerminal Terminal(CampaignOperation operation, string layer, string outcome, CampaignAcceptedCheckpoint? checkpoint)
+        {
+            usage?.ObserveState(checkpoint?.Artifact);
+            return new(layer, operation, outcome, checkpoint?.Artifact.CheckpointRevision);
+        }
         if (!preflight.Configuration.Revalidate())
         {
             return Terminal(preflight.Operation, "preflight", "campaign.invalid-configuration", existing);
@@ -340,6 +347,7 @@ internal static class CampaignCommandRunner
             GitHubProposalProcessHooks.Reach("after-next-batch");
         }
 
+        usage?.ObserveState(current.Artifact);
         using var settlementCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(
             checked(configuration.Budgets.Invocation.MaximumElapsedMilliseconds + 30_000)));
         if (current.Artifact.State.ActiveReservation is CampaignProviderReservation)
@@ -376,6 +384,7 @@ internal static class CampaignCommandRunner
             current = archived.AcceptedCheckpoint;
         }
         var invocationAllowance = new DocumentationScribeInvocationAllowance(configuration.Budgets.Invocation);
+        usage?.Bind(invocationAllowance);
         var targetAllowance = CampaignStateFactory.CreateInvocationTargetAllowance(current.Artifact.State, targetLimit);
         var reconstructPriorAccepted = continuation is null && current.Artifact.State.CandidateObservation is not null;
         var invocationStopped = false;
@@ -401,6 +410,7 @@ internal static class CampaignCommandRunner
                 return Terminal(preflight.Operation, "state", AcceptanceOutcome(observed.Kind), current);
             }
             current = acceptedCurrent;
+            usage?.ObserveState(current.Artifact);
             var stateNow = current.Artifact.State;
             if (stateNow.TerminalOutcome is
                 { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.NoWork })
@@ -445,6 +455,8 @@ internal static class CampaignCommandRunner
                     patchToken,
                     DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
                     AcceptedOnly: reconstructAccepted)).ConfigureAwait(false);
+                usage?.ObserveState(patched.Artifact);
+                if (patched.Kind == DocumentationCampaignOutcomeKind.Reconstructed) usage?.ObserveReconstruction(patched.Artifact);
                 if ((patched.Kind is DocumentationCampaignOutcomeKind.Cancelled or DocumentationCampaignOutcomeKind.TimedOut
                     || patched.CheckpointFailure == CampaignCheckpointAcceptanceKind.Cancelled)
                     && continuation?.FinalizationFailure(patched.Artifact?.CheckpointRevision ?? current.Artifact.CheckpointRevision) is { } finalizationFailure)
@@ -563,7 +575,8 @@ internal static class CampaignCommandRunner
                 SettlementToken: settlementCancellation.Token,
                 DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor, configuration.Budgets.Invocation.MaximumConnectMilliseconds),
                 DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
-                TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance)).ConfigureAwait(false);
+                TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance, Usage: usage)).ConfigureAwait(false);
+            usage?.ObserveState(proposal.Artifact);
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady)
             {
                 continue;
@@ -935,10 +948,4 @@ internal static class CampaignCommandRunner
         long? revision) =>
         CampaignCliPresentation.Present(identity, new CampaignTerminal(layer, operation, outcome, revision));
 
-    private static CampaignTerminal Terminal(
-        CampaignOperation operation,
-        string layer,
-        string outcome,
-        CampaignAcceptedCheckpoint? checkpoint) =>
-        new(layer, operation, outcome, checkpoint?.Artifact.CheckpointRevision);
 }

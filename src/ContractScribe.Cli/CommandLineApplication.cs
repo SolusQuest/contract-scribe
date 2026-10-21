@@ -162,6 +162,7 @@ public static class CommandLineApplication
                 output.Write(GitHubProposalCommand.Help);
                 return 0;
             }
+            var invocationUsage = new InvocationUsage();
             var proposalLifetime = new GitHubProposalSignalLifetime(cancellationToken, installSignalHandlers);
             CliExecutionResult selected;
             try
@@ -169,7 +170,7 @@ public static class CommandLineApplication
                 selected = proposalParse.Failure is { } failure
                     ? GitHubProposalPresentation.Usage(CliBuildIdentity.Current, failure)
                     : await GitHubProposalCommand.RunAsync(proposalParse.Arguments!,
-                        currentDirectory ?? Environment.CurrentDirectory, proposalLifetime.Token).ConfigureAwait(false);
+                        currentDirectory ?? Environment.CurrentDirectory, proposalLifetime.Token, usage: invocationUsage).ConfigureAwait(false);
                 try { GitHubProposalProcessHooks.Reach("before-presentation"); }
                 catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
                 {
@@ -179,6 +180,7 @@ public static class CommandLineApplication
                         selected = GitHubProposalPresentation.ContractError(CliBuildIdentity.Current,
                             proposalParse.Failure?.Operation, selected.AuthoritativeCheckpointRevision);
                 }
+                selected = GitHubProposalPresentation.WithUsage(selected, invocationUsage);
                 GitHubProposalPresentation.Write(selected, output, error);
                 return selected.ExitCode;
             }

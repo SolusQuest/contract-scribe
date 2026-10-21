@@ -71,6 +71,7 @@ public sealed class DocumentationScribeExecutionScope
     private DocumentationScribeInvocationProviderPermit? provider;
     private int failed;
     private int operationGrant;
+    private (Guid LogicalCallId, int AttemptNumber)? nextProviderAttempt;
     internal DocumentationScribeExecutionScope(DocumentationScribeInvocationAllowance allowance,
         IDocumentationScribeExecutionOperations? operations, int restoredFailures, int pendingRetryAfter)
     {
@@ -133,6 +134,9 @@ public sealed class DocumentationScribeExecutionScope
             || Interlocked.CompareExchange(ref operationGrant, 1, 0) != 0) return null;
         if (!Allowance.TryReserveProvider(out var permit) || permit is null)
         { Volatile.Write(ref operationGrant, 0); return null; }
+        permit.LogicalCallId = nextProviderAttempt?.LogicalCallId;
+        permit.PhysicalAttemptNumber = nextProviderAttempt?.AttemptNumber;
+        nextProviderAttempt = null;
         provider = permit;
         if (operations is not null && !await operations.ReserveProviderAsync(descriptor, permit, cancellationToken).ConfigureAwait(false))
         {
@@ -151,6 +155,7 @@ public sealed class DocumentationScribeExecutionScope
         if (!ReferenceEquals(provider, permit) || !Enum.IsDefined(settlement.Disposition) || !Enum.IsDefined(settlement.Cache)
             || !DocumentationScribeInvocationAllowance.ValidUsage(settlement.Usage)
             || settlement.RetryAfterMilliseconds is < 0 or > 300_000) return false;
+        Allowance.ObserveProviderUsage(permit, settlement.Usage);
         if (operations is not null && !await operations.SettleProviderAsync(permit, settlement, cancellationToken).ConfigureAwait(false))
         { Interlocked.Exchange(ref failed, 1); return false; }
         if (!Allowance.SettleProvider(permit, settlement.Usage)) { Interlocked.Exchange(ref failed, 1); return false; }
@@ -206,4 +211,9 @@ public sealed class DocumentationScribeExecutionScope
         && descriptor.ProviderRequestNumber is > 0 and <= 128 && descriptor.MaximumOutputTokens > 0
         && descriptor.MaximumOutputTokens <= DocumentationScribeContract.MaximumConfiguredOutputTokens;
     public override string ToString() => nameof(DocumentationScribeExecutionScope);
+
+    /// <summary>Optional SDK correlation only; cannot admit or start a provider operation.</summary>
+    public void ObserveProviderAttempt(Guid logicalCallId, int attemptNumber) =>
+        nextProviderAttempt = logicalCallId != Guid.Empty && attemptNumber is > 0 and <= 128
+            ? (logicalCallId, attemptNumber) : null;
 }

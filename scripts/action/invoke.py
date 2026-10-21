@@ -25,6 +25,7 @@ import time
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import common as C
+import usage as U
 
 # Envelope keys per docs/20_architecture/github-proposal-cli.md. The
 # wrapper validates physical shape only — these keys must be present so the
@@ -34,7 +35,7 @@ ENVELOPE_FIELDS = (
     "githubProposalEnvelopeVersion", "terminalLayer", "cliContractBaseline",
     "toolVersion", "campaignOperation", "publicationOperationId",
     "generationId", "outcome", "diagnosticCodes", "checkpointRevision",
-    "pullRequestUrl", "publicationDiagnostic",
+    "pullRequestUrl", "publicationDiagnostic", "invocationUsage",
 )
 
 _PR_URL = re.compile(
@@ -227,6 +228,8 @@ def parse_envelope(stdout_bytes, stderr_bytes, rc):
     diag = envelope["publicationDiagnostic"]
     if diag is not None and not isinstance(diag, dict):
         fail_envelope("publication-diagnostic-shape")
+    if not U.valid(envelope["invocationUsage"]):
+        fail_envelope("invocation-usage-shape")
 
     # stderr: physical shape only — success is silent, a controlled failure
     # carries at most one bounded control-free line whose text is
@@ -251,6 +254,8 @@ def emit_outputs(envelope, stdout_bytes, rc):
     C.write_output("result", stdout_bytes.decode("utf-8", "replace"),
                    limit=C.BOUND_ENVELOPE)
     C.write_output("outcome", envelope["outcome"])
+    C.write_output("usage-json", json.dumps(envelope["invocationUsage"], separators=(",", ":")),
+                   limit=C.BOUND_ENVELOPE)
     C.write_output("exit-code", str(rc))
     C.write_output("terminal-layer", envelope["terminalLayer"])
     C.write_output("diagnostic-codes", ",".join(envelope["diagnosticCodes"]))
@@ -303,8 +308,10 @@ def main():
         if not env.get(name):
             env.pop(name, None)
 
+    invoke_started = time.monotonic()
     (rc, stdout_b, stderr_b, signalled, orphan,
      out_over, err_over) = run_cli(argv, env, plan["cwd"])
+    C.write_output("invoke-elapsed-milliseconds", str(max(0, int((time.monotonic() - invoke_started) * 1000))))
     if orphan:
         fail_invoke("orphan-survived")
     if out_over or err_over:
@@ -313,6 +320,9 @@ def main():
     try:
         envelope = parse_envelope(stdout_b, stderr_b, rc)
     except SystemExit:
+        # Preserve the reaped child's numeric exit as wrapper-only diagnostics;
+        # an invalid envelope still exports no product exit/outcome/usage.
+        C.marker("action-invoke", "stage=child-exit", "ok", f"exit-{rc}")
         # Cancellation before a valid envelope is wrapper cancellation (130);
         # a legitimately emitted envelope is still preserved below.
         if signalled:

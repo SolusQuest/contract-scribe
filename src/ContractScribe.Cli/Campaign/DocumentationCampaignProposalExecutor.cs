@@ -28,7 +28,8 @@ internal sealed record DocumentationCampaignProposalInput(
     Func<IDocumentationScribeModelExchange?>? DeferredExchange = null,
     Func<bool>? DispatchGuard = null,
     CampaignInvocationTargetAllowance? TargetAllowance = null,
-    DocumentationScribeInvocationAllowance? InvocationAllowance = null);
+    DocumentationScribeInvocationAllowance? InvocationAllowance = null,
+    InvocationUsage? Usage = null);
 
 internal static class DocumentationCampaignProposalExecutor
 {
@@ -51,6 +52,8 @@ internal static class DocumentationCampaignProposalExecutor
         }
 
         var current = accepted.AcceptedCheckpoint;
+        input.Usage?.Bind(input.InvocationAllowance);
+        input.Usage?.ObserveState(current.Artifact);
         DocumentationScribeAuditAuthority auditAuthority;
         try
         {
@@ -259,6 +262,7 @@ internal static class DocumentationCampaignProposalExecutor
                 : FromArtifact(reserved.Artifact, selectedState.WorkItemKey);
         }
 
+        input.Usage?.ObserveExecution(reserved.Artifact!, selectedState.WorkItemKey);
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterReservationReadback);
 
         CampaignProviderInvocationAuthority invocation;
@@ -295,6 +299,8 @@ internal static class DocumentationCampaignProposalExecutor
             manifestSelection, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
             input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken,
             GuardDispatch, coordinator).ConfigureAwait(false);
+        input.Usage?.ObserveFinish(prepared.CompletionAuthority?.Outcome?.RunResult.Stop);
+        input.Usage?.ObserveState(invocation.AcceptedCheckpoint.Artifact);
         if (dispatchGuardRejected || coordinator.Conflict)
         {
             return new DocumentationCampaignProposalOutcome(
@@ -364,6 +370,7 @@ internal static class DocumentationCampaignProposalExecutor
         }
         if (settled.Kind == CampaignCheckpointAcceptanceKind.Accepted && settled.Artifact is not null)
         {
+            input.Usage?.ObserveState(settled.Artifact);
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterResultReadback);
             CampaignProcessBoundaryHooks.Reach(proposalResult
                 ? CampaignProcessBoundaryHooks.ProposalAfterProposalReadback
