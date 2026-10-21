@@ -140,7 +140,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: newPath);
-        AssertResult(await fixture.Run(), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published-partial");
         var prior = fixture.Checkpoint();
         await ConfigureSealedResume(fixture);
         var before = GateCounts(fixture);
@@ -156,27 +156,19 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemTheory]
-    [InlineData(false, false)]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    [InlineData(true, true)]
-    public async Task Independent_processes_compete_for_the_same_ref_claim_without_duplicate_publication(bool differentOperation, bool published)
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Identical_automatic_processes_compete_for_the_same_ref_claim_without_duplicate_publication(bool published)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: published);
         if (published)
         {
-            AssertResult(await fixture.Run(), 0, "published");
+            AssertResult(await fixture.Run(), 0, "published-partial");
             await ConfigureSealedResume(fixture);
         }
         var otherRequest = Path.Join(fixture.Outside, "other-request.json");
         var otherArgs = fixture.Args(requestPath: otherRequest);
-        if (differentOperation)
-        {
-            var request = JsonNode.Parse(await File.ReadAllTextAsync(otherRequest))!;
-            request["github"]!["operationId"] = "operation.other";
-            await File.WriteAllTextAsync(otherRequest, request.ToJsonString());
-        }
         fixture.GitHub.Barrier("/git/ref/heads/contract-scribe/");
         using var first = CampaignCliProcessTests.Start(fixture.Args(), fixture.Environment());
         var otherEnvironment = fixture.Environment();

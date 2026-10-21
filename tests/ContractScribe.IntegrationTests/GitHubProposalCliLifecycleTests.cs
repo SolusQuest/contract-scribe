@@ -44,7 +44,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
-        AssertResult(await fixture.Run(), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published-partial");
         await ConfigureSealedResume(fixture);
         var changed = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         changed["planning"] = new JsonObject { ["targetProfile"] = "profile.assembly-visible" };

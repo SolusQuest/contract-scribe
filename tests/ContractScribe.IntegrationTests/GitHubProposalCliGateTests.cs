@@ -89,7 +89,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync(twoWorks: true);
         var initial = await fixture.Run();
         Assert.True(initial.ExitCode == 0, initial.Stdout + initial.Stderr + await File.ReadAllTextAsync(fixture.Observations));
-        AssertResult(initial, 0, "published");
+        AssertResult(initial, 0, "published-partial");
         var checkpoint = fixture.Checkpoint();
         Assert.True(Observed(fixture, "sdk-discovery") > 0);
         Assert.True(Observed(fixture, "provider-create") > 0);
@@ -215,7 +215,7 @@ public sealed partial class GitHubProposalCliProcessTests
         configuration["budgets"]!["invocation"]!["maximumProviderRequests"] = 64;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var requests = fixture.Provider.RequestCount;
-        AssertResult(await fixture.Run(), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published-partial");
         var restored = fixture.Checkpoint();
         Assert.Equal(prior.State.Batch.Identity, restored.State.Batch.Identity);
         Assert.Equal(prior.State.Batch.SelectedTargetKeys.ToArray(), restored.State.Batch.SelectedTargetKeys.ToArray());

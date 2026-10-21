@@ -815,7 +815,9 @@ case_invoke_argv() {
         CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
         STUB_ARGV="$w/argv.txt" STUB_ENV="$w/env.txt" \
         python3 "$ACTION_SCRIPTS/invoke.py"
-    grep -q "github-proposal start" "$w/argv.txt"
+    grep -q "github-proposal --repository-root" "$w/argv.txt"
+    grep -q -- "--campaign $w/input-campaign.json" "$w/argv.txt"
+    ! grep -Eq 'github-proposal (start|resume)|--request' "$w/argv.txt"
     grep -q "ContractScribe.Cli.dll" "$w/argv.txt"
     ! grep -q "CONTRACTSCRIBE_ACQUISITION_TOKEN" "$w/env.txt"
     grep -q "CONTRACTSCRIBE_GITHUB_TOKEN=$PRODUCT_TOKEN" "$w/env.txt"

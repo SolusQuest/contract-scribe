@@ -38,7 +38,7 @@ public sealed partial class GitHubProposalCliProcessTests
         }
         else
         {
-            AssertResult(result, 0, "published");
+            AssertResult(result, 0, "published-partial");
             Assert.Equal(CampaignCumulativeOutcomeKind.Accepted, checkpoint.State.CumulativeOutcome!.Kind);
             Assert.Single(checkpoint.State.CandidateObservation!.AcceptedWorkItemKeys);
             Assert.Single(checkpoint.State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
@@ -57,7 +57,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true, rejectNewPath: true);
-        AssertResult(await fixture.Run(), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published-partial");
         var accepted = fixture.Checkpoint();
         await ConfigureSealedResume(fixture);
         var before = GateCounts(fixture);
@@ -148,9 +148,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         var arguments = GitHubProposalCommandParser.Parse(fixture.Args().AsSpan(1)).Arguments!;
         var request = GitHubCampaignConfigurationReader.Read(arguments.CampaignFile, fixture.Repository.Root);
-        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true)
-            with
-        { SnapshotBinding = fixture.Checkpoint().State.Snapshot.OpaqueSnapshotBinding };
+        var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true);
         var github = request.Configuration.GitHub;
         using var registration = (IDisposable)typeof(GitHubTransportTestHook)
             .GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!
@@ -159,6 +157,7 @@ public sealed partial class GitHubProposalCliProcessTests
             github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Configuration.CampaignLineage), GitHubTransportTestHook.Placeholder);
         await using var checkpoint = GitHubCoordinationStore.Create(client);
         var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, default);
+        preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Configuration, observed) };
         Assert.True(await client.BindObservedCheckpointBaseAsync(observed, default));
         Assert.Equal(CampaignCheckpointReadKind.Found, await checkpoint.AcquireCheckpointAsync(default));
         var configuration = preflight.Configuration.Document;
@@ -185,7 +184,10 @@ public sealed partial class GitHubProposalCliProcessTests
                 {
                     var policy = configuration.CreateExecutionPolicy();
                     var execution = configuration.CreateExecutionCapability(policy);
-                    var planning = CampaignCommandRunner.CreatePlanningInput(preflight, configuration, policy, bundle, token);
+                    var saved = fixture.Checkpoint().State.Batch;
+                    var planning = CampaignCommandRunner.CreatePlanningInput(preflight, configuration, policy, bundle, token,
+                        new(saved.CreationQuota)) with
+                    { BatchStartTargetKey = saved.SelectedTargetKeys.FirstOrDefault() };
                     var plan = CampaignPlanner.Plan(planning);
                     Assert.True(await checkpoint.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(plan), token));
                     result = await DocumentationCampaignPatchExecutor.ExecuteAsync(new(bundle.Classified, bundle.Observed,

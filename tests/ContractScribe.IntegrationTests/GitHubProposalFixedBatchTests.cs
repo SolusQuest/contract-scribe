@@ -14,6 +14,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(unsupportedProperty: true);
+        await SetAutomaticQuota(fixture, 0);
         await CreateFixedBatchCheckpoint(fixture, 0);
         var initial = fixture.Checkpoint();
         Assert.Empty(initial.State.Batch.SelectedTargetKeys);
@@ -47,7 +48,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await CreateFixedBatchCheckpoint(fixture, unresolved ? 100 : 1);
         var originalBatch = fixture.Checkpoint().State.Batch;
         Assert.Equal(2, originalBatch.CompleteTargets.Length);
-        AssertResult(await fixture.Run(), 0, "published");
+        AssertResult(await fixture.Run(), 0, unresolved ? "published-partial" : "published");
         var accepted = fixture.Checkpoint();
         Assert.Equal(originalBatch.Identity, accepted.State.Batch.Identity);
         Assert.Single(accepted.State.WorkItems, item => item.Status == CampaignWorkStatus.Accepted);

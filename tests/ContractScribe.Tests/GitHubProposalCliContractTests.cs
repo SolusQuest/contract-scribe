@@ -115,6 +115,23 @@ public sealed class GitHubProposalCliContractTests
         Assert.Empty(result.Diagnostics);
     }
 
+    [Theory]
+    [InlineData(false, "published")]
+    [InlineData(true, "published-partial")]
+    public void Publication_reports_unresolved_selected_work_without_losing_the_successful_PR(bool partial, string outcome)
+    {
+        var observation = new GitHubPublicationObservation(GitHubPublicationResult.Published(
+            new(1, "generation.test", "refs/heads/proposal", new('a', 40), new('b', 64))),
+            "operation.test", "generation.test", "https://github.com/Owner/repo/pull/1");
+        var result = GitHubProposalPresentation.Publication(Identity, CampaignOperation.Resume, 15, observation, partial);
+        using var json = JsonDocument.Parse(result.StandardOutput);
+        Assert.Equal(0, result.ExitCode);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("github-proposal." + outcome, json.RootElement.GetProperty("outcome").GetString());
+        Assert.Equal(observation.PullRequestUrl, json.RootElement.GetProperty("pullRequestUrl").GetString());
+        Assert.Equal(observation.GenerationId, json.RootElement.GetProperty("generationId").GetString());
+    }
+
     private static CliExecutionResult Present(GitHubPublicationDiagnostic diagnostic) =>
         GitHubProposalPresentation.Publication(Identity, CampaignOperation.Start, 14,
             new(GitHubPublicationResult.FromRemoteFailure(GitHubPublicationRemoteFailureKind.Conflict), null, null, null, diagnostic));

@@ -253,7 +253,7 @@ def unexpected_result_summary(exit_code, data):
         return summary
     if not isinstance(value, dict):
         return summary
-    outcomes = {'local-invalid', 'host-failure', 'published', 'replayed', 'no-op', 'awaiting-review',
+    outcomes = {'local-invalid', 'host-failure', 'published', 'published-partial', 'replayed', 'no-op', 'awaiting-review',
                 'merged', 'closed-unmerged', 'stale-base-after-create', 'stale', 'human-change',
                 'conflict', 'permission', 'rate-limit', 'cancelled', 'timeout'}
     known = {'github-proposal.' + name for name in outcomes | {'admitted', 'recovered-content-partial',
@@ -274,7 +274,7 @@ def unexpected_result_summary(exit_code, data):
     if isinstance(codes, list):
         summary['diagnosticCodes'] = [code for code in codes[:16] if isinstance(code, str) and code in known]
         summary['omittedDiagnosticCount'] = len(codes) - len(summary['diagnosticCodes'])
-    failures = outcomes - {'published', 'replayed', 'no-op', 'awaiting-review', 'merged'}
+    failures = outcomes - {'published', 'published-partial', 'replayed', 'no-op', 'awaiting-review', 'merged'}
     if (summary['terminalLayer'] == 'publication' and summary['exitCode'] not in (None, 0)
             and summary['outcome'] in {'github-proposal.' + name for name in failures}):
         summary['publicationDiagnostic'] = publication_diagnostic(value.get('publicationDiagnostic'))

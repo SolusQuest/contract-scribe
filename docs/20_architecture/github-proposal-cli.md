@@ -98,6 +98,8 @@ campaignOperation, publicationOperationId, generationId, outcome, diagnosticCode
 checkpointRevision, pullRequestUrl, publicationDiagnostic
 ```
 
+A successful publication with unresolved selected members reports `published-partial` (exit 0), retaining the PR URL and operation/generation. It does not claim those members are resolved or authorize another PR for the batch. A complete selected result reports `published`.
+
 Envelope version is `1`. Layers are `usage`, `preflight`, `campaign`, `publication`, or `presentation`. Campaign operation is `start`, `resume`, or null when unavailable. Unavailable operation ID, generation, revision, and PR URL are explicitly null. Successful results have no stderr; controlled failures have exactly one closed, sanitized stderr line. No raw HTTP/header/exception, credential, source, candidate, private path or provider data is emitted.
 
 `publicationDiagnostic` is null outside a failed publication, on success, or when no internal observation is available. Otherwise its ordered fields are `boundary`, `owner`, `coordinationFailure`, `proposalFailure`, `pullRequestOutcome`, `transportCode`, `transportHttpStatus`, `delivery`, `recoveryCode`, `recoveryHttpStatus`, `objectKind`, and `predicate`. Boundary and owner are required closed names; all other fields may be null. HTTP statuses are integers from 100 through 599. Undefined enum values or out-of-range statuses suppress the complete diagnostic to null without replacing the original outcome, exit or stderr. This is an in-place correction of the current draft envelope; no alternate version is supported.
@@ -118,7 +120,7 @@ The adapter pairs this observation with one invocation's unchanged Core result. 
 
 | Outcome suffix (`github-proposal.` prefix) | Exit |
 | --- | --- |
-| published, replayed, no-op, awaiting-review, merged | 0 |
+| published, published-partial, replayed, no-op, awaiting-review, merged | 0 |
 | usage (local-invalid with existing `cli.usage.*` diagnostic) | 2 |
 | stale-base-after-create, rate-limit, conflict | 3 |
 | local-invalid, stale, human-change, permission, closed-unmerged | 4 |

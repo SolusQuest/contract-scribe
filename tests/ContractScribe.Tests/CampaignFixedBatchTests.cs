@@ -45,6 +45,27 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
+    public void No_result_batch_successor_rejects_skipped_boundaries_and_unfinished_or_accepted_work()
+    {
+        var scenario = CreateProposalScenario(workItemCount: 4, targetLimit: 0);
+        var before = CampaignStateJson.CreateArtifact(scenario.InitialState);
+        var input = scenario.Input with { TargetLimit = new(2) };
+        var plan = CampaignPlanner.Plan(input);
+        var next = CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(before), plan);
+        Assert.Equal(CampaignTransitionKind.Applied, next.Kind);
+        Assert.True(CampaignStateFactory.IsNoResultBatchSuccessor(before, next.Artifact));
+        CampaignStateFactory.ValidateSuccessorHistory(before, next.Artifact);
+        Assert.Equal(CampaignPlanner.CreateRecoveryProjection(scenario.Plan).ExactUtf8Json.ToArray(),
+            CampaignPlanner.CreateRecoveryProjection(plan).ExactUtf8Json.ToArray());
+        var skipped = CampaignPlanner.Plan(input with { BatchStartTargetKey = plan.Batch.CompleteTargets[2].TargetKey });
+        Assert.Equal(CampaignTransitionKind.Rejected,
+            CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(before), skipped).Kind);
+        Assert.Null(CampaignStateFactory.NextNoResultBatch(next.Artifact.State, new(2)));
+        var accepted = AcceptedPublicationCheckpoint("campaign.synthetic");
+        Assert.Null(CampaignStateFactory.NextNoResultBatch(accepted.State, new(2)));
+    }
+
+    [Fact]
     public void Empty_selected_batch_still_preserves_excluded_unresolved_work()
     {
         var state = CreateCapacityState(excludedOwners: 1, deferredOwners: 0);

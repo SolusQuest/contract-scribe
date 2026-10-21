@@ -94,11 +94,15 @@ public static partial class CampaignStateFactory
     {
         var selected = state.Batch.SelectedTargetKeys.ToHashSet(StringComparer.Ordinal);
         var workByKey = state.WorkItems.ToDictionary(work => work.WorkItemKey, StringComparer.Ordinal);
+        var prior = state.Batch.SelectedTargetKeys.IsEmpty ? new HashSet<string>(StringComparer.Ordinal)
+            : CampaignPlanner.OrderedEligibleTargets(state.Batch)
+                .TakeWhile(target => target.TargetKey != state.Batch.SelectedTargetKeys[0])
+                .Select(target => target.TargetKey).ToHashSet(StringComparer.Ordinal);
         return state.Batch.CompleteTargets.Select(target =>
         {
             var work = workByKey[target.WorkItemKey];
             var kind = !target.BatchEligible ? CampaignTargetProgressKind.Excluded
-                : !selected.Contains(target.TargetKey) && work.OuterAttemptCount == 0 ? CampaignTargetProgressKind.Deferred
+                : !selected.Contains(target.TargetKey) && !prior.Contains(target.TargetKey) ? CampaignTargetProgressKind.Deferred
                 : !target.Dispatchable ? CampaignTargetProgressKind.UnsupportedCurrentExecutor
                 : work.AttemptDisposition == CampaignAttemptDisposition.SuppressedAtAttemptLimit ? CampaignTargetProgressKind.Suppressed
                 : state.ActiveReservation is CampaignProviderReservation reservation && reservation.WorkItemKey == work.WorkItemKey
@@ -150,8 +154,11 @@ public static partial class CampaignStateFactory
     private static bool IsClosedNoResult(CampaignWorkItemState work) =>
         work.Status == CampaignWorkStatus.Closed && work.TrustedProposal is null && work.PausedProviderAttempt is null
         && (work.AttemptDisposition == CampaignAttemptDisposition.SuppressedAtAttemptLimit
-            || work.ClosedOutcome is not { Code: CampaignWorkOutcomeCode.ProviderFailure,
-                ProviderDisposition: CampaignProviderFinalDisposition.Retryable });
+            || work.ClosedOutcome is not
+            {
+                Code: CampaignWorkOutcomeCode.ProviderFailure,
+                ProviderDisposition: CampaignProviderFinalDisposition.Retryable
+            });
 
     internal static CampaignFixedBatch? NextNoResultBatch(CampaignCheckpointState state, CampaignInvocationTargetLimit limit)
     {
@@ -177,6 +184,7 @@ public static partial class CampaignStateFactory
         var successor = next.State;
         var expected = NextNoResultBatch(state, new CampaignInvocationTargetLimit(successor.Batch.CreationQuota));
         return expected is not null && SameRetainedFact(expected, successor.Batch)
+            && successor.ProductRevision == state.ProductRevision && successor.CampaignLineage == state.CampaignLineage
             && successor.Snapshot == state.Snapshot && successor.CheckpointRevision == state.CheckpointRevision + 1
             && successor.ActiveReservation is null && successor.CandidateObservation is null
             && successor.AcceptedCandidateOrigin is null && successor.CumulativeOutcome is null

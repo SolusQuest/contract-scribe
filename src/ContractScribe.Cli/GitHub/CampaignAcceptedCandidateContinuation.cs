@@ -88,7 +88,9 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             if (observed.Result.Kind == GitHubPublicationResultKind.Cancelled
                 && FinalizationFailure(revision) is { } publicationDeadline)
                 return new(null, publicationDeadline);
-            return new(null, GitHubProposalPresentation.Publication(identity, preflight.Operation, revision, observed));
+            var state = context.CurrentCheckpoint.State;
+            var partial = state.CandidateObservation!.AcceptedWorkItemKeys.Length != state.Batch.SelectedTargetKeys.Length;
+            return new(null, GitHubProposalPresentation.Publication(identity, preflight.Operation, revision, observed, partial));
         }
         catch (OperationCanceledException) when (context.CancellationToken.IsCancellationRequested)
         {
