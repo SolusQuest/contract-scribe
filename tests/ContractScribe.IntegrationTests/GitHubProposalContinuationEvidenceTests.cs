@@ -24,6 +24,8 @@ public sealed partial class GitHubProposalCliProcessTests
         });
         await SetAutomaticQuota(fixture, 100);
         var sizes = oversized ? new[] { 100, 100, 30 } : new[] { 95, 12 };
+        // Each batch and the final replay retain one authenticated history.
+        fixture.GitHub.MaximumRequests = (sizes.Length + 1) * 20_000;
         var seen = new HashSet<string>(StringComparer.Ordinal);
         CampaignCheckpointArtifact? previous = null;
         foreach (var size in sizes)
@@ -34,8 +36,13 @@ public sealed partial class GitHubProposalCliProcessTests
             var current = fixture.Checkpoint();
             Assert.Equal(oversized ? 230 : 107, current.State.Batch.CompleteTargets.Length);
             Assert.Equal(size, current.State.Batch.SelectedTargetKeys.Length);
-            var expected = current.State.Batch.CompleteTargets.Where(target => !seen.Contains(target.TargetKey))
-                .Take(size).Select(target => target.TargetKey);
+            // Complete-plan order may interleave types. The fixture declares the
+            // whole AFirst group before BSecond and CThird; each retains its order.
+            var complete = current.State.Batch.CompleteTargets;
+            var grouped = oversized ? complete.AsEnumerable() : new[] { "AFirst", "BSecond", "CThird" }
+                .SelectMany(type => complete.Where(target => target.SymbolRef.DocumentationCommentId
+                    .StartsWith($"M:Fixture.{type}.", StringComparison.Ordinal)));
+            var expected = grouped.Where(target => !seen.Contains(target.TargetKey)).Take(size).Select(target => target.TargetKey);
             Assert.Equal(expected, current.State.Batch.SelectedTargetKeys);
             foreach (var key in current.State.Batch.SelectedTargetKeys) Assert.True(seen.Add(key));
             Assert.Equal(seen.Count, current.State.TargetProgress.Count(item => item.Kind == CampaignTargetProgressKind.Skipped));
@@ -81,6 +88,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(final.Sha256, fixture.Checkpoint().Sha256);
         Assert.Empty(fixture.GitHub.PullRequests);
         Assert.Equal(0, fixture.GitHub.PrAttempts);
+        Assert.InRange(fixture.GitHub.Requests.Count, 1, fixture.GitHub.MaximumRequests);
         await fixture.AssertSourceUnchanged();
     }
 
