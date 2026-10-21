@@ -68,13 +68,14 @@ public sealed partial class GitHubProposalCliProcessTests
             await SetAutomaticQuota(fixture, nextQuota);
         }
         Assert.Equal(6, seen.Count);
-        Assert.DoesNotContain(previous!.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
+        var final = previous ?? throw new InvalidOperationException("No batch completed.");
+        Assert.DoesNotContain(final.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
         var counts = GateCounts(fixture);
         var requests = fixture.Provider.RequestCount;
         AssertResult(await fixture.Run(), 5, "host-failure");
         Assert.Equal(counts.Created, GateCounts(fixture).Created);
         Assert.Equal(requests, fixture.Provider.RequestCount);
-        Assert.Equal(previous.Sha256, fixture.Checkpoint().Sha256);
+        Assert.Equal(final.Sha256, fixture.Checkpoint().Sha256);
         Assert.Empty(fixture.GitHub.PullRequests);
         await fixture.AssertSourceUnchanged();
     }
