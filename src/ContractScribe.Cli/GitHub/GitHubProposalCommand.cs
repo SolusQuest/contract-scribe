@@ -10,13 +10,12 @@ internal static class GitHubProposalCommand
     internal const string Help =
         "ContractScribe github-proposal\n\n" +
         "Usage:\n" +
-        "  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]\n" +
-        "  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]\n\n" +
+        "  contract-scribe github-proposal --repository-root <path> --input <path> --policy <path> --campaign <path> [--configuration <path>] [--configuration-override <path>]\n\n" +
         "Options:\n" +
         "  --repository-root <path>       Existing repository root.\n" +
         "  --input <path>                 Existing .sln, .slnx, or .csproj inside the repository.\n" +
         "  --policy <path>                Existing M1 policy file inside the repository.\n" +
-        "  --request <path>               Strict non-secret github-proposal invocation request JSON.\n" +
+        "  --campaign <path>              Stable non-secret GitHub campaign configuration JSON.\n" +
         "  --configuration <path>         Optional consumer configuration layer.\n" +
         "  --configuration-override <path>  Optional invocation configuration layer.\n" +
         "  -h, --help                     Print this help.\n\n" +
@@ -24,7 +23,7 @@ internal static class GitHubProposalCommand
         "Both --option value and --option=value forms are accepted in any order.\n\n" +
         "Environment:\n" +
         "  CONTRACTSCRIBE_PROVIDER_API_KEY  Existing campaign provider credential.\n" +
-        "  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local request/configuration validation.\n\n" +
+        "  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local configuration validation.\n\n" +
         "Exit codes:\n" +
         "  0  Published, replayed, no work, awaiting review, or merged.\n" +
         "  2  Invalid command-line usage.\n" +
@@ -38,44 +37,47 @@ internal static class GitHubProposalCommand
         string currentDirectory, CancellationToken cancellationToken, Func<string, string?>? credentialAccessor = null)
     {
         var identity = CliBuildIdentity.Current;
+        CampaignOperation? operation = null;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var request = GitHubProposalRequestReader.Read(arguments.Request, currentDirectory);
+            var request = GitHubCampaignConfigurationReader.Read(arguments.CampaignFile, currentDirectory);
             var preflight = CampaignPreflight.Run(arguments.Campaign(request), currentDirectory, identity, remoteCheckpoint: true);
-            if (GitHubProposalProcessHooks.Terminal(arguments.Operation) is { } selectedTerminal)
+            if (GitHubProposalProcessHooks.Terminal(CampaignOperation.Start) is { } selectedTerminal)
                 return GitHubProposalPresentation.Campaign(identity, selectedTerminal);
             var accessor = credentialAccessor ?? Environment.GetEnvironmentVariable;
             if (!request.Revalidate() || !preflight.Configuration.Revalidate())
-                return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid");
-            var github = request.Request.GitHub;
-            var authority = ValidatedGitHubCheckpointAuthority.Create(github.RepositoryOwner, github.RepositoryName,
-                github.TargetRef, request.Request.CampaignLineage, github.ExpectedBaseCommitOid);
+                return GitHubProposalPresentation.Local(identity, operation, "local-invalid");
+            var github = request.Configuration.GitHub;
+            var authority = GitHubPublicationFactory.CreateCampaignReadAuthority(github.RepositoryOwner, github.RepositoryName,
+                github.TargetRef, request.Configuration.CampaignLineage);
             GitHubProposalProcessHooks.Reach("token-read");
             GitHubApiClient client;
-            try { client = GitHubApiClient.CreateCheckpoint(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!); }
+            try { client = GitHubApiClient.CreateReadOnly(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!); }
             catch (Exception exception) when (exception is ArgumentException or GitHubProtocolException)
-            { return GitHubProposalPresentation.Local(identity, arguments.Operation, "permission"); }
+            { return GitHubProposalPresentation.Local(identity, operation, "permission"); }
             using var clientLifetime = client;
             using var finalization = new GitHubPublicationFinalization(cancellationToken, GitHubProposalProcessHooks.FinalizationClock);
             await using var checkpoint = GitHubCoordinationStore.Create(client);
             var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, cancellationToken).ConfigureAwait(false);
             if (observed.Failure is not null
-                && GitHubCampaignPreflight.Select(identity, arguments.Operation, request.Request, observed, null) is { } lifecycleStop)
+                && GitHubCampaignPreflight.Select(identity, operation, observed, null) is { } lifecycleStop)
                 return lifecycleStop;
             var read = await checkpoint.ReadAsync(cancellationToken).ConfigureAwait(false);
             if (checkpoint.CheckpointFailure is { } readFailure)
-                return GitHubProposalPresentation.Local(identity, arguments.Operation, GitHubCampaignPreflight.TransportOutcome(readFailure));
+                return GitHubProposalPresentation.Local(identity, operation, GitHubCampaignPreflight.TransportOutcome(readFailure));
             var accepted = read.Kind == CampaignCheckpointReadKind.Found ? CampaignCheckpointAcceptance.AcceptCurrent(read) : null;
             if (read.Kind is not (CampaignCheckpointReadKind.Found or CampaignCheckpointReadKind.NotFound)
                 || read.Kind == CampaignCheckpointReadKind.Found && accepted?.Kind != CampaignCheckpointAcceptanceKind.Accepted
                 || read.Kind == CampaignCheckpointReadKind.NotFound && observed.Ledger is not null)
-                return GitHubProposalPresentation.Preflight(identity, arguments.Operation, "human-change", "invalid-recovery-authority", null);
-            if (GitHubCampaignPreflight.Select(identity, arguments.Operation, request.Request, observed,
+                return GitHubProposalPresentation.Preflight(identity, operation, "human-change", "invalid-recovery-authority", null);
+            operation = read.Kind == CampaignCheckpointReadKind.Found ? CampaignOperation.Resume : CampaignOperation.Start;
+            preflight = preflight with { Operation = operation.Value };
+            if (GitHubCampaignPreflight.Select(identity, operation, observed,
                 accepted?.Artifact?.CheckpointRevision) is { } verifiedStop) return verifiedStop;
-            // Classify lifecycle before a stale caller publication base can mask its reason.
+            // Lifecycle precedes the base-bound checkpoint write capability.
             if (!await client.BindObservedCheckpointBaseAsync(observed, cancellationToken).ConfigureAwait(false))
-                return GitHubProposalPresentation.Preflight(identity, arguments.Operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
+                return GitHubProposalPresentation.Preflight(identity, operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
             var claim = await checkpoint.AcquireCheckpointAsync(cancellationToken).ConfigureAwait(false);
             if (claim != CampaignCheckpointReadKind.Found)
             {
@@ -89,11 +91,11 @@ internal static class GitHubProposalCommand
                         ? "conflict" : claim == CampaignCheckpointReadKind.Invalid ? "human-change"
                         : claim == CampaignCheckpointReadKind.Unreadable ? "host-failure" : "local-invalid",
                 };
-                return GitHubProposalPresentation.Local(identity, arguments.Operation, outcome);
+                return GitHubProposalPresentation.Local(identity, operation, outcome);
             }
             using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, checkpoint.CheckpointToken);
             var claimed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, execution.Token).ConfigureAwait(false);
-            if (GitHubCampaignPreflight.Select(identity, arguments.Operation, request.Request, claimed,
+            if (GitHubCampaignPreflight.Select(identity, operation, claimed,
                 accepted?.Artifact?.CheckpointRevision) is { } claimedStop) return claimedStop;
             if (GitHubCampaignPreflight.NeedsPublicationRecovery(claimed))
             {
@@ -102,22 +104,21 @@ internal static class GitHubProposalCommand
                 claimed = await checkpoint.RecoverObservedPublicationAsync(recoveryToken).ConfigureAwait(false);
                 GitHubProposalProcessHooks.Reach("after-publication-recovery");
                 if (finalization.TimedOut && claimed.Failure?.Transport?.Code == GitHubFailureCode.Cancelled)
-                    return GitHubProposalPresentation.Local(identity, arguments.Operation, "timeout", accepted?.Artifact?.CheckpointRevision);
-                if (GitHubCampaignPreflight.Select(identity, arguments.Operation, request.Request, claimed,
+                    return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
+                if (GitHubCampaignPreflight.Select(identity, operation, claimed,
                     accepted?.Artifact?.CheckpointRevision) is { } recoveredStop) return recoveredStop;
-                if (finalization.TimedOut) return GitHubProposalPresentation.Local(identity, arguments.Operation, "timeout", accepted?.Artifact?.CheckpointRevision);
+                if (finalization.TimedOut) return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
             }
             if (claimed.TargetOid != observed.TargetOid)
-                return GitHubProposalPresentation.Preflight(identity, arguments.Operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
+                return GitHubProposalPresentation.Preflight(identity, operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
             if (!request.Revalidate() || !preflight.Configuration.Revalidate())
-                return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
-            preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Request, claimed) };
+                return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
+            preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Configuration, claimed) };
             var originalOnly = claimed.Ledger?.Stage is GitHubCoordinationStage.Claimed
                 or GitHubCoordinationStage.ContentCreated or GitHubCoordinationStage.ProposalRefAdvanced;
-            if (originalOnly && accepted?.Artifact is { } frozen
-                && preflight.SnapshotBinding != frozen.State.Snapshot.OpaqueSnapshotBinding)
-                return GitHubProposalPresentation.Preflight(identity, arguments.Operation, "conflict", "publication-incomplete", frozen.CheckpointRevision);
-            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request, accessor,
+            var publicationSelection = new GitHubAutomaticPublicationSelection(request.Configuration, claimed);
+            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request,
+                publicationSelection.ForState,
                 (publication, payload, token) => GitHubPublicationFacade.PublishCheckpointAsync(client, checkpoint,
                     publication, payload, token),
                 async (bundle, token) =>
@@ -125,40 +126,40 @@ internal static class GitHubProposalCommand
                     try
                     {
                         if (!request.Revalidate() || !preflight.Configuration.Revalidate())
-                            return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
+                            return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
                         var inputFailure = await GitHubCheckoutBinding.ValidateAsync(client, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false);
-                        return inputFailure is null ? null : GitHubProposalPresentation.Preflight(identity, arguments.Operation,
+                        return inputFailure is null ? null : GitHubProposalPresentation.Preflight(identity, operation,
                             "stale", inputFailure, accepted?.Artifact?.CheckpointRevision);
                     }
                     catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
                     {
-                        return GitHubProposalPresentation.Local(identity, arguments.Operation,
+                        return GitHubProposalPresentation.Local(identity, operation,
                             GitHubCampaignPreflight.TransportOutcome(exception.TransportFailure), accepted?.Artifact?.CheckpointRevision);
                     }
                 },
-                authenticatedBaseOid: claimed.TargetOid, finalization: finalization,
+                finalization: finalization,
                 bindFinalizationDeadline: client.BindFinalizationDeadline, originalOperationOnly: originalOnly);
             return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
                 accessor, continuation, checkpointStore: checkpoint).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            return GitHubProposalPresentation.Local(identity, arguments.Operation, "cancelled");
+            return GitHubProposalPresentation.Local(identity, operation, "cancelled");
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
         {
-            return GitHubProposalPresentation.Local(identity, arguments.Operation,
+            return GitHubProposalPresentation.Local(identity, operation,
                 GitHubCampaignPreflight.TransportOutcome(exception.TransportFailure));
         }
         catch (Exception exception) when (exception is CampaignPreflightException
             or System.Text.Json.JsonException or System.Text.DecoderFallbackException
             || CliPreflight.IsPathFailure(exception))
         {
-            return GitHubProposalPresentation.Local(identity, arguments.Operation, "local-invalid");
+            return GitHubProposalPresentation.Local(identity, operation, "local-invalid");
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            return GitHubProposalPresentation.ContractError(identity, arguments.Operation, null);
+            return GitHubProposalPresentation.ContractError(identity, operation, null);
         }
     }
 }

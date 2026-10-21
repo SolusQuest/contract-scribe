@@ -15,7 +15,6 @@ public sealed class PackagedCliGitHubProcessTests
 {
     private const string Placeholder = "contract-scribe-synthetic-transport-only";
     private const string Lineage = "campaign.packed.github";
-    private const string Snapshot = "snapshot.packed.github";
 
     [Fact]
     public async Task PackedGitHub_StartPublishAndReplay()
@@ -100,29 +99,23 @@ public sealed class PackagedCliGitHubProcessTests
     {
         var request = new JsonObject
         {
-            ["githubProposalRequestVersion"] = 1,
+            ["githubCampaignVersion"] = 1,
             ["campaignLineage"] = Lineage,
-            ["snapshot"] = Snapshot,
-            ["checkpointStore"] = "coordination-ref",
             ["github"] = new JsonObject
             {
                 ["repositoryOwner"] = "Owner",
                 ["repositoryName"] = "repo",
                 ["targetRef"] = "refs/heads/main",
-                ["expectedBaseCommitOid"] = github.BaseOid,
-                ["operationId"] = "operation.packed",
-                ["generationId"] = "generation.packed",
-                ["transition"] = "initial",
             },
         };
         await File.WriteAllTextAsync(requestPath, request.ToJsonString(), new UTF8Encoding(false, true));
         var result = await PackagedCliProcessTests.RunCliAsync(
             [
-                "github-proposal", operation,
+                "github-proposal",
                 "--repository-root", fixtureRoot,
                 "--input", "App/App.csproj",
                 "--policy", "policy.json",
-                "--request", requestPath,
+                "--campaign", requestPath,
                 "--configuration", layer,
             ],
             environment);

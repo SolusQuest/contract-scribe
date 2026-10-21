@@ -95,7 +95,7 @@ def configuration(raw):
     require(value['product_sha'] == PRODUCT and value['base_sha'] != BOOTSTRAP, 'product-or-base')
     require(value['scheduled_run_number'] == value['manual_run_number'] + 1, 'role-slots')
     require(value['actor_id'] == 16307884 and value['actor_login'] == value['owner'] == 'Yuee98'
-            and value['issue'] == 166 and value['scenarios'] == ['stale', 'published', 'replayed'], 'authorization-scope')
+            and value['issue'] == 166 and value['scenarios'] == ['local-invalid', 'published', 'awaiting-review'], 'authorization-scope')
     duration = timestamp(value['not_after']) - timestamp(value['not_before'])
     require(dt.timedelta(0) < duration <= dt.timedelta(hours=6), 'window-bound')
     return value
@@ -188,8 +188,9 @@ def archive_checkpoint(data, expected_archive_digest, expected_content_digest=No
 
 def scenario_result(scenario, exit_code, data, product_sha=PRODUCT):
     result = parse_json(data)
-    expected = {'negative': (4, 'stale', 'start'), 'positive': (0, 'published', 'start'), 'replay': (0, 'replayed', 'resume')}[scenario]
-    require(isinstance(result, dict) and exit_code == expected[0] and result.get('terminalLayer') == 'publication'
+    expected = {'negative': (4, 'local-invalid', None, 'preflight'), 'positive': (0, 'published', 'start', 'publication'),
+                'replay': (0, 'awaiting-review', 'resume', 'preflight')}[scenario]
+    require(isinstance(result, dict) and exit_code == expected[0] and result.get('terminalLayer') == expected[3]
             and result.get('outcome') == 'github-proposal.' + expected[1]
             and result.get('campaignOperation') == expected[2] and result.get('cliContractBaseline') == product_sha,
             'unexpected-scenario-result')

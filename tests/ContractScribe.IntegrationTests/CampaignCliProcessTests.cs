@@ -841,6 +841,7 @@ public sealed partial class CampaignCliProcessTests
         }
 
         internal Uri Endpoint { get; }
+        internal bool SkipProposals { get; set; }
 
         internal int RequestCount => Volatile.Read(ref requestCount);
 
@@ -880,7 +881,7 @@ public sealed partial class CampaignCliProcessTests
                     }
                     var response = scenario == "shared"
                         ? CreateSharedResponse(body)
-                        : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal");
+                        : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal" || SkipProposals);
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
                     await stream.WriteAsync(headers, disposal.Token);

@@ -1,7 +1,7 @@
 name: contract-scribe
 description: >-
   Acquire, verify, install, and invoke the authorized ContractScribe CLI
-  payload (github-proposal start|resume). See
+  payload (automatic github-proposal). See
   docs/20_architecture/action-interface.md for the contract.
 author: SolusQuest
 branding:
@@ -9,9 +9,6 @@ branding:
   color: blue
 
 inputs:
-  operation:
-    description: "github-proposal-start | github-proposal-resume"
-    required: true
   repository-root:
     description: "Existing repository root (relative paths resolve from the workspace)"
     required: true
@@ -21,8 +18,8 @@ inputs:
   policy:
     description: "Existing M1 policy file inside the repository"
     required: true
-  request:
-    description: "github-proposal invocation request JSON object (inline; <=64 KiB UTF-8)"
+  campaign:
+    description: "Stable GitHub campaign configuration JSON object (inline; <=64 KiB UTF-8)"
     required: true
   configuration:
     description: "Optional consumer configuration layer path"
@@ -115,11 +112,10 @@ runs:
         CONTRACTSCRIBE_PROVIDER_API_KEY: ""
         CONTRACTSCRIBE_GITHUB_TOKEN: ""
         CONTRACTSCRIBE_ACQUISITION_TOKEN: ""
-        CS_INPUT_OPERATION: ${{ inputs.operation }}
         CS_INPUT_REPOSITORY_ROOT: ${{ inputs.repository-root }}
         CS_INPUT_INPUT: ${{ inputs.input }}
         CS_INPUT_POLICY: ${{ inputs.policy }}
-        CS_INPUT_REQUEST: ${{ inputs.request }}
+        CS_INPUT_CAMPAIGN: ${{ inputs.campaign }}
         CS_INPUT_CONFIGURATION: ${{ inputs.configuration }}
         CS_INPUT_CONFIGURATION_OVERRIDE: ${{ inputs.configuration-override }}
       run: exec python3 "${{ github.action_path }}/scripts/action/prepare.py"
@@ -179,5 +175,4 @@ runs:
         CS_OUT_PAYLOAD_VERSION: ${{ steps.acquire.outputs['payload-version'] }}
         CS_OUT_PAYLOAD_SHA256: ${{ steps.acquire.outputs['payload-sha256'] }}
         CS_OUT_INSTALL_DIR: ${{ steps.install.outputs['install-dir'] }}
-        CS_INPUT_OPERATION: ${{ inputs.operation }}
       run: exec python3 "${{ github.action_path }}/scripts/action/emit.py"

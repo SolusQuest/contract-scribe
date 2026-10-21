@@ -284,11 +284,11 @@ def main():
     C.mask(os.environ.get("CONTRACTSCRIBE_PROVIDER_API_KEY"))
     C.mask(os.environ.get("CONTRACTSCRIBE_GITHUB_TOKEN"))
 
-    argv = [plan["dotnet"], entry, "github-proposal", plan["operation"],
+    argv = [plan["dotnet"], entry, "github-proposal",
             "--repository-root", plan["repositoryRoot"],
             "--input", plan["input"],
             "--policy", plan["policy"],
-            "--request", plan["request"]]
+            "--campaign", plan["campaign"]]
     if plan.get("configuration"):
         argv += ["--configuration", plan["configuration"]]
     if plan.get("configurationOverride"):

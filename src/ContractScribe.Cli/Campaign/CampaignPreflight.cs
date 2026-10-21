@@ -19,6 +19,7 @@ internal sealed record CampaignPreflightResult(
     CampaignResolvedConfigurationSnapshot Configuration)
 {
     internal string PolicyPath { get; init; } = string.Empty;
+    internal bool AutomaticSnapshotBinding { get; init; }
 }
 
 internal static class CampaignPreflight
@@ -59,7 +60,7 @@ internal static class CampaignPreflight
                 arguments.Snapshot,
                 state,
                 configuration)
-            { PolicyPath = inputs.PolicyPath };
+            { PolicyPath = inputs.PolicyPath, AutomaticSnapshotBinding = remoteCheckpoint };
         }
         catch (CampaignPreflightException)
         {

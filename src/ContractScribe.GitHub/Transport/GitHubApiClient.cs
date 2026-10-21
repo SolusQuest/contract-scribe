@@ -115,9 +115,10 @@ internal sealed class GitHubApiClient : IDisposable
     internal async ValueTask<bool> BindObservedCheckpointBaseAsync(
         Coordination.GitHubCampaignObservation observation, CancellationToken token)
     {
-        Input(checkpointAuthority is not null && mutationAuthority is null && checkpointWrite is null
+        Input(mutationAuthority is null && checkpointWrite is null
             && observation.Failure is null && observation.CollectionExhausted
-            && observation.Repository == AuthenticatedRepository && observation.TargetRef == readAuthority.TargetRef);
+            && observation.Repository == AuthenticatedRepository && observation.TargetRef == readAuthority.TargetRef
+            && observation.CoordinationRef == GitHubPublicationFactory.CreateCoordinationRef(readAuthority));
         var current = Coordination.GitHubObservedProposalIntegrity.Read(await GetRefAsync(readAuthority.TargetRef, token).ConfigureAwait(false));
         if (current is not { } target || target.Oid != observation.TargetOid) return false;
         checkpointAuthority = ValidatedGitHubCheckpointAuthority.Create(readAuthority.RepositoryOwner,

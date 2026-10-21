@@ -1,20 +1,17 @@
-# Copy alongside .github/contract-scribe/handoff.py and select a reviewed Action ref.
+# Copy alongside .github/contract-scribe/caller.py and select a reviewed Action ref.
 # Set CONTRACTSCRIBE_CAMPAIGN_LINEAGE and CONTRACTSCRIBE_CAMPAIGN repository variables.
-# The campaign JSON contains snapshot, operationId, generationId, targetRef,
-# repositoryOwner and repositoryName. Resume uses the same ref-backed
-# checkpoint; each run explicitly selects start or resume. No schedule or artifact
-# selection authorizes an invocation. Provider/acquisition secrets are passed only
-# to the Action; publication uses this job's github.token.
+# The campaign JSON is the stable githubCampaignVersion/campaignLineage/github
+# configuration. Every trigger passes identical inputs; CLI chooses lifecycle.
+# Provider/acquisition secrets are passed only to the Action; publication uses
+# this job's github.token. Optional schedule is best-effort, with no timing guarantee.
 name: ContractScribe campaign
 
 on:
-  workflow_dispatch:
-    inputs:
-      operation:
-        description: Explicit campaign operation
-        required: true
-        type: choice
-        options: [start, resume]
+  workflow_dispatch: {}
+  # Optional: uncomment to enable best-effort native scheduling.
+  # schedule:
+  #   - cron: '*/30 * * * *'
+  # External callers may use GitHub's workflow_dispatch API with the same inputs.
 
 permissions: {}
 
@@ -23,7 +20,7 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  CS_HELPER: ${{ github.workspace }}/.github/contract-scribe/handoff.py
+  CS_HELPER: ${{ github.workspace }}/.github/contract-scribe/caller.py
   CS_CAMPAIGN_LINEAGE: ${{ vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE }}
   # The checked-out target revision, input surface, policy file and optional
   # consumer configuration layer are ordinary file edits for the caller.
@@ -41,13 +38,12 @@ env:
     "repositoryId":${{ toJSON(github.repository_id) }},
     "workflowRef":${{ toJSON(github.workflow_ref) }}}
   CS_CAMPAIGN: ${{ vars.CONTRACTSCRIBE_CAMPAIGN }}
-  CS_OPERATION: ${{ inputs.operation }}
 
 jobs:
   invoke:
-    name: Explicit campaign invocation
+    name: Automatic campaign invocation
     if: >-
-      github.event_name == 'workflow_dispatch' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
       vars.CONTRACTSCRIBE_CAMPAIGN_LINEAGE != '' &&
       vars.CONTRACTSCRIBE_CAMPAIGN != ''
     runs-on: ubuntu-latest
@@ -66,27 +62,19 @@ jobs:
       - name: Assert exact workflow head
         run: test "$(git rev-parse HEAD)" = "${{ github.sha }}"
 
-      - name: Authenticate explicit invocation
+      - name: Authenticate trusted trigger
         env:
           GITHUB_TOKEN: ${{ github.token }}
         run: python3 "$CS_HELPER" gate
 
-      - name: Build invocation request
-        id: request
-        run: >-
-          python3 "$CS_HELPER" request
-          --base-oid "$(git rev-parse HEAD)"
-          --out "$RUNNER_TEMP/cs-request.json"
-
-      - name: ContractScribe selected invocation
+      - name: ContractScribe automatic invocation
         id: invoke
         uses: SolusQuest/contract-scribe@<RELEASE_TAG_OR_SHA>
         with:
-          operation: github-proposal-${{ inputs.operation }}
           repository-root: ${{ github.workspace }}
           input: ${{ env.CS_INPUT }}
           policy: ${{ env.CS_POLICY }}
-          request: ${{ steps.request.outputs.request-json }}
+          campaign: ${{ env.CS_CAMPAIGN }}
           configuration: ${{ env.CS_CONFIGURATION }}
           provider-api-key: ${{ secrets.CONTRACTSCRIBE_PROVIDER_API_KEY }}
           github-token: ${{ github.token }}

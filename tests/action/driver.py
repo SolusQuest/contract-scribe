@@ -33,10 +33,9 @@ def _init(workdir, install_root=None, dotnet=None, cwd=None):
     os.makedirs(workdir, mode=0o700, exist_ok=True)
     os.chmod(workdir, 0o700)
     plan = {
-        "operation": "start",
         "repositoryRoot": cwd or workdir,
         "input": "x.slnx", "policy": "policy.json",
-        "request": os.path.join(workdir, "input-request.json"),
+        "campaign": os.path.join(workdir, "input-campaign.json"),
         "configuration": None, "configurationOverride": None,
         "dotnet": dotnet or "dotnet",
         "cwd": cwd or workdir,
@@ -44,8 +43,8 @@ def _init(workdir, install_root=None, dotnet=None, cwd=None):
     }
     with open(os.path.join(workdir, "plan.json"), "w", encoding="utf-8") as fh:
         json.dump(plan, fh)
-    if not os.path.exists(plan["request"]):
-        with open(plan["request"], "w", encoding="utf-8") as fh:
+    if not os.path.exists(plan["campaign"]):
+        with open(plan["campaign"], "w", encoding="utf-8") as fh:
             fh.write("{}")
 
 

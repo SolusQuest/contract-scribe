@@ -24,7 +24,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (patchTimeout)
             layer["planning"] = new JsonObject { ["maximumPatchElapsedMilliseconds"] = 1 };
         await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString());
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         var checkpoint = fixture.Checkpoint();
         Assert.Equal(2, checkpoint.State.Batch.SelectedTargetKeys.Length);
         Assert.True(checkpoint.State.CumulativeOutcome is not null, result.Stdout + result.Stderr);
@@ -44,7 +44,7 @@ public sealed partial class GitHubProposalCliProcessTests
             Assert.Single(checkpoint.State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
             var writes = fixture.GitHub.PublicationWrites;
             var sends = fixture.Provider.RequestCount;
-            AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+            AssertResult(await fixture.Run(), 0, "awaiting-review");
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
             Assert.Equal(sends, fixture.Provider.RequestCount);
             Assert.Single(fixture.Checkpoint().State.WorkItems.Where(work => work.Status == CampaignWorkStatus.Accepted));
@@ -57,12 +57,12 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true, rejectNewPath: true);
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var accepted = fixture.Checkpoint();
         await ConfigureSealedResume(fixture);
         var before = GateCounts(fixture);
         var writes = fixture.GitHub.Mutations;
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
         Assert.Equal(accepted.Sha256, fixture.Checkpoint().Sha256);
         Assert.Equal(before, GateCounts(fixture));
         Assert.Equal(writes, fixture.GitHub.Mutations);
@@ -78,7 +78,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var accepted = fixture.Checkpoint();
         var failed = (await RealReconstruction(fixture, failure)).Artifact!;
         Assert.Equal(CampaignTerminalKind.Failed, failed.State.TerminalOutcome!.Kind);
@@ -87,7 +87,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await ConfigureSealedResume(fixture);
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
-        var result = await fixture.Run("resume");
+        var result = await fixture.Run();
         Assert.Equal(exit, outcome == "stale" ? 4 : 5);
         Assert.StartsWith("campaign.patch-", diagnostic, StringComparison.Ordinal);
         AssertResult(result, 0, "awaiting-review");
@@ -104,10 +104,10 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task Invalid_escaped_request_is_local_invalid_before_campaign_or_token_access()
     {
         await using var fixture = await Fixture.CreateAsync();
-        var arguments = fixture.Args("start");
+        var arguments = fixture.Args();
         var raw = await File.ReadAllTextAsync(fixture.Request);
         await File.WriteAllTextAsync(fixture.Request,
-            raw.Replace("operation.initial", "\\uD800", StringComparison.Ordinal));
+            raw.Replace("Owner", "\\uD800", StringComparison.Ordinal));
         var result = await fixture.RunArgs(arguments, fixture.Environment());
         AssertResult(result, 4, "local-invalid");
         Assert.Equal("github proposal stopped before publication: github-proposal.local-invalid\n", result.Stderr);
@@ -121,24 +121,23 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var accepted = fixture.Checkpoint();
         var reconstruction = await RealReconstruction(fixture, "accepted");
         await ConfigureSealedResume(fixture);
-        var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
-        var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
+        var arguments = GitHubProposalCommandParser.Parse(fixture.Args().AsSpan(1)).Arguments!;
+        var request = GitHubCampaignConfigurationReader.Read(arguments.CampaignFile, fixture.Repository.Root);
         var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true)
             with
         { SnapshotBinding = fixture.Checkpoint().State.Snapshot.OpaqueSnapshotBinding };
-        var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, request,
-            _ => throw new InvalidOperationException("No credential is needed to classify original progress."));
+        var continuation = new CampaignAcceptedCandidateContinuation(CliBuildIdentity.Current, preflight, request);
         var current = fixture.Checkpoint();
         Assert.Equal(accepted.Sha256, current.State.AcceptedCandidateOrigin!.CheckpointSha256);
         Assert.Null(continuation.ValidateHandoff(current, reconstruction));
         Assert.True(continuation.ReconstructAccepted(current.State));
         var reads = fixture.TokenReads();
         var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), 0, "awaiting-review");
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
         Assert.Equal(current.Sha256, fixture.Checkpoint().Sha256);
         Assert.Equal(reads + 1, fixture.TokenReads());
         Assert.Equal(writes, fixture.GitHub.PublicationWrites);
@@ -147,19 +146,20 @@ public sealed partial class GitHubProposalCliProcessTests
 
     private static async Task<DocumentationCampaignOutcome> RealReconstruction(Fixture fixture, string failure)
     {
-        var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
-        var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
+        var arguments = GitHubProposalCommandParser.Parse(fixture.Args().AsSpan(1)).Arguments!;
+        var request = GitHubCampaignConfigurationReader.Read(arguments.CampaignFile, fixture.Repository.Root);
         var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true)
             with
         { SnapshotBinding = fixture.Checkpoint().State.Snapshot.OpaqueSnapshotBinding };
-        var github = request.Request.GitHub;
+        var github = request.Configuration.GitHub;
         using var registration = (IDisposable)typeof(GitHubTransportTestHook)
             .GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, [fixture.GitHub.Endpoint, null, 30_000])!;
-        using var client = GitHubApiClient.CreateCheckpoint(ValidatedGitHubCheckpointAuthority.Create(
-            github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Request.CampaignLineage,
-            github.ExpectedBaseCommitOid), GitHubTransportTestHook.Placeholder);
+        using var client = GitHubApiClient.CreateReadOnly(GitHubPublicationFactory.CreateCampaignReadAuthority(
+            github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Configuration.CampaignLineage), GitHubTransportTestHook.Placeholder);
         await using var checkpoint = GitHubCoordinationStore.Create(client);
+        var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, default);
+        Assert.True(await client.BindObservedCheckpointBaseAsync(observed, default));
         Assert.Equal(CampaignCheckpointReadKind.Found, await checkpoint.AcquireCheckpointAsync(default));
         var configuration = preflight.Configuration.Document;
         var sourcePath = Path.Join(fixture.Repository.Root, "App", "App.cs");

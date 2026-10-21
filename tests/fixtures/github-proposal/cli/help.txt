@@ -1,14 +1,13 @@
 ContractScribe github-proposal
 
 Usage:
-  contract-scribe github-proposal start --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
-  contract-scribe github-proposal resume --repository-root <path> --input <path> --policy <path> --request <path> [--configuration <path>] [--configuration-override <path>]
+  contract-scribe github-proposal --repository-root <path> --input <path> --policy <path> --campaign <path> [--configuration <path>] [--configuration-override <path>]
 
 Options:
   --repository-root <path>       Existing repository root.
   --input <path>                 Existing .sln, .slnx, or .csproj inside the repository.
   --policy <path>                Existing M1 policy file inside the repository.
-  --request <path>               Strict non-secret github-proposal invocation request JSON.
+  --campaign <path>              Stable non-secret GitHub campaign configuration JSON.
   --configuration <path>         Optional consumer configuration layer.
   --configuration-override <path>  Optional invocation configuration layer.
   -h, --help                     Print this help.
@@ -18,7 +17,7 @@ Both --option value and --option=value forms are accepted in any order.
 
 Environment:
   CONTRACTSCRIBE_PROVIDER_API_KEY  Existing campaign provider credential.
-  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local request/configuration validation.
+  CONTRACTSCRIBE_GITHUB_TOKEN      GitHub credential read once after local configuration validation.
 
 Exit codes:
   0  Published, replayed, no work, awaiting review, or merged.

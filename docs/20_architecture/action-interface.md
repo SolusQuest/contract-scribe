@@ -4,13 +4,11 @@
 > published or supported distribution; this document freezes the external
 > contract so M6-A3 examples and M6-R1 promotion build against it.
 
-## M7 planning boundary
+## Automatic campaign boundary
 
-[M7 plan](../90_roadmap/m7-plan.md) adopts one automatic caller-triggered product entrypoint that selects start, compatible unpublished fixed-batch recovery, exact publication recovery, no-op, awaiting review or pause from authenticated ledger/PR state. Manual, optional best-effort native schedule and caller-selected external triggers use the same safeguards, with no schedule timing guarantee or external scheduler built by the product.
+The Action invokes one automatic `github-proposal` command with stable campaign configuration. CLI authentication of coordination-ref state and PR facts selects initial work, compatible unpublished recovery, exact original publication recovery, no-op, wait or pause before new Audit/provider work. Manual dispatch, optional best-effort native schedule and external workflow dispatch use identical inputs. Rich per-invocation usage JSON remains separate M7-A3 work.
 
-C1 adopts that direction only. The inputs, operations, envelope and output table below remain the current implemented M6 interface; they do not yet expose M7 automatic selection or usage outputs. Their owning CLI/Action issues update the real contracts coherently. M7 requires versioned per-invocation usage JSON in the result envelope/Action output and a step summary, distinguishing restored history, known/unknown usage, exposure, charges and zero-provider lifecycle gates. Exact field names remain implementation choices.
-
-The wrapper stays thin: CLI reads complete consumer coordination-ref recovery state and PR facts before new Audit/provider work and owns lifecycle/accounting; artifacts are diagnostic exports, not manual next-run handoff authority. One fixed batch publishes at most one draft PR, published draft/ready PRs accept no additional targets, and human review/ready/merge/close remain explicit boundaries. Nothing in C1 authorizes a public release, payload-map change or new credential path.
+This is an in-place replacement of an unreleased draft. Retired operation/request inputs have no translation or fallback. A real integrity-valid old runtime rejects the automatic grammar before provider/product GitHub effects; this semantic refusal is distinct from acquisition digest/identity rejection. Production `payload: null` remains refused.
 
 ## What the Action is
 
@@ -30,13 +28,12 @@ map; no input or environment route substitutes the checked-in authority.
 
 | input | required | notes |
 |---|---|---|
-| `operation` | yes | `github-proposal-start` or `github-proposal-resume` |
 | `repository-root` | yes | absolute or workspace-relative path to the target repo |
 | `input` | yes | project/solution path relative to `repository-root` |
 | `policy` | yes | policy file path relative to `repository-root` |
-| `request` | yes | **inline** github-proposal request JSON (materialized into a private 0600 file) |
+| `campaign` | yes | **inline** stable campaign JSON (materialized into a private 0600 file); see [CLI](github-proposal-cli.md#stable-campaign-configuration) |
 | `configuration` | no | consumer layer JSON file path |
-| `configuration-override` | no | **inline** layer-override JSON (materialized like `request`) |
+| `configuration-override` | no | **inline** layer-override JSON (materialized like `campaign`) |
 | `provider-api-key` | yes* | reaches only the CLI invocation step env |
 | `github-token` | yes* | reaches only the CLI invocation step env |
 | `acquisition-token` | no | authenticated release enumeration (required for drafts); recommended for published releases too — without it the resolve call is anonymous (60 req/h per egress IP, shared on hosted runners); must differ from `github-token` when both set |
@@ -44,7 +41,7 @@ map; no input or environment route substitutes the checked-in authority.
 `*` required by the operation's own contract, not by the wrapper.
 
 Empty strings violate `required: true` semantics: `prepare` rejects missing or
-empty required inputs. Newline-bearing caller data (`request`,
+empty required inputs. Newline-bearing caller data (`campaign`,
 `configuration-override`) is materialized verbatim into private files; it never
 crosses `$GITHUB_ENV`, `$GITHUB_OUTPUT`, annotations, or logs. Only
 wrapper-generated identifiers travel through `$GITHUB_ENV`.
@@ -132,7 +129,7 @@ permits. A wrapper failure exits 1 with `action-status` set.
   authenticate as.
 - `provider-api-key` and `github-token` are visible only to the `invoke` step's
   process environment. They never appear in argv, files, `GITHUB_ENV`,
-  `GITHUB_OUTPUT`, annotations, or request/plan JSON.
+  `GITHUB_OUTPUT`, annotations, or campaign/plan JSON.
 - `acquisition-token` is a separate trust channel used only by `acquire` for
   authenticated release enumeration; it is masked and never reaches the CLI or
   the install tree. When both are supplied, `acquisition-token` must differ

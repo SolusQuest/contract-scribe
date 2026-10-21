@@ -11,10 +11,10 @@ internal sealed record CampaignRunSelection(CampaignTerminal? Terminal, CliExecu
 
 internal sealed class CampaignAcceptedCandidateContinuation(
     CliBuildIdentity identity, CampaignPreflightResult preflight,
-    GitHubProposalRequestSnapshot request, Func<string, string?> credentialAccessor,
+    GitHubCampaignConfigurationSnapshot request,
+    Func<CampaignCheckpointState, GitHubPublicationConfiguration>? selectPublication = null,
     Func<ValidatedGitHubPublicationAuthority, ValidatedGitHubChangedFilePayload, CancellationToken, Task<GitHubPublicationObservation>>? publish = null,
     Func<ProductionRepositorySessionBundle, CancellationToken, Task<CliExecutionResult?>>? beforePlanning = null,
-    string? authenticatedBaseOid = null,
     GitHubPublicationFinalization? finalization = null,
     Action<CancellationToken>? bindFinalizationDeadline = null,
     bool originalOperationOnly = false)
@@ -59,8 +59,7 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             || current.State.CandidateObservation is null
             || current.State.CumulativeOutcome?.Kind != CampaignCumulativeOutcomeKind.Accepted)
             return GitHubProposalPresentation.ContractError(identity, preflight.Operation, current.CheckpointRevision);
-        if (!preflight.Configuration.Revalidate() || !request.Revalidate()
-            || authenticatedBaseOid is not null && request.Request.GitHub.ExpectedBaseCommitOid != authenticatedBaseOid)
+        if (!preflight.Configuration.Revalidate() || !request.Revalidate())
             return GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", current.CheckpointRevision);
         return null;
     }
@@ -75,7 +74,9 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             context.CancellationToken.ThrowIfCancellationRequested();
             if (!preflight.Configuration.Revalidate() || !request.Revalidate())
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
-            var admitted = GitHubPublicationRequestFactory.Create(context, outcome, request.Request.GitHub);
+            if (selectPublication is null || publish is null)
+                return new(null, GitHubProposalPresentation.ContractError(identity, preflight.Operation, revision));
+            var admitted = GitHubPublicationRequestFactory.Create(context, outcome, selectPublication(context.CurrentCheckpoint.State));
             if (!admitted.IsValid)
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
             GitHubProposalProcessHooks.Reach("before-publication");
@@ -83,10 +84,7 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             // Revalidate after candidate capture too; no ambient credential access occurs in H1.
             if (!preflight.Configuration.Revalidate() || !request.Revalidate())
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
-            var observed = publish is not null
-                ? await publish(admitted.Authority!, admitted.Payload!, context.CancellationToken).ConfigureAwait(false)
-                : await GitHubPublicationFacade.PublishAsync(admitted.Authority!, admitted.Payload!,
-                    () => credentialAccessor("CONTRACTSCRIBE_GITHUB_TOKEN"), context.CancellationToken).ConfigureAwait(false);
+            var observed = await publish(admitted.Authority!, admitted.Payload!, context.CancellationToken).ConfigureAwait(false);
             if (observed.Result.Kind == GitHubPublicationResultKind.Cancelled
                 && FinalizationFailure(revision) is { } publicationDeadline)
                 return new(null, publicationDeadline);
@@ -96,6 +94,10 @@ internal sealed class CampaignAcceptedCandidateContinuation(
         {
             return new(null, FinalizationFailure(revision)
                 ?? GitHubProposalPresentation.Local(identity, preflight.Operation, "cancelled", revision));
+        }
+        catch (ArgumentException)
+        {
+            return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
         }
     }
 }

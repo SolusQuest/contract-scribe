@@ -22,9 +22,11 @@ WORK=""
 KEEP=0
 ONLY=""
 REAL=0
+STALE_ARCHIVE=""
 
 while [ $# -gt 0 ]; do
     case "$1" in
+        --stale-archive) STALE_ARCHIVE="$2"; shift 2 ;;
         --archive) ARCHIVE="$2"; shift 2 ;;
         --sha256-file) SHA_FILE="$2"; shift 2 ;;
         --kit) KIT="$2"; shift 2 ;;
@@ -265,20 +267,19 @@ case_static_action_yml() {
 # ---------------------------------------------------------------------------
 
 prep_env() {
-    local req="${6-}"
+    local req="${5-}"
     [ -z "$req" ] && req='{}'
     env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT \
         -u CS_WORK_DIR \
         PATH="$STUB_BIN:$PATH" \
         RUNNER_OS=Linux RUNNER_ARCH=X64 RUNNER_TEMP="$WORK" \
         GITHUB_OUTPUT="$1" GITHUB_ENV="$1.env" \
-        CS_INPUT_OPERATION="${2:-github-proposal-start}" \
-        CS_INPUT_REPOSITORY_ROOT="${3:-/repo}" \
-        CS_INPUT_INPUT="${4:-App/App.csproj}" \
-        CS_INPUT_POLICY="${5:-policy.json}" \
-        CS_INPUT_REQUEST="$req" \
-        CS_INPUT_CONFIGURATION="${7-}" \
-        CS_INPUT_CONFIGURATION_OVERRIDE="${8-}" \
+        CS_INPUT_REPOSITORY_ROOT="${2:-/repo}" \
+        CS_INPUT_INPUT="${3:-App/App.csproj}" \
+        CS_INPUT_POLICY="${4:-policy.json}" \
+        CS_INPUT_CAMPAIGN="$req" \
+        CS_INPUT_CONFIGURATION="${6-}" \
+        CS_INPUT_CONFIGURATION_OVERRIDE="${7-}" \
         python3 "$ACTION_SCRIPTS/prepare.py"
 }
 case_prepare_ok() {
@@ -299,51 +300,57 @@ case_prepare_dotnet_missing() {
     expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$sb" HOME="$HOME" \
         RUNNER_OS=Linux RUNNER_ARCH=X64 RUNNER_TEMP="$WORK" \
         GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
-        CS_INPUT_OPERATION=github-proposal-start CS_INPUT_REPOSITORY_ROOT=/r \
-        CS_INPUT_INPUT=i CS_INPUT_POLICY=p CS_INPUT_REQUEST='{}' \
+        CS_INPUT_REPOSITORY_ROOT=/r \
+        CS_INPUT_INPUT=i CS_INPUT_POLICY=p CS_INPUT_CAMPAIGN='{}' \
         python3 "$ACTION_SCRIPTS/prepare.py"
 }
-case_prepare_operation_missing() {
+case_prepare_required_missing() {
     expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" RUNNER_OS=Linux RUNNER_ARCH=X64 \
         RUNNER_TEMP="$WORK" GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
         python3 "$ACTION_SCRIPTS/prepare.py"
 }
-case_prepare_operation_unknown() {
-    expect_fail prep_env /dev/null "audit-run"
-}
-case_prepare_request_missing() {
-    expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" RUNNER_OS=Linux RUNNER_ARCH=X64 \
+case_prepare_retired_manual_input() {
+    expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR \
+        -u CS_INPUT_CAMPAIGN PATH="$STUB_BIN:$PATH" RUNNER_OS=Linux RUNNER_ARCH=X64 \
         RUNNER_TEMP="$WORK" GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
-        CS_INPUT_OPERATION=github-proposal-start \
+        CS_INPUT_OPERATION=github-proposal-start CS_INPUT_REQUEST='{}' \
         CS_INPUT_REPOSITORY_ROOT=/r CS_INPUT_INPUT=i CS_INPUT_POLICY=p \
         python3 "$ACTION_SCRIPTS/prepare.py"
 }
-case_prepare_request_oversize() {
+case_prepare_campaign_missing() {
+    expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" RUNNER_OS=Linux RUNNER_ARCH=X64 \
+        RUNNER_TEMP="$WORK" GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
+        \
+        CS_INPUT_REPOSITORY_ROOT=/r CS_INPUT_INPUT=i CS_INPUT_POLICY=p \
+        python3 "$ACTION_SCRIPTS/prepare.py"
+}
+case_prepare_campaign_oversize() {
     local big; big="$(python3 -c 'print(" "*66000)')"
-    expect_fail prep_env /dev/null github-proposal-start /r i p "{\"k\":\"$big\"}"
+    expect_fail prep_env /dev/null /r i p "{\"k\":\"$big\"}"
 }
 case_prepare_runner_os() {
     expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" RUNNER_OS=Windows RUNNER_ARCH=X64 \
         RUNNER_TEMP="$WORK" GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
-        CS_INPUT_OPERATION=github-proposal-start CS_INPUT_REPOSITORY_ROOT=/r \
-        CS_INPUT_INPUT=i CS_INPUT_POLICY=p CS_INPUT_REQUEST='{}' \
+        CS_INPUT_REPOSITORY_ROOT=/r \
+        CS_INPUT_INPUT=i CS_INPUT_POLICY=p CS_INPUT_CAMPAIGN='{}' \
         python3 "$ACTION_SCRIPTS/prepare.py"
 }
 case_prepare_runner_arch() {
     expect_fail env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" RUNNER_OS=Linux RUNNER_ARCH=ARM64 \
         RUNNER_TEMP="$WORK" GITHUB_OUTPUT=/dev/null GITHUB_ENV=/dev/null \
-        CS_INPUT_OPERATION=github-proposal-start CS_INPUT_REPOSITORY_ROOT=/r \
-        CS_INPUT_INPUT=i CS_INPUT_POLICY=p CS_INPUT_REQUEST='{}' \
+        CS_INPUT_REPOSITORY_ROOT=/r \
+        CS_INPUT_INPUT=i CS_INPUT_POLICY=p CS_INPUT_CAMPAIGN='{}' \
         python3 "$ACTION_SCRIPTS/prepare.py"
 }
 case_prepare_multiline() {
     local req='{
-  "githubProposalRequestVersion": 1,
-  "github": {"transition": "initial"}
+  "githubCampaignVersion": 1,
+  "campaignLineage": "campaign.fixture",
+  "github": {"repositoryOwner": "Owner", "repositoryName": "repo", "targetRef": "refs/heads/main"}
 }'
-    prep_env "$WORK/prep-ml.txt" github-proposal-start /r i p "$req" >/dev/null
+    prep_env "$WORK/prep-ml.txt" /r i p "$req" >/dev/null
     local wd; wd="$(grep '^CS_WORK_DIR=' "$WORK/prep-ml.txt.env" | cut -d= -f2-)"
-    cmp -s "$wd/input-request.json" <(printf '%s' "$req")
+    cmp -s "$wd/input-campaign.json" <(printf '%s' "$req")
 }
 
 # ---------------------------------------------------------------------------
@@ -997,21 +1004,17 @@ prepare_real() {
    "maximumElapsedMilliseconds":3600000}}}
 EOF
     cat > "$w/request.json" <<EOF
-{"githubProposalRequestVersion":1,
- "campaignLineage":"campaign.action.${w##*/}","snapshot":"snapshot.action.test",
- "checkpointStore":"coordination-ref",
+{"githubCampaignVersion":1,
+ "campaignLineage":"campaign.action.${w##*/}",
  "github":{"repositoryOwner":"Owner","repositoryName":"repo",
-   "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
-   "operationId":"operation.action","generationId":"generation.action",
-   "transition":"initial"}}
+   "targetRef":"refs/heads/main"}}
 EOF
     env -u CONTRACTSCRIBE_ACTION_TEST -u CONTRACTSCRIBE_ACTION_TEST_API_ROOT -u CS_WORK_DIR PATH="$PATH" HOME="$HOME" RUNNER_OS=Linux RUNNER_ARCH=X64 \
         RUNNER_TEMP="$WORK" GITHUB_OUTPUT="$w/pre-out.txt" \
         GITHUB_ENV="$w/pre-env.txt" GITHUB_WORKSPACE="$w" \
-        CS_INPUT_OPERATION="github-proposal-$2" \
         CS_INPUT_REPOSITORY_ROOT="$w/target repo x" \
         CS_INPUT_INPUT="Fixture.slnx" CS_INPUT_POLICY="policy.json" \
-        CS_INPUT_REQUEST="$(cat "$w/request.json")" \
+        CS_INPUT_CAMPAIGN="$(cat "$w/request.json")" \
         CS_INPUT_CONFIGURATION="$w/layer.json" \
         python3 "$ACTION_SCRIPTS/prepare.py"
     export CS_WORK_DIR="$(grep '^CS_WORK_DIR=' "$w/pre-env.txt" | cut -d= -f2-)"
@@ -1020,7 +1023,7 @@ EOF
 case_real_chain() {
     real_env_ready || { echo "skip: real env unavailable"; return 0; }
     local w; w="$(new_work real)"
-    prepare_real "$w" start
+    prepare_real "$w"
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/acq-out.txt" \
         CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
@@ -1046,10 +1049,55 @@ case_real_chain() {
     grep -q "POST /repos/Owner/repo/pulls" "$WORK/github-requests.log"
     grep -q "POST /v1/chat/completions" "$WORK/provider-requests.log"
 }
+# The old archive is intact and independently identity/digest-authorized through
+# the synthetic map. Only the new automatic CLI grammar must reject it.
+case_real_stale_contract() {
+    real_env_ready
+    [ -f "$STALE_ARCHIVE" ]
+    local w; w="$(new_work stale)"
+    prepare_real "$w"
+    local old_archive="$ARCHIVE" old_sha="$ARCHIVE_SHA" old_base="$ARCHIVE_BASE" old_version="$ARCHIVE_VERSION"
+    ARCHIVE="$STALE_ARCHIVE"
+    ARCHIVE_SHA="$(sha256sum "$ARCHIVE" | cut -d' ' -f1)"
+    ARCHIVE_BASE="$(basename "$ARCHIVE" .tar.gz)"
+    ARCHIVE_VERSION="${ARCHIVE_BASE#contract-scribe-}"
+    ARCHIVE_VERSION="${ARCHIVE_VERSION%-linux-x64}"
+    write_map "$ARCHIVE_SHA" "payload-$ARCHIVE_VERSION" "$w/stale-map.json"
+    release_config "" "" ""
+    env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/acq.txt" \
+        CONTRACTSCRIBE_ACTION_TEST=1 \
+        CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
+        CONTRACTSCRIBE_ACTION_TEST_MAP="$w/stale-map.json" \
+        GITHUB_ACTIONS=true GITHUB_REPOSITORY=SolusQuest/contract-scribe \
+        CONTRACTSCRIBE_ACQUISITION_TOKEN="$SYNTHETIC_TOKEN" \
+        python3 "$ACTION_SCRIPTS/acquire.py"
+    env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/install.txt" \
+        python3 "$ACTION_SCRIPTS/install.py"
+    cmp "$ARCHIVE" "$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["installRoot"])' "$CS_WORK_DIR/plan.json")/.archives/$ARCHIVE_SHA.tar.gz"
+    local gh_before provider_before rc=0
+    gh_before="$(wc -l < "$WORK/github-requests.log")"
+    provider_before="$(wc -l < "$WORK/provider-requests.log")"
+    env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/invoke.txt" \
+        DOTNET_STARTUP_HOOKS="$HOOK_DLL" \
+        CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT="$GITHUB_ENDPOINT" \
+        CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS="$w/observations.txt" \
+        CONTRACTSCRIBE_GITHUB_TOKEN="$PRODUCT_TOKEN" \
+        CONTRACTSCRIBE_PROVIDER_API_KEY="$PROVIDER_TOKEN" \
+        python3 "$ACTION_SCRIPTS/invoke.py" >"$w/stdout" 2>"$w/stderr" || rc=$?
+    [ "$rc" -eq 2 ]
+    grep -q '^action-status=ok$' "$w/invoke.txt"
+    grep -q '^diagnostic-codes=cli.usage.unknown-command$' "$w/invoke.txt"
+    grep -q '^exit-code=2$' "$w/invoke.txt"
+    [ "$(wc -l < "$WORK/github-requests.log")" = "$gh_before" ]
+    [ "$(wc -l < "$WORK/provider-requests.log")" = "$provider_before" ]
+    ! grep -Eq '^(token-read|sdk-discovery|provider-create|provider-send)$' "$w/observations.txt" 2>/dev/null
+    ARCHIVE="$old_archive"; ARCHIVE_SHA="$old_sha"; ARCHIVE_BASE="$old_base"; ARCHIVE_VERSION="$old_version"
+    release_config "" "" ""
+}
 case_real_missing_token() {
     real_env_ready || { echo "skip: real env unavailable"; return 0; }
     local w; w="$(new_work realmt)"
-    prepare_real "$w" start
+    prepare_real "$w"
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/acq.txt" \
         CONTRACTSCRIBE_ACTION_TEST=1 \
         CONTRACTSCRIBE_ACTION_TEST_API_ROOT="$API_ROOT" \
@@ -1076,7 +1124,7 @@ case_real_missing_token() {
 case_real_cancel() {
     real_env_ready || { echo "skip: real env unavailable"; return 0; }
     local w; w="$(new_work realcx)"
-    prepare_real "$w" start
+    prepare_real "$w"
     # Keep faster runs active at the provider; cancellation during SDK loading
     # is also valid, but a real CLI child must be running before the signal.
     python3 - "$w/layer.json" "$HANG_ENDPOINT" <<'PY'
@@ -1125,10 +1173,10 @@ run_case static-map-schema case_static_map_schema
 run_case static-action-yml case_static_action_yml
 
 run_case prepare-ok case_prepare_ok
-run_case prepare-operation-missing case_prepare_operation_missing
-run_case prepare-operation-unknown case_prepare_operation_unknown
-run_case prepare-request-missing case_prepare_request_missing
-run_case prepare-request-oversize case_prepare_request_oversize
+run_case prepare-required-missing case_prepare_required_missing
+run_case prepare-retired-manual-input case_prepare_retired_manual_input
+run_case prepare-campaign-missing case_prepare_campaign_missing
+run_case prepare-campaign-oversize case_prepare_campaign_oversize
 run_case prepare-runner-os case_prepare_runner_os
 run_case prepare-runner-arch case_prepare_runner_arch
 run_case prepare-dotnet-missing case_prepare_dotnet_missing
@@ -1191,31 +1239,31 @@ case_emit_annotation_counts() {
     # Frozen annotation contract: success emits no ::error::; a wrapper
     # failure and a product failure each emit exactly one.
     local w; w="$(new_work emit)"
-    env GITHUB_OUTPUT="$w/o1.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE=""         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="0" CS_INPUT_OPERATION="github-proposal-start"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/ok.log" 2>&1
+    env GITHUB_OUTPUT="$w/o1.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE=""         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="0"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/ok.log" 2>&1
     [ "$(grep -c '::error::' "$w/ok.log")" -eq 0 ]
-    env GITHUB_OUTPUT="$w/o2.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE="action.prepare-operation"         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="" CS_INPUT_OPERATION="github-proposal-start"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/wrap.log" 2>&1
+    env GITHUB_OUTPUT="$w/o2.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE="action.prepare-missing-campaign"         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE=""         python3 "$ACTION_SCRIPTS/emit.py" > "$w/wrap.log" 2>&1
     [ "$(grep -c '::error::' "$w/wrap.log")" -eq 1 ]
-    grep -q "action.prepare-operation" "$w/wrap.log"
-    env GITHUB_OUTPUT="$w/o3.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE=""         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="github-proposal.permission" CS_OUT_EXIT_CODE="4"         CS_INPUT_OPERATION="github-proposal-start"         python3 "$ACTION_SCRIPTS/emit.py" > "$w/prod.log" 2>&1
+    grep -q "action.prepare-missing-campaign" "$w/wrap.log"
+    env GITHUB_OUTPUT="$w/o3.txt" CS_STATUS_GUARD="" CS_STATUS_PREPARE=""         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE=""         CS_OUT_OUTCOME="github-proposal.permission" CS_OUT_EXIT_CODE="4"                 python3 "$ACTION_SCRIPTS/emit.py" > "$w/prod.log" 2>&1
     [ "$(grep -c '::error::' "$w/prod.log")" -eq 1 ]
     grep -q "github-proposal.permission (exit 4)" "$w/prod.log"
     grep -q "^action-status=ok" "$w/o1.txt"
-    grep -q "^action-status=action.prepare-operation" "$w/o2.txt"
+    grep -q "^action-status=action.prepare-missing-campaign" "$w/o2.txt"
     # Exact annotation bytes including the fixed-format parentheses.
     grep -q '::error::contract-scribe: github-proposal.permission (exit 4)' \
         "$w/prod.log"
 }
 case_emit_summary_sanitizes() {
-    # A hostile caller operation must never reach the summary verbatim —
-    # emit renders only the closed operation names or a placeholder.
+    # A hostile caller campaign configuration must never reach the summary verbatim —
+    # emit renders the fixed automatic entrypoint and never raw caller data.
     local w; w="$(new_work esum)"
     env GITHUB_OUTPUT="$w/o.txt" GITHUB_STEP_SUMMARY="$w/summary.md" \
-        CS_STATUS_GUARD="" CS_STATUS_PREPARE="action.prepare-operation" \
+        CS_STATUS_GUARD="" CS_STATUS_PREPARE="action.prepare-missing-campaign" \
         CS_STATUS_ACQUIRE="" CS_STATUS_INSTALL="" CS_STATUS_INVOKE="" \
         CS_OUT_OUTCOME="" CS_OUT_EXIT_CODE="" \
-        CS_INPUT_OPERATION=$'evil\n| `rm -rf` |' \
+        CS_INPUT_CAMPAIGN=$'evil\n| `rm -rf` |' \
         python3 "$ACTION_SCRIPTS/emit.py" >"$w/log.txt" 2>&1
-    grep -q "(invalid operation)" "$w/summary.md"
+    grep -q "automatic" "$w/summary.md"
     ! grep -q "rm -rf" "$w/summary.md"
     ! grep -q 'evil' "$w/summary.md"
 }
@@ -1271,6 +1319,10 @@ EOF
 
     start_real_github
     run_case real-chain case_real_chain
+    if [ -n "$STALE_ARCHIVE" ]; then
+        start_real_github
+        run_case real-stale-contract case_real_stale_contract
+    fi
     start_real_github
     run_case real-missing-token case_real_missing_token
     start_real_github

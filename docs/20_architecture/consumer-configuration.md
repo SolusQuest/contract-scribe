@@ -26,7 +26,7 @@ The resolved output is the complete `campaign-configuration-v1` runtime-authorit
 
 Some fields of the resolved document are never read from a consumer layer:
 
-- `planning.campaignLineage` is caller-attested invocation authority: the `campaign` command supplies it through the required `--campaign-lineage <id>` option and `github-proposal` through the request document's `campaignLineage` field. It is a durable identity consumed by campaign state and GitHub publication coordination, and uses the existing M4 opaque-identifier grammar `[A-Za-z0-9][A-Za-z0-9._:-]*` at 1–512 UTF-16 code units. A layer that carries it is rejected as an unknown field.
+- `planning.campaignLineage` is caller-attested invocation authority: the `campaign` command supplies it through the required `--campaign-lineage <id>` option and `github-proposal` through the stable campaign configuration's `campaignLineage` field. It is a durable identity consumed by campaign state and GitHub publication coordination, and uses the existing M4 opaque-identifier grammar `[A-Za-z0-9][A-Za-z0-9._:-]*` at 1–512 UTF-16 code units. A layer that carries it is rejected as an unknown field.
 - `planning.productContractRevisionSha256` is derived from the running payload build identity (`CliBuildIdentity`) and injected by the resolver on both production paths; it is never caller-supplied and consumers cannot express it.
 - `planning.productContractRevisionId` and every protocol, contract, version, policy, registry, and source-marker identifier are product-owned authority values carried only by the payload defaults.
 
@@ -35,7 +35,7 @@ Some fields of the resolved document are never read from a consumer layer:
 | Resolved field | Disposition |
 |---|---|
 | `campaignConfigurationVersion` | product-owned (`1`) |
-| `planning.campaignLineage` | invocation authority (`--campaign-lineage` for `campaign`, request `campaignLineage` for `github-proposal`) |
+| `planning.campaignLineage` | invocation authority (`--campaign-lineage` for `campaign`, campaign configuration `campaignLineage` for `github-proposal`) |
 | `planning.targetProfile` | public |
 | `planning.proposalContractId` | product-owned |
 | `planning.contextSelectionPolicyId` | product-owned |
@@ -94,7 +94,7 @@ Every source is admitted through the same bounded regular-file, no-follow, size,
 
 ## github-proposal and validation disposition
 
-`github-proposal` consumes the same layered resolution: its optional `--configuration`/`--configuration-override` options carry the consumer layers while campaign lineage, snapshot binding, state location, and GitHub publication claims move into the separately validated `--request` invocation document (see [github-proposal-cli.md](github-proposal-cli.md)). The direct resolved-document input and its low-level runtime-authority reader are retired; `campaign-configuration-v1` keeps exactly one active draft role — the resolved authority representation produced by this resolver — and does not become a competing public consumer contract.
+`github-proposal` consumes the same layered resolution through optional `--configuration` and `--configuration-override`. Stable lineage and destination belong to the separate `--campaign` configuration; CLI derives snapshot, current HEAD and publication operation from authenticated remote facts. See [github-proposal-cli.md](github-proposal-cli.md). `campaign-configuration-v1` remains the resolved authority produced by this resolver, with no competing public low-level runtime reader.
 
 ## Non-goals
 

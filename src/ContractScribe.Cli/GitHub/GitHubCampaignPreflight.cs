@@ -10,8 +10,8 @@ internal sealed record GitHubCampaignPreflightLink(string? GenerationId, string 
 
 internal static class GitHubCampaignPreflight
 {
-    internal static CliExecutionResult? Select(CliBuildIdentity identity, CampaignOperation operation,
-        GitHubProposalRequest request, GitHubCampaignObservation observed, long? revision)
+    internal static CliExecutionResult? Select(CliBuildIdentity identity, CampaignOperation? operation,
+        GitHubCampaignObservation observed, long? revision)
     {
         var pr = observed.PullRequests.FirstOrDefault(row => row.Number == observed.Failure?.PullRequestNumber)
             ?? observed.PullRequests.FirstOrDefault(row => row.Kind is GitHubCampaignPullRequestKind.OpenDraft or GitHubCampaignPullRequestKind.OpenReady)
@@ -51,7 +51,7 @@ internal static class GitHubCampaignPreflight
                 Stage: GitHubCoordinationStage.Claimed or GitHubCoordinationStage.ContentCreated
                 or GitHubCoordinationStage.ProposalRefAdvanced or GitHubCoordinationStage.PullRequestCreateStarted
             } ledger
-            && (ledger.OperationId != request.GitHub.OperationId || ledger.OriginalBaseOid != observed.TargetOid))
+            && ledger.OriginalBaseOid != observed.TargetOid)
             return Stop("conflict", "publication-incomplete");
         return null;
     }
@@ -72,7 +72,7 @@ internal static class GitHubCampaignPreflight
         _ => "host-failure",
     };
 
-    internal static string SnapshotBinding(CampaignPreflightResult preflight, GitHubProposalRequest request,
+    internal static string SnapshotBinding(CampaignPreflightResult preflight, GitHubCampaignConfiguration request,
         GitHubCampaignObservation observed)
     {
         var configuration = preflight.Configuration.Document;
@@ -80,7 +80,8 @@ internal static class GitHubCampaignPreflight
         {
             domain = "github-campaign-snapshot-v1",
             actualBase = observed.TargetOid,
-            callerSnapshot = request.Snapshot,
+            request.CampaignLineage,
+            request.GitHub,
             preflight.InputIdentity,
             policy = Convert.ToHexStringLower(SHA256.HashData(preflight.PolicyBytes)),
             configuration.Planning,

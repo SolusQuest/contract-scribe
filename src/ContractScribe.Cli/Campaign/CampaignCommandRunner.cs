@@ -160,10 +160,18 @@ internal static class CampaignCommandRunner
             policy = configuration.CreateExecutionPolicy();
             execution = configuration.CreateExecutionCapability(policy);
             planning = CreatePlanningInput(preflight, configuration, policy, bundle, cancellationToken, targetLimit);
-            if (existing is not null && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding == preflight.SnapshotBinding)
+            if (existing is not null && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding == planning.Snapshot.OpaqueSnapshotBinding)
             {
-                planning = planning with { TargetLimit = new CampaignInvocationTargetLimit(existing.Artifact.State.Batch.CreationQuota) };
+                planning = planning with
+                {
+                    TargetLimit = new CampaignInvocationTargetLimit(existing.Artifact.State.Batch.CreationQuota),
+                    BatchStartTargetKey = existing.Artifact.State.Batch.SelectedTargetKeys.FirstOrDefault(),
+                };
             }
+            if (continuation?.OriginalOperationOnly == true && existing is not null
+                && existing.Artifact.State.Snapshot.OpaqueSnapshotBinding != planning.Snapshot.OpaqueSnapshotBinding)
+                return new(null, GitHubProposalPresentation.Preflight(CliBuildIdentity.Current, preflight.Operation,
+                    "conflict", "publication-incomplete", existing.Artifact.CheckpointRevision));
             plan = CampaignPlanner.Plan(planning);
             if (store is ICampaignRecoveryPlanStore recovery
                 && !await recovery.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(plan), cancellationToken).ConfigureAwait(false))
@@ -226,7 +234,7 @@ internal static class CampaignCommandRunner
             current = existing;
             if (string.Equals(
                     current.Artifact.State.Snapshot.OpaqueSnapshotBinding,
-                    preflight.SnapshotBinding,
+                    planning.Snapshot.OpaqueSnapshotBinding,
                     StringComparison.Ordinal))
             {
                 try
@@ -299,6 +307,27 @@ internal static class CampaignCommandRunner
                 }
                 current = acceptedSuccessor;
             }
+        }
+
+        // Only a batch already terminal when this trigger began can advance.
+        // A newly completed batch remains the fixed batch for this invocation.
+        if (continuation is not null && !continuation.OriginalOperationOnly && existing is not null
+            && existing.Artifact.State.TerminalOutcome?.Kind == CampaignTerminalKind.Complete
+            && existing.Artifact.State.Snapshot == current.Artifact.State.Snapshot
+            && CampaignStateFactory.NextNoResultBatch(current.Artifact.State, targetLimit) is { } nextBatch)
+        {
+            planning = planning with { TargetLimit = targetLimit, BatchStartTargetKey = nextBatch.SelectedTargetKeys[0] };
+            plan = CampaignPlanner.Plan(planning);
+            if (store is ICampaignRecoveryPlanStore nextRecovery
+                && !await nextRecovery.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(plan), cancellationToken).ConfigureAwait(false))
+                return Terminal(preflight.Operation, "state", "campaign.incompatible-snapshot", current);
+            GitHubProposalProcessHooks.Reach("before-next-batch");
+            var advanced = await CampaignCheckpointAcceptance.AcceptAsync(store,
+                CampaignStateReducer.AdvanceNoResultBatch(current, plan), cancellationToken).ConfigureAwait(false);
+            if (advanced.Kind != CampaignCheckpointAcceptanceKind.Accepted || advanced.AcceptedCheckpoint is null)
+                return Terminal(preflight.Operation, "state", AcceptanceOutcome(advanced.Kind), current);
+            current = advanced.AcceptedCheckpoint;
+            GitHubProposalProcessHooks.Reach("after-next-batch");
         }
 
         using var settlementCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(
@@ -540,8 +569,8 @@ internal static class CampaignCommandRunner
                 reconstructPriorAccepted = !stoppedArtifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete);
                 continue;
             }
-            var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Reason == CampaignTerminalReason.Unresolved
-                ? "campaign.unresolved"
+            var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Kind == CampaignTerminalKind.Complete
+                ? CompletionOutcome(proposal.Artifact.State)
                 : proposal.CheckpointFailure is { } proposalFailure
                 ? AcceptanceOutcome(proposalFailure)
                 : proposal.Code == "campaign.credential.invalid"
@@ -579,10 +608,10 @@ internal static class CampaignCommandRunner
             .FirstOrDefault();
 
     private static string CompletionOutcome(CampaignCheckpointState state) =>
-        (state.TerminalOutcome ?? CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems))?.Reason
-            == CampaignTerminalReason.Unresolved ? "campaign.unresolved"
-            : state.TargetProgress.Any(progress => progress.Kind == CampaignTargetProgressKind.Deferred)
-                ? "campaign.batch-complete" : "campaign.complete";
+        state.TargetProgress.Any(progress => progress.Kind == CampaignTargetProgressKind.Deferred)
+            ? "campaign.batch-complete"
+            : (state.TerminalOutcome ?? CampaignStateFactory.SelectBatchTerminal(state.Batch, state.WorkItems))?.Reason
+                == CampaignTerminalReason.Unresolved ? "campaign.unresolved" : "campaign.complete";
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,
@@ -743,9 +772,21 @@ internal static class CampaignCommandRunner
                 bundle.Observed.ObservationSet!.Observations.Single(observation =>
                     observation.Subject == binding.Subject),
                 binding.Evidence)).ToImmutableArray();
+        var binding = preflight.SnapshotBinding;
+        if (preflight.AutomaticSnapshotBinding)
+        {
+            // Materialized applicable instruction stacks are correctness inputs;
+            // runner roots, budgets and invocation quotas are not.
+            binding = Sha256(JsonSerializer.SerializeToUtf8Bytes(new
+            {
+                seed = binding,
+                grouping = owners.SelectMany(owner => owner.Targets)
+                    .Select(authority => new { authority.Target.SymbolRef, authority.GroupingAuthority }),
+            }));
+        }
         var snapshot = new CampaignPlanningSnapshot(
             configuration.Planning.CampaignLineage,
-            preflight.SnapshotBinding,
+            binding,
             Sha256(bundle.CanonicalAudit),
             Sha256(File.ReadAllBytes(bundle.ResolvedPaths.PhysicalInput)),
             Sha256(preflight.PolicyBytes),

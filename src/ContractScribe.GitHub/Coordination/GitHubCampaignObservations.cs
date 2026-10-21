@@ -20,7 +20,10 @@ internal sealed record GitHubCampaignFailure(GitHubCampaignFailureKind Kind,
 internal sealed record GitHubCampaignLedger(string HeadOid, GitHubCoordinationStage Stage,
     string OriginalBaseOid, string GenerationId, string SnapshotCommitmentSha256,
     string BatchIdentity, string OperationId, string OperationCommitmentSha256,
-    string CandidateCommitmentSha256, string? ExpectedProposalRef, int? PullRequestNumber) : GitHubValue;
+    string CandidateCommitmentSha256, string? ExpectedProposalRef, int? PullRequestNumber) : GitHubValue
+{
+    internal string Transition { get; init; } = "initial";
+}
 
 internal sealed record GitHubCampaignPullRequest(long Id, string NodeId, int Number,
     GitHubCampaignPullRequestKind Kind, GitHubPullRequestHead Head,

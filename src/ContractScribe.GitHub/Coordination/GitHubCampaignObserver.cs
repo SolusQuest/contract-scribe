@@ -80,7 +80,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
                     ledger = new(state.HeadOid, state.Stage, state.TargetCommitOid, state.GenerationId,
                         state.SnapshotCommitmentSha256, state.BatchIdentity, state.OperationId,
                         state.OperationCommitmentSha256, state.CurrentCandidateCommitmentSha256,
-                        coordination.ProposalRefFor(state), state.PullRequestNumber);
+                        coordination.ProposalRefFor(state), state.PullRequestNumber) { Transition = state.Transition };
                     generations.AddRange(coordination.ObservedGenerations(state));
                     if (coordination.ObservedCurrentGeneration(state) is { } current)
                     {

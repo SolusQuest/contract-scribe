@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
-"""Validate an explicitly selected workflow invocation and render its request.
+"""Authenticate the caller's trusted workflow run without selecting lifecycle.
 
-The CLI owns durable checkpoints in the campaign coordination ref. This helper
-never downloads, uploads, restores, or interprets checkpoint artifacts. CS_OPERATION
-is the caller's workflow_dispatch choice (start or resume); CS_CAMPAIGN and
-CS_CAMPAIGN_LINEAGE supply reviewed claims. CS_RUN_CONTEXT contains github.* facts.
-The existing read-only Actions API admission checks authenticate the current run.
+The production CLI owns campaign identity admission, remote state, HEAD,
+continuation and publication. This helper only authenticates runner-supplied
+workflow metadata through read-only Actions API calls. It creates no request,
+reads no campaign checkpoint, and derives no publication claim.
 """
 
 import json
@@ -16,15 +15,12 @@ import urllib.error
 import urllib.request
 
 BOUND_CONTEXT = 8 * 1024
-BOUND_CAMPAIGN = 8 * 1024
 BOUND_API_RESPONSE = 4 * 1024 * 1024
 HTTP_TIMEOUT = 30
 API_VERSION = "2026-03-10"
 EXPECTED_REF_PREFIX = "refs/heads/"
 
-IDENT_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]*")
 SHA_RE = re.compile(r"[0-9a-f]{40}")
-SHA256_RE = re.compile(r"[0-9a-f]{64}")
 
 
 class Stop(Exception):
@@ -106,14 +102,6 @@ def int_field(obj, key):
     stop(f"field-{key}-type")
 
 
-def str_field(obj, key, pattern=None):
-    value = obj.get(key)
-    require(isinstance(value, str) and value, f"field-{key}-type")
-    if pattern is not None:
-        require(pattern.fullmatch(value), f"field-{key}-format")
-    return value
-
-
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, *args, **kwargs):
         return None
@@ -147,7 +135,7 @@ class _Api:
             headers={"Authorization": "Bearer " + self.token,
                      "Accept": "application/vnd.github+json",
                      "X-GitHub-Api-Version": API_VERSION,
-                     "User-Agent": "contract-scribe-handoff"})
+                     "User-Agent": "contract-scribe-caller"})
         try:
             with self.opener.open(request, timeout=HTTP_TIMEOUT) as resp:
                 body = resp.read(BOUND_API_RESPONSE + 1)
@@ -211,122 +199,24 @@ def workflow_path(ctx, run):
     return path
 
 
-# ---------------------------------------------------------------------------
-# gate — producer admission (start path)
-# ---------------------------------------------------------------------------
-
-def cmd_gate():
-    ctx = context()
-    api = _Api()
-    run, _branch = own_run(api, ctx)
-    workflow_path(ctx, run)
-    require(ctx["event"] == "workflow_dispatch", "gate-event")
-    operation()
-    print("handoff.gate:ok")
-
-
-def operation():
-    selected = os.environ.get("CS_OPERATION")
-    require(selected in ("start", "resume"), "operation-selection")
-    return selected
-
-
-def cmd_request(base_oid, out_path):
-    operation()
-    ctx = context()
-    campaign = env_json("CS_CAMPAIGN", BOUND_CAMPAIGN)
-    require(set(campaign) == {"snapshot", "operationId", "generationId",
-                              "targetRef",
-                              "repositoryOwner", "repositoryName"},
-            "campaign-fields")
-    # The lineage is a separate caller authority (it also drives the
-    # per-campaign concurrency group), not a member of the claims document.
-    lineage = os.environ.get("CS_CAMPAIGN_LINEAGE") or ""
-    require(IDENT_RE.fullmatch(lineage), "campaign-lineage")
-    for key in ("operationId", "generationId"):
-        require(IDENT_RE.fullmatch(str_field(campaign, key)),
-                f"campaign-{key}")
-    snapshot = str_field(campaign, "snapshot")
-    require(len(snapshot) <= 512, "campaign-snapshot")
-    target_ref = str_field(campaign, "targetRef")
-    require(target_ref.startswith(EXPECTED_REF_PREFIX), "campaign-targetref")
-    # The caller supplies the checked-out HEAD as expectedBaseCommitOid, so
-    # the campaign target must be the run's checked-out ref; a different
-    # targetRef would bind the request to the wrong base.
-    require(target_ref == ctx["ref"], "campaign-target")
-    owner = str_field(campaign, "repositoryOwner")
-    name = str_field(campaign, "repositoryName")
-    require(re.fullmatch(r"[A-Za-z0-9_.-]+", owner), "campaign-owner")
-    require(re.fullmatch(r"[A-Za-z0-9_.-]+", name), "campaign-name")
-    require(owner + "/" + name == ctx["repository"], "campaign-repo")
-    require(SHA_RE.fullmatch(base_oid), "base-oid")
-    require(base_oid == ctx["sha"], "base-context-mismatch")
-    request = {
-        "githubProposalRequestVersion": 1,
-        "campaignLineage": lineage,
-        "snapshot": campaign["snapshot"],
-        "checkpointStore": "coordination-ref",
-        "github": {
-            "repositoryOwner": owner,
-            "repositoryName": name,
-            "targetRef": target_ref,
-            "expectedBaseCommitOid": base_oid,
-            "operationId": campaign["operationId"],
-            "generationId": campaign["generationId"],
-            "transition": "initial",
-        },
-    }
-    write_private(out_path, json.dumps(request, separators=(",", ":"),
-                                       sort_keys=True).encode())
-    output("request-path", out_path)
-    with open(out_path, encoding="utf-8") as fh:
-        output("request-json", fh.read(), multiline=True)
-    print("handoff.request:ok")
-
-
-def write_private(path, data):
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as fh:
-        fh.write(data)
-    try:
-        os.chmod(path, 0o600)
-    except OSError:
-        pass  # platform without POSIX modes; the store remains private
-
-
-
-def output(name, value, multiline=False):
-    path = os.environ.get("GITHUB_OUTPUT")
-    if not path:
-        return
-    with open(path, "a", encoding="utf-8", newline="\n") as fh:
-        if multiline:
-            fh.write(f"{name}<<CSOUT\n{value}\nCSOUT\n")
-        else:
-            require("\n" not in value and "\r" not in value, "output-value")
-            fh.write(f"{name}={value}\n")
-
-
 def main(argv):
-    require(len(argv) >= 2, "usage")
-    if argv[1] == "gate":
-        require(len(argv) == 2, "gate-usage")
-        cmd_gate()
-    elif argv[1] == "request":
-        require(len(argv) == 6 and argv[2] == "--base-oid" and argv[4] == "--out", "request-usage")
-        cmd_request(argv[3], argv[5])
-    else:
-        stop("unknown-command")
+    require(len(argv) == 2, "usage")
+    require(argv[1] == "gate", "unknown-command")
+    ctx = context()
+    run, _branch = own_run(_Api(), ctx)
+    workflow_path(ctx, run)
+    require(ctx["event"] in ("workflow_dispatch", "schedule"), "gate-event")
+    print("caller.gate:ok")
 
 
 if __name__ == "__main__":
     try:
         main(sys.argv)
     except Stop as error:
-        print(f"handoff.stop:{error.reason}", file=sys.stderr)
+        print(f"caller.stop:{error.reason}", file=sys.stderr)
         raise SystemExit(1)
     except SystemExit:
         raise
     except Exception:
-        print("handoff.stop:exception", file=sys.stderr)
+        print("caller.stop:exception", file=sys.stderr)
         raise SystemExit(1)

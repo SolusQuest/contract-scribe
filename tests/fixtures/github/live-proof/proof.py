@@ -213,16 +213,11 @@ def preflight():
     print('gate:' + role)
 
 
-def request_document(config, base):
-    nonce = config['activation']
-    return {'githubProposalRequestVersion': 1,
-            'campaignLineage': 'campaign.issue166.' + nonce,
-            'snapshot': 'snapshot.issue166.' + nonce,
-            'checkpointStore': 'coordination-ref',
+def campaign_document(config):
+    return {'githubCampaignVersion': 1,
+            'campaignLineage': 'campaign.issue166.' + config['activation'],
             'github': {'repositoryOwner': 'SolusQuest', 'repositoryName': 'contract-scribe-sandbox',
-                       'targetRef': 'refs/heads/main', 'expectedBaseCommitOid': base,
-                       'operationId': 'operation.issue166.' + nonce, 'generationId': 'generation.issue166.' + nonce,
-                       'transition': 'initial'}}
+                       'targetRef': 'refs/heads/main'}}
 
 
 def write_configuration(config, directory):
@@ -234,9 +229,10 @@ def write_configuration(config, directory):
              'budgets': {'campaign': {'maximumCandidatesPerBlock': 30, 'maximumElapsedMilliseconds': 3600000}}}
     (directory / 'layer.json').write_bytes(canonical(layer))
     (directory / 'request-positive.json').write_bytes(
-        canonical(request_document(config, config['base_sha'])))
-    (directory / 'request-negative.json').write_bytes(
-        canonical(request_document(config, BOOTSTRAP)))
+        canonical(campaign_document(config)))
+    negative = campaign_document(config)
+    negative['github']['expectedBaseCommitOid'] = BOOTSTRAP
+    (directory / 'request-negative.json').write_bytes(canonical(negative))
 
 
 def check_checkpoint(path, checker):
@@ -346,8 +342,8 @@ def published_facts(config, api, *, inspect_trees=False):
     state = parse_json(api.content('.contract-scribe/coordination-state-v1.json', coordination[0]['oid']))
     require(state.get('stage') == 'published' and state.get('repositoryId') == REPOSITORY
             and state.get('targetRef') == 'refs/heads/main' and state.get('targetCommitOid') == config['base_sha']
-            and state.get('operationId') == 'operation.issue166.' + config['activation']
-            and state.get('generationId') == 'generation.issue166.' + config['activation']
+            and isinstance(state.get('operationId'), str) and re.fullmatch(r'operation\.[0-9a-f]{64}', state['operationId'])
+            and isinstance(state.get('generationId'), str) and re.fullmatch(r'generation\.[0-9a-f]{64}', state['generationId'])
             and state.get('transition') == 'initial' and state.get('expectedBaseOid') == state.get('observedBaseOid') == config['base_sha']
             and state.get('proposalRefOid') == state.get('proposalCommitOid') == state.get('contentCommitOid') == proposals[0]['oid'], 'coordination-state')
     pr = api.get('pulls/' + str(current['pulls'][0]['number']))
@@ -408,7 +404,7 @@ def invoke(scenario):
         require(trial_snapshot(config, before) == {'refs': [], 'pulls': []}, 'preexisting-work')
         (root / 'before.json').write_bytes(canonical(before))
     elif scenario == 'positive':
-        require((root / 'negative.ok').read_text() == 'stale', 'negative-not-complete')
+        require((root / 'negative.ok').read_text() == 'local-invalid', 'negative-not-complete')
     else:
         before = published_facts(config, api)
         (root / 'before.json').write_bytes(canonical(before))
@@ -430,9 +426,9 @@ def invoke(scenario):
         require(bool(credential), 'product-credential-absent')
         environment['CONTRACTSCRIBE_GITHUB_TOKEN'] = credential
         cli = root / 'product/src/ContractScribe.Cli/bin/Release/net10.0/ContractScribe.Cli.dll'
-        args = ['dotnet', str(cli), 'github-proposal', 'resume' if scenario == 'replay' else 'start',
+        args = ['dotnet', str(cli), 'github-proposal',
                 '--repository-root', str(root / 'target'), '--input', 'Synthetic.csproj', '--policy', 'policy.json',
-                '--request', str(root / ('request-negative.json' if scenario == 'negative' else 'request-positive.json')),
+                '--campaign', str(root / ('request-negative.json' if scenario == 'negative' else 'request-positive.json')),
                 '--configuration', str(root / 'layer.json')]
         try:
             process = subprocess.run(args, env=environment, capture_output=True, timeout=360)
@@ -455,7 +451,7 @@ def invoke(scenario):
             provider.wait()
     if scenario == 'negative':
         require(remote_snapshot(api) == before, 'negative-mutated-resources')
-        (root / 'negative.ok').write_text('stale')
+        (root / 'negative.ok').write_text('local-invalid')
     else:
         facts = published_facts(config, api)
         if scenario == 'replay':

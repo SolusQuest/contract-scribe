@@ -304,11 +304,11 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         return response;
     }
 
-    internal void Lifecycle(string kind)
+    internal void Lifecycle(string kind, int index = 0)
     {
         lock (Gate)
         {
-            var pr = PullRequests[0];
+            var pr = PullRequests[index];
             var closed = kind is "closed" or "merged";
             pr["state"] = closed ? "closed" : "open"; pr["draft"] = kind == "draft";
             pr["merged"] = kind == "merged";

@@ -66,7 +66,6 @@ public static partial class CampaignPlanner
                 item.Disposition,
             }),
             plan.Summary,
-            plan.Batch,
         });
         Require(bytes.Length <= CampaignStateContract.MaximumArtifactUtf8Bytes,
             CampaignPlanningValidationCode.InvalidBound, "The recovery plan exceeds its byte bound.");

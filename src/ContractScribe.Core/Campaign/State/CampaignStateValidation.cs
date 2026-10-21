@@ -326,9 +326,13 @@ public static partial class CampaignStateFactory
         ArgumentNullException.ThrowIfNull(planningInput);
         ArgumentNullException.ThrowIfNull(acceptedPlan);
         Validate(state);
+        Require(acceptedPlan.ExecutionCommitment == state.Snapshot.ExecutionCommitmentSha256
+            && state.Batch.CompleteTargets.SequenceEqual(acceptedPlan.Batch.CompleteTargets),
+            CampaignStateValidationCode.InvalidCorrelation);
         var replanned = CampaignPlanner.Plan(planningInput with
         {
             TargetLimit = new CampaignInvocationTargetLimit(state.Batch.CreationQuota),
+            BatchStartTargetKey = state.Batch.SelectedTargetKeys.FirstOrDefault(),
         });
         RequireSamePlan(replanned, acceptedPlan);
         var style = CreateStyleConfigurationAuthority(

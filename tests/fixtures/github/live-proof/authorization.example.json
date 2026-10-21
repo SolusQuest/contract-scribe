@@ -14,5 +14,5 @@
   "actor_login": "Yuee98",
   "owner": "Yuee98",
   "issue": 166,
-  "scenarios": ["stale", "published", "replayed"]
+  "scenarios": ["local-invalid", "published", "awaiting-review"]
 }

@@ -177,7 +177,7 @@ public static class CommandLineApplication
                     // Before any public byte, other presentation failures have one closed fallback.
                     if (!selected.IsPublication)
                         selected = GitHubProposalPresentation.ContractError(CliBuildIdentity.Current,
-                            proposalParse.Arguments?.Operation ?? proposalParse.Failure?.Operation, selected.AuthoritativeCheckpointRevision);
+                            proposalParse.Failure?.Operation, selected.AuthoritativeCheckpointRevision);
                 }
                 GitHubProposalPresentation.Write(selected, output, error);
                 return selected.ExitCode;

@@ -22,7 +22,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(CampaignTerminalReason.AllWorkClosed, initial.State.TerminalOutcome!.Reason);
         for (var repeat = 0; repeat < 2; repeat++)
         {
-            var stopped = await fixture.Run("resume");
+            var stopped = await fixture.Run();
             AssertResult(stopped, 0, "no-op");
             Assert.Equal("", stopped.Stderr);
             Assert.Equal(initial.Sha256, fixture.Checkpoint().Sha256);
@@ -47,7 +47,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await CreateFixedBatchCheckpoint(fixture, unresolved ? 100 : 1);
         var originalBatch = fixture.Checkpoint().State.Batch;
         Assert.Equal(2, originalBatch.CompleteTargets.Length);
-        AssertResult(await fixture.Run("resume"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var accepted = fixture.Checkpoint();
         Assert.Equal(originalBatch.Identity, accepted.State.Batch.Identity);
         Assert.Single(accepted.State.WorkItems, item => item.Status == CampaignWorkStatus.Accepted);
@@ -62,7 +62,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var gates = GateCounts(fixture);
         for (var repeat = 0; repeat < 2; repeat++)
         {
-            var stopped = await fixture.Run("resume");
+            var stopped = await fixture.Run();
             AssertResult(stopped, 0, "awaiting-review");
             Assert.Empty(stopped.Stderr);
             var current = fixture.Checkpoint();
@@ -78,19 +78,19 @@ public sealed partial class GitHubProposalCliProcessTests
 
     private static async Task CreateFixedBatchCheckpoint(Fixture fixture, int limit)
     {
-        var arguments = GitHubProposalCommandParser.Parse(fixture.Args("resume").AsSpan(1)).Arguments!;
-        var request = GitHubProposalRequestReader.Read(arguments.Request, fixture.Repository.Root);
+        var arguments = GitHubProposalCommandParser.Parse(fixture.Args().AsSpan(1)).Arguments!;
+        var request = GitHubCampaignConfigurationReader.Read(arguments.CampaignFile, fixture.Repository.Root);
         var preflight = CampaignPreflight.Run(arguments.Campaign(request), fixture.Repository.Root, CliBuildIdentity.Current, remoteCheckpoint: true);
-        var github = request.Request.GitHub;
+        var github = request.Configuration.GitHub;
         using var registration = (IDisposable)typeof(GitHubTransportTestHook)
             .GetMethod("Register", BindingFlags.NonPublic | BindingFlags.Static)!
             .Invoke(null, [fixture.GitHub.Endpoint, null, 30_000])!;
-        using var client = GitHubApiClient.CreateCheckpoint(ValidatedGitHubCheckpointAuthority.Create(
-            github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Request.CampaignLineage,
-            github.ExpectedBaseCommitOid), GitHubTransportTestHook.Placeholder);
+        using var client = GitHubApiClient.CreateReadOnly(GitHubPublicationFactory.CreateCampaignReadAuthority(
+            github.RepositoryOwner, github.RepositoryName, github.TargetRef, request.Configuration.CampaignLineage), GitHubTransportTestHook.Placeholder);
         await using var checkpoint = GitHubCoordinationStore.Create(client);
         var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, default);
-        preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Request, observed) };
+        preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Configuration, observed) };
+        Assert.True(await client.BindObservedCheckpointBaseAsync(observed, default));
         Assert.Equal(CampaignCheckpointReadKind.Found, await checkpoint.AcquireCheckpointAsync(default));
         var configuration = preflight.Configuration.Document;
         CampaignCheckpointArtifact? initial = null;

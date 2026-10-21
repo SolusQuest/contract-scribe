@@ -3,26 +3,24 @@ using System.Text;
 namespace ContractScribe.Cli;
 
 internal sealed record GitHubProposalCommandArguments(
-    CampaignOperation Operation,
     string RepositoryRoot,
     string Input,
     string Policy,
-    string Request,
+    string CampaignFile,
     string? Configuration,
     string? ConfigurationOverride)
 {
-    // The request supplies the invocation authority the layered campaign
-    // consumer needs: snapshot binding, state location and campaign lineage.
-    internal CampaignCommandArguments Campaign(GitHubProposalRequestSnapshot request) => new(
-        Operation,
+    internal CampaignCommandArguments Campaign(GitHubCampaignConfigurationSnapshot configuration,
+        CampaignOperation operation = CampaignOperation.Start) => new(
+        operation,
         RepositoryRoot,
         Input,
         Policy,
-        request.Request.Snapshot,
+        string.Empty,
         string.Empty,
         Configuration,
         ConfigurationOverride,
-        request.Request.CampaignLineage);
+        configuration.Configuration.CampaignLineage);
 }
 
 internal sealed record GitHubProposalParseResult(
@@ -40,14 +38,14 @@ internal static class GitHubProposalCommandParser
         "--repository-root",
         "--input",
         "--policy",
-        "--request",
+        "--campaign",
     ];
     private static readonly string[] KnownOptions =
     [
         "--repository-root",
         "--input",
         "--policy",
-        "--request",
+        "--campaign",
         "--configuration",
         "--configuration-override",
     ];
@@ -55,27 +53,9 @@ internal static class GitHubProposalCommandParser
     internal static GitHubProposalParseResult Parse(ReadOnlySpan<string> tokens)
     {
         CampaignOperation? operation = null;
-        if (tokens.Length > 0)
-        {
-            operation = tokens[0] switch
-            {
-                "start" => CampaignOperation.Start,
-                "resume" => CampaignOperation.Resume,
-                _ => null,
-            };
-        }
-
-        if (tokens.Length is 1 && tokens[0] is "--help" or "-h"
-            || tokens.Length is 2
-                && operation is not null
-                && tokens[1] is "--help" or "-h")
+        if (tokens.Length is 1 && tokens[0] is "--help" or "-h")
         {
             return new GitHubProposalParseResult(null, null, HelpRequested: true);
-        }
-
-        if (tokens.Length == 0 || operation is null)
-        {
-            return Failure("unknown-command", operation);
         }
 
         var values = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -87,7 +67,7 @@ internal static class GitHubProposalCommandParser
         var invalidValue = !WithinArgumentBound(tokens);
         var unexpectedOperand = false;
 
-        for (var index = 1; index < tokens.Length; index++)
+        for (var index = 0; index < tokens.Length; index++)
         {
             var token = tokens[index];
             if (token is "--help" or "-h")
@@ -175,11 +155,10 @@ internal static class GitHubProposalCommandParser
         values.TryGetValue("--configuration-override", out var configurationOverride);
         return new GitHubProposalParseResult(
             new GitHubProposalCommandArguments(
-                operation.Value,
                 values["--repository-root"],
                 values["--input"],
                 values["--policy"],
-                values["--request"],
+                values["--campaign"],
                 configuration,
                 configurationOverride),
             null,

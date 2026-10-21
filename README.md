@@ -26,9 +26,9 @@ GitHub-hosted Ubuntu x64 (`ubuntu-latest`) is the sole required M1-M5 source-val
 
 Initial target repositories must expose an explicit C# solution or project whose caller-prepared prerequisites and design-time MSBuild/Roslyn load succeed on the selected Ubuntu runner. Native-Windows-only workloads, targets, tools, filesystem behavior, process behavior, and host assumptions are outside that boundary. See [ADR 0004](docs/20_architecture/decisions/0004-initial-runner-platform-support.md).
 
-A caller-owned GitHub Actions example for manually and periodically running the Action with verified campaign-state handoff lives under `examples/github-actions/`; see [Caller-owned Action usage](docs/10_workflow/action-usage.md).
+A caller-owned GitHub Actions example for manually and periodically running the Action with stable automatic campaign inputs lives under `examples/github-actions/`; see [Caller-owned Action usage](docs/10_workflow/action-usage.md).
 
-The current example requires explicit per-hop activation and replays an existing publication on its default resume path. M6 qualification proved checkpoint recovery and idempotent replay, not automatic consumption of all remaining work or punctual GitHub cron delivery. The M7 plan adopts automatic bounded continuation while retaining best-effort caller scheduling without a timing guarantee; those new behaviors await implementation.
+The current automatic entrypoint selects bounded continuation from authenticated campaign/PR state. Caller scheduling remains best-effort with no timing guarantee. The production payload map remains unconfigured, so the current wrapper cannot acquire a product release; synthetic CI qualification does not authorize publication.
 
 Licensing and contribution policy are to be decided before the first downstream-consumable release, NuGet package or GitHub Action publication, or merge of external code contributions.
 

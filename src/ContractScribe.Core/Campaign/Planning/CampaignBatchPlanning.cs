@@ -86,7 +86,7 @@ public static partial class CampaignPlanner
     private static CampaignFixedBatch SelectBatch(
         string commitment,
         ImmutableArray<CampaignPlanningWorkItem> workItems,
-        CampaignInvocationTargetLimit limit)
+        CampaignInvocationTargetLimit limit, string? startTargetKey)
     {
         var complete = workItems.SelectMany(work => work.Targets.Select(target =>
         {
@@ -98,12 +98,24 @@ public static partial class CampaignPlanner
                 group, eligible ? target.GroupingAuthority!.MemberFamilySha256 : null);
         })).ToImmutableArray();
 
+        return SelectBatchFromTargets(commitment, complete, limit, startTargetKey);
+    }
+
+    internal static ImmutableArray<CampaignBatchTarget> OrderedEligibleTargets(CampaignFixedBatch batch) =>
+        batch.CompleteTargets.Where(target => target.BatchEligible)
+            .GroupBy(target => target.GroupIdentity, StringComparer.Ordinal).SelectMany(group => group).ToImmutableArray();
+
+    internal static CampaignFixedBatch SelectBatchFromTargets(string commitment,
+        ImmutableArray<CampaignBatchTarget> complete, CampaignInvocationTargetLimit limit, string? startTargetKey)
+    {
+        var eligible = complete.Where(target => target.BatchEligible)
+            .GroupBy(target => target.GroupIdentity, StringComparer.Ordinal).SelectMany(group => group).ToImmutableArray();
+        var start = startTargetKey is null ? 0 : Array.FindIndex(eligible.ToArray(), target => target.TargetKey == startTargetKey);
+        Require(start >= 0, CampaignPlanningValidationCode.InvalidRoot, "Batch boundary must name a complete-plan target.");
         var selected = ImmutableArray.CreateBuilder<string>();
         if (limit.MaximumTargets > 0)
         {
-            // GroupBy preserves first occurrence and member order from the canonical complete plan.
-            foreach (var group in complete.Where(target => target.BatchEligible)
-                         .GroupBy(target => target.GroupIdentity, StringComparer.Ordinal))
+            foreach (var group in eligible.Skip(start).GroupBy(target => target.GroupIdentity, StringComparer.Ordinal))
             {
                 var members = group.ToImmutableArray();
                 ImmutableArray<ImmutableArray<CampaignBatchTarget>> subdivisions = members.Length <= limit.MaximumTargets
@@ -114,9 +126,7 @@ public static partial class CampaignPlanner
                 foreach (var subdivision in subdivisions)
                 {
                     if (selected.Count + subdivision.Length > limit.MaximumTargets)
-                    {
                         return new CampaignFixedBatch(commitment, limit.MaximumTargets, complete, selected.ToImmutable());
-                    }
                     selected.AddRange(subdivision.Select(target => target.TargetKey));
                 }
             }

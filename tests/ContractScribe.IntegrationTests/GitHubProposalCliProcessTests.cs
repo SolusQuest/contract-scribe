@@ -14,11 +14,11 @@ public sealed partial class GitHubProposalCliProcessTests
     public async Task Ref_checkpoint_survives_a_new_CLI_process_without_a_local_checkpoint_file()
     {
         await using var fixture = await Fixture.CreateAsync();
-        var started = await fixture.Run("start");
+        var started = await fixture.Run();
         AssertResult(started, 0, "published");
         Assert.False(File.Exists(fixture.State));
         var before = fixture.Checkpoint();
-        var resumed = await fixture.Run("resume");
+        var resumed = await fixture.Run();
         AssertResult(resumed, 0, "awaiting-review");
         Assert.False(File.Exists(fixture.State));
         Assert.Equal(before.Sha256, fixture.Checkpoint().Sha256);
@@ -40,7 +40,7 @@ public sealed partial class GitHubProposalCliProcessTests
                 fixture.GitHub.RejectionStatus = 404;
             }
         };
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, 3, "conflict");
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal("preflight", json.RootElement.GetProperty("terminalLayer").GetString());
@@ -59,11 +59,11 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var accepted = fixture.Checkpoint();
         var before = GateCounts(fixture);
         var writes = fixture.GitHub.Mutations;
-        var result = await fixture.Run("resume");
+        var result = await fixture.Run();
         AssertResult(result, 0, "awaiting-review");
         Assert.Equal(accepted.Sha256, fixture.Checkpoint().Sha256);
         Assert.Equal(before, GateCounts(fixture));
@@ -82,7 +82,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         fixture.GitHub.Lifecycle(lifecycle);
         if (lifecycle == "merged")
         {
@@ -91,11 +91,11 @@ public sealed partial class GitHubProposalCliProcessTests
             await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString());
         }
         var writes = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), exit, outcome);
+        AssertResult(await fixture.Run(), exit, outcome);
         Assert.Equal(writes, fixture.GitHub.PublicationWrites);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         var settledWrites = fixture.GitHub.PublicationWrites;
-        AssertResult(await fixture.Run("resume"), exit, outcome);
+        AssertResult(await fixture.Run(), exit, outcome);
         Assert.Equal(settledWrites, fixture.GitHub.PublicationWrites);
         Assert.Single(fixture.GitHub.PullRequests);
         await fixture.AssertSourceUnchanged();
@@ -115,11 +115,11 @@ public sealed partial class GitHubProposalCliProcessTests
         {
             fixture.Publication["token"] = "private-token-sentinel";
         }
-        var arguments = fixture.Args("start");
+        var arguments = fixture.Args();
         if (scenario == "duplicate-property")
         {
             var json = await File.ReadAllTextAsync(fixture.Request);
-            await File.WriteAllTextAsync(fixture.Request, json[..^2] + ",\"operationId\":\"other\"}}");
+            await File.WriteAllTextAsync(fixture.Request, json[..^2] + ",\"targetRef\":\"refs/heads/other\"}}");
         }
         if (scenario == "request-token")
         {
@@ -166,7 +166,7 @@ public sealed partial class GitHubProposalCliProcessTests
             "{\"consumerConfigurationVersion\":1,"
             + "\"provider\":{\"endpoint\":\"https://provider.invalid/v1/chat/completions\"},"
             + "\"planning\":{\"" + field + "\":\"smuggled.value\"}}\n", new UTF8Encoding(false, true));
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, 4, "local-invalid");
         Assert.Equal(0, fixture.Provider.RequestCount);
         Assert.Equal(0, fixture.TokenReads());
@@ -179,7 +179,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         var checkpoint = fixture.GitHub.CheckpointBytes();
         var providerRequests = fixture.Provider.RequestCount;
         var tokenReads = fixture.TokenReads();
@@ -187,7 +187,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         layer["provider"]!["model"] = "drifted-model";
         await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString(), new UTF8Encoding(false, true));
-        var result = await fixture.Run("resume");
+        var result = await fixture.Run();
         AssertResult(result, 0, "awaiting-review");
         Assert.Empty(result.Stderr);
         Assert.Equal(checkpoint, fixture.GitHub.CheckpointBytes());
@@ -202,7 +202,7 @@ public sealed partial class GitHubProposalCliProcessTests
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
-        var result = await fixture.Run("resume");
+        var result = await fixture.Run();
         AssertResult(result, 4, "local-invalid");
         Assert.Equal("github proposal stopped before publication: campaign.state-missing\n", result.Stderr);
         Assert.False(File.Exists(fixture.State));
@@ -218,7 +218,7 @@ public sealed partial class GitHubProposalCliProcessTests
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await Fixture.CreateAsync();
         fixture.Configuration = null;
-        var result = await fixture.Run("start");
+        var result = await fixture.Run();
         AssertResult(result, 4, "local-invalid");
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal("campaign", json.RootElement.GetProperty("terminalLayer").GetString());
@@ -244,7 +244,7 @@ public sealed partial class GitHubProposalCliProcessTests
         fixture.Configuration = wrong;
         fixture.ConfigurationOverride = Path.Join(fixture.Outside, "layer-override.json");
         await CampaignCliProcessTests.WriteConsumerLayerAsync(fixture.ConfigurationOverride, fixture.Provider.Endpoint);
-        AssertResult(await fixture.Run("start"), 0, "published");
+        AssertResult(await fixture.Run(), 0, "published");
         Assert.Single(fixture.GitHub.PullRequests);
     }
 
@@ -280,13 +280,19 @@ public sealed partial class GitHubProposalCliProcessTests
         internal string? ConfigurationOverride;
         internal required byte[] Source;
         internal required Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)> GovernedFiles;
-        internal string Snapshot = "snapshot.github";
 
         internal static async Task<Fixture> CreateAsync(bool required = true, bool twoWorks = false, bool newPath = false, bool rejectNewPath = false,
-            bool unsupportedProperty = false)
+            bool unsupportedProperty = false, int targetCount = 0, string providerScenario = "accepted")
         {
             var repository = await LoaderFixture.CreateAsync();
             await CampaignCliProcessTests.SetSingleWorkItemSourceAsync(repository.Root);
+            if (targetCount > 0)
+            {
+                var path = Path.Join(repository.Root, "App", "App.cs");
+                var text = await File.ReadAllTextAsync(path);
+                await File.WriteAllTextAsync(path, text.Replace("    public static void Run() { }",
+                    string.Join("\n", Enumerable.Range(0, targetCount).Select(index => $"    public static void Method{index:D2}() {{ }}")), StringComparison.Ordinal));
+            }
             if (unsupportedProperty)
             {
                 var path = Path.Join(repository.Root, "App", "App.cs");
@@ -310,7 +316,7 @@ public sealed partial class GitHubProposalCliProcessTests
             var outside = Path.Join(Path.GetTempPath(), "contract-scribe-github-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(outside);
             if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported) File.SetUnixFileMode(outside, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-            var provider = new CampaignCliProcessTests.ProposalLoopbackServer();
+            var provider = new CampaignCliProcessTests.ProposalLoopbackServer(providerScenario);
             var source = await File.ReadAllBytesAsync(Path.Join(repository.Root, "App", "App.cs"));
             var governed = new Dictionary<string, (byte[] Bytes, UnixFileMode? Mode)>(StringComparer.Ordinal);
             foreach (var path in Directory.EnumerateFiles(repository.Root, "*", SearchOption.AllDirectories)
@@ -341,10 +347,6 @@ public sealed partial class GitHubProposalCliProcessTests
                 ["repositoryOwner"] = "Owner",
                 ["repositoryName"] = "repo",
                 ["targetRef"] = "refs/heads/main",
-                ["expectedBaseCommitOid"] = github.BaseOid,
-                ["operationId"] = "operation.initial",
-                ["generationId"] = "generation.initial",
-                ["transition"] = "initial",
             };
             return new Fixture
             {
@@ -362,22 +364,20 @@ public sealed partial class GitHubProposalCliProcessTests
             };
         }
 
-        internal string[] Args(string operation, string? state = null, string? requestPath = null)
+        internal string[] Args(string? requestPath = null)
         {
             var request = new JsonObject
             {
-                ["githubProposalRequestVersion"] = 1,
+                ["githubCampaignVersion"] = 1,
                 ["campaignLineage"] = Lineage,
-                ["snapshot"] = Snapshot,
-                ["checkpointStore"] = "coordination-ref",
                 ["github"] = Publication.DeepClone(),
             };
             var path = requestPath ?? Request;
             File.WriteAllText(path, request.ToJsonString(), new UTF8Encoding(false));
             var arguments = new List<string>
             {
-                "github-proposal", operation, "--repository-root", Repository.Root, "--input", "App/App.csproj",
-                "--policy", "policy.json", "--request", path,
+                "github-proposal", "--repository-root", Repository.Root, "--input", "App/App.csproj",
+                "--policy", "policy.json", "--campaign", path,
             };
             if (Configuration is not null) arguments.AddRange(["--configuration", Configuration]);
             if (ConfigurationOverride is not null) arguments.AddRange(["--configuration-override", ConfigurationOverride]);
@@ -391,8 +391,8 @@ public sealed partial class GitHubProposalCliProcessTests
             ["CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS"] = Observations,
             ["CONTRACTSCRIBE_TEST_GITHUB_FAULT"] = fault,
         };
-        internal async Task<CampaignProcessResult> Run(string operation, string? token = Placeholder, string? fault = null) =>
-            await RunArgs(Args(operation), Environment(token, fault));
+        internal async Task<CampaignProcessResult> Run(string? token = Placeholder, string? fault = null) =>
+            await RunArgs(Args(), Environment(token, fault));
 
         internal async Task<CampaignProcessResult> RunArgs(string[] arguments, Dictionary<string, string?> environment)
         {

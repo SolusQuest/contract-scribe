@@ -299,10 +299,7 @@ public sealed partial class GitHubCoordinationRefTests
                 Number = 18, OriginalBaseOid = Oid('9'), BaseOid = Oid('1'), GenerationId = "closed-at-current-base",
             }],
         };
-        var request = new GitHubProposalRequest(1, "campaign.test", "snapshot.test", "coordination-ref",
-            new("Owner", "repo", "refs/heads/main", Oid('9'), "operation.not-attempted", "generation.not-attempted",
-                GitHubPublicationTransitionKind.Initial));
-        var result = GitHubCampaignPreflight.Select(CliBuildIdentity.Current, CampaignOperation.Resume, request, decision, 7);
+        var result = GitHubCampaignPreflight.Select(CliBuildIdentity.Current, CampaignOperation.Resume, decision, 7);
         Assert.NotNull(result);
         Assert.Equal("github-proposal.closed-same-base", Assert.Single(result.Diagnostics).Code);
         using var json = JsonDocument.Parse(result.StandardOutput);

@@ -52,7 +52,7 @@ internal static class GitHubProposalHttpLossScenario
     {
         if (!OperatingSystem.IsLinux()) return;
         await using var fixture = await GitHubProposalCliProcessTests.Fixture.CreateAsync();
-        GitHubProposalCliProcessTests.AssertResult(await fixture.Run("start"), 0, "published");
+        GitHubProposalCliProcessTests.AssertResult(await fixture.Run(), 0, "published");
         var mutations = fixture.GitHub.Mutations;
         Assert.InRange(mutations, 20, 500);
         Assert.Equal(new[] { "blobs", "cas", "commits", "pulls", "trees" },
@@ -63,7 +63,7 @@ internal static class GitHubProposalHttpLossScenario
             fixture.GitHub.Reset();
             fixture.GitHub.LoseAt = index;
             fixture.GitHub.LoseAfter = after;
-            var failed = await fixture.Run("start");
+            var failed = await fixture.Run();
             if (failed.ExitCode == 4)
             {
                 GitHubProposalCliProcessTests.AssertResult(failed, 4, "local-invalid");
@@ -81,11 +81,11 @@ internal static class GitHubProposalHttpLossScenario
             fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
             var hasCheckpoint = fixture.GitHub.Refs.Keys.Any(key => key.Contains("/coordination/", StringComparison.Ordinal))
                 && fixture.GitHub.CoordinationDocument()["checkpoint"] is not null;
-            var restarted = await fixture.Run(hasCheckpoint ? "resume" : "start");
+            var restarted = await fixture.Run();
             Assert.True(restarted.ExitCode is 0 or 3,
                 $"recovery mutation={index}, after={after}, stdout={restarted.Stdout}, stderr={restarted.Stderr}");
             var writes = fixture.GitHub.PublicationWrites;
-            var stable = await fixture.Run("resume");
+            var stable = await fixture.Run();
             Assert.Equal(writes, fixture.GitHub.PublicationWrites);
             Assert.True(stable.ExitCode is 0 or 3,
                 $"replay mutation={index}, after={after}, stdout={stable.Stdout}, stderr={stable.Stderr}");

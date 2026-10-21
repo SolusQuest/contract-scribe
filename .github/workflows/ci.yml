@@ -1131,6 +1131,14 @@ jobs:
           assert payload["toolVersion"] == manifest["toolVersion"]
           PYEOF
           fi
+      - name: Build intact retired-contract payload fixture
+        env:
+          NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ secrets.GITHUB_TOKEN }};ValidAuthenticationTypes=Basic
+        run: |
+          set -euo pipefail
+          # Accepted pre-cutover runtime; never a production payload-map change.
+          git -C action-src worktree add --detach "$PWD/stale-src" 80c0b3434694e3e55ec5aedbb95f8a47e2e1bb11
+          bash stale-src/scripts/release/build-payload.sh --output "$PWD/stale-payload"
       - name: Run the script/test matrix
         id: matrix
         continue-on-error: true
@@ -1143,6 +1151,7 @@ jobs:
             --kit "$PWD/kit" \
             --archive "$archive" \
             --sha256-file "${archive%.tar.gz}.sha256" \
+            --stale-archive "$(find "$PWD/stale-payload" -name '*.tar.gz' -print -quit)" \
             --real --work "$PWD/verify-work" --keep
       - name: Start loopback fakes
         id: fakes
@@ -1228,23 +1237,15 @@ jobs:
             echo "base_oid=$BASE_OID"
           } >> "$GITHUB_OUTPUT"
           mkdir -p action-inputs
-          cat > action-inputs/request.json <<EOFX
-          {"githubProposalRequestVersion":1,
-           "campaignLineage":"campaign.action.e2e","snapshot":"snapshot.action.e2e",
-           "checkpointStore":"coordination-ref",
+          cat > action-inputs/campaign.json <<'EOFX'
+          {"githubCampaignVersion":1,"campaignLineage":"campaign.action.e2e",
            "github":{"repositoryOwner":"Owner","repositoryName":"repo",
-             "targetRef":"refs/heads/main","expectedBaseCommitOid":"$BASE_OID",
-             "operationId":"operation.e2e","generationId":"generation.e2e",
-             "transition":"initial"}}
+             "targetRef":"refs/heads/main"}}
           EOFX
-          cp action-inputs/request.json action-inputs/request-2.json
           {
-            echo "request-json<<CSREQ"
-            cat action-inputs/request.json
-            echo "CSREQ"
-            echo "request2-json<<CSREQ"
-            cat action-inputs/request-2.json
-            echo "CSREQ"
+            echo "campaign-json<<CSCAMPAIGN"
+            cat action-inputs/campaign.json
+            echo "CSCAMPAIGN"
           } >> "$GITHUB_OUTPUT"
           cat > action-inputs/layer.json <<EOFX
           {"consumerConfigurationVersion":1,
@@ -1264,11 +1265,10 @@ jobs:
           CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.target.outputs.github }}
           CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/e2e-obs.txt
         with:
-          operation: github-proposal-start
           repository-root: ${{ github.workspace }}/target repo a2
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ steps.target.outputs.request-json }}
+          campaign: ${{ steps.target.outputs.campaign-json }}
           configuration: ${{ github.workspace }}/action-inputs/layer.json
           provider-api-key: contract-scribe-synthetic-provider-only
           github-token: contract-scribe-synthetic-transport-only
@@ -1297,11 +1297,10 @@ jobs:
           DOTNET_STARTUP_HOOKS: ${{ github.workspace }}/kit/hook/ContractScribe.CampaignStartupHook.dll
           CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.target.outputs.github }}
         with:
-          operation: github-proposal-start
           repository-root: ${{ github.workspace }}/target repo a2
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ steps.target.outputs.request2-json }}
+          campaign: ${{ steps.target.outputs.campaign-json }}
           configuration: ${{ github.workspace }}/action-inputs/layer.json
           provider-api-key: contract-scribe-synthetic-provider-only
           acquisition-token: contract-scribe-synthetic-acquisition-only
@@ -1381,7 +1380,7 @@ jobs:
           mkdir -p "$TGT"
           cp -r kit/fixture/. "$TGT/"
           cp kit/global.json "$TGT/global.json"
-          # Real checkout: HEAD commit is the request's expectedBaseCommitOid
+          # Real checkout: HEAD commit is the authenticated automatic campaign base
           # AND the fake remote's refs/heads/main. Deterministic
           # author/committer/date makes the sha identical in the consumer job.
           git -C "$TGT" init -q -b main
@@ -1485,43 +1484,13 @@ jobs:
            "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
              "maximumElapsedMilliseconds":3600000}}}
           EOFX
-          python3 - <<'PYEOF'
-          import json, sys
-          campaign = {
-              "snapshot": "snapshot.action.a3",
-              "operationId": "operation.a3",
-              "generationId": "generation.a3",
-              "targetRef": "refs/heads/main",
-              "repositoryOwner": "Owner",
-              "repositoryName": "repo"}
-          json.dump(campaign, open("action-inputs/campaign.json", "w"))
-          context = {"runId": 91001, "runNumber": 500, "runAttempt": 1,
-                     "event": "workflow_dispatch", "ref": "refs/heads/main",
-                     "sha": "b" * 40, "repository": "Owner/repo",
-                     "repositoryId": 7001,
-                     "workflowRef": "Owner/repo/.github/workflows/"
-                                    "contract-scribe-campaign.yml@refs/heads/main"}
-          json.dump(context, open("action-inputs/context.json", "w"))
-          PYEOF
       - name: Producer admission gate
         env:
-          CS_OPERATION: start
           CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"${{ steps.target.outputs.target_head }}","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
-        run: python3 action-src/examples/github-actions/handoff.py gate
-      - name: Build invocation request
-        id: request
-        env:
-          CS_OPERATION: start
-          CS_CAMPAIGN_LINEAGE: campaign.action.a3
-          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo"}'
-          CS_RUN_CONTEXT: '{"runId":91001,"runNumber":500,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"${{ steps.target.outputs.target_head }}","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
-        run: >-
-          python3 action-src/examples/github-actions/handoff.py request
-          --base-oid "${{ steps.target.outputs.target_head }}"
-          --out "$RUNNER_TEMP/cs-request.json"
-      - name: "E2E start through uses (producer)"
+        run: python3 action-src/examples/github-actions/caller.py gate
+      - name: "E2E automatic invocation through uses (producer)"
         id: invoke
         uses: ./action-src
         env:
@@ -1532,11 +1501,10 @@ jobs:
           CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
           CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/producer-obs.txt
         with:
-          operation: github-proposal-start
           repository-root: ${{ github.workspace }}/target-repo-a3
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ steps.request.outputs.request-json }}
+          campaign: '{"githubCampaignVersion":1,"campaignLineage":"campaign.action.a3","github":{"repositoryOwner":"Owner","repositoryName":"repo","targetRef":"refs/heads/main"}}'
           configuration: ${{ github.workspace }}/action-inputs/layer.json
           provider-api-key: contract-scribe-synthetic-provider-only
           github-token: contract-scribe-synthetic-transport-only
@@ -1565,7 +1533,7 @@ jobs:
           if-no-files-found: warn
 
   action_examples_consumer:
-    # Fresh runner restores the synthetic GitHub service, then explicitly resumes
+    # Fresh runner restores the synthetic GitHub service, then invokes identical inputs
     # through the Action from its coordination ref with no local checkpoint file.
     needs: action_examples_producer
     runs-on: ubuntu-latest
@@ -1692,7 +1660,7 @@ jobs:
             echo "github=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/github-ready.json)"
             echo "actions_api=$(python3 -c 'import json,sys;print(json.load(open(sys.argv[1]))["endpoint"])' fakes/actions-ready.json)"
           } >> "$GITHUB_OUTPUT"
-      - name: Prepare layer for resumes
+      - name: Prepare identical layer for fresh invocation
         env:
           PROVIDER: ${{ needs.action_examples_producer.outputs.provider_endpoint }}
         run: |
@@ -1705,25 +1673,13 @@ jobs:
            "budgets":{"campaign":{"maximumCandidatesPerBlock":30,
              "maximumElapsedMilliseconds":3600000}}}
           EOFX
-      - name: Authenticate explicit resume
+      - name: Authenticate fresh trusted trigger
         env:
-          CS_OPERATION: resume
           CS_ACTIONS_API_URL: ${{ steps.fakes.outputs.actions_api }}
           GITHUB_TOKEN: contract-scribe-synthetic-actions-read
           CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"${{ steps.target.outputs.target_head }}","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
-        run: python3 action-src/examples/github-actions/handoff.py gate
-      - name: "Consumer leg 1 — build invocation request"
-        id: request
-        env:
-          CS_OPERATION: resume
-          CS_CAMPAIGN_LINEAGE: campaign.action.a3
-          CS_CAMPAIGN: '{"snapshot":"snapshot.action.a3","operationId":"operation.a3","generationId":"generation.a3","targetRef":"refs/heads/main","repositoryOwner":"Owner","repositoryName":"repo"}'
-          CS_RUN_CONTEXT: '{"runId":92002,"runNumber":501,"runAttempt":1,"event":"workflow_dispatch","ref":"refs/heads/main","sha":"${{ steps.target.outputs.target_head }}","repository":"Owner/repo","repositoryId":7001,"workflowRef":"Owner/repo/.github/workflows/contract-scribe-campaign.yml@refs/heads/main"}'
-        run: >-
-          python3 action-src/examples/github-actions/handoff.py request
-          --base-oid "${{ steps.target.outputs.target_head }}"
-          --out "$RUNNER_TEMP/cs-request.json"
-      - name: "Consumer leg 1 — resume through uses"
+        run: python3 action-src/examples/github-actions/caller.py gate
+      - name: "Consumer leg 1 — identical invocation through uses"
         id: invoke
         uses: ./action-src
         env:
@@ -1734,16 +1690,15 @@ jobs:
           CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT: ${{ steps.fakes.outputs.github }}
           CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS: ${{ github.workspace }}/consumer-obs.txt
         with:
-          operation: github-proposal-resume
           repository-root: ${{ github.workspace }}/target-repo-a3
           input: Fixture.slnx
           policy: policy.json
-          request: ${{ steps.request.outputs.request-json }}
+          campaign: '{"githubCampaignVersion":1,"campaignLineage":"campaign.action.a3","github":{"repositoryOwner":"Owner","repositoryName":"repo","targetRef":"refs/heads/main"}}'
           configuration: ${{ github.workspace }}/action-inputs/layer.json
           provider-api-key: contract-scribe-synthetic-provider-only
           github-token: contract-scribe-synthetic-transport-only
           acquisition-token: contract-scribe-synthetic-acquisition-only
-      - name: Verify fresh-runner resume from remote ref
+      - name: Verify fresh-runner automatic wait from remote ref
         env:
           OUTCOME: ${{ steps.invoke.outputs.outcome }}
           STATUS: ${{ steps.invoke.outputs.action-status }}

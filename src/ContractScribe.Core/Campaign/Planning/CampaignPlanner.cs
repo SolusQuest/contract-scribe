@@ -130,7 +130,7 @@ public static partial class CampaignPlanner
             input.Snapshot.TargetProfile,
             workItems,
             summary,
-            SelectBatch(executionCommitment, workItems, input.TargetLimit));
+            SelectBatch(executionCommitment, workItems, input.TargetLimit, input.BatchStartTargetKey));
     }
 
     internal static ImmutableHashSet<SymbolRef> ReadViolationParentSymbols(

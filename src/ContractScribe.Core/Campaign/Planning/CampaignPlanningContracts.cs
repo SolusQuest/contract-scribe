@@ -541,6 +541,7 @@ public sealed record CampaignPlanningInput
     public AuditDocument AuditDocument { get; init; }
     public CampaignPlanningOwnerAuthoritySet OwnerAuthority { get; init; }
     public CampaignInvocationTargetLimit TargetLimit { get; init; }
+    internal string? BatchStartTargetKey { get; init; }
 }
 
 public sealed record CampaignPlanningViolationCause

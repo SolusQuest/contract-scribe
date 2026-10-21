@@ -47,7 +47,7 @@ internal static class GitHubProposalPresentation
         Result(identity, operation, "preflight", outcome, revision,
             [new("github-proposal." + outcome, "github proposal stopped before publication: github-proposal." + outcome)]);
 
-    internal static CliExecutionResult Preflight(CliBuildIdentity identity, CampaignOperation operation,
+    internal static CliExecutionResult Preflight(CliBuildIdentity identity, CampaignOperation? operation,
         string outcome, string reason, long? revision, GitHubCampaignPreflightLink? link = null) =>
         Result(identity, operation, "preflight", outcome, revision,
             Exit(outcome) == 0 ? [] : [new("github-proposal." + reason,

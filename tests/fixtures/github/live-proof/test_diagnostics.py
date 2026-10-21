@@ -77,7 +77,7 @@ class UnexpectedResultDiagnosticsTests(unittest.TestCase):
         config = inputs()[0]
         with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
             root = Path(temporary)
-            (root / 'negative.ok').write_text('stale')
+            (root / 'negative.ok').write_text('local-invalid')
             stack.enter_context(mock.patch.object(proof, 'current_config', return_value=config))
             stack.enter_context(mock.patch.object(proof, 'context', return_value={}))
             stack.enter_context(mock.patch.object(proof, 'fresh_gate', return_value='manual'))
@@ -103,7 +103,7 @@ class UnexpectedResultDiagnosticsTests(unittest.TestCase):
     def test_process_timeout_stops_once_cleans_provider_and_never_emits_partial_output(self):
         with tempfile.TemporaryDirectory() as temporary, contextlib.ExitStack() as stack:
             root = Path(temporary)
-            (root / 'negative.ok').write_text('stale')
+            (root / 'negative.ok').write_text('local-invalid')
             stack.enter_context(mock.patch.object(proof, 'current_config', return_value=inputs()[0]))
             stack.enter_context(mock.patch.object(proof, 'context', return_value={}))
             stack.enter_context(mock.patch.object(proof, 'fresh_gate', return_value='manual'))

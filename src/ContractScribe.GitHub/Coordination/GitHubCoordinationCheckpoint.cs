@@ -106,6 +106,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
                         throw new GitHubCoordinationException();
                 }
                 if (document.Plan != parent.Plan
+                    && !CampaignStateFactory.IsNoResultBatchSuccessor(before, next)
                     && (next.State.Snapshot.ExecutionCommitmentSha256 == before.State.Snapshot.ExecutionCommitmentSha256
                         || next.State.Predecessor?.FinalCheckpointSha256 != before.Sha256))
                     throw new GitHubCoordinationException();
