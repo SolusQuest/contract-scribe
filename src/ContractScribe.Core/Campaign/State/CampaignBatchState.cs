@@ -167,8 +167,9 @@ public static partial class CampaignStateFactory
             || state.WorkItems.Any(work => work.TrustedProposal is not null || work.Status is CampaignWorkStatus.Accepted or CampaignWorkStatus.ProposalComplete
                 || work.PausedProviderAttempt is not null)) return null;
         var ordered = CampaignPlanner.OrderedEligibleTargets(state.Batch);
+        var selected = state.Batch.SelectedTargetKeys.ToHashSet(StringComparer.Ordinal);
         var start = state.Batch.SelectedTargetKeys.IsEmpty ? 0
-            : Array.FindIndex(ordered.ToArray(), target => target.TargetKey == state.Batch.SelectedTargetKeys[^1]) + 1;
+            : Array.FindLastIndex(ordered.ToArray(), target => selected.Contains(target.TargetKey)) + 1;
         if (start >= ordered.Length) return null;
         var byKey = state.WorkItems.ToDictionary(work => work.WorkItemKey, StringComparer.Ordinal);
         if (!ordered.Take(start).All(target => !target.Dispatchable || IsClosedNoResult(byKey[target.WorkItemKey]))) return null;

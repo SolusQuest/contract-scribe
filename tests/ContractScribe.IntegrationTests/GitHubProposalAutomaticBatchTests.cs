@@ -8,6 +8,78 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false, 2)]
+    [InlineData(true, 3)]
+    public async Task Automatic_no_result_batches_exhaust_interleaved_overloads_and_nested_groups(bool partial, int nextQuota)
+    {
+        await using var fixture = await Fixture.CreateAsync(providerScenario: "closed-proposal");
+        var source = "namespace Fixture;\n/// <summary>Provides fixture operations.</summary>\npublic static "
+            + (partial ? "partial " : "") + "class App\n{\n"
+            + "    public static void A() { }\n    public static void B() { }\n"
+            + (partial ? "" : "    public static void A(int value) { }\n    public static void B(int value) { }\n")
+            + "    /// <summary>Provides nested operations.</summary>\n    public static class Nested\n    {\n"
+            + "        public static void Run() { }\n        public static void Run(int value) { }\n    }\n}\n";
+        await File.WriteAllTextAsync(Path.Join(fixture.Repository.Root, "App/App.cs"), source);
+        fixture.Source = await File.ReadAllBytesAsync(Path.Join(fixture.Repository.Root, "App/App.cs"));
+        fixture.GovernedFiles["App/App.cs"] = (fixture.Source, fixture.GovernedFiles["App/App.cs"].Mode);
+        if (partial)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes("namespace Fixture;\npublic static partial class App\n{\n"
+                + "    public static void A(int value) { }\n    public static void B(int value) { }\n}\n");
+            await File.WriteAllBytesAsync(Path.Join(fixture.Repository.Root, "App/Other.cs"), bytes);
+            fixture.GovernedFiles["App/Other.cs"] = (bytes, fixture.GovernedFiles["App/App.cs"].Mode);
+        }
+        AdvanceTarget(fixture, fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes),
+            "Synthetic interleaved overload families and a nested group\n");
+        await SetAutomaticQuota(fixture, 2);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var families = new HashSet<string>(StringComparer.Ordinal);
+        CampaignCheckpointArtifact? previous = null;
+        for (var batch = 0; batch < 3; batch++)
+        {
+            AssertResult(await fixture.Run(), 5, "host-failure");
+            var current = fixture.Checkpoint();
+            var selected = current.State.Batch.CompleteTargets.Where(target =>
+                current.State.Batch.SelectedTargetKeys.Contains(target.TargetKey)).ToArray();
+            Assert.Equal(2, selected.Length);
+            Assert.Single(selected.Select(target => target.MemberFamilyIdentity).Distinct());
+            Assert.True(families.Add(selected[0].MemberFamilyIdentity!));
+            if (batch == 0 && partial)
+            {
+                var group = current.State.Batch.CompleteTargets.Where(target => target.GroupIdentity == selected[0].GroupIdentity).ToArray();
+                Assert.True(Array.FindLastIndex(group, target => current.State.Batch.SelectedTargetKeys.Contains(target.TargetKey)) >= 2,
+                    "Fixture must expose interleaving in the actual complete-plan order: "
+                    + string.Join(", ", group.Select(target => target.SymbolRef.DocumentationCommentId)));
+            }
+            Assert.All(selected, target =>
+            {
+                if (batch == 2) Assert.StartsWith("M:Fixture.App.Nested.Run", target.SymbolRef.DocumentationCommentId);
+                else Assert.DoesNotContain("Nested", target.SymbolRef.DocumentationCommentId);
+                Assert.True(seen.Add(target.TargetKey), "A closed target was dispatched again.");
+            });
+            if (previous is not null)
+            {
+                Assert.Equal(previous.State.Snapshot, current.State.Snapshot);
+                Assert.NotEqual(previous.State.Batch.Identity, current.State.Batch.Identity);
+                foreach (var work in previous.State.WorkItems.Where(work => work.OuterAttemptCount > 0))
+                    Assert.Equal(work, current.State.WorkItems.Single(item => item.WorkItemKey == work.WorkItemKey));
+            }
+            previous = current;
+            await SetAutomaticQuota(fixture, nextQuota);
+        }
+        Assert.Equal(6, seen.Count);
+        Assert.DoesNotContain(previous!.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
+        var counts = GateCounts(fixture);
+        var requests = fixture.Provider.RequestCount;
+        AssertResult(await fixture.Run(), 5, "host-failure");
+        Assert.Equal(counts.Created, GateCounts(fixture).Created);
+        Assert.Equal(requests, fixture.Provider.RequestCount);
+        Assert.Equal(previous.Sha256, fixture.Checkpoint().Sha256);
+        Assert.Empty(fixture.GitHub.PullRequests);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData("historical")]
     [InlineData("deferred")]
     [InlineData("none")]
