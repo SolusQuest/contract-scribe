@@ -66,6 +66,55 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Fact]
+    public void No_result_batch_preserves_patch_rejection_attempts_but_deferred_work_stays_unattempted()
+    {
+        var scenario = CreateProposalScenario(workItemCount: 3, targetLimit: 1);
+        var work = scenario.Plan.WorkItems[0];
+        var exchange = CreateScribeExchange(work, scenario: scenario);
+        var proposal = AdmitProposal(scenario,
+            WithState(scenario.InitialState, scenario.InitialState.WorkItems, ProviderReservation(work.WorkItemKey, exchange)),
+            work, exchange);
+        var complete = WithState(scenario.InitialState,
+            ReplaceWork(scenario.InitialState, work.WorkItemKey, CampaignWorkStatus.ProposalComplete, proposal), null);
+        var request = CampaignStateFactory.ReconstructPatchRequest(complete, PatchContext(exchange.Request), CurrentEvidence(exchange));
+        var predecessor = CampaignStateJson.CreateArtifact(complete);
+        var reserved = CampaignStateReducer.ReservePatchInvocation(predecessor, request, elapsedMilliseconds: 1_000);
+        Assert.Equal(CampaignTransitionKind.Applied, reserved.Kind);
+        var rejection = CampaignStateFactory.CreatePatchRejectionReduction(reserved.Artifact, scenario.ExecutionAuthority,
+            "style.synthetic", scenario.StyleProjection, "samples/Synthetic.csproj", scenario.Input, scenario.Plan,
+            request, CreateRejectedPatchResult(request, work.WorkItemKey, "patch.rejected.unsafe-change"), work.WorkItemKey);
+        Assert.Equal(CampaignPatchRejectionDecisionKind.Removable, rejection.Kind);
+        var authority = CampaignStateReducer.CreatePatchInvocationAuthority(AcceptForTest(predecessor, reserved), request);
+        Assert.True(authority.TryBeginDispatch());
+        var reduced = CampaignStateReducer.ApplyPatchRejection(reserved.Artifact, authority, rejection.Reduction!);
+        Assert.Equal(CampaignTransitionKind.Applied, reduced.Kind);
+        Assert.Equal(CampaignTerminalKind.Complete, reduced.Artifact.State.TerminalOutcome!.Kind);
+        var closed = reduced.Artifact.State.WorkItems[0];
+        Assert.Equal(CampaignWorkOutcomeCode.PatchRejected, closed.ClosedOutcome!.Code);
+        Assert.Equal(1, closed.CandidateAttemptCount);
+
+        var plan = CampaignPlanner.Plan(scenario.Input with
+        { BatchStartTargetKey = scenario.Plan.Batch.CompleteTargets[1].TargetKey });
+        var next = CampaignStateReducer.AdvanceNoResultBatch(AcceptCurrentForTest(reduced.Artifact), plan);
+        Assert.Equal(CampaignTransitionKind.Applied, next.Kind);
+        Assert.Equal(closed, next.Artifact.State.WorkItems[0]);
+        Assert.Equal(reduced.Artifact.State.LineageCharges, next.Artifact.State.LineageCharges);
+        Assert.True(CampaignStateFactory.IsNoResultBatchSuccessor(reduced.Artifact, next.Artifact));
+        CampaignStateFactory.ValidateSuccessorHistory(reduced.Artifact, next.Artifact);
+        AssertPublishedCampaignRoundTrip(next.Artifact.State);
+        AssertMutationFailure(next.Artifact.State,
+            root => root["workItems"]![2]!["candidateAttemptCount"] = 1, CampaignStateValidationCode.InvalidCorrelation);
+        AssertMutationFailure(next.Artifact.State,
+            root => root["workItems"]![2]!["outerAttemptCount"] = 1, CampaignStateValidationCode.InvalidCorrelation);
+        var resetArtifact = CampaignStateJson.CreateArtifact(WithState(next.Artifact.State,
+            next.Artifact.State.WorkItems.Select(item => item.WorkItemKey == closed.WorkItemKey
+                ? item with { CandidateAttemptCount = 0 } : item), null));
+        Assert.False(CampaignStateFactory.IsNoResultBatchSuccessor(reduced.Artifact, resetArtifact));
+        Assert.Throws<CampaignStateValidationException>(() =>
+            CampaignStateFactory.ValidateSuccessorHistory(reduced.Artifact, resetArtifact));
+    }
+
+    [Fact]
     public void Empty_selected_batch_still_preserves_excluded_unresolved_work()
     {
         var state = CreateCapacityState(excludedOwners: 1, deferredOwners: 0);

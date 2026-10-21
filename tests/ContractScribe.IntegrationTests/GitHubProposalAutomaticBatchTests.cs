@@ -7,6 +7,76 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Automatic_patch_rejected_no_result_batch_preserves_attempts_through_next_batch_recovery()
+    {
+        await using var fixture = await Fixture.CreateAsync(twoWorks: true, newPath: true);
+        var path = Path.Join(fixture.Repository.Root, "App", "App.cs");
+        var source = await File.ReadAllTextAsync(path);
+        var firstBreak = source.IndexOf('\n');
+        Assert.True(firstBreak >= 0);
+        await File.WriteAllTextAsync(path, source[..firstBreak] + "\r\n" + source[(firstBreak + 1)..]);
+        var bytes = await File.ReadAllBytesAsync(path);
+        fixture.Source = bytes;
+        fixture.GovernedFiles["App/App.cs"] = (bytes, fixture.GovernedFiles["App/App.cs"].Mode);
+        AdvanceTarget(fixture, fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes),
+            "Synthetic base with a mixed-line-ending M2 rejection\n");
+        await SetAutomaticQuota(fixture, 1);
+
+        AssertResult(await fixture.Run(), 5, "host-failure");
+        var before = fixture.Checkpoint();
+        Assert.Equal(CampaignTerminalKind.Complete, before.State.TerminalOutcome!.Kind);
+        Assert.Null(before.State.CandidateObservation);
+        Assert.Null(before.State.ActiveReservation);
+        var rejected = Assert.Single(before.State.WorkItems, work => work.Status == CampaignWorkStatus.Closed);
+        Assert.Equal(CampaignWorkOutcomeCode.PatchRejected, rejected.ClosedOutcome!.Code);
+        Assert.Equal(1, rejected.CandidateAttemptCount);
+        var deferred = Assert.Single(before.State.TargetProgress, item => item.Kind == CampaignTargetProgressKind.Deferred);
+        var requests = fixture.Provider.RequestCount;
+
+        var environment = fixture.Environment();
+        environment["CONTRACTSCRIBE_TEST_GITHUB_PAUSE"] = "after-next-batch";
+        environment["CONTRACTSCRIBE_TEST_GITHUB_RELEASE"] = Path.Join(fixture.Outside, "never-release-rejected-next-batch");
+        using (var running = CampaignCliProcessTests.Start(fixture.Args(), environment))
+        {
+            try
+            {
+                var elapsed = System.Diagnostics.Stopwatch.StartNew();
+                while (!File.ReadAllLines(fixture.Observations).Contains("after-next-batch", StringComparer.Ordinal))
+                {
+                    if (running.Process.HasExited)
+                    {
+                        var result = await running.CompleteAsync();
+                        Assert.Fail($"Next batch was not persisted: exit={result.ExitCode} stdout={result.Stdout} stderr={result.Stderr}");
+                    }
+                    Assert.True(elapsed.Elapsed < TimeSpan.FromMinutes(2));
+                    await Task.Delay(20);
+                }
+                var persisted = fixture.Checkpoint();
+                Assert.True(CampaignStateFactory.IsNoResultBatchSuccessor(before, persisted));
+                Assert.Equal(rejected, persisted.State.WorkItems.Single(work => work.WorkItemKey == rejected.WorkItemKey));
+                Assert.Equal(before.State.LineageCharges, persisted.State.LineageCharges);
+                Assert.Equal(requests, fixture.Provider.RequestCount);
+                Assert.Equal(new[] { deferred.Target.TargetKey }, persisted.State.Batch.SelectedTargetKeys);
+            }
+            finally { await CampaignCliProcessTests.StopAsync(running); }
+        }
+        fixture.GitHub.ServerNow = fixture.GitHub.ServerNow.AddMinutes(6);
+        AssertResult(await fixture.Run(), 0, "published");
+        var after = fixture.Checkpoint();
+        Assert.Equal(before.State.Snapshot, after.State.Snapshot);
+        Assert.Equal(rejected, after.State.WorkItems.Single(work => work.WorkItemKey == rejected.WorkItemKey));
+        Assert.Equal(before.State.DispatchObservations.Where(row => row.WorkItemKey == rejected.WorkItemKey),
+            after.State.DispatchObservations.Where(row => row.WorkItemKey == rejected.WorkItemKey));
+        Assert.Equal(new[] { deferred.Target.WorkItemKey }, after.State.CandidateObservation!.AcceptedWorkItemKeys);
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
+        var counts = GateCounts(fixture);
+        AssertResult(await fixture.Run(), 0, "awaiting-review");
+        Assert.Equal(counts, GateCounts(fixture));
+        Assert.Equal(after.Sha256, fixture.Checkpoint().Sha256);
+        await fixture.AssertSourceUnchanged();
+    }
+
     [Fact]
     public async Task Automatic_no_result_batch_advances_exact_deferred_members_and_preserves_closed_history()
     {

@@ -241,17 +241,19 @@ public static partial class CampaignStateFactory
         var canonical = CampaignPlanner.SelectBatchFromTargets(batch.PlanCommitment, batch.CompleteTargets,
             new CampaignInvocationTargetLimit(batch.CreationQuota), batch.SelectedTargetKeys.FirstOrDefault());
         Require(canonical.SelectedTargetKeys.SequenceEqual(batch.SelectedTargetKeys), CampaignStateValidationCode.InvalidCorrelation);
-        var prior = CampaignPlanner.OrderedEligibleTargets(batch)
-            .TakeWhile(target => target.TargetKey != batch.SelectedTargetKeys.FirstOrDefault());
-        if (!batch.SelectedTargetKeys.IsEmpty)
-            Require(prior.All(target => !target.Dispatchable || IsClosedNoResult(state.WorkItems[workIndices[target.WorkItemKey]])),
-                CampaignStateValidationCode.InvalidCorrelation);
+        var prior = batch.SelectedTargetKeys.IsEmpty ? [] : CampaignPlanner.OrderedEligibleTargets(batch)
+            .TakeWhile(target => target.TargetKey != batch.SelectedTargetKeys[0]).ToImmutableArray();
+        Require(prior.All(target => !target.Dispatchable || IsClosedNoResult(state.WorkItems[workIndices[target.WorkItemKey]])),
+            CampaignStateValidationCode.InvalidCorrelation);
+        var priorWork = prior.Where(target => target.Dispatchable)
+            .Select(target => target.WorkItemKey).ToHashSet(StringComparer.Ordinal);
         var selectedTargetKeys = batch.SelectedTargetKeys.ToHashSet(StringComparer.Ordinal);
         var selectedWork = batch.CompleteTargets.Where(target => selectedTargetKeys.Contains(target.TargetKey))
             .Where(target => target.Dispatchable).Select(target => target.WorkItemKey).ToHashSet(StringComparer.Ordinal);
         Require(state.WorkItems.All(work => selectedWork.Contains(work.WorkItemKey)
-            || work.TrustedProposal is null && work.CandidateAttemptCount == 0
-                && (work.OuterAttemptCount == 0 || IsClosedNoResult(work))),
+            || work.TrustedProposal is null
+                && (priorWork.Contains(work.WorkItemKey) && IsClosedNoResult(work)
+                    || work.OuterAttemptCount == 0 && work.CandidateAttemptCount == 0)),
             CampaignStateValidationCode.InvalidCorrelation);
         Require(state.ActiveReservation is not CampaignProviderReservation reservation || selectedWork.Contains(reservation.WorkItemKey),
             CampaignStateValidationCode.InvalidCorrelation);
