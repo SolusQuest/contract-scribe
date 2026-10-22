@@ -226,6 +226,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             if (permit is null) throw new OperationCanceledException(token);
             try
             {
+                token.ThrowIfCancellationRequested();
                 var begun = permit.TryBeginOperation();
                 if (!begun && (permit.RemainingMilliseconds > 0 || State.Scope.Failed || State.Scope.Allowance.HasCheckedStop
                     || permit.DeadlineOwner != DocumentationScribeDeadlineOwner.HostOperation))
@@ -326,6 +327,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
         }
         private async Task<ProviderResponse> SendAsync(ProviderRequest request, ProviderObservation observation, CancellationToken token)
         {
+            using var execution = CancellationTokenSource.CreateLinkedTokenSource(token, owner.State.CallerCancellation);
+            token = execution.Token;
             try
             {
                 await owner.WaitForProductRetryAsync(token);
@@ -530,6 +533,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             var timedOut = false;
             try
             {
+                owner.State.CallerCancellation.ThrowIfCancellationRequested();
+                token.ThrowIfCancellationRequested();
                 if (!permit.TryBeginOperation())
                 {
                     owner.State.Scope.ObserveDeadline(permit);
@@ -538,7 +543,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                 else
                 {
                     using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), owner.State.Scope.Allowance.Clock);
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, deadline.Token);
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, owner.State.CallerCancellation, deadline.Token);
                     try
                     {
                         owner.State.ToolCallCount++;
@@ -549,7 +554,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                         { _ = DocumentationScribeTaskObservation.ObserveLateAsync(invocation); throw; }
                         linked.Token.ThrowIfCancellationRequested();
                     }
-                    catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested)
+                    catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested
+                        && !owner.State.CallerCancellation.IsCancellationRequested)
                     {
                         owner.State.Scope.ObserveDeadline(permit);
                         timedOut = true;

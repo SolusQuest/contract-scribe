@@ -68,6 +68,8 @@ internal sealed partial class DocumentationScribeSession
         }
         try
         {
+            State.CallerCancellation.ThrowIfCancellationRequested();
+            token.ThrowIfCancellationRequested();
             if (!permit.TryBeginOperation())
             {
                 State.Scope.ObserveDeadline(permit);

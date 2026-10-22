@@ -1244,14 +1244,16 @@ internal static partial class DocumentationScribeComposition
 
             var permit = executionScope is null ? null
                 : await executionScope.BeginHostAsync(DocumentationScribeHostOperation.RepositoryTool, cancellationToken).ConfigureAwait(false);
-            if (executionScope is not null && (permit is null || !permit.TryBeginOperation()))
+            if (executionScope is not null && permit is null)
                 throw new OperationCanceledException();
-            using var readDeadline = permit is null ? null : new CancellationTokenSource(
-                TimeSpan.FromMilliseconds(Math.Max(1, permit.RemainingMilliseconds)), executionScope!.Allowance.Clock);
-            using var readCancellation = readDeadline is null ? null : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, readDeadline.Token);
             DocumentationScribeRepositoryReadExcerptResult result;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (permit is not null && !permit.TryBeginOperation()) throw new OperationCanceledException();
+                using var readDeadline = permit is null ? null : new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(Math.Max(1, permit.RemainingMilliseconds)), executionScope!.Allowance.Clock);
+                using var readCancellation = readDeadline is null ? null : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, readDeadline.Token);
                 result = await repository.ReadExcerpt.InvokeAsync(
                 new DocumentationScribeRepositoryReadExcerptRequest(
                     reference.ContextReferenceId,

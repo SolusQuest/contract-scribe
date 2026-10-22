@@ -24,6 +24,7 @@ internal static class DocumentationScribePhysicalExchange
         var disposition = DocumentationScribeDispatchDisposition.Interrupted;
         try
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (permit.RemainingMilliseconds <= 0) throw new OperationCanceledException();
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), scope.Allowance.Clock);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, deadline.Token);
