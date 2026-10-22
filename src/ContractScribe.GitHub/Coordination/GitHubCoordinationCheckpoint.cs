@@ -10,9 +10,11 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
     private readonly SemaphoreSlim checkpointGate = new(1, 1);
     private readonly Dictionary<string, GitHubCoordinationDocument> documents = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource checkpointLifetime = new();
+    private readonly CancellationTokenSource checkpointExpiry = new();
+    private readonly CancellationTokenRegistration checkpointExpiryRegistration;
     private string? invocationOwner;
     private long invocationEpoch;
-    private bool checkpointStopped;
+    private volatile bool checkpointStopped;
     private Task? renewal;
     private CampaignRecoveryPlan? boundPlan;
     private readonly HashSet<GitHubEventPointer> verifiedCheckpointPublications = [];
@@ -21,8 +23,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
     internal CancellationToken CheckpointToken => checkpointLifetime.Token;
     internal GitHubFailure? CheckpointFailure { get; private set; }
 
-    // One complete read proof only. Mutable resources are never stored here;
-    // every subsequent gate creates a new proof and reauthenticates its objects.
+    // One read or conditional-write transaction only. Mutable resources are
+    // never cached; each subsequent gate reauthenticates its own objects.
     private sealed class ReadProof
     {
         internal Dictionary<string, GitHubCoordinationDocument> Documents { get; } = new(StringComparer.Ordinal);
@@ -156,7 +158,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         return artifact;
     }
 
-    private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token)
+    private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token, ReadProof? transactionProof = null, bool verifyTarget = false)
     {
         var repository = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
         var current = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
@@ -165,7 +167,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             if (current.Failure?.Code == GitHubFailureCode.NotFound) return null;
             throw new GitHubCoordinationException(transportFailure: current.Failure);
         }
-        var proof = new ReadProof();
+        var proof = transactionProof ?? new ReadProof();
         var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token, proof).ConfigureAwait(false);
         if (document.Publication is { } publication)
         {
@@ -215,6 +217,11 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             }
             else if (document.Archive is not null) throw new GitHubCoordinationException();
         }
+        if (verifyTarget)
+        {
+            var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
+            if (target.Oid != client.CheckpointAuthority!.ExpectedBaseOid) throw new GitHubCoordinationException();
+        }
         var reread = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
         if (reread.Value is null && reread.Failure?.Code != GitHubFailureCode.NotFound)
             throw new GitHubCoordinationException(transportFailure: reread.Failure ?? new(GitHubFailureCode.InvalidResponse));
@@ -223,9 +230,9 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         return new(current.Value.Oid, document, artifact, evidence);
     }
 
-    private async ValueTask<RemoteCheckpoint?> ReadCallerCheckpointAsync(CancellationToken token)
+    private async ValueTask<RemoteCheckpoint?> ReadCallerCheckpointAsync(CancellationToken token, ReadProof? proof = null, bool verifyTarget = false)
     {
-        try { return await ReadRemoteCheckpointAsync(token).ConfigureAwait(false); }
+        try { return await ReadRemoteCheckpointAsync(token, proof, verifyTarget).ConfigureAwait(false); }
         catch (GitHubCoordinationException exception) when (
             exception.TransportFailure?.Code == GitHubFailureCode.Cancelled && token.IsCancellationRequested)
         { throw new OperationCanceledException(token); }

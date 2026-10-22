@@ -21,7 +21,8 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.Equal(0, store.CreateCalls);
         Assert.True(store.Artifact!.ExactUtf8Json.AsSpan().SequenceEqual(
             transition.Artifact.ExactUtf8Json.AsSpan()));
-        Assert.Equal(2, store.ReadCalls);
+        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(1, store.WriteReadbacks);
     }
 
     [Fact]
@@ -112,7 +113,8 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.NotNull(result.AcceptedCheckpoint);
         Assert.Equal(1, store.CreateCalls);
         Assert.Equal(0, store.ReplaceCalls);
-        Assert.Equal(2, store.ReadCalls);
+        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(1, store.WriteReadbacks);
     }
 
     [Fact]
@@ -170,6 +172,34 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.True(result.ExactUtf8Json.IsDefault);
     }
 
+    [Fact]
+    public void Written_only_construction_is_rejected()
+    {
+        Assert.Throws<ArgumentException>(() => new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+        Assert.Throws<ArgumentNullException>(() => CampaignCheckpointWriteResult.Written(null!));
+    }
+
+    [Theory]
+    [InlineData("default")]
+    [InlineData("missing")]
+    [InlineData("unreadable")]
+    [InlineData("revision")]
+    [InlineData("digest")]
+    [InlineData("bytes")]
+    [InlineData("predecessor")]
+    public async Task Successful_write_without_exact_observed_successor_never_grants_authority(string fault)
+    {
+        var predecessor = CreateOpenArtifact();
+        var transition = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        var store = new MemoryStore(predecessor) { ReadbackFault = fault };
+        var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.ReadbackMismatch, result.Kind);
+        Assert.Null(result.AcceptedCheckpoint);
+        Assert.Equal(1, store.ReplaceCalls);
+        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(1, store.WriteReadbacks);
+    }
+
     private static CampaignCheckpointArtifact CreateOpenArtifact()
     {
         var path = Path.GetFullPath(Path.Join(
@@ -210,6 +240,9 @@ public sealed class CampaignCheckpointStorePortTests
         public CampaignCheckpointArtifact? WinnerOnRejectedWrite { get; init; }
         public bool CorruptAfterWrite { get; init; }
         public int ReadCalls { get; private set; }
+        public int WriteReadbacks { get; private set; }
+        public string? ReadbackFault { get; init; }
+        private CampaignCheckpointArtifact? predecessor;
         public int CreateCalls { get; private set; }
         public int ReplaceCalls { get; private set; }
 
@@ -217,6 +250,11 @@ public sealed class CampaignCheckpointStorePortTests
         {
             cancellationToken.ThrowIfCancellationRequested();
             ReadCalls++;
+            return Observe();
+        }
+
+        private ValueTask<CampaignCheckpointReadResult> Observe()
+        {
             if (Artifact is null)
             {
                 return ValueTask.FromResult(CampaignCheckpointReadResult.NotFound());
@@ -251,9 +289,10 @@ public sealed class CampaignCheckpointStorePortTests
                     Artifact is not null ? CampaignCheckpointWriteKind.AlreadyPresent : CreateResult));
             }
 
+            predecessor = Artifact;
             Artifact = Assert.IsType<CampaignCheckpointArtifact>(
                 CampaignStateJson.Parse(exactUtf8Json).Artifact);
-            return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+            return ValueTask.FromResult(ObserveWrite());
         }
 
         public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(
@@ -285,9 +324,27 @@ public sealed class CampaignCheckpointStorePortTests
                     CampaignCheckpointWriteKind.CurrentMismatch));
             }
 
+            predecessor = Artifact;
             Artifact = Assert.IsType<CampaignCheckpointArtifact>(
                 CampaignStateJson.Parse(exactUtf8Json).Artifact);
-            return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+            return ValueTask.FromResult(ObserveWrite());
+        }
+        private CampaignCheckpointWriteResult ObserveWrite()
+        {
+            WriteReadbacks++;
+            var observed = Observe().Result;
+            if (ReadbackFault == "default") return default;
+            observed = ReadbackFault switch
+            {
+                "missing" => CampaignCheckpointReadResult.NotFound(),
+                "unreadable" => CampaignCheckpointReadResult.Unreadable(),
+                "revision" => CampaignCheckpointReadResult.Found(observed.ExactUtf8Json.AsSpan(), observed.CheckpointRevision!.Value + 1, observed.Sha256!),
+                "digest" => CampaignCheckpointReadResult.Found(observed.ExactUtf8Json.AsSpan(), observed.CheckpointRevision!.Value, new string('0', 64)),
+                "bytes" => CampaignCheckpointReadResult.Found("{}"u8, observed.CheckpointRevision!.Value, observed.Sha256!),
+                "predecessor" => CampaignCheckpointReadResult.Found(predecessor!.ExactUtf8Json.AsSpan(), predecessor.CheckpointRevision, predecessor.Sha256),
+                _ => observed,
+            };
+            return CampaignCheckpointWriteResult.Written(observed);
         }
     }
 }

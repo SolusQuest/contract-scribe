@@ -33,7 +33,7 @@ The checkpoint remains the only durable execution authority. It contains bounded
 
 ## State and interruption behavior
 
-The X2A adapter classifies safety before lease and lease before checkpoint bytes. Read is `NotFound`, `Found`, `Unsafe`, `LeaseConflict`, `LeaseUnverifiable`, `Invalid`, or `Unreadable`. Conditional write is `Written`, `AlreadyPresent`, `PredecessorMissing`, `CurrentMismatch`, `Unsafe`, `LeaseConflict`, `LeaseUnverifiable`, or `PublicationFailure`. The runner maps these typed results and never re-inspects, repairs, or interprets physical state.
+The X2A adapter classifies safety before lease and lease before checkpoint bytes. Read is `NotFound`, `Found`, `Unsafe`, `LeaseConflict`, `LeaseUnverifiable`, `Invalid`, or `Unreadable`. Conditional write is `Written`, `AlreadyPresent`, `PredecessorMissing`, `CurrentMismatch`, `Unsafe`, `LeaseConflict`, `LeaseUnverifiable`, or `PublicationFailure`. `Written` carries the actual canonical readback from the completed conditional transaction; Core validates it before acceptance. The runner maps these typed results and never re-inspects, repairs, or interprets physical state.
 
 Changed-base supersession preserves only campaign lineage, configured lineage policy, monotonic consumptive totals, and the bounded immediate-predecessor summary. The Core reducer conservatively settles old active provider or Patch exposure, discards old current work, proposals, attempts, cumulative candidate authority, and completion state, and installs only the fresh plan's work and ceilings. Distinct opaque bindings always produce distinct execution and work-item identities, including when canonical Audit and consumed content commitments are byte-identical.
 

@@ -359,7 +359,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             context.Dispose();
             context = null;
             cancellationToken.ThrowIfCancellationRequested();
-            return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written);
+            return CampaignCheckpointWriteResult.Written(readback.ToPublicResult());
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

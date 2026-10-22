@@ -151,6 +151,8 @@ internal sealed partial class GitHubCoordinationStore
     private GitHubCoordinationStore(GitHubApiClient client)
     {
         this.client = client;
+        checkpointExpiryRegistration = checkpointExpiry.Token.UnsafeRegister(static state =>
+            ((GitHubCoordinationStore)state!).StopCheckpoint(), this);
         coordinationRef = GitHubPublicationFactory.CreateCoordinationRef(client.ReadAuthority);
     }
 

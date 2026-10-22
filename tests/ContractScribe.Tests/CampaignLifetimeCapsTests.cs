@@ -500,7 +500,7 @@ public sealed partial class CampaignStateContractTests
             if (expectedRevision != Artifact.CheckpointRevision || expectedSha != Artifact.Sha256)
                 return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.CurrentMismatch));
             Artifact = CampaignStateJson.Parse(bytes).Artifact!;
-            return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+            return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(token).Result));
         }
     }
 }

@@ -62,7 +62,8 @@ internal sealed partial class GitHubCoordinationStore
             if (!parsed.IsValid || parsed.Artifact is not { } artifact || artifact.Sha256 != sha
                 || artifact.CheckpointRevision != revision || !bytes.Span.SequenceEqual(artifact.ExactUtf8Json.AsSpan()))
                 return new(CampaignCheckpointWriteKind.Unsafe);
-            var remote = await ReadCallerCheckpointAsync(token).ConfigureAwait(false);
+            var proof = new ReadProof();
+            var remote = await ReadCallerCheckpointAsync(token, proof).ConfigureAwait(false);
             if (remote is null || !Owns(remote.Document)) return new(CampaignCheckpointWriteKind.LeaseConflict);
             if (expectedRevision is null && remote.Artifact is not null) return new(CampaignCheckpointWriteKind.AlreadyPresent);
             if (expectedRevision is not null && remote.Artifact is null) return new(CampaignCheckpointWriteKind.PredecessorMissing);
@@ -93,9 +94,16 @@ internal sealed partial class GitHubCoordinationStore
                 blobs.Add(witness);
                 document = document with { Archive = new(witness.Oid, evidence.WitnessSha256, GitHubCoordinationDocument.CurrentCommit) };
             }
-            if (!await WriteDocumentAsync(document, blobs, token).ConfigureAwait(false))
+            if (!await WriteDocumentAsync(document, blobs, token, proof: proof).ConfigureAwait(false))
             { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
-            return new(CampaignCheckpointWriteKind.Written);
+            var observed = await ReadCallerCheckpointAsync(token, proof, verifyTarget: true).ConfigureAwait(false);
+            if (observed?.Artifact is not { } readback || !Owns(observed.Document)
+                || observed.Document != document || readback.CheckpointRevision != revision || readback.Sha256 != sha
+                || !readback.ExactUtf8Json.AsSpan().SequenceEqual(bytes.Span)
+                || !ConfirmCheckpointLease(observed.Document))
+            { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
+            return CampaignCheckpointWriteResult.Written(CampaignCheckpointReadResult.Found(
+                readback.ExactUtf8Json.AsSpan(), readback.CheckpointRevision, readback.Sha256, observed.ArchiveEvidence));
         }
         catch (OperationCanceledException exception) when (token.IsCancellationRequested && exception.CancellationToken == token)
         { throw; }
@@ -106,7 +114,7 @@ internal sealed partial class GitHubCoordinationStore
 
     private async ValueTask<bool> WriteDocumentAsync(GitHubCoordinationDocument document, IEnumerable<GitHubBlob> blobs,
         CancellationToken token, bool requireLiveClaim = true, GitHubCoordinationDocument? livePredecessor = null,
-        GitHubPublicationEvent? publication = null)
+        GitHubPublicationEvent? publication = null, ReadProof? proof = null)
     {
         var prepared = GitHubCoordinationObjects.Prepare(document, publication);
         var payloads = blobs.Concat(publication is null ? [] : new[] { Blob(publication.Encode()) }).ToImmutableArray();
@@ -134,8 +142,8 @@ internal sealed partial class GitHubCoordinationStore
             using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
             var current = GitHubObservedProposalIntegrity.Read(await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false));
             if (current?.Oid != prepared.CommitOid) return false;
-            var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token).ConfigureAwait(false);
-            return read == document && (!requireLiveClaim || Owns(read));
+            var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token, proof).ConfigureAwait(false);
+            return read == document && (!requireLiveClaim || ConfirmCheckpointLease(read));
         }
         finally { client.BindCheckpointWrite(null); }
     }
@@ -168,6 +176,19 @@ internal sealed partial class GitHubCoordinationStore
         }
         catch (OperationCanceledException) when (checkpointLifetime.IsCancellationRequested) { }
         catch { StopCheckpoint(); }
+    }
+
+    private bool ConfirmCheckpointLease(GitHubCoordinationDocument document)
+    {
+        if (!Owns(document) || checkpointExpiry.IsCancellationRequested) return false;
+        // Authenticated server time advances monotonically in the client. The
+        // independent timer still fences execution if renewal waits on the gate
+        // or transport; only an actually confirmed owned claim can rearm it.
+        var remaining = DateTimeOffset.FromUnixTimeSeconds(document.Claim!.ExpiresUnixSeconds)
+            - client.ServerTime!.Value - TimeSpan.FromSeconds(1);
+        if (remaining <= TimeSpan.Zero) { StopCheckpoint(); return false; }
+        checkpointExpiry.CancelAfter(remaining);
+        return !checkpointStopped;
     }
 
     private void StopCheckpoint()
@@ -267,7 +288,14 @@ internal sealed partial class GitHubCoordinationStore
             }
         }
         catch { /* Expiry retains all remote facts when release cannot be established. */ }
-        finally { checkpointStopped = true; checkpointGate.Release(); checkpointLifetime.Dispose(); }
+        finally
+        {
+            checkpointStopped = true;
+            checkpointExpiryRegistration.Dispose();
+            checkpointExpiry.Dispose();
+            checkpointGate.Release();
+            checkpointLifetime.Dispose();
+        }
     }
 
     private ValueTask<GitHubApiResult<GitHubAcknowledgement>> UpdateCoordinationRefAsync(GitHubUpdateRef request,

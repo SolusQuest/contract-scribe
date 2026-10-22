@@ -620,6 +620,9 @@ public sealed partial class CampaignStateContractTests
                 failNextRead = dispatch && FailDispatchReadback || settlement && FailSettlementReadback;
                 if (next.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.RetryWait })
                     RetryWaitEntered.TrySetResult();
+                // This is the actual observation of the conditional write, including
+                // the same delay and fault hooks exercised by independent reads.
+                return CampaignCheckpointWriteResult.Written(await ReadAsync(token));
             }
             return result;
         }

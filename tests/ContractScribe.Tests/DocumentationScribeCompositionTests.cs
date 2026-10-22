@@ -21,6 +21,54 @@ public sealed class CampaignProcessBoundaryHookCollection;
 [Collection("Campaign process boundary hook")]
 public sealed partial class DocumentationScribeCompositionTests
 {
+    [Theory]
+    [InlineData(false, 0, true)]
+    [InlineData(true, 0, false)]
+    [InlineData(false, 13000, false)]
+    public async Task Real_semantic_query_progress_uses_the_single_GitHub_checkpoint_transaction(
+        bool duplicateReadback, int additionalDelay, bool reachesSemantic)
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, campaign.InitialState.CampaignLineage, handler);
+        await using var actual = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await actual.AcquireCheckpointAsync(default));
+        Assert.True(await actual.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(campaign.Plan), default));
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await actual.CreateIfAbsentAsync(
+            initial.ExactUtf8Json.AsMemory(), initial.CheckpointRevision, initial.Sha256, default)).Kind);
+        var clock = new ControlledCompositionClock();
+        var trace = new RuntimeCheckpointTrace(actual, duplicateReadback, additionalDelay, clock, clock.Advance);
+        // Same prospective 175ms schedule as the direct Runtime boundary pair.
+        handler.BeforeRequest = request =>
+        {
+            clock.Advance(175);
+            remote.ServerNow = remote.ServerNow.AddMilliseconds(175);
+            trace.Observe(request);
+            return Task.CompletedTask;
+        };
+        var exchange = new SemanticThenProposalExchange(fixture.Request);
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, trace, exchange, RuntimeOptions(), executionToken: actual.CheckpointToken, timeProvider: clock));
+        Assert.Equal(reachesSemantic, exchange.SawSemanticEvidence);
+        Assert.Equal(reachesSemantic ? 3 : 1, exchange.RequestCount);
+        // Every HTTP exchange keeps consuming the existing invocation clock.
+        // The real semantic query progresses; later terminal persistence reaches
+        // this fixture's original 120s invocation cap rather than gaining time.
+        Assert.Equal(reachesSemantic, outcome.TrustedProposal is not null);
+        if (reachesSemantic)
+            Assert.Equal(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted, outcome.Kind);
+        Assert.Single(trace.SemanticWrites);
+        var observed = trace.SemanticWrites[0];
+        Assert.Equal(duplicateReadback ? 3 : 2, observed.PredecessorCommitReads);
+        Assert.True(reachesSemantic ? observed.ElapsedMilliseconds < 10000 : observed.ElapsedMilliseconds >= 10000,
+            $"duplicate={duplicateReadback}; requests={observed.Requests}; elapsed={observed.ElapsedMilliseconds}");
+        if (!reachesSemantic) Assert.Equal("campaign.timed-out", outcome.Code);
+        Assert.Null(outcome.Artifact!.State.ActiveReservation);
+    }
+
     [Fact]
     public async Task Production_prepare_and_consume_preserve_the_exact_bound_outcome()
     {
@@ -960,6 +1008,7 @@ public sealed partial class DocumentationScribeCompositionTests
         : IDocumentationScribeModelExchange
     {
         internal int RequestCount { get; private set; }
+        internal bool SawSemanticEvidence { get; private set; }
 
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest modelRequest,
@@ -986,7 +1035,14 @@ public sealed partial class DocumentationScribeCompositionTests
                 return ValueTask.FromResult(new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Finish(modelRequest))], usage: new(0, 0, 0, 0, 0)));
             }
             Assert.Equal(2, RequestCount);
-            Assert.Single(modelRequest.CompletedToolExchanges);
+            var semanticResult = Assert.Single(modelRequest.CompletedToolExchanges);
+            Assert.Equal("get-target-evidence", semanticResult.OperationId);
+            Assert.Contains(semanticResult.OutcomeId, new[] { DocumentationScribeToolOutcome.Complete.Id, DocumentationScribeToolOutcome.Incomplete.Id });
+            using var semanticJson = JsonDocument.Parse(semanticResult.ResultUtf8Json);
+            Assert.Equal(request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId,
+                semanticJson.RootElement.GetProperty("page").GetProperty("core").GetProperty("method")
+                    .GetProperty("symbolRef").GetProperty("documentationCommentId").GetString());
+            SawSemanticEvidence = true;
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(modelRequest, ProposalTerminal(request)))],
@@ -1970,7 +2026,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 }
 
                 current = Parse(exactUtf8Json);
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+                return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
             }
         }
 
@@ -2026,7 +2082,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 current = Parse(exactUtf8Json);
                 SuccessfulReplaceCount++;
                 AfterSuccessfulReplace?.Invoke(SuccessfulReplaceCount);
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+                return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
             }
         }
 

@@ -5781,8 +5781,7 @@ public sealed partial class CampaignStateContractTests
 
             _artifact = Assert.IsType<CampaignCheckpointArtifact>(
                 CampaignStateJson.Parse(exactUtf8Json).Artifact);
-            return ValueTask.FromResult(new CampaignCheckpointWriteResult(
-                CampaignCheckpointWriteKind.Written));
+            return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
         }
     }
 

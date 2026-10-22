@@ -1107,8 +1107,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         failNextRead = true;
                     }
                 }
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(
-                    CampaignCheckpointWriteKind.Written));
+                return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
             }
         }
     }

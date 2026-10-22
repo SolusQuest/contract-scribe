@@ -17,6 +17,105 @@ public sealed partial class GitHubCoordinationRefTests
             "Owner", "repo", "refs/heads/main", lineage, Oid('1')), GitHubTransportTestHook.Placeholder);
     }
 
+    [Theory]
+    [InlineData("exact")]
+    [InlineData("blob")]
+    [InlineData("target")]
+    [InlineData("ref")]
+    [InlineData("expiry")]
+    public async Task Conditional_write_returns_only_actual_stable_owned_remote_readback(string fault)
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new CheckpointInterceptHandler(remote);
+        using var client = CheckpointClient(remote, handler: handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        SeedPublicationCheckpoint(remote);
+        var predecessor = PublicationCheckpointFixture("campaign-1");
+        var next = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        Assert.Equal(CampaignTransitionKind.Applied, next.Kind);
+        var nextBlob = GitHubCoordinationObjects.ObjectOid("blob", next.Artifact.ExactUtf8Json.AsSpan());
+        var priorHead = remote.CoordinationHead!;
+        var priorWrites = remote.RefMutationAttempts;
+        var observedBlobs = 0;
+        var commitGets = new Dictionary<string, int>();
+        handler.BeforeRequest = request =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (request.Method != HttpMethod.Get) return Task.CompletedTask;
+            if (path.Contains("/git/commits/", StringComparison.Ordinal))
+                commitGets[path] = commitGets.GetValueOrDefault(path) + 1;
+            if (remote.RefMutationAttempts > priorWrites && path.EndsWith(nextBlob, StringComparison.Ordinal))
+            {
+                observedBlobs++;
+                if (fault == "blob") remote.CorruptBlob(nextBlob);
+                if (fault == "target") remote.TargetHead = Oid('2');
+                if (fault == "ref") remote.ForceCoordinationHead(Oid('9'));
+                if (fault == "expiry") remote.ServerNow = remote.ServerNow.AddSeconds(301);
+            }
+            return Task.CompletedTask;
+        };
+        var result = await store.ReplaceIfCurrentAsync(predecessor.CheckpointRevision, predecessor.Sha256,
+            next.Artifact.ExactUtf8Json.AsMemory(), next.Artifact.CheckpointRevision, next.Artifact.Sha256, default);
+        Assert.Equal(1, observedBlobs);
+        Assert.Equal(priorWrites + 1, remote.RefMutationAttempts);
+        if (fault != "exact")
+        {
+            Assert.NotEqual(CampaignCheckpointWriteKind.Written, result.Kind);
+            Assert.Null(result.Readback);
+            return;
+        }
+        Assert.Equal(CampaignCheckpointWriteKind.Written, result.Kind);
+        var readback = Assert.IsType<CampaignCheckpointReadResult>(result.Readback);
+        Assert.Equal(next.Artifact.Sha256, readback.Sha256);
+        Assert.Equal(next.Artifact.CheckpointRevision, readback.CheckpointRevision);
+        Assert.True(readback.ExactUtf8Json.AsSpan().SequenceEqual(next.Artifact.ExactUtf8Json.AsSpan()));
+        // The predecessor and actual successor are each authenticated once in this
+        // conditional transaction. A later independent read starts a fresh proof.
+        Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(priorHead, StringComparison.Ordinal)).Value);
+        Assert.All(commitGets.Where(pair => !pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)),
+            pair => Assert.Equal(1, pair.Value));
+        // CreateObjects also authenticates the prepared commit before CAS.
+        Assert.Equal(2, commitGets.Single(pair => pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)).Value);
+        var first = commitGets.ToDictionary();
+        Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
+        Assert.Contains(first, pair => commitGets[pair.Key] > pair.Value);
+    }
+
+    [Fact]
+    public async Task Confirmed_readback_lease_expiry_cancels_execution_even_while_checkpoint_gate_is_held()
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new CheckpointInterceptHandler(remote);
+        using var client = CheckpointClient(remote, handler: handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        SeedPublicationCheckpoint(remote);
+        var predecessor = PublicationCheckpointFixture("campaign-1");
+        var next = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled).Artifact;
+        var blob = GitHubCoordinationObjects.ObjectOid("blob", next.ExactUtf8Json.AsSpan());
+        var priorWrites = remote.RefMutationAttempts;
+        handler.BeforeRequest = request =>
+        {
+            if (remote.RefMutationAttempts > priorWrites && request.Method == HttpMethod.Get
+                && request.RequestUri!.AbsolutePath.EndsWith(blob, StringComparison.Ordinal))
+                remote.ServerNow = remote.ServerNow.AddSeconds(297);
+            return Task.CompletedTask;
+        };
+        var result = await store.ReplaceIfCurrentAsync(predecessor.CheckpointRevision, predecessor.Sha256,
+            next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, result.Kind);
+        var gate = (SemaphoreSlim)typeof(GitHubCoordinationStore).GetField("checkpointGate", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store)!;
+        await gate.WaitAsync();
+        try
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, store.CheckpointToken).WaitAsync(TimeSpan.FromSeconds(4));
+        }
+        catch (OperationCanceledException) when (store.CheckpointToken.IsCancellationRequested) { }
+        finally { gate.Release(); }
+        Assert.True(store.CheckpointToken.IsCancellationRequested);
+    }
+
     [Fact]
     public async Task Checkpoint_proof_reuses_authenticated_blobs_only_until_the_next_read_gate()
     {

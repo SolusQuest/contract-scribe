@@ -345,9 +345,15 @@ written only over the predecessor embedded in that transition; an independently
 supplied predecessor is not accepted. An already exact successor is accepted as
 lost-ack replay without a write. A conditional-write conflict is reread and is
 accepted only when the concurrent winner is that exact intended successor.
-Every accepted path performs an exact readback, recomputes SHA-256, parses and
-canonical-validates the bytes, and compares bytes, digest, revision, and the
-complete parsed artifact. A rejected reducer result performs zero port calls,
+A successful conditional write returns a typed `Written` result containing the
+actual bounded canonical observation from that same transaction, including any
+verified dispatch-archive evidence bound to the observed checkpoint digest. A
+Written-only or default result supplies no acceptance authority. Core consumes
+that observation without another store read, independently recomputes SHA-256,
+parses and canonical-validates the bytes, and compares bytes, digest, revision,
+the complete artifact and archive binding. Missing, unreadable, corrupt or foreign
+observations fail closed. Exact replay and conditional conflicts retain their
+independent read paths; an exact concurrent winner grants observer authority only. A rejected reducer result performs zero port calls,
 and no conflict falls back from replace to create or from create to overwrite.
 Found reads enforce byte, revision, and lowercase digest bounds before copying.
 
