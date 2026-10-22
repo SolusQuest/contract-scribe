@@ -11,6 +11,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private readonly Func<bool>? guard;
     private long operationStartedAt;
     private CampaignSemanticCheckpointWindow? semanticWindow;
+    private int checkpointFailure = -1;
     internal CampaignScribeExecutionCoordinator(CampaignProviderInvocationAuthority invocation,
         DocumentationScribeInvocationAllowance allowance, ICampaignCheckpointStore store,
         CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt)
@@ -25,6 +26,9 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     internal void ObserveProjectionCapacity() => ProjectionCapacityStop = true;
     internal bool LifetimeStop { get; private set; }
     internal bool Conflict { get; private set; }
+    internal CampaignCheckpointAcceptanceKind? CheckpointFailure => Volatile.Read(ref checkpointFailure) is var value && value >= 0
+        ? (CampaignCheckpointAcceptanceKind)value : null;
+    internal CampaignCheckpointArtifact LatestAcknowledgedArtifact => invocation.AcceptedCheckpoint.Artifact;
     internal Task LateObservation { get; private set; } = Task.CompletedTask;
     internal bool LifetimeElapsedExhausted => CampaignBudgetAccounting.RemainingLifetimeElapsed(
         invocation.AcceptedCheckpoint.Artifact.State.LineageCharges,
@@ -151,7 +155,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
             }
             if (accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
                 || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
-            { Conflict = true; return null; }
+            { RejectCheckpoint(accepted.Kind); return null; }
             // This is the transition boundary, never the later readback time.
             operationStartedAt = boundary;
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.SemanticAuthorizationAfterReadback);
@@ -195,7 +199,11 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
             catch (OperationCanceledException) { LateObservation = ObserveLateAcceptanceAsync(read); throw; }
             if (!window.ObservationOpen || guard is not null && !guard()
                 || observed.Kind != CampaignCheckpointAcceptanceKind.Accepted || observed.AcceptedCheckpoint is null)
-            { Conflict = true; return; }
+            {
+                if (observed.Kind != CampaignCheckpointAcceptanceKind.Accepted) RejectCheckpoint(observed.Kind);
+                else Conflict = true;
+                return;
+            }
             if (!invocation.ObserveStoppedProgress(transition, observed.AcceptedCheckpoint))
             { Conflict = true; return; }
             Scope.ObserveSemanticAuthorizationClosed();
@@ -237,7 +245,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     }
     internal async ValueTask<bool> AcceptHostProgressAsync(CampaignTransitionResult transition, CancellationToken cancellationToken)
     {
-        if (cancellationToken.IsCancellationRequested) return false;
+        if (cancellationToken.IsCancellationRequested) { RejectCheckpoint(CampaignCheckpointAcceptanceKind.Cancelled); return false; }
         if (guard is not null && !guard()) { Conflict = true; return false; }
         if (transition.Kind != CampaignTransitionKind.Unchanged)
             return await AcceptProgressAsync(transition, operationStartedAt, cancellationToken).ConfigureAwait(false);
@@ -248,7 +256,8 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
             && (invocation.LifecycleAvailable || invocation.DispatchStarted)
             && accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted
             && accepted.Artifact?.Sha256 == invocation.AcceptedCheckpoint.Artifact.Sha256;
-        Conflict |= !valid;
+        if (!valid) RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
+            ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind);
         return valid;
     }
 
@@ -274,7 +283,11 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         if (cancellationToken.IsCancellationRequested || semanticObservation is { ObservationOpen: false }
             || accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
             || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
-        { Conflict = true; return false; }
+        {
+            RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
+                ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind);
+            return false;
+        }
         operationStartedAt = boundary;
         var state = accepted.Artifact!.State;
         var exceeded = !CampaignBudgetAccounting.FitsSettledBudget(state.LineageCharges, state.ConfiguredCeilings.CampaignBudget);
@@ -282,5 +295,14 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         LifetimeStop |= exceeded || CampaignBudgetAccounting.RemainingLifetimeElapsed(state.LineageCharges,
             state.ConfiguredCeilings.CampaignBudget) <= 0;
         return true;
+    }
+
+    private void RejectCheckpoint(CampaignCheckpointAcceptanceKind kind)
+    {
+        // An exact observation is not a new Writer grant. Preserve the first
+        // failed acknowledgement even if a later stop or observation completes.
+        var failure = kind == CampaignCheckpointAcceptanceKind.Accepted ? CampaignCheckpointAcceptanceKind.Conflict : kind;
+        Interlocked.CompareExchange(ref checkpointFailure, (int)failure, -1);
+        Conflict = true;
     }
 }

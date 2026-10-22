@@ -307,7 +307,8 @@ internal static class DocumentationCampaignProposalExecutor
                 DocumentationCampaignProposalOutcomeKind.StateConflict,
                 "campaign.reservation.conflict",
                 selectedState.WorkItemKey,
-                reserved.Artifact);
+                coordinator.LatestAcknowledgedArtifact,
+                checkpointFailure: coordinator.CheckpointFailure);
         }
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
@@ -399,7 +400,8 @@ internal static class DocumentationCampaignProposalExecutor
             ? Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.settlement.conflict")
             : Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.settlement.unconfirmed");
         return new DocumentationCampaignProposalOutcome(
-            settlementFailure.Kind, settlementFailure.Code, checkpointFailure: settled.Kind);
+            settlementFailure.Kind, settlementFailure.Code, selectedState.WorkItemKey,
+            coordinator.LatestAcknowledgedArtifact, checkpointFailure: settled.Kind);
     }
 
     private static bool TrySelectAudit(
