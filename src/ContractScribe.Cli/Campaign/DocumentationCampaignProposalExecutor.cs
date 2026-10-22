@@ -335,7 +335,8 @@ internal static class DocumentationCampaignProposalExecutor
         {
             completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
                 prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted
-                    || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeStop || coordinator.LifetimeElapsedExhausted);
+                    || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeStop || coordinator.LifetimeElapsedExhausted,
+                invocationHeadroomStop: coordinator.Scope.SemanticInvocationHeadroomReached);
         }
         else if (prepared.Kind is DocumentationCampaignPreparationKind.StopCancelled
             or DocumentationCampaignPreparationKind.StopTimedOut

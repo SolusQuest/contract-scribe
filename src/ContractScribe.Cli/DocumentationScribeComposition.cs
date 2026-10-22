@@ -687,7 +687,7 @@ internal static partial class DocumentationScribeComposition
             if (coordinator.Scope.LifetimeDeadlineReached || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded
                 || m3 is null && coordinator.LifetimeElapsedExhausted)
                 resourceOwner = DocumentationScribeDeadlineOwner.Lifetime;
-            else if (coordinator.Scope.Allowance.HasCheckedStop)
+            else if (coordinator.Scope.Allowance.HasCheckedStop || coordinator.Scope.SemanticInvocationHeadroomReached)
                 resourceOwner = DocumentationScribeDeadlineOwner.Invocation;
         }
         if (resourceOwner is DocumentationScribeDeadlineOwner.Lifetime or DocumentationScribeDeadlineOwner.Invocation)

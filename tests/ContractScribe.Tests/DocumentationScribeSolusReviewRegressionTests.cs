@@ -70,29 +70,64 @@ public sealed partial class CampaignStateContractTests
     [InlineData(false, true)]
     [InlineData(true, false)]
     [InlineData(true, true)]
-    public async Task Solus_runtime_expired_tool_admission_closes_the_Host_without_invoking_the_port(bool invocationCut, bool callerCancelled)
+    public async Task Solus_runtime_insufficient_closure_headroom_denies_semantic_without_any_effect(bool invocationCut, bool callerCancelled)
     {
         var clock = new SolusDeadlineClock();
         var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 30000,
             invocationMilliseconds: invocationCut ? 9000 : 20000);
         using var caller = new CancellationTokenSource();
         trial.Store.DelayedReadbackPhase = CampaignProviderHostPhase.SemanticTool;
-        trial.Store.DelayedReadback = () => { clock.Advance(10500); if (callerCancelled) caller.Cancel(); };
+        trial.Store.DelayedReadback = () => throw new InvalidOperationException("Denied admission must not write a semantic checkpoint.");
+        if (callerCancelled) caller.Cancel();
         var port = new ReviewBoundaryPort();
-        var registry = ReviewBoundaryRegistry(trial.Request, port);
         var exchange = ReviewBoundaryToolExchange();
-        var session = trial.Session(exchange, registry);
-        var result = await session.RunAsync(caller.Token).WaitAsync(TimeSpan.FromSeconds(10));
+        var result = await trial.Session(exchange, ReviewBoundaryRegistry(trial.Request, port))
+            .RunAsync(caller.Token).WaitAsync(TimeSpan.FromSeconds(10));
+        Assert.Equal(0, port.Calls);
+        Assert.Equal(0, result.RunEnvelope.ToolCallCount);
+        Assert.Equal(callerCancelled ? 0 : 1, exchange.Requests.Length);
+        Assert.DoesNotContain(CampaignProviderHostPhase.SemanticTool, trial.Store.AdmittedHostPhases);
+        Assert.DoesNotContain(CampaignProviderHostPhase.SemanticTool, trial.Store.CompletedHostReadbacks);
+        if (callerCancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
+        else
+        {
+            Assert.True(trial.Coordinator.Scope.SemanticHeadroomReached);
+            Assert.False(trial.Coordinator.Scope.Allowance.HasCheckedStop);
+            Assert.Equal(DocumentationScribeFailureCode.Budget, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
+        }
+        await trial.CompleteAsync(result);
+    }
+
+    [Theory]
+    [InlineData(30000, false)]
+    [InlineData(30001, false)]
+    [InlineData(30000, true)]
+    [InlineData(30001, true)]
+    public async Task Semantic_authorization_cutoff_observes_only_for_completion_and_never_calls_the_port(int elapsed, bool callerCancelled)
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock);
+        using var caller = new CancellationTokenSource();
+        trial.Store.DelayedReadbackPhase = CampaignProviderHostPhase.SemanticTool;
+        trial.Store.DelayedReadback = () => { clock.Advance(elapsed); if (callerCancelled) caller.Cancel(); };
+        var port = new ReviewBoundaryPort();
+        var exchange = ReviewBoundaryToolExchange();
+        var result = await trial.Session(exchange, ReviewBoundaryRegistry(trial.Request, port))
+            .RunAsync(caller.Token).WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(0, port.Calls);
         Assert.Equal(0, result.RunEnvelope.ToolCallCount);
         Assert.Single(exchange.Requests);
-        Assert.Contains(CampaignProviderHostPhase.SemanticTool, trial.Store.CompletedHostReadbacks);
-        Assert.NotEqual(CampaignProviderHostPhase.SemanticTool,
-            Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).HostPhase);
+        Assert.True(trial.Authority.ProgressStopped);
+        Assert.True(trial.Coordinator.Scope.SemanticAuthorizationClosed);
+        Assert.False(trial.Coordinator.Scope.Failed);
+        Assert.False(trial.Coordinator.Conflict);
+        Assert.DoesNotContain(CampaignProviderHostPhase.SemanticTool, trial.Store.CompletedHostReadbacks);
         if (callerCancelled) Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
-        else Assert.Equal(invocationCut ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout,
-            Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
+        else Assert.Equal(DocumentationScribeFailureCode.Timeout, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
         await trial.CompleteAsync(result);
+        Assert.Equal(elapsed, trial.Store.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        Assert.Equal(0, trial.Store.Current.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+        Assert.Null(trial.Store.Current.State.ActiveReservation);
     }
 
     [Theory]
@@ -112,9 +147,18 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(0, port.Calls);
         Assert.Equal(0, result.RunEnvelope.ToolCallCount);
         Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
-        Assert.Contains(phase, trial.Store.CompletedHostReadbacks);
-        Assert.NotEqual(phase, Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).HostPhase);
+        if (phase == CampaignProviderHostPhase.SemanticTool)
+        {
+            Assert.True(trial.Authority.ProgressStopped);
+            Assert.DoesNotContain(phase, trial.Store.CompletedHostReadbacks);
+        }
+        else
+        {
+            Assert.Contains(phase, trial.Store.CompletedHostReadbacks);
+            Assert.NotEqual(phase, Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).HostPhase);
+        }
         await trial.CompleteAsync(result);
+        Assert.Null(trial.Store.Current.State.ActiveReservation);
     }
 
     [Fact]
@@ -301,8 +345,10 @@ public sealed partial class CampaignStateContractTests
             throw new InvalidOperationException("The infinite operation must end through cancellation.");
         }
     }
-    private sealed class ReviewBoundaryPort(Exception? failure = null) : IDocumentationScribeToolPort<ReviewBoundaryRequest, ReviewBoundaryResult>
+    private sealed class ReviewBoundaryPort(Exception? failure = null) : IDocumentationScribeToolPort<ReviewBoundaryRequest, ReviewBoundaryResult>, IDocumentationScribeToolResultReleaseValidator
     {
+        public bool ValidateResultRelease(CancellationToken cancellationToken)
+        { cancellationToken.ThrowIfCancellationRequested(); return true; }
         internal int Calls { get; private set; }
         public ValueTask<ReviewBoundaryResult> InvokeAsync(ReviewBoundaryRequest request, CancellationToken cancellationToken)
         {

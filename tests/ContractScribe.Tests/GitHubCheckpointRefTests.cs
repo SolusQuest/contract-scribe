@@ -228,6 +228,7 @@ public sealed partial class GitHubCoordinationRefTests
     internal sealed class CheckpointInterceptHandler(CoordinationRemote remote) : HttpMessageHandler
     {
         internal Func<HttpRequestMessage, Task>? BeforeRequest;
+        internal Func<HttpRequestMessage, CancellationToken, Task>? BeforeRequestWithCancellation;
         internal bool PauseNextRequest;
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -236,6 +237,7 @@ public sealed partial class GitHubCoordinationRefTests
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
             if (BeforeRequest is { } before) await before(request);
+            if (BeforeRequestWithCancellation is { } withCancellation) await withCancellation(request, token);
             if (PauseNextRequest)
             {
                 PauseNextRequest = false;

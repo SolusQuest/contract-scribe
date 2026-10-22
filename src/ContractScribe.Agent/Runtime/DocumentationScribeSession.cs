@@ -526,7 +526,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             var permit = await owner.State.Scope.BeginHostAsync(phase, token);
             if (permit is null)
             {
-                owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget);
+                owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token,
+                    owner.State.Scope.SemanticAuthorizationTimedOut ? DocumentationScribeFailureCode.Timeout : DocumentationScribeFailureCode.Budget);
                 throw new ToolContractException(ToolError.InvocationFailed);
             }
             ToolInvocationResult? result = null;
@@ -543,7 +544,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                 else
                 {
                     using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(permit.RemainingMilliseconds), owner.State.Scope.Allowance.Clock);
-                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, owner.State.CallerCancellation, deadline.Token);
+                    using var linked = CancellationTokenSource.CreateLinkedTokenSource(
+                        token, owner.State.CallerCancellation, deadline.Token, permit.ExecutionCancellation);
                     try
                     {
                         owner.State.ToolCallCount++;
@@ -553,6 +555,11 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                         catch (OperationCanceledException) when (!invocation.IsCompleted)
                         { _ = DocumentationScribeTaskObservation.ObserveLateAsync(invocation); throw; }
                         linked.Token.ThrowIfCancellationRequested();
+                        if (permit.RemainingMilliseconds <= 0)
+                        {
+                            owner.State.Scope.ObserveDeadline(permit);
+                            timedOut = true;
+                        }
                     }
                     catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested
                         && !owner.State.CallerCancellation.IsCancellationRequested)
@@ -564,7 +571,15 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             }
             finally
             {
-                if (!await owner.State.Scope.CompleteHostAsync(permit, CancellationToken.None))
+                var validateRelease = permit.RequiresReleaseValidation && !timedOut && result is { } observed
+                    && observed.Outcome != DocumentationScribeToolOutcome.BudgetExhausted
+                    && observed.Outcome != DocumentationScribeToolOutcome.TimedOut
+                    && observed.Outcome != DocumentationScribeToolOutcome.Cancelled
+                    && observed.Outcome != DocumentationScribeToolOutcome.Failure;
+                using var releaseCancellation = validateRelease ? CancellationTokenSource.CreateLinkedTokenSource(
+                    token, owner.State.CallerCancellation, permit.ExecutionCancellation) : null;
+                if (!await owner.State.Scope.CompleteHostAsync(permit, CancellationToken.None,
+                        validateRelease ? registration : null, releaseCancellation?.Token ?? default))
                     throw new InvalidOperationException("scribe.tool.settlement-unconfirmed");
             }
 
@@ -573,6 +588,10 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             if (owner.Result is null && timedOut)
                 owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token,
                     owner.State.Scope.ResourceBudgetReached ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
+            if (owner.Result is null && !permit.ResultReleaseAccepted)
+                owner.Result = permit.ResultReleaseDeadlineReached
+                    ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Timeout)
+                    : new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
             if (owner.Result is not null) throw new ToolContractException(ToolError.InvocationFailed);
             var returned = result ?? throw new InvalidOperationException("scribe.tool.result-missing");
             if (returned.Outcome == DocumentationScribeToolOutcome.BudgetExhausted

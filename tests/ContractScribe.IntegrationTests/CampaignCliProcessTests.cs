@@ -883,7 +883,7 @@ public sealed partial class CampaignCliProcessTests
                         await stream.WriteAsync(transient, disposal.Token);
                         continue;
                     }
-                    var response = scenario is "shared" or "shared-closed"
+                    var response = scenario == "semantic" ? CreateSemanticResponse(body) : scenario is "shared" or "shared-closed"
                         ? CreateSharedResponse(body, skipAll: scenario == "shared-closed")
                         : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal" || SkipProposals);
                     var headers = Encoding.ASCII.GetBytes(

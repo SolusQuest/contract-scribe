@@ -58,6 +58,7 @@ internal sealed partial class GitHubCoordinationStore
         await checkpointGate.WaitAsync(token).ConfigureAwait(false);
         try
         {
+            using var semanticRecovery = client.EnterSemanticRecovery(semanticWindow);
             var parsed = CampaignStateJson.Parse(bytes);
             if (!parsed.IsValid || parsed.Artifact is not { } artifact || artifact.Sha256 != sha
                 || artifact.CheckpointRevision != revision || !bytes.Span.SequenceEqual(artifact.ExactUtf8Json.AsSpan()))
@@ -102,8 +103,10 @@ internal sealed partial class GitHubCoordinationStore
                 || !readback.ExactUtf8Json.AsSpan().SequenceEqual(bytes.Span)
                 || !ConfirmCheckpointLease(observed.Document))
             { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
-            return CampaignCheckpointWriteResult.Written(CampaignCheckpointReadResult.Found(
-                readback.ExactUtf8Json.AsSpan(), readback.CheckpointRevision, readback.Sha256, observed.ArchiveEvidence));
+            var actual = CampaignCheckpointReadResult.Found(
+                readback.ExactUtf8Json.AsSpan(), readback.CheckpointRevision, readback.Sha256, observed.ArchiveEvidence);
+            ObserveSemanticReadback(observed, actual);
+            return CampaignCheckpointWriteResult.Written(actual);
         }
         catch (OperationCanceledException exception) when (token.IsCancellationRequested && exception.CancellationToken == token)
         { throw; }

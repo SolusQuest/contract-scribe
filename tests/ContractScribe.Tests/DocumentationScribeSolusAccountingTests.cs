@@ -462,7 +462,8 @@ public sealed partial class CampaignStateContractTests
 
     private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3, TimeProvider? clock = null,
         int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null,
-        DocumentationScribeInvocationLimits? invocationLimits = null, int? targetToolCalls = null)
+        DocumentationScribeInvocationLimits? invocationLimits = null, int? targetToolCalls = null,
+        Func<bool>? dispatchGuard = null)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
@@ -498,7 +499,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
         var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, request);
-        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
+        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, dispatchGuard, allowance.Clock.GetTimestamp());
         Assert.True(authority.TryBeginDispatch(out _));
         var attempt = Assert.IsType<CampaignProviderReservation>(accepted.Artifact!.State.ActiveReservation).AttemptId;
         return new(scenario, request, attempt, store, authority, coordinator);
@@ -534,8 +535,21 @@ public sealed partial class CampaignStateContractTests
         }
     }
 
-    private sealed class SolusCheckpointStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
+    private sealed class SolusCheckpointStore(CampaignCheckpointArtifact initial) : ICampaignSemanticCheckpointStore
     {
+        private CampaignSemanticCheckpointWindow? semanticWindow;
+        public object SemanticCheckpointIdentity => this;
+        public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => CampaignSemanticCheckpointStoreKind.Local;
+        public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window)
+        {
+            Assert.Null(semanticWindow);
+            semanticWindow = window;
+            return new SolusSemanticBinding(this);
+        }
+        private sealed class SolusSemanticBinding(SolusCheckpointStore store) : IDisposable
+        {
+            public void Dispose() => store.semanticWindow = null;
+        }
         private readonly TransitionCheckpointStore inner = new(initial);
         internal CampaignCheckpointArtifact Current { get; private set; } = initial;
         internal int Reads { get; private set; }
@@ -554,6 +568,12 @@ public sealed partial class CampaignStateContractTests
         internal Action? RetryReadback { get; set; }
         internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
         internal Action? DelayedReadback { get; set; }
+        internal Action<CampaignProviderHostPhase>? HostCompletionReadback { get; set; }
+        internal bool HoldSemanticReadback { get; set; }
+        internal CampaignSemanticCheckpointWindow? SemanticWindowForTest => semanticWindow;
+        internal TaskCompletionSource SemanticReadbackEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseSemanticReadback { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource SemanticReadbackFinished { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource SettlementEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource ReleaseSettlement { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal TaskCompletionSource RetryWaitEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -579,6 +599,7 @@ public sealed partial class CampaignStateContractTests
             {
                 CompletedHostReadbacks.Add(completed);
                 pendingHostCompletionReadback = null;
+                HostCompletionReadback?.Invoke(completed);
             }
             return inner.ReadAsync(token);
         }
@@ -620,9 +641,19 @@ public sealed partial class CampaignStateContractTests
                 failNextRead = dispatch && FailDispatchReadback || settlement && FailSettlementReadback;
                 if (next.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.RetryWait })
                     RetryWaitEntered.TrySetResult();
+                if (HoldSemanticReadback && next.State.ActiveReservation is CampaignProviderReservation
+                    { HostPhase: CampaignProviderHostPhase.SemanticTool })
+                {
+                    SemanticReadbackEntered.TrySetResult();
+                    // Intentionally uncooperative to verify outer absolute bounds.
+                    await ReleaseSemanticReadback.Task;
+                    SemanticReadbackFinished.TrySetResult();
+                }
                 // This is the actual observation of the conditional write, including
                 // the same delay and fault hooks exercised by independent reads.
-                return CampaignCheckpointWriteResult.Written(await ReadAsync(token));
+                var observation = await ReadAsync(token);
+                semanticWindow?.ObserveLocalReadback(this, observation);
+                return CampaignCheckpointWriteResult.Written(observation);
             }
             return result;
         }

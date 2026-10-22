@@ -5,8 +5,33 @@ using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.GitHub.Coordination;
 
-internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore, ICampaignRecoveryPlanStore, IAsyncDisposable
+internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpointStore, ICampaignRecoveryPlanStore, IAsyncDisposable
 {
+    private CampaignSemanticCheckpointWindow? semanticWindow;
+    private RemoteCheckpoint? lastObservedCheckpoint;
+    public object SemanticCheckpointIdentity => this;
+    public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => CampaignSemanticCheckpointStoreKind.RemoteLeased;
+    public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window)
+    {
+        if (Interlocked.CompareExchange(ref semanticWindow, window, null) is not null)
+            throw new InvalidOperationException("campaign.semantic.window-overlap");
+        return new SemanticBinding(this, window);
+    }
+    private sealed class SemanticBinding(GitHubCoordinationStore store, CampaignSemanticCheckpointWindow window) : IDisposable
+    {
+        public void Dispose() => Interlocked.CompareExchange(ref store.semanticWindow, null, window);
+    }
+
+    private void ObserveSemanticReadback(RemoteCheckpoint remote, CampaignCheckpointReadResult readback)
+    {
+        if (semanticWindow is not { } window || remote.Document.Claim is not { } claim
+            || client.ServerTime is not { } now || !Owns(remote.Document)) return;
+        var remaining = (int)Math.Clamp(Math.Floor((DateTimeOffset.FromUnixTimeSeconds(claim.ExpiresUnixSeconds)
+            - now - TimeSpan.FromSeconds(1)).TotalMilliseconds), 0, int.MaxValue);
+        window.ObserveRemoteReadback(this, readback, remaining, CheckpointToken,
+            () => !checkpointStopped && lastObservedCheckpoint is { } latest && Owns(latest.Document)
+                && (window.IsClosingObservation || latest.Artifact?.Sha256 == readback.Sha256));
+    }
     private readonly SemaphoreSlim checkpointGate = new(1, 1);
     private readonly Dictionary<string, GitHubCoordinationDocument> documents = new(StringComparer.Ordinal);
     private readonly CancellationTokenSource checkpointLifetime = new();
@@ -227,7 +252,10 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
             throw new GitHubCoordinationException(transportFailure: reread.Failure ?? new(GitHubFailureCode.InvalidResponse));
         if (reread.Value?.Oid != current.Value.Oid)
             throw new GitHubCoordinationException(transportFailure: new(GitHubFailureCode.Conflict));
-        return new(current.Value.Oid, document, artifact, evidence);
+        var observed = new RemoteCheckpoint(current.Value.Oid, document, artifact, evidence);
+        lastObservedCheckpoint = observed;
+        if (invocationOwner is not null && !Owns(document)) StopCheckpoint();
+        return observed;
     }
 
     private async ValueTask<RemoteCheckpoint?> ReadCallerCheckpointAsync(CancellationToken token, ReadProof? proof = null, bool verifyTarget = false)
@@ -244,9 +272,11 @@ internal sealed partial class GitHubCoordinationStore : ICampaignCheckpointStore
         try
         {
             var remote = await ReadCallerCheckpointAsync(cancellationToken).ConfigureAwait(false);
-            return remote?.Artifact is not { } artifact ? CampaignCheckpointReadResult.NotFound()
-                : CampaignCheckpointReadResult.Found(artifact.ExactUtf8Json.AsSpan(), artifact.CheckpointRevision,
-                    artifact.Sha256, remote.ArchiveEvidence);
+            if (remote?.Artifact is not { } artifact) return CampaignCheckpointReadResult.NotFound();
+            var readback = CampaignCheckpointReadResult.Found(artifact.ExactUtf8Json.AsSpan(), artifact.CheckpointRevision,
+                artifact.Sha256, remote.ArchiveEvidence);
+            ObserveSemanticReadback(remote, readback);
+            return readback;
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure?.Code == GitHubFailureCode.Conflict)
         { return CampaignCheckpointReadResult.LeaseConflict(); }

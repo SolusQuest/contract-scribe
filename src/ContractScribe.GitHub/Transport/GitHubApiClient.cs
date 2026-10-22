@@ -32,6 +32,20 @@ internal sealed class GitHubApiClient : IDisposable
     private string? credential;
     private int disposed;
     private CancellationToken finalizationDeadline;
+    private readonly AsyncLocal<CampaignSemanticCheckpointWindow?> semanticRecovery = new();
+
+    internal IDisposable? EnterSemanticRecovery(CampaignSemanticCheckpointWindow? window)
+    {
+        if (window is null) return null;
+        var prior = semanticRecovery.Value;
+        semanticRecovery.Value = window;
+        return new SemanticRecoveryBinding(this, prior);
+    }
+
+    private sealed class SemanticRecoveryBinding(GitHubApiClient client, CampaignSemanticCheckpointWindow? prior) : IDisposable
+    {
+        public void Dispose() => client.semanticRecovery.Value = prior;
+    }
 
     internal void BindFinalizationDeadline(CancellationToken deadline)
     {
@@ -41,8 +55,10 @@ internal sealed class GitHubApiClient : IDisposable
 
     internal CancellationTokenSource CreateRecoveryScope(TimeSpan maximum)
     {
-        var scope = CancellationTokenSource.CreateLinkedTokenSource(finalizationDeadline);
-        scope.CancelAfter(maximum);
+        var window = semanticRecovery.Value;
+        var scope = CancellationTokenSource.CreateLinkedTokenSource(finalizationDeadline, window?.ObservationToken ?? default);
+        scope.CancelAfter(window is null ? maximum
+            : TimeSpan.FromMilliseconds(Math.Min(maximum.TotalMilliseconds, window.RemainingObservationMilliseconds)));
         return scope;
     }
 

@@ -5736,8 +5736,21 @@ public sealed partial class CampaignStateContractTests
         return Assert.IsType<CampaignAcceptedCheckpoint>(constructor.Invoke([artifact, writer]));
     }
 
-    private sealed class TransitionCheckpointStore : ICampaignCheckpointStore
+    private sealed class TransitionCheckpointStore : ICampaignSemanticCheckpointStore
     {
+        private CampaignSemanticCheckpointWindow? semanticWindow;
+        public object SemanticCheckpointIdentity => this;
+        public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => CampaignSemanticCheckpointStoreKind.Local;
+        public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window)
+        {
+            Assert.Null(semanticWindow);
+            semanticWindow = window;
+            return new TransitionSemanticBinding(this);
+        }
+        private sealed class TransitionSemanticBinding(TransitionCheckpointStore store) : IDisposable
+        {
+            public void Dispose() => store.semanticWindow = null;
+        }
         private CampaignCheckpointArtifact _artifact;
 
         public TransitionCheckpointStore(CampaignCheckpointArtifact artifact) => _artifact = artifact;
@@ -5745,11 +5758,15 @@ public sealed partial class CampaignStateContractTests
         public CampaignCheckpointWriteKind ReplaceResult { get; init; } = CampaignCheckpointWriteKind.Written;
         public CampaignCheckpointArtifact? WinnerOnRejectedWrite { get; init; }
 
-        public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken) =>
-            ValueTask.FromResult(CampaignCheckpointReadResult.Found(
+        public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken)
+        {
+            var actual = CampaignCheckpointReadResult.Found(
                 _artifact.ExactUtf8Json.AsSpan(),
                 _artifact.CheckpointRevision,
-                _artifact.Sha256));
+                _artifact.Sha256);
+            semanticWindow?.ObserveLocalReadback(this, actual);
+            return ValueTask.FromResult(actual);
+        }
 
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(
             ReadOnlyMemory<byte> exactUtf8Json,

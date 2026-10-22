@@ -21,7 +21,10 @@ public sealed record DocumentationScribeDispatchSettlement(
     DocumentationScribeCacheObservation Cache = DocumentationScribeCacheObservation.NotReported);
 
 public sealed record DocumentationScribeHostAdmission(
-    int MaximumMilliseconds, DocumentationScribeDeadlineOwner DeadlineOwner);
+    int MaximumMilliseconds, DocumentationScribeDeadlineOwner DeadlineOwner)
+{
+    internal CampaignSemanticCheckpointWindow? SemanticWindow { get; init; }
+}
 
 /// <summary>Closed scalar operations; persistence and accepted authority remain with the host.</summary>
 public interface IDocumentationScribeExecutionOperations
@@ -44,19 +47,28 @@ public sealed class DocumentationScribeHostPermit
     private int started;
     private int completed;
     internal DocumentationScribeHostPermit(DocumentationScribeExecutionScope scope,
-        DocumentationScribeHostOperation operation, int milliseconds, bool chargesTool, long startedAt, DocumentationScribeDeadlineOwner deadlineOwner)
+        DocumentationScribeHostOperation operation, int milliseconds, bool chargesTool, long startedAt,
+        DocumentationScribeDeadlineOwner deadlineOwner, CampaignSemanticCheckpointWindow? semanticWindow = null)
     {
         this.scope = scope; Operation = operation; MaximumMilliseconds = milliseconds;
         this.chargesTool = chargesTool; this.startedAt = startedAt; DeadlineOwner = deadlineOwner;
+        SemanticWindow = semanticWindow;
     }
     public DocumentationScribeHostOperation Operation { get; }
     public int MaximumMilliseconds { get; }
     public DocumentationScribeDeadlineOwner DeadlineOwner { get; }
     public int ElapsedMilliseconds => scope.Allowance.ElapsedSince(startedAt);
-    public int RemainingMilliseconds => Math.Max(0, MaximumMilliseconds - ElapsedMilliseconds);
+    internal CampaignSemanticCheckpointWindow? SemanticWindow { get; }
+    public bool RequiresReleaseValidation => SemanticWindow is not null;
+    public CancellationToken ExecutionCancellation => SemanticWindow?.OwnerLost ?? default;
+    public bool ResultReleaseAccepted { get; internal set; } = true;
+    public bool ResultReleaseDeadlineReached { get; internal set; }
+    public int RemainingMilliseconds => SemanticWindow?.RemainingQueryMilliseconds
+        ?? Math.Max(0, MaximumMilliseconds - ElapsedMilliseconds);
     public bool TryBeginOperation() => !scope.Failed && scope.CanBeginHost(Operation)
         && RemainingMilliseconds > 0 && !scope.Allowance.HasCheckedStop
         && Interlocked.CompareExchange(ref started, 1, 0) == 0
+        && (SemanticWindow?.TryBeginQuery() ?? true)
         && (!chargesTool || scope.Allowance.TryChargeTool());
     internal bool TryComplete() => Interlocked.CompareExchange(ref completed, 1, 0) == 0;
     public override string ToString() => nameof(DocumentationScribeHostPermit);
@@ -71,6 +83,9 @@ public sealed class DocumentationScribeExecutionScope
     private DocumentationScribeInvocationProviderPermit? provider;
     private int failed;
     private int operationGrant;
+    private string? campaignRequestSha;
+    private long? runtimeStartedAt;
+    private int runtimeMaximumMilliseconds;
     private (Guid LogicalCallId, int AttemptNumber)? nextProviderAttempt;
     internal DocumentationScribeExecutionScope(DocumentationScribeInvocationAllowance allowance,
         IDocumentationScribeExecutionOperations? operations, int restoredFailures, int pendingRetryAfter)
@@ -90,11 +105,36 @@ public sealed class DocumentationScribeExecutionScope
     public bool LifetimeAdmissionDenied { get; private set; }
     public bool CheckpointCapacityReached { get; private set; }
     internal void ObserveCheckpointCapacity() => CheckpointCapacityReached = true;
-    public bool ResourceBudgetReached => CheckpointCapacityReached || LifetimeDeadlineReached || LifetimeAdmissionDenied || SettledLifetimeBudgetExceeded
+    public bool ResourceBudgetReached => CheckpointCapacityReached || LifetimeDeadlineReached || LifetimeAdmissionDenied || SettledLifetimeBudgetExceeded || SemanticHeadroomReached
         || Allowance.IsCampaignScope && Allowance.HasCheckedStop;
+    public bool SemanticHeadroomReached { get; private set; }
+    public bool SemanticInvocationHeadroomReached { get; private set; }
+    public bool SemanticAuthorizationTimedOut { get; private set; }
+    public bool SemanticAuthorizationClosed { get; private set; }
+    internal int RemainingTargetMilliseconds => runtimeStartedAt is { } start
+        ? Math.Max(0, runtimeMaximumMilliseconds - Allowance.ElapsedSince(start)) : 0;
+    internal void ObserveSemanticAuthorizationTimeout() => SemanticAuthorizationTimedOut = true;
+    internal void ObserveSemanticAuthorizationClosed() => SemanticAuthorizationClosed = true;
+    internal void ObserveSemanticHeadroom()
+    {
+        SemanticHeadroomReached = true;
+        SemanticInvocationHeadroomReached = Allowance.RemainingMilliseconds <= RemainingTargetMilliseconds;
+    }
+
+    /// <summary>Binds the original Runtime window once; tools cannot renew it.</summary>
+    public void BindRuntimeWindow(DocumentationScribeRequest request, TimeProvider clock, long startedAt)
+    {
+        if (operations is null) return;
+        if (runtimeStartedAt is not null || request.ArtifactSha256 != campaignRequestSha
+            || !ReferenceEquals(clock, Allowance.Clock))
+            throw new InvalidOperationException("scribe.scope.runtime-authority-mismatch");
+        runtimeStartedAt = startedAt;
+        runtimeMaximumMilliseconds = request.Limits.MaximumElapsedMilliseconds;
+    }
     internal void ObserveSettledLifetimeBudgetExhaustion() => SettledLifetimeBudgetExceeded = true;
     internal void ObserveLifetimeAdmissionDenial() => LifetimeAdmissionDenied = true;
-    internal bool CanBeginHost(DocumentationScribeHostOperation operation) => !LifetimeDeadlineReached && !LifetimeAdmissionDenied
+    internal bool CanBeginHost(DocumentationScribeHostOperation operation) => !SemanticAuthorizationClosed
+        && !SemanticHeadroomReached && !LifetimeDeadlineReached && !LifetimeAdmissionDenied
         && (!SettledLifetimeBudgetExceeded || operation is DocumentationScribeHostOperation.TerminalSubmission
             or DocumentationScribeHostOperation.Postflight);
     public void ObserveDeadline(DocumentationScribeInvocationProviderPermit permit)
@@ -125,12 +165,12 @@ public sealed class DocumentationScribeExecutionScope
             throw new InvalidOperationException("scribe.scope.invalid-authority");
         var progress = ((CampaignProviderReservation)authority.AcceptedCheckpoint.Artifact.State.ActiveReservation!).RetryProgress;
         return new(allowance, operations, authority.RestoredRetryableProviderFailures, progress.PendingRetryAfterMilliseconds)
-        { MaximumTargets = authority.Request.ExecutableTargetIds.Length };
+        { MaximumTargets = authority.Request.ExecutableTargetIds.Length, campaignRequestSha = authority.Request.ArtifactSha256 };
     }
     public async ValueTask<DocumentationScribeInvocationProviderPermit?> ReserveProviderAsync(
         DocumentationScribeDispatchDescriptor descriptor, CancellationToken cancellationToken)
     {
-        if (Failed || ResourceBudgetReached || host is not null || provider is not null || !ValidDescriptor(descriptor)
+        if (Failed || SemanticAuthorizationClosed || ResourceBudgetReached || host is not null || provider is not null || !ValidDescriptor(descriptor)
             || Interlocked.CompareExchange(ref operationGrant, 1, 0) != 0) return null;
         if (!Allowance.TryReserveProvider(out var permit) || permit is null)
         { Volatile.Write(ref operationGrant, 0); return null; }
@@ -172,6 +212,7 @@ public sealed class DocumentationScribeExecutionScope
         if (Allowance.RemainingMilliseconds <= 0) { Allowance.CanBeginProviderWork(); return null; }
         if (Interlocked.CompareExchange(ref operationGrant, 1, 0) != 0) return null;
         var startedAt = Allowance.Clock.GetTimestamp();
+        var semantic = operations is not null && operation == DocumentationScribeHostOperation.SemanticTool;
         var safety = operation switch
         {
             DocumentationScribeHostOperation.RepositoryTool => 30_000,
@@ -180,29 +221,69 @@ public sealed class DocumentationScribeExecutionScope
             _ => Allowance.Limits.MaximumRequestElapsedMilliseconds,
         };
         var remaining = Allowance.RemainingMilliseconds;
-        var milliseconds = Math.Min(safety, remaining);
+        var milliseconds = semantic
+            ? Math.Min(CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds, Math.Min(remaining, RemainingTargetMilliseconds))
+            : Math.Min(safety, remaining);
+        if (semantic && milliseconds <= CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds)
+        {
+            ObserveSemanticHeadroom();
+            Volatile.Write(ref operationGrant, 0);
+            return null;
+        }
         var deadlineOwner = remaining <= safety ? DocumentationScribeDeadlineOwner.Invocation : DocumentationScribeDeadlineOwner.HostOperation;
         if (milliseconds <= 0) { Volatile.Write(ref operationGrant, 0); return null; }
+        CampaignSemanticCheckpointWindow? semanticWindow = null;
         if (operations is not null)
         {
             var admitted = await operations.BeginHostAsync(operation, milliseconds, cancellationToken).ConfigureAwait(false);
-            if (admitted is null) { Volatile.Write(ref operationGrant, 0); Interlocked.Exchange(ref failed, 1); return null; }
+            if (admitted is null)
+            {
+                Volatile.Write(ref operationGrant, 0);
+                if (!SemanticAuthorizationClosed) Interlocked.Exchange(ref failed, 1);
+                return null;
+            }
             milliseconds = admitted.MaximumMilliseconds;
             deadlineOwner = admitted.DeadlineOwner;
+            semanticWindow = admitted.SemanticWindow;
+            if (semantic && semanticWindow is null)
+            { Volatile.Write(ref operationGrant, 0); Interlocked.Exchange(ref failed, 1); return null; }
         }
         var chargesTool = operation is DocumentationScribeHostOperation.RepositoryTool
             or DocumentationScribeHostOperation.SemanticTool or DocumentationScribeHostOperation.RegisteredTool
             or DocumentationScribeHostOperation.TerminalSubmission;
-        host = new(this, operation, milliseconds, chargesTool, startedAt, deadlineOwner); return host;
+        host = new(this, operation, milliseconds, chargesTool, startedAt, deadlineOwner, semanticWindow); return host;
     }
-    public async ValueTask<bool> CompleteHostAsync(DocumentationScribeHostPermit permit, CancellationToken cancellationToken)
+    public async ValueTask<bool> CompleteHostAsync(DocumentationScribeHostPermit permit, CancellationToken cancellationToken,
+        IDocumentationScribeToolResultReleaseValidator? resultReleaseValidator = null,
+        CancellationToken resultCancellation = default)
     {
         if (!ReferenceEquals(host, permit) || !permit.TryComplete()) return false;
-        if (operations is not null && !await operations.CompleteHostAsync(permit.Operation, permit.ElapsedMilliseconds, cancellationToken).ConfigureAwait(false))
-        { Interlocked.Exchange(ref failed, 1); return false; }
-        if (permit.Operation == DocumentationScribeHostOperation.RetryWait)
-            PendingRetryAfterMilliseconds = Math.Max(0, PendingRetryAfterMilliseconds - permit.ElapsedMilliseconds);
-        host = null; Volatile.Write(ref operationGrant, 0); return true;
+        permit.SemanticWindow?.BeginClosing();
+        try
+        {
+            if (operations is not null && !await operations.CompleteHostAsync(permit.Operation, permit.ElapsedMilliseconds, cancellationToken).ConfigureAwait(false))
+            { Interlocked.Exchange(ref failed, 1); return false; }
+            if (permit.SemanticWindow is { } window && resultReleaseValidator is not null)
+            {
+                permit.ResultReleaseAccepted = false;
+                try
+                {
+                    using var validation = CancellationTokenSource.CreateLinkedTokenSource(
+                        window.ObservationToken, window.OwnerLost, resultCancellation);
+                    permit.ResultReleaseAccepted = window.ObservationOpen && window.OwnerCurrent
+                        && !validation.IsCancellationRequested
+                        && resultReleaseValidator.ValidateResultRelease(validation.Token)
+                        && !validation.IsCancellationRequested
+                        && window.ObservationOpen && window.OwnerCurrent;
+                }
+                catch (OperationCanceledException) { }
+                permit.ResultReleaseDeadlineReached = !window.ObservationOpen;
+            }
+            if (permit.Operation == DocumentationScribeHostOperation.RetryWait)
+                PendingRetryAfterMilliseconds = Math.Max(0, PendingRetryAfterMilliseconds - permit.ElapsedMilliseconds);
+            host = null; Volatile.Write(ref operationGrant, 0); return true;
+        }
+        finally { permit.SemanticWindow?.Dispose(); }
     }
     private static bool ValidDescriptor(DocumentationScribeDispatchDescriptor descriptor) => descriptor is not null
         && descriptor.RequestCommitmentSha256.Length == 64

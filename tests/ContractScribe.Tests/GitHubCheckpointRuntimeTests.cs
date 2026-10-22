@@ -11,15 +11,14 @@ public sealed partial class CampaignStateContractTests
     [InlineData(125, false, 0, true)]
     [InlineData(125, true, 0, true)]
     [InlineData(175, false, 0, true)]
-    [InlineData(175, true, 0, false)]
-    [InlineData(175, false, 13000, false)]
+    [InlineData(175, true, 0, true)]
+    [InlineData(175, false, 13000, true)]
     public async Task GitHub_checkpoint_transaction_allows_bounded_semantic_progress_without_a_second_complete_proof(
         int millisecondsPerRequest, bool duplicateReadback, int additionalDelay, bool reachesPort)
     {
-        // Each paired prospective schedule charges every actual HTTP roundtrip
-        // to the original monotonic operation clock. The 125ms control fits both
-        // paths; the 175ms boundary distinguishes the extra complete proof.
-        // Neither schedule changes the production 10s permit or asserts a SLA.
+        // Every actual HTTP roundtrip remains charged to the original clock.
+        // Authorization may exceed 10s while the query retains its separate
+        // at-most10s window. Duplicate proof remains a measured counterfactual.
         var clock = new SolusDeadlineClock();
         var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 120000, invocationMilliseconds: 120000);
         var remote = new GitHubCoordinationRefTests.CoordinationRemote();
@@ -61,7 +60,7 @@ public sealed partial class CampaignStateContractTests
         var observation = trace.SemanticWrites[0];
         Assert.Equal(duplicateReadback ? 3 : 2, observation.PredecessorCommitReads);
         Assert.True(observation.Requests > 0);
-        Assert.True(reachesPort ? observation.ElapsedMilliseconds < 10000 : observation.ElapsedMilliseconds >= 10000,
+        Assert.True(reachesPort ? observation.ElapsedMilliseconds < 30000 : observation.ElapsedMilliseconds >= 30000,
             $"duplicate={duplicateReadback}; requests={observation.Requests}; elapsed={observation.ElapsedMilliseconds}");
         if (!reachesPort)
             Assert.Equal(DocumentationScribeFailureCode.Timeout, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
@@ -71,8 +70,13 @@ public sealed partial class CampaignStateContractTests
 }
 
 internal sealed class RuntimeCheckpointTrace(ICampaignCheckpointStore inner, bool duplicate, int delay,
-    TimeProvider clock, Action<int> advance) : ICampaignCheckpointStore
+    TimeProvider clock, Action<int> advance) : ICampaignSemanticCheckpointStore
 {
+    private ICampaignSemanticCheckpointStore SemanticStore => (ICampaignSemanticCheckpointStore)inner;
+    public object SemanticCheckpointIdentity => SemanticStore.SemanticCheckpointIdentity;
+    public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => SemanticStore.SemanticCheckpointKind;
+    public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window) =>
+        SemanticStore.EnterSemanticCheckpointWindow(window);
     internal List<(int Requests, long ElapsedMilliseconds, int PredecessorCommitReads)> SemanticWrites { get; } = [];
     private bool measuring;
     private int requests;
