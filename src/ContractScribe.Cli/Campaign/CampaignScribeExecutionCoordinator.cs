@@ -142,6 +142,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
                 cancellationToken, settlementToken, window.AuthorizationToken);
             pending = CampaignCheckpointAcceptance.AcceptAsync(store, transition, authorization.Token).AsTask();
             var accepted = await pending.WaitAsync(authorization.Token).ConfigureAwait(false);
+            var acceptedAt = clock.GetTimestamp();
             if (!window.AuthorizationOpen || cancellationToken.IsCancellationRequested)
             {
                 if (!cancellationToken.IsCancellationRequested) Scope.ObserveSemanticAuthorizationTimeout();
@@ -154,7 +155,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
             // This is the transition boundary, never the later readback time.
             operationStartedAt = boundary;
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.SemanticAuthorizationAfterReadback);
-            if (!window.TryIssue(accepted.Artifact!, Scope.Allowance.RemainingMilliseconds,
+            if (!window.TryIssue(accepted.Artifact!, acceptedAt, Scope.Allowance.RemainingMilliseconds,
                     Scope.RemainingTargetMilliseconds, out var queryMilliseconds)
                 || guard is not null && !guard())
             { Conflict = true; return null; }

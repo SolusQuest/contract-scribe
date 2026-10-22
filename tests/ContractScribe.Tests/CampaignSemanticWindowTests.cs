@@ -1,12 +1,58 @@
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Cli;
 using ContractScribe.Core;
 
 namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    internal static async Task AssertSemanticAcceptanceDelayAsync(int envelope, int authorizationElapsed,
+        int issuanceDelay, int expectedQuery)
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 120000, invocationMilliseconds: envelope);
+        trial.Coordinator.Scope.BindRuntimeWindow(trial.Request, clock, clock.GetTimestamp());
+        trial.Store.DelayedReadbackPhase = CampaignProviderHostPhase.SemanticTool;
+        trial.Store.DelayedReadback = () => clock.Advance(authorizationElapsed);
+        var callbacks = 0;
+        using var hook = CampaignProcessBoundaryHooks.Register(name =>
+        {
+            if (name != CampaignProcessBoundaryHooks.SemanticAuthorizationAfterReadback) return;
+            callbacks++;
+            clock.Advance(issuanceDelay);
+        });
+        var permit = await trial.Coordinator.Scope.BeginHostAsync(DocumentationScribeHostOperation.SemanticTool, default);
+        Assert.Equal(1, callbacks);
+        Assert.Equal(envelope, Assert.IsType<CampaignProviderReservation>(trial.Store.Current.State.ActiveReservation).Exposure.ElapsedMilliseconds);
+        if (expectedQuery == 0)
+        {
+            Assert.Null(permit);
+            Assert.Equal(0, trial.Coordinator.Scope.Allowance.ToolCallCount);
+            var actual = await CampaignCheckpointAcceptance.AcceptCurrentAsync(trial.Store);
+            var retired = CampaignStateReducer.RetireInterruptedProviderAttempt(actual.AcceptedCheckpoint!);
+            Assert.Equal(CampaignTransitionKind.Applied, retired.Kind);
+            Assert.Equal(envelope, retired.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+            Assert.Equal(CampaignTransitionFailure.InvalidAuthority,
+                CampaignStateReducer.RetireInterruptedProviderAttempt(actual.AcceptedCheckpoint!).Failure);
+            return;
+        }
+        Assert.NotNull(permit);
+        Assert.Equal(expectedQuery, permit.RemainingMilliseconds);
+        Assert.True(permit.TryBeginOperation());
+        Assert.False(permit.TryBeginOperation());
+        clock.Advance(expectedQuery - 1);
+        Assert.Equal(1, permit.RemainingMilliseconds);
+        Assert.True(await trial.Coordinator.Scope.CompleteHostAsync(permit, default, new SemanticReleaseValidator(_ => true)));
+        Assert.True(permit.ResultReleaseAccepted);
+        Assert.True(permit.SemanticWindow!.IsClosingObservation);
+        Assert.Equal(30000, permit.SemanticWindow.RemainingObservationMilliseconds);
+        Assert.Equal(1, trial.Coordinator.Scope.Allowance.ToolCallCount);
+        Assert.Equal(authorizationElapsed + issuanceDelay + expectedQuery - 1,
+            trial.Store.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+    }
+
     [Theory]
     [InlineData(30000, false)]
     [InlineData(30001, true)]
@@ -151,7 +197,7 @@ public sealed partial class CampaignStateContractTests
         window.ObserveRemoteReadback(fault == "foreign-store" ? new object() : store, readback,
             fault == "missing-lease" ? 0 : 5000, fault == "missing-owner-token" ? default : owner.Token, () => true);
         if (fault == "owner-lost") owner.Cancel();
-        Assert.Equal(fault == "valid", window.TryIssue(transition.Artifact, 120000, 120000, out var admitted));
+        Assert.Equal(fault == "valid", window.TryIssue(transition.Artifact, clock.GetTimestamp(), 120000, 120000, out var admitted));
         if (fault != "valid") { Assert.False(window.TryBeginQuery()); return; }
         Assert.Equal(5000, admitted);
         clock.Advance(4000);
@@ -163,6 +209,38 @@ public sealed partial class CampaignStateContractTests
         owner.Cancel();
         Assert.True(window.OwnerLost.IsCancellationRequested);
         Assert.False(window.OwnerCurrent);
+    }
+
+    [Theory]
+    [InlineData(20000, 0, 9999, 1)]
+    [InlineData(20000, 0, 10000, 0)]
+    [InlineData(5000, 0, 4999, 1)]
+    [InlineData(5000, 0, 5000, 0)]
+    [InlineData(5000, 1000, 3999, 1)]
+    [InlineData(5000, 1000, 4000, 0)]
+    public async Task Semantic_issuance_delay_consumes_both_fixed_readback_lease_and_accepted_query_time(
+        int lease, int acceptanceDelay, int issuanceDelay, int expected)
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock);
+        var transition = CampaignStateReducer.AdvanceHostOperation(trial.Authority,
+            DocumentationScribeHostOperation.SemanticTool, 0, 70000, completing: false);
+        var store = new RemoteSemanticFenceStore();
+        using var window = new CampaignSemanticCheckpointWindow(store, transition.Artifact, clock, clock.GetTimestamp(), 70000);
+        using var owner = new CancellationTokenSource();
+        var readback = CampaignCheckpointReadResult.Found(transition.Artifact.ExactUtf8Json.AsSpan(),
+            transition.Artifact.CheckpointRevision, transition.Artifact.Sha256);
+        window.ObserveRemoteReadback(store, readback, lease, owner.Token, () => true);
+        clock.Advance(acceptanceDelay);
+        var acceptedAt = clock.GetTimestamp();
+        clock.Advance(issuanceDelay);
+        Assert.Equal(expected > 0, window.TryIssue(transition.Artifact, acceptedAt, 120000, 120000, out var admitted));
+        Assert.Equal(expected, admitted);
+        if (expected == 0) { Assert.False(window.TryBeginQuery()); return; }
+        Assert.Equal(expected, window.RemainingQueryMilliseconds);
+        clock.Advance(expected);
+        Assert.Equal(0, window.RemainingQueryMilliseconds);
+        Assert.False(window.TryBeginQuery());
     }
 
     [Theory]

@@ -42,7 +42,7 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
     private int? leaseMilliseconds;
     private CancellationToken ownerLost;
     private Func<bool>? ownerCurrent;
-    private long queryIssuedAt;
+    private long queryAcceptedAt;
     private int queryMilliseconds;
     private IDisposable? binding;
 
@@ -93,8 +93,17 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
     internal bool OwnerCurrent => !ownerLost.IsCancellationRequested
         && (ownerCurrent?.Invoke() ?? storeKind == CampaignSemanticCheckpointStoreKind.Local)
         && (progressGuard?.Invoke() ?? true);
-    internal int RemainingQueryMilliseconds => Volatile.Read(ref stage) == 1 && !abandoned
-        ? Math.Max(0, queryMilliseconds - Elapsed(queryIssuedAt)) : 0;
+    internal int RemainingQueryMilliseconds
+    {
+        get
+        {
+            if (Volatile.Read(ref stage) != 1 || abandoned) return 0;
+            var now = Clock.GetTimestamp();
+            var leaseRemaining = leaseMilliseconds is { } lease ? lease - Elapsed(leaseObservedAt, now) : int.MaxValue;
+            return Math.Max(0, Math.Min(queryMilliseconds - Elapsed(queryAcceptedAt, now),
+                Math.Min(EnvelopeMilliseconds - MaximumClosureMilliseconds - Elapsed(startedAt, now), leaseRemaining)));
+        }
+    }
 
     internal void AttachBinding(IDisposable value) => binding = value;
 
@@ -122,20 +131,24 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
         && ReferenceEquals(identity, storeIdentity) && readback.Kind == CampaignCheckpointReadKind.Found
         && readback.CheckpointRevision == checkpointRevision && readback.Sha256 == checkpointSha;
 
-    internal bool TryIssue(CampaignCheckpointArtifact accepted, int invocationRemaining, int targetRemaining,
+    internal bool TryIssue(CampaignCheckpointArtifact accepted, long acceptedAt, int invocationRemaining, int targetRemaining,
         out int milliseconds)
     {
         milliseconds = 0;
         if (!AuthorizationOpen || !observed || accepted.CheckpointRevision != checkpointRevision
             || accepted.Sha256 != checkpointSha || !OwnerCurrent
             || storeKind == CampaignSemanticCheckpointStoreKind.RemoteLeased && leaseMilliseconds is null) return false;
-        var leaseRemaining = leaseMilliseconds is { } lease ? Math.Max(0, lease - Elapsed(leaseObservedAt)) : int.MaxValue;
-        milliseconds = Math.Min(MaximumQueryMilliseconds, Math.Min(leaseRemaining,
-            Math.Min(EnvelopeMilliseconds - MaximumClosureMilliseconds - ElapsedMilliseconds,
-                Math.Min(invocationRemaining, targetRemaining))));
+        var now = Clock.GetTimestamp();
+        var acceptedElapsed = Elapsed(acceptedAt, now);
+        var leaseRemaining = leaseMilliseconds is { } lease ? Math.Max(0, lease - Elapsed(leaseObservedAt, now)) : int.MaxValue;
+        milliseconds = Math.Max(0, Math.Min(MaximumQueryMilliseconds - acceptedElapsed, Math.Min(leaseRemaining,
+            Math.Min(EnvelopeMilliseconds - MaximumClosureMilliseconds - Elapsed(startedAt, now),
+                Math.Min(invocationRemaining, targetRemaining)))));
         if (milliseconds <= 0 || Interlocked.CompareExchange(ref stage, 1, 0) != 0) return false;
-        queryIssuedAt = Clock.GetTimestamp();
-        queryMilliseconds = milliseconds;
+        // Both the original ten-second bound and any shorter authority remain
+        // anchored before post-acceptance callbacks, never at permit issuance.
+        queryAcceptedAt = acceptedAt;
+        queryMilliseconds = checked(acceptedElapsed + milliseconds);
         return true;
     }
 
@@ -155,7 +168,8 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
         if (RemainingObservationMilliseconds == 0) closure.Cancel();
     }
 
-    private int Elapsed(long from) => (int)Math.Clamp(Math.Ceiling(Clock.GetElapsedTime(from).TotalMilliseconds), 0, int.MaxValue);
+    private int Elapsed(long from) => Elapsed(from, Clock.GetTimestamp());
+    private int Elapsed(long from, long to) => (int)Math.Clamp(Math.Ceiling(Clock.GetElapsedTime(from, to).TotalMilliseconds), 0, int.MaxValue);
 
     public void Dispose()
     {

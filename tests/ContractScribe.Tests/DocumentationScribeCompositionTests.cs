@@ -21,6 +21,19 @@ public sealed class CampaignProcessBoundaryHookCollection;
 [Collection("Campaign process boundary hook")]
 public sealed partial class DocumentationScribeCompositionTests
 {
+    [Theory]
+    [InlineData(70000, 0, 0, 10000)]
+    [InlineData(70000, 0, 9999, 1)]
+    [InlineData(70000, 0, 10000, 0)]
+    [InlineData(70000, 0, 11000, 0)]
+    [InlineData(70000, 13164, 9999, 1)]
+    [InlineData(70000, 13164, 10000, 0)]
+    [InlineData(50000, 13164, 6835, 1)]
+    [InlineData(50000, 13164, 6836, 0)]
+    public Task Semantic_post_acceptance_callback_consumes_the_original_query_deadline(
+        int envelope, int authorizationElapsed, int issuanceDelay, int expectedQuery) =>
+        CampaignStateContractTests.AssertSemanticAcceptanceDelayAsync(envelope, authorizationElapsed, issuanceDelay, expectedQuery);
+
     [Fact]
     [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
     public async Task Native_File_semantic_readback_issues_the_same_independent_query_window()
