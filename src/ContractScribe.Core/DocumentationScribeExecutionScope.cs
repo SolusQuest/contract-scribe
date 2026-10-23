@@ -112,6 +112,7 @@ public sealed class DocumentationScribeExecutionScope
     public int RestoredRetryableProviderFailures { get; }
     public int PendingRetryAfterMilliseconds { get; private set; }
     public int PhysicalProviderRequestCount { get; private set; }
+    public DocumentationScribeAttemptId? AttemptId { get; private init; }
     public bool LifetimeDeadlineReached { get; private set; }
     public bool StandaloneDeadlineReached => !Allowance.IsCampaignScope
         && Allowance.StopReason == DocumentationScribeInvocationStopReason.Elapsed;
@@ -179,7 +180,11 @@ public sealed class DocumentationScribeExecutionScope
             throw new InvalidOperationException("scribe.scope.invalid-authority");
         var progress = ((CampaignProviderReservation)authority.AcceptedCheckpoint.Artifact.State.ActiveReservation!).RetryProgress;
         return new(allowance, operations, authority.RestoredRetryableProviderFailures, progress.PendingRetryAfterMilliseconds)
-        { MaximumTargets = authority.Request.ExecutableTargetIds.Length, campaignRequestSha = authority.Request.ArtifactSha256 };
+        {
+            MaximumTargets = authority.Request.ExecutableTargetIds.Length,
+            campaignRequestSha = authority.Request.ArtifactSha256,
+            AttemptId = authority.AttemptId
+        };
     }
     public async ValueTask<DocumentationScribeInvocationProviderPermit?> ReserveProviderAsync(
         DocumentationScribeDispatchDescriptor descriptor, CancellationToken cancellationToken)

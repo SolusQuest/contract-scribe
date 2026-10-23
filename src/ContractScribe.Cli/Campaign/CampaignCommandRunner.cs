@@ -573,7 +573,9 @@ internal static class CampaignCommandRunner
                 ConfiguredAgentEntrypoint: null,
                 ExecutionToken: cancellationToken,
                 SettlementToken: settlementCancellation.Token,
-                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor, configuration.Budgets.Invocation.MaximumConnectMilliseconds),
+                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor,
+                    configuration.Budgets.Invocation.MaximumConnectMilliseconds,
+                    observation => usage?.ObserveProvider(invocationAllowance, observation)),
                 DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
                 TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance, Usage: usage)).ConfigureAwait(false);
             usage?.ObserveState(proposal.Artifact);
@@ -632,7 +634,8 @@ internal static class CampaignCommandRunner
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,
-        Func<string, string?> credentialAccessor, int maximumConnectMilliseconds = 15_000)
+        Func<string, string?> credentialAccessor, int maximumConnectMilliseconds = 15_000,
+        Action<OpenAiCompatibleProviderObservation>? observer = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(credentialAccessor);
@@ -654,7 +657,8 @@ internal static class CampaignCommandRunner
                 provider.RequestProfile,
                 networkEnabled: true,
                 credential, maximumConnectMilliseconds);
-            return new CampaignHookedModelExchange(new OpenAiCompatibleHttpModelExchange(options));
+            return new CampaignHookedModelExchange(observer is null ? new OpenAiCompatibleHttpModelExchange(options)
+                : new OpenAiCompatibleHttpModelExchange(options, observer));
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {

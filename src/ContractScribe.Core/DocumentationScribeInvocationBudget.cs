@@ -116,6 +116,8 @@ public sealed class DocumentationScribeInvocationProviderPermit
     public DocumentationScribeDispatchExposure Exposure { get; internal set; }
     public DocumentationScribeDeadlineOwner DeadlineOwner { get; internal set; }
     public bool DispatchStarted => Volatile.Read(ref started) == 1;
+    // Process-local observation of the original send, never a reservation or recovery grant.
+    public int? PhysicalDispatchOrdinal { get; internal set; }
     public int RemainingMilliseconds => Math.Max(0, Exposure.ElapsedMilliseconds - owner.ElapsedSince(StartedAt));
     internal long StartedAt { get; }
     internal Guid? LogicalCallId { get; set; }
@@ -283,6 +285,7 @@ public sealed partial class DocumentationScribeInvocationAllowance
                 || permit.RemainingMilliseconds <= 0 || RemainingMilliseconds <= 0
                 || requests >= Limits.MaximumProviderRequests || !permit.TryStart()) return false;
             requests = checked(requests + 1);
+            permit.PhysicalDispatchOrdinal = requests;
             sentPermits.Add(permit);
             return true;
         }

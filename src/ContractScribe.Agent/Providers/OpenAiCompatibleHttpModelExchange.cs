@@ -13,6 +13,7 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
     private readonly OpenAiCompatibleHttpTransportOptions options;
     private readonly HttpMessageInvoker invoker;
     private readonly OpenAiCompatibleResponseDiagnostics? diagnostics;
+    private readonly Action<OpenAiCompatibleProviderObservation>? observer;
     private int disposed;
 
     public OpenAiCompatibleHttpModelExchange(OpenAiCompatibleHttpTransportOptions options)
@@ -27,16 +28,24 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
     {
     }
 
+    public OpenAiCompatibleHttpModelExchange(OpenAiCompatibleHttpTransportOptions options,
+        Action<OpenAiCompatibleProviderObservation> observer)
+        : this(options, CreateProductionHandler(options.MaximumConnectMilliseconds), observer: observer)
+    {
+    }
+
     internal OpenAiCompatibleHttpModelExchange(
         OpenAiCompatibleHttpTransportOptions options,
         HttpMessageHandler handler,
         bool disposeHandler = true,
-        OpenAiCompatibleResponseDiagnostics? diagnostics = null)
+        OpenAiCompatibleResponseDiagnostics? diagnostics = null,
+        Action<OpenAiCompatibleProviderObservation>? observer = null)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(handler);
         this.options = options;
         this.diagnostics = diagnostics;
+        this.observer = observer;
         invoker = new HttpMessageInvoker(
             new SanitizingHandler(handler, disposeHandler),
             disposeHandler: true);
@@ -78,15 +87,22 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
                 origin: DocumentationScribeModelFailureOrigin.RequestPreparation);
         }
 
-        return scope is null
-            ? await SendPreparedAsync(prepared, request, null, null, cancellationToken).ConfigureAwait(false)
-            : await DocumentationScribePhysicalExchange.SendAsync(request, scope,
-                new PreparedPhysicalSend(this, prepared, request, scope), cancellationToken).ConfigureAwait(false);
+        if (scope is null)
+            return await SendPreparedAsync(prepared, request, null, null, cancellationToken).ConfigureAwait(false);
+        var send = new PreparedPhysicalSend(this, prepared, request, scope);
+        DocumentationScribeModelResponse? response = null;
+        try
+        {
+            return response = await DocumentationScribePhysicalExchange.SendAsync(request, scope, send,
+                cancellationToken).ConfigureAwait(false);
+        }
+        finally { send.Observe(response); }
     }
 
     private async ValueTask<DocumentationScribeModelResponse> SendPreparedAsync(OpenAiCompatiblePreparedRequest prepared,
         DocumentationScribeModelRequest request, DocumentationScribeExecutionScope? scope,
-        DocumentationScribeInvocationProviderPermit? permit, CancellationToken cancellationToken)
+        DocumentationScribeInvocationProviderPermit? permit, CancellationToken cancellationToken,
+        OpenAiCompatibleResponseDiagnostics? closedDiagnostics = null)
     {
         var replayObservation = prepared.HistoryReplayed
             ? DocumentationScribeContinuationObservation.HistoryReplayed
@@ -128,6 +144,9 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             try
             {
                 var parsed = OpenAiCompatibleChatCompletionsCodec.ParseResponse(body, prepared);
+                ObserveClosed(closedDiagnostics, request.ProviderRequestNumber,
+                    parsed.TerminalSubmissions.Length == 1 ? OpenAiCompatibleResponseCodecDisposition.AcceptedTerminal
+                        : OpenAiCompatibleResponseCodecDisposition.AcceptedTool);
                 if (diagnostics is not null)
                 {
                     var disposition = parsed.TerminalSubmissions.Length == 1
@@ -144,6 +163,8 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
             }
             catch (OpenAiCompatibleProtocolException exception)
             {
+                if (exception.Disposition is { } closedDisposition)
+                    ObserveClosed(closedDiagnostics, request.ProviderRequestNumber, closedDisposition);
                 if (diagnostics is not null)
                 {
                     var disposition = exception.Disposition
@@ -221,12 +242,50 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         }
     }
 
+    private static void ObserveClosed(OpenAiCompatibleResponseDiagnostics? closed, int number,
+        OpenAiCompatibleResponseCodecDisposition disposition)
+    {
+        if (closed is null) return;
+        try
+        {
+            lock (closed)
+                closed.ObserveAsync(number, disposition, ReadOnlyMemory<byte>.Empty, CancellationToken.None).GetAwaiter().GetResult();
+        }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { }
+    }
+
     private sealed class PreparedPhysicalSend(OpenAiCompatibleHttpModelExchange owner,
         OpenAiCompatiblePreparedRequest prepared, DocumentationScribeModelRequest request,
         DocumentationScribeExecutionScope scope) : IDocumentationScribePreparedPhysicalSend
     {
-        public ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeInvocationProviderPermit permit, CancellationToken token) =>
-            owner.SendPreparedAsync(prepared, request, scope, permit, token);
+        private DocumentationScribeInvocationProviderPermit? actualPermit;
+        private OpenAiCompatibleResponseDiagnostics? closed;
+        public ValueTask<DocumentationScribeModelResponse> SendAsync(DocumentationScribeInvocationProviderPermit permit, CancellationToken token)
+        {
+            actualPermit = permit;
+            if (owner.observer is not null)
+                try
+                {
+                    closed = OpenAiCompatibleResponseDiagnostics.ForProviderRequest(request.ProviderRequestNumber,
+                    scope.Allowance.Limits.MaximumProviderRequests);
+                }
+                catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { }
+            return owner.SendPreparedAsync(prepared, request, scope, permit, token, closed);
+        }
+
+        internal void Observe(DocumentationScribeModelResponse? response)
+        {
+            if (owner.observer is null || actualPermit?.PhysicalDispatchOrdinal is not { } ordinal) return;
+            // Freeze this request before any late body callback. Never read the next request's collector.
+            try
+            {
+                string? codec = null;
+                if (closed is not null)
+                    lock (closed) codec = closed.CompleteCase().Responses.SingleOrDefault()?.CodecDisposition;
+                owner.observer(new(ordinal, request, scope.AttemptId?.Value, response?.Failure, codec));
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException)) { }
+        }
     }
 
     public void Dispose()

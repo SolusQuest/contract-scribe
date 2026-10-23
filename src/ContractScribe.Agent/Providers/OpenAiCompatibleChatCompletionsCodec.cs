@@ -307,7 +307,12 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported);
             if (!string.Equals(finishReason, "tool_calls", StringComparison.Ordinal))
             {
-                throw Unsupported(OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported);
+                throw Unsupported(finishReason switch
+                {
+                    "length" => OpenAiCompatibleResponseCodecDisposition.FinishReasonLength,
+                    "stop" => OpenAiCompatibleResponseCodecDisposition.FinishReasonStop,
+                    _ => OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported,
+                });
             }
 
             if ((hasRefusal && refusal.ValueKind != JsonValueKind.Null)

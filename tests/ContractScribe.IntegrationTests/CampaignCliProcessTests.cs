@@ -843,6 +843,7 @@ public sealed partial class CampaignCliProcessTests
         internal Uri Endpoint { get; }
         internal bool SkipProposals { get; set; }
         internal int? DropResponseAt { get; set; }
+        internal int? PaymentRequiredAt { get; set; }
 
         internal int RequestCount => Volatile.Read(ref requestCount);
 
@@ -877,6 +878,11 @@ public sealed partial class CampaignCliProcessTests
                     // The independent server received the complete request; closing
                     // this connection now deliberately supplies no response.
                     if (DropResponseAt == count) continue;
+                    if (PaymentRequiredAt == count)
+                    {
+                        await stream.WriteAsync(Encoding.ASCII.GetBytes("HTTP/1.1 402 Payment Required\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"), disposal.Token);
+                        continue;
+                    }
                     if (scenario is "retry" or "retry-wait" && count == 1)
                     {
                         var transient = Encoding.ASCII.GetBytes("HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");

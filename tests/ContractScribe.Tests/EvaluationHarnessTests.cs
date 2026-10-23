@@ -799,7 +799,7 @@ public sealed class EvaluationHarnessTests
     public void ReportWriterAcceptsTheCompleteClosedCodecVocabularyWithoutRawFields()
     {
         var values = Enum.GetValues<OpenAiCompatibleResponseCodecDisposition>();
-        Assert.Equal(26, values.Length);
+        Assert.Equal(28, values.Length);
         var identifiers = values
             .Select(value => new OpenAiCompatibleResponseDiagnostic(1, value).CodecDisposition)
             .ToArray();
