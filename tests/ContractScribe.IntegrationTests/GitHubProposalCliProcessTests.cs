@@ -67,6 +67,12 @@ public sealed partial class GitHubProposalCliProcessTests
         using var json = JsonDocument.Parse(result.Stdout);
         Assert.Equal("preflight", json.RootElement.GetProperty("terminalLayer").GetString());
         Assert.Equal(JsonValueKind.Null, json.RootElement.GetProperty("publicationDiagnostic").ValueKind);
+        var checkpointFailure = json.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
+        Assert.Equal("Acquire", checkpointFailure.GetProperty("operation").GetString());
+        Assert.Equal("FinalRef", checkpointFailure.GetProperty("stage").GetString());
+        Assert.Equal("RefMismatch", checkpointFailure.GetProperty("reason").GetString());
+        Assert.Equal("NotFound", checkpointFailure.GetProperty("transportCode").GetString());
+        Assert.Equal(404, checkpointFailure.GetProperty("httpStatus").GetInt32());
         Assert.Null(fixture.GitHub.CoordinationDocument()["publication"]);
         Assert.Null(fixture.GitHub.CoordinationDocument()["checkpoint"]);
         Assert.Empty(fixture.GitHub.PullRequests);

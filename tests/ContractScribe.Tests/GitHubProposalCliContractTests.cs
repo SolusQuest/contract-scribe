@@ -171,7 +171,7 @@ public sealed class GitHubProposalCliContractTests
             + "],\"checkpointRevision\":12,\"pullRequestUrl\":null,\"publicationDiagnostic\":null,\"invocationUsage\":"
             + "{\"invocationUsageVersion\":1,\"invocationId\":null,\"campaignLineage\":null,\"snapshotId\":null,\"batchId\":null,"
             + "\"checkpointRevision\":null,\"publicationOperationId\":null,\"generationId\":null,\"pullRequestUrl\":null,"
-            + "\"work\":null,\"calls\":null,\"providerDiagnostics\":null,\"tokens\":null,\"accounting\":null,\"history\":null,\"timing\":null,\"termination\":null,\"completeness\":\"unknown\"}}\n";
+            + "\"work\":null,\"calls\":null,\"providerDiagnostics\":null,\"checkpointFailure\":null,\"tokens\":null,\"accounting\":null,\"history\":null,\"timing\":null,\"termination\":null,\"completeness\":\"unknown\"}}\n";
         Assert.Equal(expected, stdout.ToString());
         Assert.Equal(exit == 0 ? "" : "github proposal stopped before publication: " + code + "\n", stderr.ToString());
     }

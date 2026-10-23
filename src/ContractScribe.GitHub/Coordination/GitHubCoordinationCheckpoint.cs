@@ -193,7 +193,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         return artifact;
     }
 
-    private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token, ReadProof? transactionProof = null, bool verifyTarget = false)
+    private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token, ReadProof? transactionProof = null, bool verifyTarget = false, CheckpointAttempt? attempt = null)
     {
         var repository = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
         var current = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
@@ -264,24 +264,34 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
             throw new GitHubCoordinationException(transportFailure: new(GitHubFailureCode.Conflict));
         var observed = new RemoteCheckpoint(current.Value.Oid, document, artifact, evidence);
         lastObservedCheckpoint = observed;
-        if (invocationOwner is not null && !Owns(document)) StopCheckpoint();
+        if (invocationOwner is not null && !Owns(document))
+        {
+            ObserveCheckpointFailure(attempt, GitHubCheckpointStage.OwnerConfirmation,
+                document.Claim?.Owner != invocationOwner || document.Claim.Epoch != invocationEpoch
+                    ? GitHubCheckpointReason.OwnerMismatch : GitHubCheckpointReason.LeaseUnverifiable);
+            StopCheckpoint();
+        }
         return observed;
     }
 
-    private async ValueTask<RemoteCheckpoint?> ReadCallerCheckpointAsync(CancellationToken token, ReadProof? proof = null, bool verifyTarget = false)
+    private async ValueTask<RemoteCheckpoint?> ReadCallerCheckpointAsync(CancellationToken token, ReadProof? proof = null, bool verifyTarget = false, CheckpointAttempt? attempt = null,
+        GitHubCheckpointStage stage = GitHubCheckpointStage.PredecessorRead)
     {
-        try { return await ReadRemoteCheckpointAsync(token, proof, verifyTarget).ConfigureAwait(false); }
+        try { return await ReadRemoteCheckpointAsync(token, proof, verifyTarget, attempt).ConfigureAwait(false); }
         catch (GitHubCoordinationException exception) when (
             exception.TransportFailure?.Code == GitHubFailureCode.Cancelled && token.IsCancellationRequested)
-        { throw new OperationCanceledException(token); }
+        { ObserveCheckpointException(attempt, stage, exception, token); throw new OperationCanceledException(token); }
     }
 
     public async ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken)
     {
-        await checkpointGate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        var attempt = BeginCheckpointOperation(GitHubCheckpointOperation.Read);
+        try { await checkpointGate.WaitAsync(cancellationToken).ConfigureAwait(false); }
+        catch (OperationCanceledException exception)
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.Gate, exception, cancellationToken); throw; }
         try
         {
-            var remote = await ReadCallerCheckpointAsync(cancellationToken).ConfigureAwait(false);
+            var remote = await ReadCallerCheckpointAsync(cancellationToken, attempt: attempt).ConfigureAwait(false);
             if (remote?.Artifact is not { } artifact) return CampaignCheckpointReadResult.NotFound();
             var readback = CampaignCheckpointReadResult.Found(artifact.ExactUtf8Json.AsSpan(), artifact.CheckpointRevision,
                 artifact.Sha256, remote.ArchiveEvidence);
@@ -289,11 +299,13 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
             return readback;
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure?.Code == GitHubFailureCode.Conflict)
-        { return CampaignCheckpointReadResult.LeaseConflict(); }
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, cancellationToken); return CampaignCheckpointReadResult.LeaseConflict(); }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
-        { CheckpointFailure = exception.TransportFailure; return CampaignCheckpointReadResult.Unreadable(); }
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, cancellationToken); CheckpointFailure = exception.TransportFailure; return CampaignCheckpointReadResult.Unreadable(); }
         catch (Exception exception) when (exception is GitHubCoordinationException or CampaignStateValidationException)
-        { return CampaignCheckpointReadResult.Invalid(); }
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, cancellationToken); return CampaignCheckpointReadResult.Invalid(); }
+        catch (OperationCanceledException exception)
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, cancellationToken); throw; }
         finally { checkpointGate.Release(); }
     }
 

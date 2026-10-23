@@ -45,7 +45,8 @@ internal sealed partial class GitHubCoordinationStore
             ValidateSuccessor(current.State, next);
             var prepared = Prepare(next, current.Creation?.State ?? current.State);
             if (!await WriteDocumentAsync(prepared.Document, [], token,
-                livePredecessor: remote.Document, publication: prepared.Event).ConfigureAwait(false))
+                livePredecessor: remote.Document, publication: prepared.Event,
+                attempt: BeginCheckpointOperation(GitHubCheckpointOperation.Publication)).ConfigureAwait(false))
             {
                 StopCheckpoint();
                 throw new GitHubCoordinationException(transportFailure: CheckpointFailure ?? new(GitHubFailureCode.Conflict));

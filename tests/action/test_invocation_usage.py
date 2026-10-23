@@ -49,6 +49,49 @@ def encode(value):
 
 
 class InvocationUsageTests(unittest.TestCase):
+    def test_checkpoint_failure_is_closed_bounded_and_lossless_through_action(self):
+        observation = dict(operationOrdinal=7, operation="Write", attemptedRevision=17,
+                           stage="CheckpointReadback", reason="Transport", transportCode="NotFound",
+                           httpStatus=404, cancellation=None)
+        with tempfile.TemporaryDirectory() as temp:
+            value = fixture("partial")
+            value["checkpointFailure"] = observation
+            raw = encode(envelope(value))
+            output = str(Path(temp) / "out.txt")
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": output}):
+                parsed = invoke.parse_envelope(raw, b"", 0)
+                invoke.emit_outputs(parsed, raw, 0)
+            self.assertEqual(observation, json.loads(driver.read_outputs(output)["usage-json"])["checkpointFailure"])
+            summary = "\n".join(U.summary_rows(value))
+            self.assertIn("CheckpointReadback / Transport", summary)
+            self.assertIn("NotFound / 404 / unknown", summary)
+            self.assertNotIn("campaign.private-summary-sentinel", summary)
+            self.assertLess(len(raw), C.BOUND_ENVELOPE)
+        vocabularies = (("operation", U.CHECKPOINT_OPERATIONS), ("stage", U.CHECKPOINT_STAGES),
+                        ("reason", U.CHECKPOINT_REASONS), ("transportCode", U.CHECKPOINT_TRANSPORT),
+                        ("cancellation", U.CHECKPOINT_CANCELLATIONS))
+        for key, choices in vocabularies:
+            for choice in choices:
+                row = dict(observation, **{key: choice})
+                if key == "cancellation" or row["reason"] == "Cancelled":
+                    row.update(reason="Cancelled", cancellation=choice if key == "cancellation" else "Unknown")
+                self.assertTrue(U.checkpoint_failure(row), (key, choice))
+        for key, invalid in (("operationOrdinal", 0), ("operationOrdinal", True),
+                             ("operationOrdinal", 2**63), ("attemptedRevision", -1),
+                             ("attemptedRevision", True), ("httpStatus", True),
+                             ("httpStatus", 99), ("httpStatus", 600),
+                             ("reason", []), ("stage", {}), ("operation", None),
+                             ("cancellation", "caller-timeout"), ("transportCode", "private-error-sentinel"),
+                             ("transportCode", None), ("reason", "Cancelled")):
+            row = dict(observation, **{key: invalid})
+            self.assertFalse(U.checkpoint_failure(row), (key, invalid))
+            bad = fixture("partial")
+            bad["checkpointFailure"] = row
+            self.assertFalse(U.valid(bad))
+            self.assertNotIn("private-error-sentinel", "\n".join(U.summary_rows(bad)))
+        self.assertFalse(U.checkpoint_failure(dict(observation, privateText="private-error-sentinel")))
+        self.assertFalse(U.checkpoint_failure({key: value for key, value in observation.items() if key != "stage"}))
+
     def test_logical_attempts_use_their_contract_bound_independently_of_physical_requests(self):
         contracts = (HERE.parent.parent / "src/ContractScribe.Core/DocumentationScribeContracts.cs").read_text()
         maximum_attempts = int(re.search(r"MaximumAttempts = ([\d_]+);", contracts).group(1).replace("_", ""))
@@ -117,6 +160,9 @@ class InvocationUsageTests(unittest.TestCase):
     def test_latest_bounded_rows_fit_existing_envelope_and_omissions_remain_unknown(self):
         value = fixture("partial")
         value["calls"]["physicalProviderDispatches"] = 128
+        value["checkpointFailure"] = dict(operationOrdinal=2**63 - 1, operation="Publication",
+                                        attemptedRevision=2**63 - 1, stage="LeaseConfirmation", reason="Cancelled",
+                                        transportCode="InvalidResponse", httpStatus=599, cancellation="OperationToken")
         value["providerDiagnostics"] = dict(missingDispatches=112, observations=[
             dict(physicalDispatchOrdinal=n, attemptId="scribe-attempt." + "a" * 32,
                  attemptNumber=1_000_000, providerRequestNumber=128, failureCode="model.failure.permanent-unavailable",

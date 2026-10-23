@@ -1,6 +1,7 @@
 using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Agent.Providers;
+using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.Cli;
 
@@ -25,6 +26,18 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
     private readonly object providerGate = new();
     private readonly SortedDictionary<int, OpenAiCompatibleProviderObservation> providerObservations = [];
     private bool providerObservationsFrozen;
+    private GitHubCheckpointDiagnostic? checkpointFailure;
+
+    // The command supplies its own store's observation before disposal. Snapshot
+    // closes reporting; a later observer/cleanup callback cannot revise it.
+    internal void ObserveCheckpoint(GitHubCheckpointDiagnostic? observation)
+    {
+        lock (providerGate)
+        {
+            if (!providerObservationsFrozen && observation is { IsValid: true })
+                checkpointFailure ??= observation;
+        }
+    }
 
     internal static JsonElement Unavailable { get; } = JsonSerializer.SerializeToElement(new
     {
@@ -40,6 +53,7 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
         work = (object?)null,
         calls = (object?)null,
         providerDiagnostics = (object?)null,
+        checkpointFailure = (object?)null,
         tokens = (object?)null,
         accounting = (object?)null,
         history = (object?)null,
@@ -153,11 +167,13 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
     {
         DocumentationScribeInvocationObservation? observation;
         OpenAiCompatibleProviderObservation[] providerRows;
+        GitHubCheckpointDiagnostic? checkpoint;
         lock (providerGate)
         {
             providerObservationsFrozen = true;
             observation = allowance?.Observe();
             providerRows = providerObservations.Values.ToArray();
+            checkpoint = checkpointFailure;
         }
         var zero = new DocumentationScribeTokenObservation(0, 0);
         var tokens = new
@@ -215,6 +231,17 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
             {
                 observations = providerRows,
                 missingDispatches = Math.Max(0, (observation?.PhysicalProviderDispatches ?? 0) - providerRows.Length),
+            },
+            checkpointFailure = checkpoint is null ? null : new
+            {
+                operationOrdinal = checkpoint.OperationOrdinal,
+                operation = checkpoint.Operation.ToString(),
+                attemptedRevision = checkpoint.AttemptedRevision,
+                stage = checkpoint.Stage.ToString(),
+                reason = checkpoint.Reason.ToString(),
+                transportCode = checkpoint.TransportCode?.ToString(),
+                httpStatus = checkpoint.HttpStatus,
+                cancellation = checkpoint.Cancellation?.ToString(),
             },
             accounting = observation is null ? null : new
             {

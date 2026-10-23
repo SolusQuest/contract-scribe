@@ -9,12 +9,15 @@ internal sealed partial class GitHubCoordinationStore
 {
     internal async ValueTask<CampaignCheckpointReadKind> AcquireCheckpointAsync(CancellationToken token)
     {
-        await checkpointGate.WaitAsync(token).ConfigureAwait(false);
+        var attempt = BeginCheckpointOperation(GitHubCheckpointOperation.Acquire);
+        try { await checkpointGate.WaitAsync(token).ConfigureAwait(false); }
+        catch (OperationCanceledException exception)
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.Gate, exception, token); throw; }
         try
         {
             if (client.CheckpointAuthority is not { } authority || invocationOwner is not null)
                 return CampaignCheckpointReadKind.Unsafe;
-            var remote = await ReadRemoteCheckpointAsync(token).ConfigureAwait(false);
+            var remote = await ReadRemoteCheckpointAsync(token, attempt: attempt).ConfigureAwait(false);
             var target = await client.GetRefAsync(authority.ReadAuthority.TargetRef, token).ConfigureAwait(false);
             if (target.Value?.Oid != authority.ExpectedBaseOid) return CampaignCheckpointReadKind.Unsafe;
             if (client.ServerTime is not { } now) return CampaignCheckpointReadKind.LeaseUnverifiable;
@@ -32,7 +35,7 @@ internal sealed partial class GitHubCoordinationStore
                 TargetCommitOid = authority.ExpectedBaseOid,
                 Claim = new(invocationOwner, invocationEpoch, now.AddSeconds(ClaimSeconds).ToUnixTimeSeconds()),
             };
-            if (!await WriteDocumentAsync(document, [], token).ConfigureAwait(false))
+            if (!await WriteDocumentAsync(document, [], token, attempt: attempt).ConfigureAwait(false))
             {
                 StopCheckpoint();
                 return CampaignCheckpointReadKind.LeaseUnverifiable;
@@ -42,6 +45,7 @@ internal sealed partial class GitHubCoordinationStore
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
+            ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, token);
             CheckpointFailure = exception is GitHubCoordinationException boundary ? boundary.TransportFailure
                 : new(exception is OperationCanceledException ? GitHubFailureCode.Cancelled : GitHubFailureCode.HostFailure);
             StopCheckpoint();
@@ -55,7 +59,11 @@ internal sealed partial class GitHubCoordinationStore
     private async ValueTask<CampaignCheckpointWriteResult> WriteCheckpointAsync(long? expectedRevision, string? expectedSha,
         ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
     {
-        await checkpointGate.WaitAsync(token).ConfigureAwait(false);
+        var attempt = BeginCheckpointOperation(GitHubCheckpointOperation.Write, revision);
+        var stage = GitHubCheckpointStage.Gate;
+        try { await checkpointGate.WaitAsync(token).ConfigureAwait(false); }
+        catch (OperationCanceledException exception)
+        { ObserveCheckpointException(attempt, stage, exception, token); throw; }
         try
         {
             using var semanticRecovery = client.EnterSemanticRecovery(semanticWindow);
@@ -64,8 +72,13 @@ internal sealed partial class GitHubCoordinationStore
                 || artifact.CheckpointRevision != revision || !bytes.Span.SequenceEqual(artifact.ExactUtf8Json.AsSpan()))
                 return new(CampaignCheckpointWriteKind.Unsafe);
             var proof = new ReadProof();
-            var remote = await ReadCallerCheckpointAsync(token, proof).ConfigureAwait(false);
-            if (remote is null || !Owns(remote.Document)) return new(CampaignCheckpointWriteKind.LeaseConflict);
+            stage = GitHubCheckpointStage.PredecessorRead;
+            var remote = await ReadCallerCheckpointAsync(token, proof, attempt: attempt).ConfigureAwait(false);
+            if (remote is null || !Owns(remote.Document))
+            {
+                ObserveCheckpointFailure(attempt, GitHubCheckpointStage.OwnerConfirmation, GitHubCheckpointReason.OwnerMismatch);
+                return new(CampaignCheckpointWriteKind.LeaseConflict);
+            }
             if (expectedRevision is null && remote.Artifact is not null) return new(CampaignCheckpointWriteKind.AlreadyPresent);
             if (expectedRevision is not null && remote.Artifact is null) return new(CampaignCheckpointWriteKind.PredecessorMissing);
             if (remote.Artifact is { } current && (current.CheckpointRevision != expectedRevision || current.Sha256 != expectedSha))
@@ -95,37 +108,55 @@ internal sealed partial class GitHubCoordinationStore
                 blobs.Add(witness);
                 document = document with { Archive = new(witness.Oid, evidence.WitnessSha256, GitHubCoordinationDocument.CurrentCommit) };
             }
-            if (!await WriteDocumentAsync(document, blobs, token, proof: proof).ConfigureAwait(false))
+            stage = GitHubCheckpointStage.CreateObjects;
+            if (!await WriteDocumentAsync(document, blobs, token, proof: proof, attempt: attempt).ConfigureAwait(false))
             { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
-            var observed = await ReadCallerCheckpointAsync(token, proof, verifyTarget: true).ConfigureAwait(false);
-            if (observed?.Artifact is not { } readback || !Owns(observed.Document)
-                || observed.Document != document || readback.CheckpointRevision != revision || readback.Sha256 != sha
-                || !readback.ExactUtf8Json.AsSpan().SequenceEqual(bytes.Span)
-                || !ConfirmCheckpointLease(observed.Document))
-            { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
+            stage = GitHubCheckpointStage.CheckpointReadback;
+            var observed = await ReadCallerCheckpointAsync(token, proof, verifyTarget: true, attempt: attempt, stage: stage).ConfigureAwait(false);
+            GitHubCheckpointReason? reason = observed?.Artifact is not { } ? GitHubCheckpointReason.CheckpointMismatch
+                : !Owns(observed.Document) ? GitHubCheckpointReason.OwnerMismatch
+                : observed.Document != document ? GitHubCheckpointReason.DocumentMismatch
+                : observed.Artifact.CheckpointRevision != revision || observed.Artifact.Sha256 != sha
+                    || !observed.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(bytes.Span) ? GitHubCheckpointReason.CheckpointMismatch
+                : !ConfirmCheckpointLease(observed.Document, attempt) ? GitHubCheckpointReason.LeaseUnverifiable : null;
+            if (reason is { } failed)
+            {
+                ObserveCheckpointFailure(attempt, stage, failed);
+                StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure);
+            }
+            var readback = observed!.Artifact!;
             var actual = CampaignCheckpointReadResult.Found(
                 readback.ExactUtf8Json.AsSpan(), readback.CheckpointRevision, readback.Sha256, observed.ArchiveEvidence);
             ObserveSemanticReadback(observed, actual);
             return CampaignCheckpointWriteResult.Written(actual);
         }
         catch (OperationCanceledException exception) when (token.IsCancellationRequested && exception.CancellationToken == token)
-        { throw; }
+        { ObserveCheckpointException(attempt, stage, exception, token); throw; }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-        { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
+        { ObserveCheckpointException(attempt, stage, exception, token); StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
         finally { checkpointGate.Release(); }
     }
 
     private async ValueTask<bool> WriteDocumentAsync(GitHubCoordinationDocument document, IEnumerable<GitHubBlob> blobs,
         CancellationToken token, bool requireLiveClaim = true, GitHubCoordinationDocument? livePredecessor = null,
-        GitHubPublicationEvent? publication = null, ReadProof? proof = null)
+        GitHubPublicationEvent? publication = null, ReadProof? proof = null, CheckpointAttempt? attempt = null)
     {
         var prepared = GitHubCoordinationObjects.Prepare(document, publication);
         var payloads = blobs.Concat(publication is null ? [] : new[] { Blob(publication.Encode()) }).ToImmutableArray();
         client.BindCheckpointWrite(new(prepared, payloads));
+        var stage = GitHubCheckpointStage.CreateObjects;
         try
         {
             var created = await CreateObjectsAsync(prepared, token, payloads, proof).ConfigureAwait(false);
-            if (created is not null) CheckpointFailure = created.Failure?.TransportFailure;
+            if (created is not null)
+            {
+                CheckpointFailure = created.Failure?.TransportFailure;
+                var failure = created.Failure?.ReadbackFailure ?? created.Failure?.TransportFailure;
+                ObserveCheckpointFailure(attempt, stage, failure?.Code == GitHubFailureCode.Cancelled
+                    ? GitHubCheckpointReason.Cancelled : failure is null ? GitHubCheckpointReason.InvalidData : GitHubCheckpointReason.Transport,
+                    failure, failure?.Code == GitHubFailureCode.Cancelled
+                        ? token.IsCancellationRequested ? GitHubCheckpointCancellation.OperationToken : GitHubCheckpointCancellation.Unknown : null);
+            }
             if (created?.Failure is
                 {
                     Delivery: GitHubDelivery.NotDispatched,
@@ -133,21 +164,46 @@ internal sealed partial class GitHubCoordinationStore
                 })
                 token.ThrowIfCancellationRequested();
             if (created is not null || requireLiveClaim && !Owns(document)
-                || livePredecessor is not null && !Owns(livePredecessor)) return false;
+                || livePredecessor is not null && !Owns(livePredecessor))
+            {
+                if (created is null) ObserveCheckpointFailure(attempt, GitHubCheckpointStage.OwnerConfirmation, GitHubCheckpointReason.OwnerMismatch);
+                return false;
+            }
+            stage = GitHubCheckpointStage.RefMutation;
             var result = await UpdateCoordinationRefAsync(new(coordinationRef, document.PredecessorOid,
                 prepared.CommitOid, document.PredecessorOid == ZeroOid), token).ConfigureAwait(false);
             if (result.Delivery == GitHubDelivery.NotDispatched)
             {
                 CheckpointFailure = result.Failure;
+                ObserveCheckpointFailure(attempt, stage, result.Failure?.Code == GitHubFailureCode.Cancelled
+                    ? GitHubCheckpointReason.Cancelled : result.Failure is null ? GitHubCheckpointReason.Unknown : GitHubCheckpointReason.Transport,
+                    result.Failure, result.Failure?.Code == GitHubFailureCode.Cancelled
+                        ? token.IsCancellationRequested ? GitHubCheckpointCancellation.OperationToken : GitHubCheckpointCancellation.Unknown : null);
                 if (result.Failure?.Code == GitHubFailureCode.Cancelled) token.ThrowIfCancellationRequested();
                 return false;
             }
             using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
-            var current = GitHubObservedProposalIntegrity.Read(await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false));
-            if (current?.Oid != prepared.CommitOid) return false;
-            var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token, proof).ConfigureAwait(false);
-            return read == document && (!requireLiveClaim || ConfirmCheckpointLease(read));
+            stage = GitHubCheckpointStage.FinalRef;
+            try
+            {
+                var finalRef = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
+                var current = GitHubObservedProposalIntegrity.Read(finalRef);
+                if (current?.Oid != prepared.CommitOid)
+                { ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, finalRef.Failure); return false; }
+                stage = GitHubCheckpointStage.CanonicalDocument;
+                var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token, proof).ConfigureAwait(false);
+                if (read != document)
+                { ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.DocumentMismatch); return false; }
+                stage = GitHubCheckpointStage.LeaseConfirmation;
+                if (requireLiveClaim && !ConfirmCheckpointLease(read, attempt))
+                { ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.LeaseUnverifiable); return false; }
+                return true;
+            }
+            catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+            { ObserveCheckpointException(attempt, stage, exception, recovery.Token, recovery: true); throw; }
         }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        { ObserveCheckpointException(attempt, stage, exception, token); throw; }
         finally { client.BindCheckpointWrite(null); }
     }
 
@@ -156,6 +212,8 @@ internal sealed partial class GitHubCoordinationStore
 
     private async Task RenewCheckpointAsync()
     {
+        CheckpointAttempt? attempt = null;
+        var stage = GitHubCheckpointStage.PredecessorRead;
         try
         {
             while (true)
@@ -164,32 +222,49 @@ internal sealed partial class GitHubCoordinationStore
                 await checkpointGate.WaitAsync(checkpointLifetime.Token).ConfigureAwait(false);
                 try
                 {
-                    var current = await ReadRemoteCheckpointAsync(checkpointLifetime.Token).ConfigureAwait(false);
-                    if (current is null || !Owns(current.Document)) { StopCheckpoint(); return; }
+                    attempt = BeginCheckpointOperation(GitHubCheckpointOperation.Renew);
+                    stage = GitHubCheckpointStage.PredecessorRead;
+                    var current = await ReadRemoteCheckpointAsync(checkpointLifetime.Token, attempt: attempt).ConfigureAwait(false);
+                    if (current is null || !Owns(current.Document))
+                    {
+                        ObserveCheckpointFailure(attempt, GitHubCheckpointStage.OwnerConfirmation, GitHubCheckpointReason.OwnerMismatch);
+                        StopCheckpoint(); return;
+                    }
                     var document = current.Document.RetainAt(current.Head) with
                     {
                         PredecessorOid = current.Head,
                         Claim = current.Document.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
                     };
-                    if (!await WriteDocumentAsync(document, [], checkpointLifetime.Token, livePredecessor: current.Document).ConfigureAwait(false))
+                    stage = GitHubCheckpointStage.CreateObjects;
+                    if (!await WriteDocumentAsync(document, [], checkpointLifetime.Token, livePredecessor: current.Document,
+                        attempt: attempt).ConfigureAwait(false))
                     { StopCheckpoint(); return; }
                 }
                 finally { checkpointGate.Release(); }
             }
         }
         catch (OperationCanceledException) when (checkpointLifetime.IsCancellationRequested) { }
-        catch { StopCheckpoint(); }
+        catch (Exception exception)
+        { ObserveCheckpointException(attempt, stage, exception, checkpointLifetime.Token); StopCheckpoint(); }
     }
 
-    private bool ConfirmCheckpointLease(GitHubCoordinationDocument document)
+    private bool ConfirmCheckpointLease(GitHubCoordinationDocument document, CheckpointAttempt? attempt = null)
     {
-        if (!Owns(document) || checkpointExpiry.IsCancellationRequested) return false;
+        if (!Owns(document) || checkpointExpiry.IsCancellationRequested)
+        {
+            ObserveCheckpointFailure(attempt, GitHubCheckpointStage.LeaseConfirmation, GitHubCheckpointReason.LeaseUnverifiable);
+            return false;
+        }
         // Authenticated server time advances monotonically in the client. The
         // independent timer still fences execution if renewal waits on the gate
         // or transport; only an actually confirmed owned claim can rearm it.
         var remaining = DateTimeOffset.FromUnixTimeSeconds(document.Claim!.ExpiresUnixSeconds)
             - client.ServerTime!.Value - TimeSpan.FromSeconds(1);
-        if (remaining <= TimeSpan.Zero) { StopCheckpoint(); return false; }
+        if (remaining <= TimeSpan.Zero)
+        {
+            ObserveCheckpointFailure(attempt, GitHubCheckpointStage.LeaseConfirmation, GitHubCheckpointReason.LeaseUnverifiable);
+            StopCheckpoint(); return false;
+        }
         checkpointExpiry.CancelAfter(remaining);
         return !checkpointStopped;
     }
@@ -202,22 +277,27 @@ internal sealed partial class GitHubCoordinationStore
 
     internal async Task<T> WithPublicationAsync<T>(Func<Task<T>> publish, CancellationToken token)
     {
+        var attempt = BeginCheckpointOperation(GitHubCheckpointOperation.Renew);
         await checkpointGate.WaitAsync(token).ConfigureAwait(false);
+        var renewalComplete = false;
         try
         {
-            var current = await ReadRemoteCheckpointAsync(token).ConfigureAwait(false);
+            var current = await ReadRemoteCheckpointAsync(token, attempt: attempt).ConfigureAwait(false);
             if (current is null || !Owns(current.Document) || current.Artifact is null) throw new GitHubCoordinationException();
             var renewed = current.Document.RetainAt(current.Head) with
             {
                 PredecessorOid = current.Head,
                 Claim = current.Document.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
             };
-            if (!await WriteDocumentAsync(renewed, [], token, livePredecessor: current.Document).ConfigureAwait(false)) throw new GitHubCoordinationException();
+            if (!await WriteDocumentAsync(renewed, [], token, livePredecessor: current.Document, attempt: attempt).ConfigureAwait(false)) throw new GitHubCoordinationException();
             publicationClaimExpires = renewed.Claim!.ExpiresUnixSeconds;
             publicationHead = GitHubCoordinationObjects.Prepare(renewed).CommitOid;
             publicationActive = true;
+            renewalComplete = true;
             return await publish().ConfigureAwait(false);
         }
+        catch (Exception exception) when (!renewalComplete && exception is not (OutOfMemoryException or StackOverflowException))
+        { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, token); throw; }
         finally { publicationActive = false; checkpointGate.Release(); }
     }
 
@@ -242,18 +322,29 @@ internal sealed partial class GitHubCoordinationStore
         token.ThrowIfCancellationRequested();
         if (checkpointStopped) return false;
         if (client.ServerTime is { } now && now.ToUnixTimeSeconds() < publicationClaimExpires - (ClaimSeconds - 60)) return true;
+        var attempt = BeginCheckpointOperation(GitHubCheckpointOperation.Renew);
+        var stage = GitHubCheckpointStage.PredecessorRead;
         try
         {
             var head = RequireRemote(await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false)).Oid;
-            if (head != publicationHead) throw new GitHubCoordinationException();
+            if (head != publicationHead)
+            {
+                ObserveCheckpointFailure(attempt, GitHubCheckpointStage.FinalRef, GitHubCheckpointReason.RefMismatch);
+                throw new GitHubCoordinationException();
+            }
             var current = await ReadAcceptedDocumentAsync(head, token).ConfigureAwait(false);
-            if (!Owns(current)) throw new GitHubCoordinationException();
+            if (!Owns(current))
+            {
+                ObserveCheckpointFailure(attempt, GitHubCheckpointStage.OwnerConfirmation, GitHubCheckpointReason.OwnerMismatch);
+                throw new GitHubCoordinationException();
+            }
             var renewed = current.RetainAt(head) with
             {
                 PredecessorOid = head,
                 Claim = current.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
             };
-            if (!await WriteDocumentAsync(renewed, [], token, livePredecessor: current).ConfigureAwait(false))
+            stage = GitHubCheckpointStage.CreateObjects;
+            if (!await WriteDocumentAsync(renewed, [], token, livePredecessor: current, attempt: attempt).ConfigureAwait(false))
                 throw new GitHubCoordinationException();
             var renewedHead = GitHubCoordinationObjects.Prepare(renewed).CommitOid;
             publicationRenewals[head] = renewedHead;
@@ -261,9 +352,11 @@ internal sealed partial class GitHubCoordinationStore
             publicationClaimExpires = renewed.Claim!.ExpiresUnixSeconds;
             return true;
         }
-        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
-        catch
+        catch (OperationCanceledException exception) when (token.IsCancellationRequested)
+        { ObserveCheckpointException(attempt, stage, exception, token); throw; }
+        catch (Exception exception)
         {
+            ObserveCheckpointException(attempt, stage, exception, token);
             StopCheckpoint();
             return false;
         }

@@ -2,7 +2,7 @@
 
 FIELDS = ("invocationUsageVersion", "invocationId", "campaignLineage", "snapshotId",
           "batchId", "checkpointRevision", "publicationOperationId", "generationId", "pullRequestUrl", "work", "calls", "tokens", "accounting", "history", "timing",
-          "termination", "completeness", "providerDiagnostics")
+          "termination", "completeness", "providerDiagnostics", "checkpointFailure")
 WORK = ("selectedTargets", "startedTargets", "resumedTargets", "acceptedTargets",
         "skippedTargets", "failedTargets", "reconstructedTargets", "remainingTargets",
         "deferredTargets")
@@ -27,6 +27,42 @@ CODECS = tuple("codec." + suffix for suffix in (
     "continuation.missing", "tool-calls.exceeds-limit", "tool-call.arguments-exceeds-limit"))
 PROVIDER_ROW = ("physicalDispatchOrdinal", "attemptId", "attemptNumber", "providerRequestNumber",
                 "failureCode", "failureOrigin", "httpStatusCode", "codecDisposition")
+
+
+CHECKPOINT_FIELDS = ("operationOrdinal", "operation", "attemptedRevision", "stage", "reason",
+                     "transportCode", "httpStatus", "cancellation")
+CHECKPOINT_OPERATIONS = frozenset(("Acquire", "Read", "Write", "Renew", "Publication"))
+CHECKPOINT_STAGES = frozenset(("Gate", "PredecessorRead", "CreateObjects", "RefMutation", "FinalRef",
+                               "CanonicalDocument", "CheckpointReadback", "OwnerConfirmation", "LeaseConfirmation"))
+CHECKPOINT_REASONS = frozenset(("Transport", "InvalidData", "RefMismatch", "DocumentMismatch", "CheckpointMismatch",
+                                "OwnerMismatch", "LeaseUnverifiable", "Cancelled", "Unknown"))
+CHECKPOINT_TRANSPORT = frozenset(("InvalidRequest", "Authentication", "Permission", "NotFound", "Conflict", "Validation",
+                                  "RateLimit", "Cancelled", "Timeout", "ResponseLost", "InvalidResponse", "HostFailure"))
+CHECKPOINT_CANCELLATIONS = frozenset(("OperationToken", "RecoveryToken", "Unknown"))
+
+
+def checkpoint_failure(value):
+    if value is None:
+        return True
+    if not isinstance(value, dict) or set(value) != set(CHECKPOINT_FIELDS):
+        return False
+    if not integer(value["operationOrdinal"]) or value["operationOrdinal"] == 0 \
+            or not integer(value["attemptedRevision"], True):
+        return False
+    # Type-check before set membership: malformed arrays/objects are rejected.
+    for key, allowed, optional in (("operation", CHECKPOINT_OPERATIONS, False),
+                                   ("stage", CHECKPOINT_STAGES, False), ("reason", CHECKPOINT_REASONS, False),
+                                   ("transportCode", CHECKPOINT_TRANSPORT, True),
+                                   ("cancellation", CHECKPOINT_CANCELLATIONS, True)):
+        item = value[key]
+        if item is None and optional:
+            continue
+        if not isinstance(item, str) or item not in allowed:
+            return False
+    status = value["httpStatus"]
+    if status is not None and (not integer(status) or not 100 <= status <= 599 or value["transportCode"] is None):
+        return False
+    return (value["reason"] == "Cancelled") == (value["cancellation"] is not None)
 
 
 def provider_diagnostics(value, calls):
@@ -100,6 +136,8 @@ def valid(value):
     if not object_fields(value["work"], WORK, integer) \
             or not object_fields(value["calls"], CALLS, lambda n: integer(n, True)):
         return False
+    if not checkpoint_failure(value["checkpointFailure"]):
+        return False
     if not provider_diagnostics(value["providerDiagnostics"], value["calls"]):
         return False
     def token(item):
@@ -154,6 +192,13 @@ def summary_rows(value):
                         f"{number(item['observed'])}; {item['missingDispatches']} |")
     if value["termination"] is not None:
         rows.append(f"| stop | {value['termination']['stopReason']} |")
+    checkpoint = value["checkpointFailure"]
+    if checkpoint is not None:
+        rows.append(f"| checkpoint failure operation / attempted revision | {checkpoint['operationOrdinal']} / "
+                    f"{checkpoint['operation']} / {number(checkpoint['attemptedRevision'])} |")
+        rows.append(f"| checkpoint failure stage / reason | {checkpoint['stage']} / {checkpoint['reason']} |")
+        rows.append(f"| checkpoint transport / status / cancellation | {checkpoint['transportCode'] or 'unknown'} / "
+                    f"{number(checkpoint['httpStatus'])} / {checkpoint['cancellation'] or 'unknown'} |")
     diagnostics = value["providerDiagnostics"]
     if diagnostics is not None:
         rows.append(f"| provider diagnostics missing sends | {diagnostics['missingDispatches']} |")

@@ -7,6 +7,49 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Actual_CLI_durable_member_failed_ack_reaches_Action_without_advancing_authority()
+    {
+        await using var fixture = await Fixture.CreateAsync();
+        var injected = false;
+        long? durableRevision = null;
+        fixture.GitHub.After = request =>
+        {
+            if (injected || request.Method != "POST" || request.Path != "/graphql"
+                || fixture.GitHub.CoordinationDocument()["checkpoint"] is null) return;
+            var state = fixture.Checkpoint();
+            if (!state.State.WorkItems.Any(work => work.TrustedProposal is not null)) return;
+            injected = true;
+            durableRevision = state.CheckpointRevision;
+            fixture.GitHub.RejectPath = "/git/ref/heads/contract-scribe/coordination/";
+            fixture.GitHub.RejectionStatus = 404;
+        };
+        var failed = await fixture.Run();
+        Assert.True(injected);
+        AssertResult(failed, 5, "host-failure");
+        var current = fixture.Checkpoint();
+        Assert.Equal(durableRevision, current.CheckpointRevision);
+        Assert.Single(current.State.WorkItems, work => work.TrustedProposal is not null);
+        Assert.NotNull(current.State.ActiveReservation);
+        Assert.Null(current.State.TerminalOutcome);
+        Assert.Equal(0, current.State.LineageCharges.PatchValidationInvocations);
+        Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.Equal(0, fixture.GitHub.PrAttempts);
+        var requests = fixture.Provider.RequestCount;
+        using var envelope = JsonDocument.Parse(failed.Stdout);
+        Assert.Equal(current.CheckpointRevision - 1, envelope.RootElement.GetProperty("checkpointRevision").GetInt64());
+        var failure = envelope.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
+        Assert.Equal("Write", failure.GetProperty("operation").GetString());
+        Assert.Equal(current.CheckpointRevision, failure.GetProperty("attemptedRevision").GetInt64());
+        Assert.Equal("FinalRef", failure.GetProperty("stage").GetString());
+        Assert.Equal("RefMismatch", failure.GetProperty("reason").GetString());
+        Assert.Equal("NotFound", failure.GetProperty("transportCode").GetString());
+        Assert.Equal(404, failure.GetProperty("httpStatus").GetInt32());
+        await AssertActualActionConsumer(fixture.Outside, failed.Stdout, failed.ExitCode, checkpoint: true);
+        Assert.Equal(requests, fixture.Provider.RequestCount);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Actual_CLI_semantic_prefix_and_terminal_HTTP_status_reach_the_Action_without_more_effects()
     {
         await using var fixture = await Fixture.CreateAsync(providerScenario: "semantic");
@@ -43,7 +86,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    private static async Task AssertActualActionConsumer(string outside, string stdout, int exit)
+    private static async Task AssertActualActionConsumer(string outside, string stdout, int exit, bool checkpoint = false)
     {
         var start = new ProcessStartInfo("python3")
         {
@@ -64,7 +107,12 @@ public sealed partial class GitHubProposalCliProcessTests
             os.environ['GITHUB_OUTPUT'] = sys.argv[2]
             invoke.emit_outputs(parsed, data, int(sys.argv[3]))
             rows = usage.summary_rows(parsed['invocationUsage'])
-            assert any('402' in row and 'model.failure.permanent-unavailable' in row for row in rows)
+            if sys.argv[4] == 'checkpoint':
+                assert any('FinalRef / RefMismatch' in row for row in rows)
+                assert any('NotFound / 404' in row for row in rows)
+                assert parsed['invocationUsage']['checkpointFailure']['attemptedRevision'] > parsed['checkpointRevision']
+            else:
+                assert any('402' in row and 'model.failure.permanent-unavailable' in row for row in rows)
             summary = '\n'.join(rows)
             for row in parsed['invocationUsage']['providerDiagnostics']['observations']:
                 assert row['attemptId'] not in summary
@@ -74,6 +122,7 @@ public sealed partial class GitHubProposalCliProcessTests
         start.ArgumentList.Add(Path.Join(CampaignCliProcessTests.RepositoryRoot, "scripts", "action"));
         start.ArgumentList.Add(Path.Join(outside, "actual-action-outputs.txt"));
         start.ArgumentList.Add(exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        start.ArgumentList.Add(checkpoint ? "checkpoint" : "provider");
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();
