@@ -112,11 +112,9 @@ internal static class GitHubProposalCommand
                 if (GitHubCampaignPreflight.NeedsPublicationRecovery(claimed))
                 {
                     var recoveryToken = finalization.Begin(execution.Token);
-                    client.BindFinalizationDeadline(finalization.DeadlineToken);
+                    client.BindFinalizationDeadline(finalization.DeadlineToken, () => finalization.TimedOut);
                     claimed = await checkpoint.RecoverObservedPublicationAsync(recoveryToken).ConfigureAwait(false);
                     GitHubProposalProcessHooks.Reach("after-publication-recovery");
-                    if (finalization.TimedOut && claimed.Failure?.Transport?.Code == GitHubFailureCode.Cancelled)
-                        return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
                     if (GitHubCampaignPreflight.Select(identity, operation, claimed,
                         accepted?.Artifact?.CheckpointRevision) is { } recoveredStop) return recoveredStop;
                     if (finalization.TimedOut) return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
@@ -150,7 +148,7 @@ internal static class GitHubProposalCommand
                         }
                     },
                     finalization: finalization,
-                    bindFinalizationDeadline: client.BindFinalizationDeadline, originalOperationOnly: originalOnly);
+                    bindFinalizationDeadline: deadline => client.BindFinalizationDeadline(deadline, () => finalization.TimedOut), originalOperationOnly: originalOnly);
                 return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
                     accessor, continuation, checkpointStore: checkpoint, usage: usage).ConfigureAwait(false);
             }

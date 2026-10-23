@@ -51,8 +51,10 @@ internal sealed partial class GitHubCoordinationStore
     private void ObserveCheckpointException(CheckpointAttempt? attempt, GitHubCheckpointStage stage,
         Exception exception, CancellationToken token, bool recovery = false)
     {
-        var failure = (exception as GitHubCoordinationException)?.TransportFailure;
-        var cancelled = exception is OperationCanceledException || failure?.Code == GitHubFailureCode.Cancelled;
+        var failure = (exception as GitHubCoordinationException)?.TransportFailure
+            ?? (exception.InnerException as GitHubCoordinationException)?.TransportFailure;
+        var cancelled = exception is OperationCanceledException || failure?.Code == GitHubFailureCode.Cancelled
+            || failure?.Code == GitHubFailureCode.Timeout && token.IsCancellationRequested;
         ObserveCheckpointFailure(attempt, stage, cancelled ? GitHubCheckpointReason.Cancelled
             : failure is not null ? GitHubCheckpointReason.Transport
             : exception is GitHubCoordinationException or ContractScribe.Core.CampaignStateValidationException

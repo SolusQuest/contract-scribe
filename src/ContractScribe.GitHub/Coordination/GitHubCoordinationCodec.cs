@@ -505,10 +505,15 @@ internal static class GitHubCoordinationCodec
 
 internal sealed class GitHubCoordinationException : Exception
 {
-    internal GitHubCoordinationException(bool incompatible = false, ContractScribe.GitHub.Transport.GitHubFailure? transportFailure = null)
+    internal GitHubCoordinationException(bool incompatible = false, ContractScribe.GitHub.Transport.GitHubFailure? transportFailure = null,
+        GitHubCoordinationFailure? failure = null)
         : base("The GitHub coordination boundary rejected the operation.")
-    { Incompatible = incompatible; TransportFailure = transportFailure; }
-    internal ContractScribe.GitHub.Transport.GitHubFailure? TransportFailure { get; }
+    {
+        Incompatible = incompatible;
+        Failure = failure ?? (transportFailure is null ? null : new(GitHubCoordinationFailureKind.Transport, transportFailure));
+    }
+    internal GitHubCoordinationFailure? Failure { get; }
+    internal ContractScribe.GitHub.Transport.GitHubFailure? TransportFailure => Failure?.ReadbackFailure ?? Failure?.TransportFailure;
     internal bool Incompatible { get; }
     public override string ToString() => Message;
 }

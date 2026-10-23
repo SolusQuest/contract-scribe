@@ -60,7 +60,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         CampaignCheckpointArtifact? Artifact, CampaignVerifiedArchive? ArchiveEvidence);
 
     private static T RequireRemote<T>(GitHubApiResult<T> result) where T : class => result.Value
-        ?? throw new GitHubCoordinationException(transportFailure: result.Failure ?? new(GitHubFailureCode.InvalidResponse));
+        ?? throw new GitHubCoordinationException(failure: new(GitHubCoordinationFailureKind.Transport,
+            result.Failure ?? new(GitHubFailureCode.InvalidResponse), result.Delivery, result.Context, result.RequiredPermissions));
 
     private async ValueTask<GitHubCoordinationDocument> ReadDocumentAsync(string head, CancellationToken token,
         ReadProof? proof = null)

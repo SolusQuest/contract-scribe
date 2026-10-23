@@ -86,7 +86,7 @@ public sealed partial class GitHubProposalCliProcessTests
         await fixture.AssertSourceUnchanged();
     }
 
-    private static async Task AssertActualActionConsumer(string outside, string stdout, int exit, bool checkpoint = false)
+    private static async Task AssertActualActionConsumer(string outside, string stdout, int exit, bool checkpoint = false, bool publication = false)
     {
         var start = new ProcessStartInfo("python3")
         {
@@ -107,7 +107,17 @@ public sealed partial class GitHubProposalCliProcessTests
             os.environ['GITHUB_OUTPUT'] = sys.argv[2]
             invoke.emit_outputs(parsed, data, int(sys.argv[3]))
             rows = usage.summary_rows(parsed['invocationUsage'])
-            if sys.argv[4] == 'checkpoint':
+            if sys.argv[4] == 'publication':
+                observation = parsed['publicationDiagnostic']
+                assert observation['boundary'] == 'CoordinationAdvanceRef'
+                assert observation['owner'] == 'Coordination'
+                assert observation['transportHttpStatus'] in (403, 404)
+                assert observation['transportCode'] == ('Permission' if observation['transportHttpStatus'] == 403 else 'NotFound')
+                assert parsed['invocationUsage']['calls']['activeSent'] == 0
+                assert parsed['invocationUsage']['calls']['activeReserved'] == 0
+                wire = json.dumps(observation, separators=(',', ':'))
+                assert ('publication-diagnostic=' + wire) in open(sys.argv[2]).read()
+            elif sys.argv[4] == 'checkpoint':
                 assert any('FinalRef / RefMismatch' in row for row in rows)
                 assert any('NotFound / 404' in row for row in rows)
                 assert parsed['invocationUsage']['checkpointFailure']['attemptedRevision'] > parsed['checkpointRevision']
@@ -122,7 +132,7 @@ public sealed partial class GitHubProposalCliProcessTests
         start.ArgumentList.Add(Path.Join(CampaignCliProcessTests.RepositoryRoot, "scripts", "action"));
         start.ArgumentList.Add(Path.Join(outside, "actual-action-outputs.txt"));
         start.ArgumentList.Add(exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        start.ArgumentList.Add(checkpoint ? "checkpoint" : "provider");
+        start.ArgumentList.Add(publication ? "publication" : checkpoint ? "checkpoint" : "provider");
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

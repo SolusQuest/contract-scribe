@@ -7,6 +7,23 @@ namespace ContractScribe.Tests;
 public sealed class GitHubPublicationFinalizationTests
 {
     [Fact]
+    public void Deadline_first_remains_timeout_when_caller_cancels_before_projection()
+    {
+        var clock = new DeadlineClock();
+        using var caller = new CancellationTokenSource();
+        using var host = new GitHubPublicationFinalization(caller.Token, clock);
+        host.Begin(default);
+        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("deadline", '5'), "synthetic");
+        client.BindFinalizationDeadline(host.DeadlineToken, () => host.TimedOut);
+        clock.Expire();
+        var first = client.CancellationFailure;
+        caller.Cancel();
+        Assert.True(host.TimedOut);
+        Assert.Equal(GitHubFailureCode.Timeout, first.Code);
+        Assert.Equal(first, client.CancellationFailure);
+    }
+
+    [Fact]
     public void Finalization_starts_once_and_never_renews_with_another_stage()
     {
         var clock = new DeadlineClock();
@@ -83,7 +100,7 @@ public sealed class GitHubPublicationFinalizationTests
         Assert.True(later.IsCancellationRequested);
     }
 
-    private sealed class DeadlineClock : TimeProvider
+    internal sealed class DeadlineClock : TimeProvider
     {
         private readonly List<Action> callbacks = [];
         internal List<TimeSpan> DueTimes { get; } = [];

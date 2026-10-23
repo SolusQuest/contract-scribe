@@ -322,7 +322,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
     internal JsonObject CoordinationDocument() => DocumentAt(
         Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal)).Value);
 
-    private JsonObject DocumentAt(string head)
+    internal JsonObject DocumentAt(string head)
     {
         var root = Trees[Commits[head]["tree"]!["sha"]!.GetValue<string>()];
         var leaf = Trees[root.Single(entry => entry.Path == ".contract-scribe").Oid];

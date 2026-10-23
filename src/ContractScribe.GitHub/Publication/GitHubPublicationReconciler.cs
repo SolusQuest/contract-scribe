@@ -29,12 +29,31 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         git = GitHubProposalStore.Create(client, coordination, async (state, token) =>
         {
             var read = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
-            if (read.Read is null || read.State?.HeadOid != state.HeadOid) return false;
+            if (read.Read is null) return GateFailure(read.Failure ?? new(GitHubCoordinationFailureKind.Conflict));
+            if (read.State?.HeadOid != state.HeadOid) return new GitHubProposalFailure(GitHubProposalFailureKind.Conflict);
             var absent = await prs.PreflightAsync(read.Read, token).ConfigureAwait(false);
-            return absent.Absence is not null
-                && GitHubProposalPullRequestStore.AuthenticatesAbsence(absent.Absence, coordination, state);
+            if (absent.Absence is null) return GateFailure(GitHubProposalPullRequestStore.CoordinationFailureOf(absent));
+            return GitHubProposalPullRequestStore.AuthenticatesAbsence(absent.Absence, coordination, state)
+                ? null : new GitHubProposalFailure(GitHubProposalFailureKind.Conflict);
         });
     }
+
+    private static GitHubProposalFailure GateFailure(GitHubCoordinationFailure failure) => new(
+        failure.Kind == GitHubCoordinationFailureKind.Transport ? GitHubProposalFailureKind.Transport : GitHubProposalFailureKind.Conflict,
+        failure.TransportFailure, failure.Delivery, failure.Context, failure.Permissions, failure.ReadbackFailure, failure.Kind);
+
+    private GitHubPublicationContentResidual ContentResidual(IGitHubProposalContent content) =>
+        new(GitHubPublicationResourceKind.Commit, content.CommitOid, Authority.OperationCommitmentSha256);
+
+    private GitHubPublicationRefResidual? RefResidual(IGitHubInspectedProposal proof) =>
+        proof.ContentExists && proof.ObservedRefOid == proof.CommitOid
+            ? new(proof.Ref, proof.BeforeOid, proof.ObservedRefOid, Authority.OperationCommitmentSha256) : null;
+
+    private static GitHubPublicationAttempt RetainPartial(GitHubPublicationAttempt attempt,
+        GitHubPublicationContentResidual? content = null, GitHubPublicationRefResidual? reference = null) =>
+        attempt.Result.RemoteFailure is { } failure && (content is not null || reference is not null)
+            ? attempt with { Result = GitHubPublicationResult.FromRemoteFailure(failure.Kind, content, reference) }
+            : attempt;
 
     // Publisher is supplied by trusted host composition, independently of inspected PRs.
     // Token-kind/platform proof is host-owned; required-permission headers are not grants.
@@ -206,31 +225,36 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         var prepared = await git.PrepareAsync(state, payload, token).ConfigureAwait(false);
         if (prepared.Prepared is null) return Project(prepared, GitHubPublicationBoundary.GitPrepare);
         var content = await git.CreateContentAsync(prepared.Prepared, state, token).ConfigureAwait(false);
-        if (content.Failure is not null || content.Content is null) return Project(content, GitHubPublicationBoundary.GitCreateContent);
+        if (content.Failure is not null || content.Content is null)
+            return RetainPartial(Project(content, GitHubPublicationBoundary.GitCreateContent),
+                content: content.Content is null ? null : ContentResidual(content.Content));
+        var verifiedContent = ContentResidual(content.Content);
+        IGitHubInspectedProposal originalProof;
         IGitHubProposalRefEntitlement? right = null;
         if (state.Stage == GitHubCoordinationStage.Claimed)
         {
             var recorded = await coordination.AdvanceAsync(state,
                 GitHubCoordinationStageUpdate.ContentCreated(content.Content.CommitOid), token).ConfigureAwait(false);
-            if (recorded.State is null) return Project(recorded, GitHubPublicationBoundary.CoordinationAdvanceContent);
+            if (recorded.State is null) return RetainPartial(Project(recorded, GitHubPublicationBoundary.CoordinationAdvanceContent), content: verifiedContent);
             state = recorded.State;
-            if (state.Stage == GitHubCoordinationStage.Stale) return Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.StaleStage);
+            if (state.Stage == GitHubCoordinationStage.Stale) return RetainPartial(Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.StaleStage), content: verifiedContent);
             right = recorded.ProposalRefEntitlement;
         }
         // Reissue only after fresh original-content and exhaustive absence proof,
         // including when this invocation observed the preceding stage acknowledgement.
         {
             var current = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
-            if (current.Read is null || current.State is null) return Project(current, GitHubPublicationBoundary.CoordinationRead);
+            if (current.Read is null || current.State is null) return RetainPartial(Project(current, GitHubPublicationBoundary.CoordinationRead), content: verifiedContent);
             state = current.State;
             var inspected = await git.InspectAsync(current.Read, payload, token).ConfigureAwait(false);
-            if (inspected.Inspection is null) return Project(inspected, GitHubPublicationBoundary.GitInspect);
+            if (inspected.Inspection is null) return RetainPartial(Project(inspected, GitHubPublicationBoundary.GitInspect), content: verifiedContent);
+            originalProof = inspected.Inspection;
             var absent = await prs.PreflightAsync(current.Read, token).ConfigureAwait(false);
             if (absent.Absence is null) return Project(absent, GitHubPublicationBoundary.PullRequestPreflight);
             var recovered = await coordination.RecoverOriginalProposalRefAsync(state,
                 inspected.Inspection, absent.Absence, token).ConfigureAwait(false);
             if (recovered.State is null || recovered.ProposalRefEntitlement is null)
-                return Project(recovered, GitHubPublicationBoundary.GitAdvanceRef);
+                return RetainPartial(Project(recovered, GitHubPublicationBoundary.GitAdvanceRef), content: verifiedContent);
             state = recovered.State;
             right = recovered.ProposalRefEntitlement;
         }
@@ -238,20 +262,23 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         if (advanced.Failure is not null)
         {
             if (advanced.Failure.Kind == GitHubProposalFailureKind.Unresolved && advanced.Failure.Transport is null
-                && advanced.Failure.Readback is null)
+                && advanced.Failure.Readback is null && advanced.Failure.CoordinationCause is null)
                 return GitHubPublicationResult.RecoveredContentPartial(new(GitHubPublicationResourceKind.Commit,
                     content.Content.CommitOid, Authority.OperationCommitmentSha256));
-            return Project(advanced, GitHubPublicationBoundary.GitAdvanceRef);
+            return Project(advanced, GitHubPublicationBoundary.GitAdvanceRef, new(
+                GitHubPublicationResourceKind.Commit, content.Content.CommitOid, Authority.OperationCommitmentSha256));
         }
+        var verifiedRef = new GitHubPublicationRefResidual(content.Content.Ref, originalProof.BeforeOid,
+            content.Content.CommitOid, Authority.OperationCommitmentSha256);
         var result = advanced.Coordination ?? await coordination.AdvanceAsync(state,
             GitHubCoordinationStageUpdate.ProposalRefAdvanced(content.Content.CommitOid, content.Content.TreeOid), token).ConfigureAwait(false);
-        if (result.State is null) return Project(result, GitHubPublicationBoundary.CoordinationAdvanceRef);
+        if (result.State is null) return RetainPartial(Project(result, GitHubPublicationBoundary.CoordinationAdvanceRef), reference: verifiedRef);
         state = result.State;
-        if (state.Stage != GitHubCoordinationStage.ProposalRefAdvanced) return Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.UnexpectedStage);
+        if (state.Stage != GitHubCoordinationStage.ProposalRefAdvanced) return RetainPartial(Reject(GitHubPublicationRemoteFailureKind.Stale, GitHubPublicationPredicate.UnexpectedStage), reference: verifiedRef);
         var read = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
-        if (read.Read is null || read.State is null) return Project(read, GitHubPublicationBoundary.CoordinationRead);
+        if (read.Read is null || read.State is null) return RetainPartial(Project(read, GitHubPublicationBoundary.CoordinationRead), reference: verifiedRef);
         var checkedGit = await git.InspectAsync(read.Read, payload, token).ConfigureAwait(false);
-        if (checkedGit.Inspection is null) return Project(checkedGit, GitHubPublicationBoundary.GitInspect);
+        if (checkedGit.Inspection is null) return RetainPartial(Project(checkedGit, GitHubPublicationBoundary.GitInspect), reference: verifiedRef);
         var pr = await prs.ObserveVerifiedAsync(read.State, checkedGit.Inspection, previous, token: token).ConfigureAwait(false);
         return await FinishProposal(read.State, checkedGit.Inspection, pr, payload, allowCreate: false, token).ConfigureAwait(false);
     }
@@ -261,24 +288,27 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         CancellationToken token)
     {
         if (observed.Observation is not null) return await Complete(state, observed.Observation, payload, token).ConfigureAwait(false);
-        if (observed.Outcome != PrOutcome.Absent) return Project(observed, GitHubPublicationBoundary.PullRequestObserve);
+        var verifiedRef = RefResidual(proof);
+        if (observed.Outcome != PrOutcome.Absent)
+            return RetainPartial(Project(observed, GitHubPublicationBoundary.PullRequestObserve), reference: verifiedRef);
         if (!allowCreate && state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
             return GitHubPublicationResult.RecoveredRefPartial(new(proof.Ref, proof.BeforeOid, proof.ObservedRefOid,
                 Authority.OperationCommitmentSha256));
         IGitHubPullRequestEntitlement? right = null;
         if (allowCreate && state.Stage == GitHubCoordinationStage.ProposalRefAdvanced)
         {
-            if (observed.Absence is null) return Project(observed, GitHubPublicationBoundary.PullRequestPreflight);
+            if (observed.Absence is null) return RetainPartial(Project(observed, GitHubPublicationBoundary.PullRequestPreflight), reference: verifiedRef);
             var fenced = await coordination.BeginOriginalPullRequestAsync(state, proof,
                 observed.Absence, token).ConfigureAwait(false);
-            if (fenced.State is null) return Project(fenced, GitHubPublicationBoundary.CoordinationAdvanceRef);
+            if (fenced.State is null) return Project(fenced, GitHubPublicationBoundary.CoordinationAdvanceRef, new(
+                proof.Ref, proof.BeforeOid, proof.ObservedRefOid, Authority.OperationCommitmentSha256));
             state = fenced.State;
             right = fenced.PullRequestEntitlement;
         }
         var result = right is null
             ? await prs.RecoverAsync(state, new(proof.Ref, proof.CommitOid, proof.TreeOid), previous, token).ConfigureAwait(false)
             : await prs.CreateAuthorizedAsync(state, new(proof.Ref, proof.CommitOid, proof.TreeOid), right, token).ConfigureAwait(false);
-        return result.Observation is null ? Project(result, right is null ? GitHubPublicationBoundary.PullRequestRecover : GitHubPublicationBoundary.PullRequestCreate)
+        return result.Observation is null ? RetainPartial(Project(result, right is null ? GitHubPublicationBoundary.PullRequestRecover : GitHubPublicationBoundary.PullRequestCreate), reference: verifiedRef)
             : await Complete(state, result.Observation, payload, token).ConfigureAwait(false);
     }
 
@@ -372,10 +402,14 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         GitHubPublicationPredicate predicate) => new(Failure(kind),
             new(GitHubPublicationBoundary.Reconcile, GitHubPublicationOwner.Reconciler, Predicate: predicate));
 
-    private static GitHubPublicationAttempt Project(GitHubCoordinationResult result, GitHubPublicationBoundary boundary)
+    internal static GitHubPublicationAttempt Project(GitHubCoordinationResult result, GitHubPublicationBoundary boundary,
+        GitHubPublicationRefResidual? residual = null)
     {
         var failure = result.Failure;
-        return new(Map(result), new(boundary, GitHubPublicationOwner.Coordination,
+        var mapped = Map(result);
+        if (residual is not null && mapped.RemoteFailure is { } remote)
+            mapped = GitHubPublicationResult.FromRemoteFailure(remote.Kind, refResidual: residual);
+        return new(mapped, new(boundary, GitHubPublicationOwner.Coordination,
             CoordinationFailure: failure?.Kind, TransportCode: failure?.TransportFailure?.Code,
             TransportHttpStatus: failure?.TransportFailure?.HttpStatus, Delivery: failure?.Delivery,
             RecoveryCode: failure?.ReadbackFailure?.Code, RecoveryHttpStatus: failure?.ReadbackFailure?.HttpStatus,
@@ -383,18 +417,28 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
             Predicate: failure is null ? GitHubPublicationPredicate.MissingOrUnexpectedComponent : null));
     }
 
-    private static GitHubPublicationAttempt Project(PrResult result, GitHubPublicationBoundary boundary) =>
-        new(Map(result), new(boundary, GitHubPublicationOwner.PullRequests,
-            CoordinationFailure: result.Cause, PullRequestOutcome: result.Outcome,
-            TransportCode: result.Failure?.Code, TransportHttpStatus: result.Failure?.HttpStatus,
-            Delivery: result.Delivery,
+    private static GitHubPublicationAttempt Project(PrResult result, GitHubPublicationBoundary boundary)
+    {
+        var failure = result.CoordinationFailure;
+        return new(Map(result), new(boundary, GitHubPublicationOwner.PullRequests,
+            CoordinationFailure: failure?.Kind ?? result.Cause, PullRequestOutcome: result.Outcome,
+            TransportCode: failure is null ? result.Failure?.Code : failure.TransportFailure?.Code,
+            TransportHttpStatus: failure is null ? result.Failure?.HttpStatus : failure.TransportFailure?.HttpStatus,
+            Delivery: failure?.Delivery ?? result.Delivery,
+            RecoveryCode: failure?.ReadbackFailure?.Code, RecoveryHttpStatus: failure?.ReadbackFailure?.HttpStatus,
+            ObjectKind: ((failure?.Context ?? result.Context) as GitHubObjectContext)?.Kind,
             Predicate: result.Failure is null && result.Cause is null
                 ? GitHubPublicationPredicate.MissingOrUnexpectedComponent : null));
+    }
 
-    private static GitHubPublicationAttempt Project(GitResult result, GitHubPublicationBoundary boundary)
+    private static GitHubPublicationAttempt Project(GitResult result, GitHubPublicationBoundary boundary,
+        GitHubPublicationContentResidual? residual = null)
     {
         var failure = result.Failure;
-        return new(Map(result), new(boundary, GitHubPublicationOwner.GitData,
+        var mapped = Map(result);
+        if (residual is not null && mapped.RemoteFailure is { } remote)
+            mapped = GitHubPublicationResult.FromRemoteFailure(remote.Kind, contentResidual: residual);
+        return new(mapped, new(boundary, GitHubPublicationOwner.GitData,
             CoordinationFailure: failure?.CoordinationCause, ProposalFailure: failure?.Kind,
             TransportCode: failure?.Transport?.Code, TransportHttpStatus: failure?.Transport?.HttpStatus,
             Delivery: failure?.Delivery, RecoveryCode: failure?.Readback?.Code,
@@ -417,16 +461,24 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
             ? Transport(error) : Domain(failure?.Kind);
     }
     private static GitHubPublicationResult Map(PrResult result) =>
-        result.Failure is { } error ? Transport(error) : Domain(result.Cause);
+        result.CoordinationFailure is { } failure ? Map(new GitHubCoordinationResult(GitHubCoordinationOutcome.Failed, failure: failure))
+            : result.Failure is { } error ? Transport(error) : Domain(result.Cause);
     private static GitHubPublicationResult Map(GitResult result)
     {
         var failure = result.Failure;
+        if (failure?.Kind == GitHubProposalFailureKind.Conflict && failure.CoordinationCause is
+            GitHubCoordinationFailureKind.Conflict or GitHubCoordinationFailureKind.TargetMoved
+                or GitHubCoordinationFailureKind.HumanChange or GitHubCoordinationFailureKind.StageConflict
+                or GitHubCoordinationFailureKind.DifferentOperation)
+            return Domain(failure.CoordinationCause);
         if (failure?.Readback is { Code: not GitHubFailureCode.NotFound } read
             && !(failure.Kind == GitHubProposalFailureKind.Integrity && read.Code == GitHubFailureCode.InvalidResponse))
             return Transport(read);
         if (failure?.CoordinationCause is { } cause
             && cause is not (GitHubCoordinationFailureKind.Transport or GitHubCoordinationFailureKind.Unresolved)
             && failure.Readback is null) return Domain(cause);
+        if (failure?.Kind == GitHubProposalFailureKind.Conflict && failure.CoordinationCause is null && failure.Readback is null)
+            return Failure(GitHubPublicationRemoteFailureKind.Conflict);
         if (failure?.Kind == GitHubProposalFailureKind.Integrity)
             return Failure(GitHubPublicationRemoteFailureKind.HumanChange);
         return RecoveryError(failure?.Readback, failure?.Transport) is { } error ? Transport(error)

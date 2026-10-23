@@ -170,8 +170,8 @@ internal sealed partial class GitHubCoordinationStore
         {
             var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
             if (repository.Value is null) return Failed(repository);
-            if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
-                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
+                return renewalFailure;
             var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
             if (target.Value is null) return Failed(target);
             var current = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
@@ -200,14 +200,15 @@ internal sealed partial class GitHubCoordinationStore
                 read: new ReadCapability(this, repository.Value.Identity, target.Value, stateCapability),
                 state: stateCapability);
         }
-        catch (GitHubCoordinationException)
+        catch (GitHubCoordinationException exception)
         {
-            return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            return exception.Failure is { } failure ? new(GitHubCoordinationOutcome.Failed, failure: failure)
+                : DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
         }
         catch (OperationCanceledException)
         {
             return DomainFailure(GitHubCoordinationFailureKind.Transport,
-                new(GitHubFailureCode.Cancelled));
+                client.CancellationFailure);
         }
         catch
         {
@@ -257,8 +258,8 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
         try
         {
-            if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
-                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
+                return renewalFailure;
             var currentRef = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
             var observedCurrent = owned.Current;
             if (currentRef.Value is not null
@@ -391,7 +392,7 @@ internal sealed partial class GitHubCoordinationStore
         catch (OperationCanceledException)
         {
             return DomainFailure(GitHubCoordinationFailureKind.Transport,
-                new(GitHubFailureCode.Cancelled));
+                client.CancellationFailure);
         }
         catch
         {
@@ -422,8 +423,8 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
         var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
         if (repository.Value is null) return Failed(repository);
-        if (renewClaim && !await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
-            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        if (renewClaim && await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
+            return renewalFailure;
         if (repository.Value.Identity != owned.Repository)
             return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
         var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
@@ -566,8 +567,8 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
         var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
         if (repository.Value is null) return Failed(repository);
-        if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
-            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
+            return renewalFailure;
         if (repository.Value.Identity != owned.Repository)
             return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
         var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
@@ -606,7 +607,7 @@ internal sealed partial class GitHubCoordinationStore
         bool checkTarget,
         bool observedPredecessor = false,
         bool requireExpectedTarget = false,
-        Func<CancellationToken, ValueTask<bool>>? mutationGuard = null)
+        Func<CancellationToken, ValueTask<GitHubCoordinationFailure?>>? mutationGuard = null)
     {
         try
         {
@@ -616,8 +617,8 @@ internal sealed partial class GitHubCoordinationStore
                 return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
             var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
             if (repository.Value is null) return Failed(repository);
-            if (!await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false))
-                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
+                return renewalFailure;
             if (repository.Value.Identity != current.Repository)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
             var refRead = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
@@ -743,8 +744,8 @@ internal sealed partial class GitHubCoordinationStore
                 objects = await CreateObjectsAsync(prepared, cancellationToken).ConfigureAwait(false);
                 if (objects is not null) return objects;
             }
-            if (mutationGuard is not null && !await mutationGuard(cancellationToken).ConfigureAwait(false))
-                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            if (mutationGuard is not null && await mutationGuard(cancellationToken).ConfigureAwait(false) is { } guardFailure)
+                return new(GitHubCoordinationOutcome.Failed, failure: guardFailure);
             var result = await UpdateAndReadAsync(repository.Value.Identity, finalTarget.Value,
                 prepared, current.HeadOid, preparedIntended, cancellationToken).ConfigureAwait(false);
             if (result.State is null) return result;
@@ -764,7 +765,7 @@ internal sealed partial class GitHubCoordinationStore
         catch (OperationCanceledException)
         {
             return DomainFailure(GitHubCoordinationFailureKind.Transport,
-                new(GitHubFailureCode.Cancelled));
+                client.CancellationFailure);
         }
         catch
         {

@@ -223,7 +223,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
         }
         catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
         { return Transport(exception.TransportFailure); }
-        catch (OperationCanceledException) { return Transport(new(token.IsCancellationRequested ? GitHubFailureCode.Cancelled : GitHubFailureCode.Timeout)); }
+        catch (OperationCanceledException) { return Transport(new(token.IsCancellationRequested ? client.CancellationFailure.Code : GitHubFailureCode.Timeout)); }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         { return Transport(new(GitHubFailureCode.HostFailure)); }
 

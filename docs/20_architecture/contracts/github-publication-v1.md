@@ -290,7 +290,14 @@ object access. Failures retain the closed R3 domain cause for R6 classification.
 After dispatch, the complete immediate and final verification phases preserve
 the mutation's delivery, context, and permissions. Independently verified
 content may accompany a later gate failure; expiration of the independent
-recovery budget is reported as timeout rather than caller cancellation.
+recovery budget is reported as timeout rather than caller cancellation. IO-performing
+renewal, absence and mutation guards retain their typed first failure, including
+transport/status, delivery and readback, rather than manufacturing a domain conflict.
+A remote-failure result may retain one independently verified content or ref residual;
+that observation does not turn the failure into a successful partial recovery or issue
+an entitlement. A genuine earlier domain conflict remains authoritative after later
+cancellation. Host/caller cancellation disposition is selected at its source and is
+not recomputed from teardown signals during CLI presentation.
 
 A fresh process may recover the next missing step of the exact frozen original operation. Fresh Core candidate/source proof, the live claim, exact deterministic Git objects and exhaustive PR absence issue a one-use proposal-ref right tied to the issuing store, operation, current content-stage head, content commit and absent original proposal ref. The paired CAS advances coordination and proposal ref atomically with both exact predecessors and `force=false`. A final absence/ownership/target check occurs before the mutation. A read-only resource proof alone grants no write.
 

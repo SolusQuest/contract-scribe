@@ -32,6 +32,7 @@ internal sealed class GitHubApiClient : IDisposable
     private string? credential;
     private int disposed;
     private CancellationToken finalizationDeadline;
+    private Func<bool>? finalizationTimedOut;
     private readonly AsyncLocal<CampaignSemanticCheckpointWindow?> semanticRecovery = new();
 
     internal IDisposable? EnterSemanticRecovery(CampaignSemanticCheckpointWindow? window)
@@ -47,11 +48,18 @@ internal sealed class GitHubApiClient : IDisposable
         public void Dispose() => client.semanticRecovery.Value = prior;
     }
 
-    internal void BindFinalizationDeadline(CancellationToken deadline)
+    internal void BindFinalizationDeadline(CancellationToken deadline, Func<bool>? timedOut = null)
     {
         Input(!finalizationDeadline.CanBeCanceled || finalizationDeadline == deadline);
         finalizationDeadline = deadline;
+        finalizationTimedOut = timedOut;
     }
+
+    // Capture the execution owner's disposition when the failure is produced;
+    // consumers must not reinterpret it from later teardown signals.
+    internal GitHubFailure CancellationFailure => new(
+        (finalizationTimedOut?.Invoke() ?? finalizationDeadline.IsCancellationRequested)
+            ? GitHubFailureCode.Timeout : GitHubFailureCode.Cancelled);
 
     internal CancellationTokenSource CreateRecoveryScope(TimeSpan maximum)
     {
@@ -491,7 +499,7 @@ internal sealed class GitHubApiClient : IDisposable
         catch (OperationCanceledException)
         {
             return GitHubApiResult<GitHubPullRequestSet>.Failed(cancellationToken.IsCancellationRequested
-                ? GitHubFailureCode.Cancelled : GitHubFailureCode.Timeout, dispatched: dispatched);
+                ? CancellationFailure.Code : GitHubFailureCode.Timeout, dispatched: dispatched);
         }
         catch { return GitHubApiResult<GitHubPullRequestSet>.Failed(GitHubFailureCode.HostFailure, dispatched: dispatched); }
     }
@@ -585,7 +593,7 @@ internal sealed class GitHubApiClient : IDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    var code = cancellationToken.IsCancellationRequested ? GitHubFailureCode.Cancelled
+                    var code = cancellationToken.IsCancellationRequested ? CancellationFailure.Code
                         : timeout.IsCancellationRequested ? GitHubFailureCode.Timeout : GitHubFailureCode.ResponseLost;
                     return GitHubApiResult<T>.Failed(code, prepared.Context, dispatched, status, retry, permissions);
                 }
@@ -605,7 +613,7 @@ internal sealed class GitHubApiClient : IDisposable
             return GitHubApiResult<T>.Failed(GitHubFailureCode.HostFailure);
         }
         catch (GitHubProtocolException exception) { return GitHubApiResult<T>.Failed(exception.Code, prepared?.Context, dispatched, status, retry, permissions); }
-        catch (OperationCanceledException) { return GitHubApiResult<T>.Failed(GitHubFailureCode.Cancelled, prepared?.Context, dispatched, status, retry, permissions); }
+        catch (OperationCanceledException) { return GitHubApiResult<T>.Failed(CancellationFailure.Code, prepared?.Context, dispatched, status, retry, permissions); }
         catch (Exception exception) when (exception is JsonException or InvalidOperationException or FormatException or System.Text.DecoderFallbackException
             or System.Text.EncoderFallbackException or OverflowException)
         { return GitHubApiResult<T>.Failed(GitHubFailureCode.InvalidResponse, prepared?.Context, dispatched, status, retry, permissions); }
