@@ -51,7 +51,8 @@ def provider_diagnostics(value, calls):
         if attempt is not None and (not isinstance(attempt, str) or not attempt.startswith("scribe-attempt.") \
                 or len(attempt) != 47 or any(c not in "0123456789abcdef" for c in attempt[15:])):
             return False
-        if not all(integer(row[key]) and 1 <= row[key] <= 128 for key in ("attemptNumber", "providerRequestNumber")):
+        if not integer(row["attemptNumber"]) or not 1 <= row["attemptNumber"] <= 1_000_000 \
+                or not integer(row["providerRequestNumber"]) or not 1 <= row["providerRequestNumber"] <= 128:
             return False
         code, origin, status, codec = (row[key] for key in ("failureCode", "failureOrigin", "httpStatusCode", "codecDisposition"))
         if code is not None and code not in FAILURES or origin is not None and origin not in ORIGINS \

@@ -49,6 +49,37 @@ def encode(value):
 
 
 class InvocationUsageTests(unittest.TestCase):
+    def test_logical_attempts_use_their_contract_bound_independently_of_physical_requests(self):
+        contracts = (HERE.parent.parent / "src/ContractScribe.Core/DocumentationScribeContracts.cs").read_text()
+        maximum_attempts = int(re.search(r"MaximumAttempts = ([\d_]+);", contracts).group(1).replace("_", ""))
+        self.assertEqual(1_000_000, maximum_attempts)
+        for attempt_number in (129, maximum_attempts):
+            with self.subTest(attempt_number=attempt_number), tempfile.TemporaryDirectory() as temp:
+                value = fixture("partial")
+                value["calls"].update(physicalProviderDispatches=1, logicalProviderCalls=1, retryDispatches=0)
+                row = dict(physicalDispatchOrdinal=1, attemptId="scribe-attempt." + "a" * 32,
+                           attemptNumber=attempt_number, providerRequestNumber=1, failureCode=None,
+                           failureOrigin=None, httpStatusCode=None, codecDisposition="codec.accepted-tool")
+                value["providerDiagnostics"] = dict(observations=[row], missingDispatches=0)
+                raw = encode(envelope(value))
+                self.assertTrue(U.valid(value))
+                output = str(Path(temp) / "out.txt")
+                with patch.dict(os.environ, {"GITHUB_OUTPUT": output}):
+                    parsed = invoke.parse_envelope(raw, b"", 0)
+                    invoke.emit_outputs(parsed, raw, 0)
+                self.assertEqual(value, parsed["invocationUsage"])
+                self.assertEqual(value, json.loads(driver.read_outputs(output)["usage-json"]))
+                self.assertIn("codec.accepted-tool", "\n".join(U.summary_rows(value)))
+                for key, invalid in (("attemptNumber", 0), ("attemptNumber", True),
+                                     ("attemptNumber", maximum_attempts + 1), ("providerRequestNumber", 0),
+                                     ("providerRequestNumber", True), ("providerRequestNumber", 129)):
+                    with self.subTest(key=key, invalid=invalid):
+                        broken = json.loads(json.dumps(value))
+                        broken["providerDiagnostics"]["observations"][0][key] = invalid
+                        self.assertFalse(U.valid(broken))
+                        with patch.dict(os.environ, {"GITHUB_OUTPUT": output}), self.assertRaises(SystemExit):
+                            invoke.parse_envelope(encode(envelope(broken)), b"", 0)
+
     def test_physical_diagnostics_cross_outputs_and_summary_with_closed_vocabulary_only(self):
         protocol = (HERE.parent.parent / "docs/20_architecture/validation/m3-provider-evaluation-protocol.md").read_text()
         allowlist = protocol.split("The complete first-disposition allowlist, in production evaluation order, is:")[1].split(
@@ -88,7 +119,7 @@ class InvocationUsageTests(unittest.TestCase):
         value["calls"]["physicalProviderDispatches"] = 128
         value["providerDiagnostics"] = dict(missingDispatches=112, observations=[
             dict(physicalDispatchOrdinal=n, attemptId="scribe-attempt." + "a" * 32,
-                 attemptNumber=128, providerRequestNumber=128, failureCode="model.failure.permanent-unavailable",
+                 attemptNumber=1_000_000, providerRequestNumber=128, failureCode="model.failure.permanent-unavailable",
                  failureOrigin="model.failure-origin.successful-response", httpStatusCode=None,
                  codecDisposition="codec.tool-call.arguments-exceeds-limit") for n in range(113, 129)])
         self.assertTrue(U.valid(value))
