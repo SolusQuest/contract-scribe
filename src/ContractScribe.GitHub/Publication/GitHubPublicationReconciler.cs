@@ -77,7 +77,12 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
             entered = true;
             return await Reconcile(payload, cancellationToken).ConfigureAwait(false);
         }
-        catch (OperationCanceledException) { return Reject(GitHubPublicationRemoteFailureKind.Cancelled, GitHubPublicationPredicate.Cancelled); }
+        catch (OperationCanceledException)
+        {
+            var failure = client.CancellationFailure;
+            return new(Transport(failure), new(GitHubPublicationBoundary.Reconcile, GitHubPublicationOwner.Reconciler,
+                TransportCode: failure.Code, Predicate: GitHubPublicationPredicate.Cancelled));
+        }
         catch { return Reject(GitHubPublicationRemoteFailureKind.HostFailure, GitHubPublicationPredicate.UnhandledException); }
         finally { if (entered) gate.Release(); }
     }
@@ -182,7 +187,13 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
         var pr = hasPrContext
             ? await prs.ObserveVerifiedAsync(state, proof, previous, token: token).ConfigureAwait(false)
             : await prs.PreflightAsync(read.Read, token).ConfigureAwait(false);
-        if (pr.Outcome is PrOutcome.Failed or PrOutcome.Conflict or PrOutcome.Unresolved) return Project(pr, hasPrContext ? GitHubPublicationBoundary.PullRequestObserve : GitHubPublicationBoundary.PullRequestPreflight);
+        if (pr.Outcome is PrOutcome.Failed or PrOutcome.Conflict or PrOutcome.Unresolved)
+        {
+            var reference = RefResidual(proof);
+            return RetainPartial(Project(pr, hasPrContext ? GitHubPublicationBoundary.PullRequestObserve : GitHubPublicationBoundary.PullRequestPreflight),
+                content: reference is null && proof.ContentExists ? new(GitHubPublicationResourceKind.Commit,
+                    proof.CommitOid, Authority.OperationCommitmentSha256) : null, reference: reference);
+        }
         previous = pr.Observation ?? previous;
         if (pr.Observation is not null && pr.Outcome is not PrOutcome.OpenDraft)
             return await Complete(state, pr.Observation, payload, token).ConfigureAwait(false);
@@ -250,7 +261,7 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
             if (inspected.Inspection is null) return RetainPartial(Project(inspected, GitHubPublicationBoundary.GitInspect), content: verifiedContent);
             originalProof = inspected.Inspection;
             var absent = await prs.PreflightAsync(current.Read, token).ConfigureAwait(false);
-            if (absent.Absence is null) return Project(absent, GitHubPublicationBoundary.PullRequestPreflight);
+            if (absent.Absence is null) return RetainPartial(Project(absent, GitHubPublicationBoundary.PullRequestPreflight), content: verifiedContent);
             var recovered = await coordination.RecoverOriginalProposalRefAsync(state,
                 inspected.Inspection, absent.Absence, token).ConfigureAwait(false);
             if (recovered.State is null || recovered.ProposalRefEntitlement is null)
