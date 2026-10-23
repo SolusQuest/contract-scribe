@@ -836,8 +836,11 @@ internal sealed partial class GitHubCoordinationStore
     private async ValueTask<GitHubCoordinationResult?> CreateObjectsAsync(
         GitHubPreparedCoordination prepared,
         CancellationToken cancellationToken,
-        IEnumerable<GitHubBlob>? additionalBlobs = null)
+        IEnumerable<GitHubBlob>? additionalBlobs = null, ReadProof? proof = null)
     {
+        GitHubBlob? observedBlob = null;
+        GitHubTree? observedLeaf = null, observedRoot = null;
+        GitHubCommit? observedCommit = null;
         var payloads = (additionalBlobs ?? []).ToList();
         if (prepared.Event is { } publication) payloads.Add(Blob(publication.Encode()));
         foreach (var payload in payloads.DistinctBy(item => item.Oid))
@@ -852,34 +855,45 @@ internal sealed partial class GitHubCoordinationStore
         var failure = await ReadBackObjectAsync(blob,
             token => client.GetBlobAsync(prepared.BlobOid, token),
             value => value.Oid == prepared.BlobOid
-                && value.Bytes.AsSpan().SequenceEqual(prepared.StateBytes.AsSpan())).ConfigureAwait(false);
+                && value.Bytes.AsSpan().SequenceEqual(prepared.StateBytes.AsSpan()),
+            value => observedBlob = value).ConfigureAwait(false);
         if (failure is not null) return failure;
 
         var leaf = await client.CreateTreeAsync(prepared.LeafTreeOid,
             GitHubCoordinationObjects.LeafEntries(prepared), cancellationToken).ConfigureAwait(false);
         failure = await ReadBackObjectAsync(leaf,
             token => client.GetTreeAsync(prepared.LeafTreeOid, token),
-            value => ExactLeaf(value, prepared)).ConfigureAwait(false);
+            value => ExactLeaf(value, prepared), value => observedLeaf = value).ConfigureAwait(false);
         if (failure is not null) return failure;
 
         var root = await client.CreateTreeAsync(prepared.RootTreeOid,
             GitHubCoordinationObjects.RootEntries(prepared), cancellationToken).ConfigureAwait(false);
         failure = await ReadBackObjectAsync(root,
             token => client.GetTreeAsync(prepared.RootTreeOid, token),
-            value => ExactRoot(value, prepared)).ConfigureAwait(false);
+            value => ExactRoot(value, prepared), value => observedRoot = value).ConfigureAwait(false);
         if (failure is not null) return failure;
 
         var commit = await client.CreateCommitAsync(
             GitHubCoordinationObjects.CommitRequest(prepared), cancellationToken).ConfigureAwait(false);
-        return await ReadBackObjectAsync(commit,
+        failure = await ReadBackObjectAsync(commit,
             token => client.GetCommitAsync(prepared.CommitOid, token),
-            value => ExactCommit(value, prepared)).ConfigureAwait(false);
+            value => ExactCommit(value, prepared), value => observedCommit = value).ConfigureAwait(false);
+        if (failure is null && proof is not null)
+        {
+            // These are actual exact GET readbacks, not prepared inputs or
+            // mutation echoes. Reuse only immutable document objects in this
+            // conditional transaction; the final checkpoint GET stays fresh.
+            var authenticated = AuthenticateDocument(observedCommit!, observedRoot!, observedLeaf!, observedBlob!);
+            if (authenticated != prepared.Document) throw new GitHubCoordinationException();
+            proof.Documents[observedCommit!.Oid] = authenticated;
+        }
+        return failure;
     }
 
     private async ValueTask<GitHubCoordinationResult?> ReadBackObjectAsync<TMutation, TRead>(
         GitHubApiResult<TMutation> mutation,
         Func<CancellationToken, ValueTask<GitHubApiResult<TRead>>> read,
-        Func<TRead, bool> exact) where TMutation : class where TRead : class
+        Func<TRead, bool> exact, Action<TRead>? observeExact = null) where TMutation : class where TRead : class
     {
         if (mutation.Delivery == GitHubDelivery.NotDispatched)
             return Failed(mutation);
@@ -890,10 +904,14 @@ internal sealed partial class GitHubCoordinationStore
         var observed = await GitHubObjectReadback.ObserveAsync(read, recovery.Token).ConfigureAwait(false);
         var readbackFailure = RecoveryFailure(observed.Failure, recovery);
         if (observed.Value is not null)
-            return exact(observed.Value) ? null
-                : DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch,
+        {
+            if (!exact(observed.Value))
+                return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch,
                     mutation.Failure, mutation.Delivery, mutation.Context,
                     mutation.RequiredPermissions, readbackFailure);
+            observeExact?.Invoke(observed.Value);
+            return null;
+        }
         return DomainFailure(GitHubCoordinationFailureKind.Unresolved,
             mutation.Failure, mutation.Delivery, mutation.Context,
             mutation.RequiredPermissions, readbackFailure);

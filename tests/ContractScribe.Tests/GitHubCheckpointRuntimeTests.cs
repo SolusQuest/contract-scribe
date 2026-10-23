@@ -7,6 +7,57 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Fact]
+    public async Task Conditional_checkpoint_reuses_only_authenticated_created_document_objects_within_its_gate()
+    {
+        var trial = await SolusTrialAsync();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, trial.Scenario.InitialState.CampaignLineage, handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(trial.Scenario.Plan), default));
+        var initial = CampaignStateJson.CreateArtifact(trial.Scenario.InitialState);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(initial.ExactUtf8Json.AsMemory(),
+            initial.CheckpointRevision, initial.Sha256, default)).Kind);
+        var allowance = new DocumentationScribeInvocationAllowance(trial.Coordinator.Scope.Allowance.Limits);
+        var admission = CampaignStateReducer.AdmitProviderInvocation(initial, trial.Scenario.ExecutionAuthority, "style.synthetic",
+            trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Scenario.Plan.WorkItems[0].WorkItemKey,
+            trial.Request, CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
+        var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, trial.Scenario.ExecutionAuthority,
+            "style.synthetic", trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Request);
+        _ = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
+        Assert.True(authority.TryBeginDispatch(out _));
+        var calls = new List<(string Method, string Path)>();
+        handler.BeforeRequest = message =>
+        {
+            calls.Add((message.Method.Method, message.RequestUri!.AbsolutePath));
+            return Task.CompletedTask;
+        };
+        var transition = CampaignStateReducer.AdvanceHostOperation(authority,
+            DocumentationScribeHostOperation.TerminalSubmission, 0, 90000, completing: false);
+        Assert.Equal(CampaignTransitionKind.Applied, transition.Kind);
+        var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, result.Kind);
+        var transaction = calls.ToArray();
+        Assert.Equal(47, transaction.Length); // Before this correction: Core14 + conditional37 =51.
+        Assert.Equal(7, transaction.Count(call => call.Method != "GET"));
+        Assert.Equal(3, transaction.Count(call => call.Method == "GET" && call.Path == "/repos/Owner/repo"));
+        Assert.Equal(7, transaction.Count(call => call.Method == "GET" && call.Path.Contains("/git/ref/heads/contract-scribe/")));
+        Assert.Single(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/ref/heads/main"));
+        var newCommit = remote.CoordinationHead!;
+        Assert.Single(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/commits/" + newCommit));
+        var checkpoint = GitHubCoordinationObjects.ObjectOid("blob", transition.Artifact.ExactUtf8Json.AsSpan());
+        Assert.Equal(2, transaction.Count(call => call.Method == "GET" && call.Path.EndsWith("/git/blobs/" + checkpoint)));
+        Assert.True(Array.FindLastIndex(transaction, call => call.Path.EndsWith("/git/blobs/" + checkpoint))
+            > Array.FindIndex(transaction, call => call.Path == "/graphql"));
+        calls.Clear();
+        Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
+        Assert.Contains(calls, call => call.Path.EndsWith("/git/commits/" + newCommit));
+        Assert.Contains(calls, call => call.Path.EndsWith("/git/blobs/" + checkpoint));
+    }
+
     [Theory]
     [InlineData(125, false, 0, true)]
     [InlineData(125, true, 0, true)]

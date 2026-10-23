@@ -124,7 +124,7 @@ internal sealed partial class GitHubCoordinationStore
         client.BindCheckpointWrite(new(prepared, payloads));
         try
         {
-            var created = await CreateObjectsAsync(prepared, token, payloads).ConfigureAwait(false);
+            var created = await CreateObjectsAsync(prepared, token, payloads, proof).ConfigureAwait(false);
             if (created is not null) CheckpointFailure = created.Failure?.TransportFailure;
             if (created?.Failure is
                 {

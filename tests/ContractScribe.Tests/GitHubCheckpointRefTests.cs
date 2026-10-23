@@ -18,6 +18,143 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Theory]
+    [InlineData("document", "missing")]
+    [InlineData("document", "mismatch")]
+    [InlineData("document", "lost-ack")]
+    [InlineData("leaf", "missing")]
+    [InlineData("leaf", "mismatch")]
+    [InlineData("leaf", "lost-ack")]
+    [InlineData("root", "missing")]
+    [InlineData("root", "mismatch")]
+    [InlineData("root", "lost-ack")]
+    [InlineData("commit", "missing")]
+    [InlineData("commit", "mismatch")]
+    [InlineData("commit", "lost-ack")]
+    public async Task Conditional_created_document_proof_uses_actual_object_observations(string component, string fault)
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new CheckpointInterceptHandler(remote);
+        using var client = CheckpointClient(remote, handler: handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        SeedPublicationCheckpoint(remote);
+        var before = PublicationCheckpointFixture("campaign-1");
+        var next = CampaignStateReducer.Stop(before, CampaignTerminalKind.Cancelled).Artifact;
+        var writes = remote.RefMutationAttempts;
+        var blobPosts = 0;
+        var treePosts = 0;
+        string? objectPath = null;
+        var observations = 0;
+        handler.AfterResponse = async (request, response) =>
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (request.Method == HttpMethod.Post && path.StartsWith("/repos/Owner/repo/git/", StringComparison.Ordinal))
+            {
+                var selected = path.EndsWith("/blobs", StringComparison.Ordinal) ? ++blobPosts == 2 && component == "document"
+                    : path.EndsWith("/trees", StringComparison.Ordinal) ? (++treePosts == 1 ? component == "leaf" : component == "root")
+                    : path.EndsWith("/commits", StringComparison.Ordinal) && component == "commit";
+                if (selected)
+                {
+                    var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+                    objectPath = path + "/" + body["sha"]!.GetValue<string>();
+                    if (fault == "lost-ack")
+                    {
+                        response.Dispose();
+                        return new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
+                    }
+                }
+            }
+            if (request.Method == HttpMethod.Get && path == objectPath)
+            {
+                observations++;
+                if (fault == "missing")
+                {
+                    response.Dispose();
+                    return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+                }
+                if (fault == "mismatch")
+                {
+                    var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+                    body["sha"] = new string('f', 40);
+                    response.Content.Dispose();
+                    response.Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+                }
+            }
+            return response;
+        };
+        var result = await store.ReplaceIfCurrentAsync(before.CheckpointRevision, before.Sha256,
+            next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default);
+        Assert.NotNull(objectPath);
+        Assert.True(observations > 0);
+        Assert.Equal(fault == "lost-ack", result.Kind == CampaignCheckpointWriteKind.Written);
+        Assert.Equal(writes + (fault == "lost-ack" ? 1 : 0), remote.RefMutationAttempts);
+        if (fault == "lost-ack") Assert.Equal(next.Sha256, result.Readback!.Sha256);
+        else Assert.Null(result.Readback);
+    }
+
+    [Theory]
+    [InlineData(LostReadback.Exact)]
+    [InlineData(LostReadback.Missing)]
+    [InlineData(LostReadback.Mismatch)]
+    public async Task Conditional_checkpoint_created_object_requires_actual_readback_after_lost_ack(LostReadback readback)
+    {
+        var remote = new CoordinationRemote();
+        using var client = CheckpointClient(remote);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        SeedPublicationCheckpoint(remote);
+        var before = PublicationCheckpointFixture("campaign-1");
+        var next = CampaignStateReducer.Stop(before, CampaignTerminalKind.Cancelled).Artifact;
+        var writes = remote.RefMutationAttempts;
+        remote.LoseResponse = LostMutation.Blob;
+        remote.LostBlobReadback = readback;
+        var result = await store.ReplaceIfCurrentAsync(before.CheckpointRevision, before.Sha256,
+            next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default);
+        Assert.Equal(readback == LostReadback.Exact, result.Kind == CampaignCheckpointWriteKind.Written);
+        Assert.Equal(writes + (readback == LostReadback.Exact ? 1 : 0), remote.RefMutationAttempts);
+        if (readback == LostReadback.Exact) Assert.Equal(next.Sha256, result.Readback!.Sha256);
+        else Assert.Null(result.Readback);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Conditional_checkpoint_never_reuses_object_proof_as_owner_authority_across_CAS(bool afterCas)
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new CheckpointInterceptHandler(remote);
+        using var client = CheckpointClient(remote, handler: handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        SeedPublicationCheckpoint(remote);
+        var before = PublicationCheckpointFixture("campaign-1");
+        var next = CampaignStateReducer.Stop(before, CampaignTerminalKind.Cancelled).Artifact;
+        var writes = remote.RefMutationAttempts;
+        var changed = false;
+        handler.BeforeRequest = message =>
+        {
+            if (!changed && (afterCas
+                ? message.Method == HttpMethod.Get && remote.RefMutationAttempts > writes
+                    && message.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/")
+                : message.Method == HttpMethod.Post && message.RequestUri!.AbsolutePath == "/graphql"))
+            {
+                changed = true;
+                remote.AppendDocument(document => document with
+                {
+                    Claim = document.Claim! with
+                    { Owner = new string('e', 64), Epoch = document.Claim!.Epoch + 1 }
+                });
+            }
+            return Task.CompletedTask;
+        };
+        var result = await store.ReplaceIfCurrentAsync(before.CheckpointRevision, before.Sha256,
+            next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default);
+        Assert.True(changed);
+        Assert.NotEqual(CampaignCheckpointWriteKind.Written, result.Kind);
+        Assert.Null(result.Readback);
+    }
+
+    [Theory]
     [InlineData("exact")]
     [InlineData("blob")]
     [InlineData("target")]
@@ -75,8 +212,9 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(priorHead, StringComparison.Ordinal)).Value);
         Assert.All(commitGets.Where(pair => !pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)),
             pair => Assert.Equal(1, pair.Value));
-        // CreateObjects also authenticates the prepared commit before CAS.
-        Assert.Equal(2, commitGets.Single(pair => pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)).Value);
+        // The actual creation GET authenticates the immutable new document
+        // inside this conditional proof; mutable refs and checkpoint remain fresh.
+        Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)).Value);
         var first = commitGets.ToDictionary();
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
         Assert.Contains(first, pair => commitGets[pair.Key] > pair.Value);
@@ -229,6 +367,7 @@ public sealed partial class GitHubCoordinationRefTests
     {
         internal Func<HttpRequestMessage, Task>? BeforeRequest;
         internal Func<HttpRequestMessage, CancellationToken, Task>? BeforeRequestWithCancellation;
+        internal Func<HttpRequestMessage, HttpResponseMessage, Task<HttpResponseMessage>>? AfterResponse;
         internal bool PauseNextRequest;
         internal readonly TaskCompletionSource Entered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal readonly TaskCompletionSource Release = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -246,6 +385,7 @@ public sealed partial class GitHubCoordinationRefTests
                 catch (OperationCanceledException) { Cancelled.TrySetResult(); throw; }
             }
             var response = await remote.Reply(request);
+            if (AfterResponse is { } after) response = await after(request, response);
             if (remote.IncludeServerDate) response.Headers.Date = remote.ServerNow;
             return response;
         }

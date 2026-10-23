@@ -592,13 +592,7 @@ internal static class CampaignCommandRunner
                 reconstructPriorAccepted = !stoppedArtifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete);
                 continue;
             }
-            var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Kind == CampaignTerminalKind.Complete
-                ? CompletionOutcome(proposal.Artifact.State)
-                : proposal.CheckpointFailure is { } proposalFailure
-                ? AcceptanceOutcome(proposalFailure)
-                : proposal.Code == "campaign.credential.invalid"
-                ? "campaign.invalid-configuration"
-                : ProposalOutcome(proposal.Kind);
+            var proposalOutcome = ProposalResultOutcome(proposal);
             return Terminal(preflight.Operation,
                 proposal.Kind == DocumentationCampaignProposalOutcomeKind.CheckpointCapacity ? "state" : "execution", proposalOutcome,
                 proposal.Artifact is null ? current : AcceptedObservation(proposal.Artifact));
@@ -904,6 +898,16 @@ internal static class CampaignCommandRunner
             _ => "campaign.state-corrupt",
         };
     }
+
+    internal static string ProposalResultOutcome(DocumentationCampaignProposalOutcome proposal) =>
+        proposal.Artifact?.State.TerminalOutcome?.Kind == CampaignTerminalKind.Complete
+            ? CompletionOutcome(proposal.Artifact.State)
+            : proposal.Kind == DocumentationCampaignProposalOutcomeKind.TimedOut
+                && proposal.CheckpointFailure == CampaignCheckpointAcceptanceKind.Cancelled
+            ? ProposalOutcome(proposal.Kind)
+            : proposal.CheckpointFailure is { } failure ? AcceptanceOutcome(failure)
+            : proposal.Code == "campaign.credential.invalid" ? "campaign.invalid-configuration"
+            : ProposalOutcome(proposal.Kind);
 
     private static string AcceptanceOutcome(CampaignCheckpointAcceptanceKind kind) => kind switch
     {

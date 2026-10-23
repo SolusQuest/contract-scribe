@@ -168,7 +168,7 @@ public sealed partial class DocumentationScribeCompositionTests
     [Theory]
     [InlineData(false, 0, true, 3)]
     [InlineData(true, 0, true, 3)]
-    [InlineData(false, 13000, true, 2)]
+    [InlineData(false, 13000, true, 3)]
     public async Task Real_semantic_query_progress_uses_the_single_GitHub_checkpoint_transaction(
         bool duplicateReadback, int additionalDelay, bool reachesSemantic, int expectedRequests)
     {
@@ -198,6 +198,8 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.Input(fixture, trace, exchange, RuntimeOptions(), executionToken: actual.CheckpointToken, timeProvider: clock));
         Assert.Equal(reachesSemantic, exchange.SawSemanticEvidence);
         Assert.Equal(expectedRequests, exchange.RequestCount);
+        // Four fewer GETs per conditional transaction now allow the finish send
+        // even with13s extra authorization delay. No request or time cap changed.
         // Every HTTP exchange keeps consuming the existing invocation clock.
         // The real semantic query progresses; later terminal persistence reaches
         // this fixture's original 120s invocation cap rather than gaining time.

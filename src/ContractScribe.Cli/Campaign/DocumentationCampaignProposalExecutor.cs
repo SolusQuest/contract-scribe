@@ -304,8 +304,9 @@ internal static class DocumentationCampaignProposalExecutor
         if (dispatchGuardRejected || coordinator.Conflict)
         {
             return new DocumentationCampaignProposalOutcome(
-                DocumentationCampaignProposalOutcomeKind.StateConflict,
-                "campaign.reservation.conflict",
+                coordinator.CheckpointCancelledByHostDeadline
+                    ? DocumentationCampaignProposalOutcomeKind.TimedOut : DocumentationCampaignProposalOutcomeKind.StateConflict,
+                coordinator.CheckpointCancelledByHostDeadline ? "campaign.timed-out" : "campaign.reservation.conflict",
                 selectedState.WorkItemKey,
                 coordinator.LatestAcknowledgedArtifact,
                 checkpointFailure: coordinator.CheckpointFailure);

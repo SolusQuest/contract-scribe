@@ -68,7 +68,11 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         token.ThrowIfCancellationRequested();
         // Reuse immutable objects only within one complete authenticated history
         // proof. The next gate starts a fresh proof, including its object reads.
-        if (proof?.Documents.TryGetValue(head, out var authenticated) == true) return authenticated;
+        if (proof?.Documents.TryGetValue(head, out var authenticated) == true)
+        {
+            documents[head] = authenticated;
+            return authenticated;
+        }
         var commit = RequireRemote(await client.GetCommitAsync(head, token).ConfigureAwait(false));
         var root = RequireRemote(await client.GetTreeAsync(commit.TreeOid, token).ConfigureAwait(false));
         if (root.Entries.Length != 1 || root.Entries[0].Path != GitHubCoordinationObjects.RootPath
@@ -77,14 +81,20 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         var stateEntry = leaf.Entries.SingleOrDefault(entry => entry.Path == GitHubCoordinationObjects.StatePath)
             ?? throw new GitHubCoordinationException();
         var blob = await ReadBlobAsync(stateEntry.Oid, token, proof).ConfigureAwait(false);
+        var document = AuthenticateDocument(commit, root, leaf, blob);
+        documents[head] = document;
+        if (proof is not null) proof.Documents[head] = document;
+        return document;
+    }
+
+    private GitHubCoordinationDocument AuthenticateDocument(GitHubCommit commit, GitHubTree root, GitHubTree leaf, GitHubBlob blob)
+    {
         var document = GitHubCoordinationDocument.Decode(blob.Bytes.AsMemory());
         var prepared = GitHubCoordinationObjects.Prepare(document);
         GitHubCoordinationObjects.Authenticate(prepared, commit, root, leaf, blob);
         if (!document.RepositoryId.Equals(client.ReadAuthority.RepositoryOwner + "/" + client.ReadAuthority.RepositoryName, StringComparison.OrdinalIgnoreCase)
             || document.TargetRef != client.ReadAuthority.TargetRef || document.CampaignLineage != client.ReadAuthority.CampaignLineage)
             throw new GitHubCoordinationException();
-        documents[head] = document;
-        if (proof is not null) proof.Documents[head] = document;
         return document;
     }
 

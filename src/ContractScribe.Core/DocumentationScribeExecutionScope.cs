@@ -70,6 +70,19 @@ public sealed class DocumentationScribeHostPermit
         && Interlocked.CompareExchange(ref started, 1, 0) == 0
         && (SemanticWindow?.TryBeginQuery() ?? true)
         && (!chargesTool || scope.Allowance.TryChargeTool());
+    // Ephemeral observations of the original tokens, never a new cancellation
+    // source, deadline or authority. A caller/owner collision stays conservative.
+    private sealed record CancellationObservation(CancellationToken Deadline, CancellationToken Execution, CancellationToken Caller, CancellationToken Linked);
+    private CancellationObservation? cancellation;
+    /// <summary>Observes the original Runtime tokens once, without creating or renewing a permit.</summary>
+    public void ObserveCancellation(CancellationToken deadline, CancellationToken execution, CancellationToken caller, CancellationToken linked)
+    {
+        if (Interlocked.CompareExchange(ref cancellation, new(deadline, execution, caller, linked), null) is not null)
+            throw new InvalidOperationException("scribe.deadline.already-bound");
+    }
+    internal bool IsHostDeadlineCancellation(CancellationToken token) => DeadlineOwner == DocumentationScribeDeadlineOwner.HostOperation
+        && Volatile.Read(ref cancellation) is { } observed && token == observed.Linked && observed.Deadline.IsCancellationRequested
+        && !observed.Execution.IsCancellationRequested && !observed.Caller.IsCancellationRequested;
     internal bool TryComplete() => Interlocked.CompareExchange(ref completed, 1, 0) == 0;
     public override string ToString() => nameof(DocumentationScribeHostPermit);
 }
@@ -80,6 +93,7 @@ public sealed class DocumentationScribeExecutionScope
     private readonly IDocumentationScribeExecutionOperations? operations;
     private DocumentationScribeHostPermit? host;
     internal DocumentationScribeDeadlineOwner? CurrentHostDeadlineOwner => host?.DeadlineOwner;
+    internal bool IsHostDeadlineCancellation(CancellationToken token) => host?.IsHostDeadlineCancellation(token) == true;
     private DocumentationScribeInvocationProviderPermit? provider;
     private int failed;
     private int operationGrant;

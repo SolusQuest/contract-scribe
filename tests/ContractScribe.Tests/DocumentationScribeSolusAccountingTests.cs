@@ -666,7 +666,7 @@ public sealed partial class CampaignStateContractTests
         { Count++; return send(request, token); }
     }
 
-    private sealed class SolusDeadlineClock : TimeProvider
+    internal sealed class SolusDeadlineClock : TimeProvider
     {
         private long timestamp;
         private readonly List<DeadlineTimer> timers = [];

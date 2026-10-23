@@ -11,7 +11,8 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private readonly Func<bool>? guard;
     private long operationStartedAt;
     private CampaignSemanticCheckpointWindow? semanticWindow;
-    private int checkpointFailure = -1;
+    private sealed record CheckpointRejection(CampaignCheckpointAcceptanceKind Kind, bool HostDeadline);
+    private CheckpointRejection? checkpointFailure;
     internal CampaignScribeExecutionCoordinator(CampaignProviderInvocationAuthority invocation,
         DocumentationScribeInvocationAllowance allowance, ICampaignCheckpointStore store,
         CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt)
@@ -26,8 +27,9 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     internal void ObserveProjectionCapacity() => ProjectionCapacityStop = true;
     internal bool LifetimeStop { get; private set; }
     internal bool Conflict { get; private set; }
-    internal CampaignCheckpointAcceptanceKind? CheckpointFailure => Volatile.Read(ref checkpointFailure) is var value && value >= 0
-        ? (CampaignCheckpointAcceptanceKind)value : null;
+    internal CampaignCheckpointAcceptanceKind? CheckpointFailure => Volatile.Read(ref checkpointFailure)?.Kind;
+    internal bool CheckpointCancelledByHostDeadline => Volatile.Read(ref checkpointFailure) is
+    { Kind: CampaignCheckpointAcceptanceKind.Cancelled, HostDeadline: true };
     internal CampaignCheckpointArtifact LatestAcknowledgedArtifact => invocation.AcceptedCheckpoint.Artifact;
     internal Task LateObservation { get; private set; } = Task.CompletedTask;
     internal bool LifetimeElapsedExhausted => CampaignBudgetAccounting.RemainingLifetimeElapsed(
@@ -245,19 +247,22 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     }
     internal async ValueTask<bool> AcceptHostProgressAsync(CampaignTransitionResult transition, CancellationToken cancellationToken)
     {
-        if (cancellationToken.IsCancellationRequested) { RejectCheckpoint(CampaignCheckpointAcceptanceKind.Cancelled); return false; }
+        if (cancellationToken.IsCancellationRequested) { RejectCheckpoint(CampaignCheckpointAcceptanceKind.Cancelled, HostDeadlineCancellation(cancellationToken, default)); return false; }
         if (guard is not null && !guard()) { Conflict = true; return false; }
         if (transition.Kind != CampaignTransitionKind.Unchanged)
             return await AcceptProgressAsync(transition, operationStartedAt, cancellationToken).ConfigureAwait(false);
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, cancellationToken, deadline.Token);
+        var cancelledByHost = -1;
+        using var cancellation = bounded.Token.Register(() =>
+            Interlocked.CompareExchange(ref cancelledByHost, HostDeadlineCancellation(cancellationToken, deadline.Token) ? 1 : 0, -1));
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, bounded.Token).ConfigureAwait(false);
         var valid = !cancellationToken.IsCancellationRequested
             && (invocation.LifecycleAvailable || invocation.DispatchStarted)
             && accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted
             && accepted.Artifact?.Sha256 == invocation.AcceptedCheckpoint.Artifact.Sha256;
         if (!valid) RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
-            ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind);
+            ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind, Volatile.Read(ref cancelledByHost) == 1);
         return valid;
     }
 
@@ -279,13 +284,18 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         }
         using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
         using var boundedSettlement = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, deadline.Token, cancellationToken);
+        // Snapshot when this acceptance is first cancelled. A later Host timer
+        // cannot turn an earlier checkpoint deadline/owner loss into a timeout.
+        var cancelledByHost = -1;
+        using var cancellation = boundedSettlement.Token.Register(() =>
+            Interlocked.CompareExchange(ref cancelledByHost, HostDeadlineCancellation(cancellationToken, deadline.Token) ? 1 : 0, -1));
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token).ConfigureAwait(false);
         if (cancellationToken.IsCancellationRequested || semanticObservation is { ObservationOpen: false }
             || accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
             || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
         {
             RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
-                ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind);
+                ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind, Volatile.Read(ref cancelledByHost) == 1);
             return false;
         }
         operationStartedAt = boundary;
@@ -297,12 +307,15 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         return true;
     }
 
-    private void RejectCheckpoint(CampaignCheckpointAcceptanceKind kind)
+    private bool HostDeadlineCancellation(CancellationToken token, CancellationToken checkpointDeadline) =>
+        !checkpointDeadline.IsCancellationRequested && !settlementToken.IsCancellationRequested && Scope.IsHostDeadlineCancellation(token);
+
+    private void RejectCheckpoint(CampaignCheckpointAcceptanceKind kind, bool hostDeadline = false)
     {
         // An exact observation is not a new Writer grant. Preserve the first
         // failed acknowledgement even if a later stop or observation completes.
         var failure = kind == CampaignCheckpointAcceptanceKind.Accepted ? CampaignCheckpointAcceptanceKind.Conflict : kind;
-        Interlocked.CompareExchange(ref checkpointFailure, (int)failure, -1);
+        Interlocked.CompareExchange(ref checkpointFailure, new(failure, hostDeadline), null);
         Conflict = true;
     }
 }
