@@ -1,11 +1,79 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.Core;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed partial class GitHubProposalCliProcessTests
 {
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(403, "Permission")]
+    [InlineData(404, "NotFound")]
+    public async Task Five_target_publication_entry_failed_confirmation_stops_actual_CLI_cleanup(int status, string transport)
+    {
+        await using var fixture = await FiveTargetFixture("shared");
+        var pending = false;
+        var failureIndex = -1;
+        string? expected = null;
+        fixture.GitHub.BeforeBody = (request, body) =>
+        {
+            if (failureIndex >= 0 || request.Method != "POST" || request.Path != "/graphql") return;
+            var updates = JsonNode.Parse(body)!["variables"]!["input"]!["refUpdates"]!.AsArray();
+            if (updates.Count != 1) return;
+            var update = updates[0]!;
+            var before = update["beforeOid"]!.GetValue<string>();
+            if (before == new string('0', 40)) return;
+            var after = update["afterOid"]!.GetValue<string>();
+            var prior = fixture.GitHub.DocumentAt(before);
+            var next = fixture.GitHub.DocumentAt(after);
+            if (prior["checkpoint"] is null || next["publication"] is not null
+                || !JsonNode.DeepEquals(prior["checkpoint"], next["checkpoint"])) return;
+            var checkpoint = fixture.Checkpoint();
+            if (checkpoint.State.CandidateObservation is null || checkpoint.State.ScribeProgress?.Session?.Ended != true) return;
+            expected = after;
+            pending = true;
+        };
+        fixture.GitHub.After = request =>
+        {
+            if (!pending || request.Method != "POST" || request.Path != "/graphql") return;
+            pending = false;
+            failureIndex = fixture.GitHub.Requests.Count;
+            fixture.GitHub.RejectPath = "/git/ref/heads/contract-scribe/coordination/";
+            fixture.GitHub.RejectionStatus = status;
+        };
+        var result = await fixture.Run();
+        Assert.NotEqual(0, result.ExitCode);
+        Assert.NotNull(expected);
+        Assert.True(failureIndex > 0);
+        Assert.DoesNotContain(fixture.GitHub.Requests.Skip(failureIndex), request => request.Method == "POST");
+        Assert.Empty(fixture.GitHub.PullRequests);
+        Assert.Equal(0, fixture.GitHub.PrAttempts);
+        var checkpoint = fixture.Checkpoint();
+        Assert.True(checkpoint.State.ScribeProgress!.Session!.Ended);
+        Assert.Equal(5, checkpoint.State.CandidateObservation!.AcceptedWorkItemKeys.Length);
+        Assert.Equal(1, checkpoint.State.LineageCharges.PatchValidationInvocations);
+        Assert.Null(checkpoint.State.ActiveReservation);
+        using var envelope = JsonDocument.Parse(result.Stdout);
+        var failure = envelope.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
+        Assert.Equal("Renew", failure.GetProperty("operation").GetString());
+        Assert.Equal("FinalRef", failure.GetProperty("stage").GetString());
+        Assert.Equal(transport, failure.GetProperty("transportCode").GetString());
+        Assert.Equal(status, failure.GetProperty("httpStatus").GetInt32());
+        Assert.Equal(JsonValueKind.Null, failure.GetProperty("cancellation").ValueKind);
+        var comparison = failure.GetProperty("refComparison");
+        var fingerprint = Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.ASCII.GetBytes("contract-scribe.checkpoint.commit\0" + expected)));
+        Assert.Equal(fingerprint, comparison.GetProperty("expectedCommit").GetString());
+        Assert.Equal("Unavailable", comparison.GetProperty("relation").GetString());
+        Assert.Equal("NeedsReadback", comparison.GetProperty("delivery").GetString());
+        Assert.True(comparison.GetProperty("acknowledged").GetBoolean());
+        Assert.DoesNotContain(expected!, result.Stdout, StringComparison.Ordinal);
+        var outcome = envelope.RootElement.GetProperty("outcome").GetString()!["github-proposal.".Length..];
+        await AssertActualActionConsumer(fixture.Outside, result.Stdout, result.ExitCode, progressOutcome: outcome);
+        await fixture.AssertSourceUnchanged();
+    }
+
     [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Actual_CLI_durable_member_failed_ack_reaches_Action_without_advancing_authority()
     {
@@ -44,6 +112,12 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal("RefMismatch", failure.GetProperty("reason").GetString());
         Assert.Equal("NotFound", failure.GetProperty("transportCode").GetString());
         Assert.Equal(404, failure.GetProperty("httpStatus").GetInt32());
+        var comparison = failure.GetProperty("refComparison");
+        Assert.Equal("Unavailable", comparison.GetProperty("relation").GetString());
+        Assert.Equal(JsonValueKind.Null, comparison.GetProperty("observedCommit").ValueKind);
+        Assert.Equal("NeedsReadback", comparison.GetProperty("delivery").GetString());
+        Assert.True(comparison.GetProperty("acknowledged").GetBoolean());
+        Assert.Equal(64, comparison.GetProperty("expectedCommit").GetString()!.Length);
         await AssertActualActionConsumer(fixture.Outside, failed.Stdout, failed.ExitCode, checkpoint: true);
         Assert.Equal(requests, fixture.Provider.RequestCount);
         await fixture.AssertSourceUnchanged();
@@ -130,6 +204,10 @@ public sealed partial class GitHubProposalCliProcessTests
                 assert any('FinalRef / RefMismatch' in row for row in rows)
                 assert any('NotFound / 404' in row for row in rows)
                 assert parsed['invocationUsage']['checkpointFailure']['attemptedRevision'] > parsed['checkpointRevision']
+                comparison = parsed['invocationUsage']['checkpointFailure']['refComparison']
+                assert comparison['relation'] == 'Unavailable' and comparison['observedCommit'] is None
+                assert comparison['delivery'] == 'NeedsReadback' and comparison['acknowledged'] is True
+                assert any('Unavailable / NeedsReadback / yes' in row for row in rows)
             else:
                 assert any('402' in row and 'model.failure.permanent-unavailable' in row for row in rows)
             summary = '\n'.join(rows)

@@ -211,13 +211,15 @@ internal sealed partial class GitHubCoordinationStore
             }
             using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
             stage = GitHubCheckpointStage.FinalRef;
+            var comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
             try
             {
                 var finalRef = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
+                comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
                 var current = GitHubObservedProposalIntegrity.Read(finalRef);
                 if (current?.Oid != prepared.CommitOid)
                 {
-                    ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, finalRef.Failure);
+                    ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, finalRef.Failure, refComparison: comparison);
                     return RetainCheckpointFailure(DomainFailure(finalRef.Failure is null
                         ? GitHubCoordinationFailureKind.Conflict : GitHubCoordinationFailureKind.Transport,
                         result.Failure, result.Delivery, result.Context, result.RequiredPermissions,
@@ -242,7 +244,8 @@ internal sealed partial class GitHubCoordinationStore
             }
             catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
             {
-                ObserveCheckpointException(attempt, stage, exception, recovery.Token, recovery: true);
+                ObserveCheckpointException(attempt, stage, exception, recovery.Token, recovery: true,
+                    refComparison: stage == GitHubCheckpointStage.FinalRef ? comparison : null);
                 var failure = CheckpointExceptionFailure(exception).Failure!;
                 return RetainCheckpointFailure(DomainFailure(failure.Kind, result.Failure, result.Delivery,
                     result.Context, result.RequiredPermissions, RecoveryFailure(failure.ReadbackFailure ?? failure.TransportFailure, recovery)));
@@ -345,7 +348,13 @@ internal sealed partial class GitHubCoordinationStore
                 Claim = current.Document.Claim! with { ExpiresUnixSeconds = client.ServerTime!.Value.AddSeconds(ClaimSeconds).ToUnixTimeSeconds() },
             };
             if (await WriteDocumentAsync(renewed, [], token, livePredecessor: current.Document, attempt: attempt).ConfigureAwait(false) is { } failed)
+            {
+                // The original transaction observation is frozen before owner
+                // cancellation; an unconfirmed renewal cannot permit cleanup CAS.
+                StopCheckpoint();
                 throw new GitHubCoordinationException(failure: failed.Failure);
+            }
+            token.ThrowIfCancellationRequested();
             publicationClaimExpires = renewed.Claim!.ExpiresUnixSeconds;
             publicationHead = GitHubCoordinationObjects.Prepare(renewed).CommitOid;
             publicationRenewalFailure = null;
@@ -356,7 +365,16 @@ internal sealed partial class GitHubCoordinationStore
             return await publish().ConfigureAwait(false);
         }
         catch (Exception exception) when (!renewalComplete && exception is not (OutOfMemoryException or StackOverflowException))
-        { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, token); throw; }
+        {
+            ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, token);
+            // Ordinary caller cancellation before dispatch (or after a fully
+            // confirmed renewal) keeps independently validated release semantics.
+            // Every other failed entry has no confirmed execution authority.
+            if (!(token.IsCancellationRequested && (exception is OperationCanceledException
+                || exception is GitHubCoordinationException { TransportFailure.Code: GitHubFailureCode.Cancelled or GitHubFailureCode.Timeout })))
+                StopCheckpoint();
+            throw;
+        }
         finally { StopPublicationPayloads(); publicationActive = false; checkpointGate.Release(); }
     }
 

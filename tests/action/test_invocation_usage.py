@@ -49,10 +49,50 @@ def encode(value):
 
 
 class InvocationUsageTests(unittest.TestCase):
+    def test_final_ref_comparison_is_operation_local_closed_and_bounded(self):
+        comparison = dict(expectedCommit="a" * 64, predecessorCommit="b" * 64,
+                          observedCommit="b" * 64, relation="Predecessor", delivery="NeedsReadback", acknowledged=True)
+        observation = dict(operationOrdinal=69, operation="Renew", attemptedRevision=None, stage="FinalRef",
+                           reason="RefMismatch", transportCode=None, httpStatus=None, cancellation=None,
+                           refComparison=comparison)
+        value = fixture("partial")
+        value["checkpointFailure"] = observation
+        with tempfile.TemporaryDirectory() as temp:
+            output = str(Path(temp) / "out.txt")
+            raw = encode(envelope(value))
+            with patch.dict(os.environ, {"GITHUB_OUTPUT": output}):
+                parsed = invoke.parse_envelope(raw, b"", 0)
+                invoke.emit_outputs(parsed, raw, 0)
+            self.assertEqual(observation, json.loads(driver.read_outputs(output)["usage-json"])["checkpointFailure"])
+            summary = "\n".join(U.summary_rows(value))
+            self.assertIn("Predecessor / NeedsReadback / yes", summary)
+            self.assertNotIn("a" * 64, summary)
+            self.assertLess(len(raw), C.BOUND_ENVELOPE)
+        for relation, observed, predecessor in (("Expected", "a" * 64, None), ("Other", "c" * 64, "b" * 64),
+                                                ("Unavailable", None, None)):
+            row = dict(comparison, relation=relation, observedCommit=observed, predecessorCommit=predecessor,
+                       delivery="Ambiguous", acknowledged=False)
+            self.assertTrue(U.ref_comparison(row))
+        invalid = (("expectedCommit", "a" * 40), ("expectedCommit", "A" * 64), ("expectedCommit", None),
+                   ("predecessorCommit", "private-marker"), ("observedCommit", "private-marker"),
+                   ("observedCommit", None), ("relation", "Other"), ("relation", []),
+                   ("delivery", "Read"), ("delivery", {}), ("acknowledged", 1), ("acknowledged", False))
+        for key, item in invalid:
+            row = dict(comparison, **{key: item})
+            self.assertFalse(U.ref_comparison(row), (key, item))
+            broken = fixture("partial")
+            broken["checkpointFailure"] = dict(observation, refComparison=row)
+            self.assertFalse(U.valid(broken))
+            self.assertEqual(["| usage | unavailable |"], U.summary_rows(broken))
+        self.assertFalse(U.ref_comparison(dict(comparison, rawOid="private-marker")))
+        self.assertFalse(U.ref_comparison({k: v for k, v in comparison.items() if k != "delivery"}))
+        self.assertFalse(U.checkpoint_failure(dict(observation, stage="PredecessorRead")))
+        self.assertFalse(U.checkpoint_failure({k: v for k, v in observation.items() if k != "refComparison"}))
+
     def test_checkpoint_failure_is_closed_bounded_and_lossless_through_action(self):
         observation = dict(operationOrdinal=7, operation="Write", attemptedRevision=17,
                            stage="CheckpointReadback", reason="Transport", transportCode="NotFound",
-                           httpStatus=404, cancellation=None)
+                           httpStatus=404, cancellation=None, refComparison=None)
         with tempfile.TemporaryDirectory() as temp:
             value = fixture("partial")
             value["checkpointFailure"] = observation
@@ -161,8 +201,11 @@ class InvocationUsageTests(unittest.TestCase):
         value = fixture("partial")
         value["calls"]["physicalProviderDispatches"] = 128
         value["checkpointFailure"] = dict(operationOrdinal=2**63 - 1, operation="Publication",
-                                        attemptedRevision=2**63 - 1, stage="LeaseConfirmation", reason="Cancelled",
-                                        transportCode="InvalidResponse", httpStatus=599, cancellation="OperationToken")
+                                        attemptedRevision=2**63 - 1, stage="FinalRef", reason="Cancelled",
+                                        transportCode="InvalidResponse", httpStatus=599, cancellation="OperationToken",
+                                        refComparison=dict(expectedCommit="a" * 64, predecessorCommit="b" * 64,
+                                                           observedCommit="c" * 64, relation="Other",
+                                                           delivery="NeedsReadback", acknowledged=True))
         value["providerDiagnostics"] = dict(missingDispatches=112, observations=[
             dict(physicalDispatchOrdinal=n, attemptId="scribe-attempt." + "a" * 32,
                  attemptNumber=1_000_000, providerRequestNumber=128, failureCode="model.failure.permanent-unavailable",

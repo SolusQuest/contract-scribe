@@ -30,7 +30,29 @@ PROVIDER_ROW = ("physicalDispatchOrdinal", "attemptId", "attemptNumber", "provid
 
 
 CHECKPOINT_FIELDS = ("operationOrdinal", "operation", "attemptedRevision", "stage", "reason",
-                     "transportCode", "httpStatus", "cancellation")
+                     "transportCode", "httpStatus", "cancellation", "refComparison")
+REF_COMPARISON_FIELDS = ("expectedCommit", "predecessorCommit", "observedCommit", "relation", "delivery", "acknowledged")
+
+
+def ref_comparison(value):
+    if value is None:
+        return True
+    if not isinstance(value, dict) or set(value) != set(REF_COMPARISON_FIELDS):
+        return False
+    expected, predecessor, observed = (value[key] for key in REF_COMPARISON_FIELDS[:3])
+    def fingerprint(item):
+        return isinstance(item, str) and len(item) == 64 and all(c in "0123456789abcdef" for c in item)
+    if not fingerprint(expected) or predecessor is not None and not fingerprint(predecessor) \
+            or observed is not None and not fingerprint(observed):
+        return False
+    delivery, acknowledged, relation = value["delivery"], value["acknowledged"], value["relation"]
+    if not isinstance(delivery, str) or delivery not in ("NeedsReadback", "Ambiguous") \
+            or type(acknowledged) is not bool or acknowledged != (delivery == "NeedsReadback"):
+        return False
+    return ((relation == "Unavailable" and observed is None)
+            or (relation == "Expected" and observed == expected)
+            or (relation == "Predecessor" and observed is not None and observed == predecessor and observed != expected)
+            or (relation == "Other" and observed is not None and observed != expected and observed != predecessor))
 CHECKPOINT_OPERATIONS = frozenset(("Acquire", "Read", "Write", "Renew", "Publication"))
 CHECKPOINT_STAGES = frozenset(("Gate", "PredecessorRead", "CreateObjects", "RefMutation", "FinalRef",
                                "CanonicalDocument", "CheckpointReadback", "OwnerConfirmation", "LeaseConfirmation"))
@@ -62,7 +84,9 @@ def checkpoint_failure(value):
     status = value["httpStatus"]
     if status is not None and (not integer(status) or not 100 <= status <= 599 or value["transportCode"] is None):
         return False
-    return (value["reason"] == "Cancelled") == (value["cancellation"] is not None)
+    return (value["reason"] == "Cancelled") == (value["cancellation"] is not None) \
+        and ref_comparison(value["refComparison"]) \
+        and (value["refComparison"] is None or value["stage"] == "FinalRef")
 
 
 def provider_diagnostics(value, calls):
@@ -199,6 +223,10 @@ def summary_rows(value):
         rows.append(f"| checkpoint failure stage / reason | {checkpoint['stage']} / {checkpoint['reason']} |")
         rows.append(f"| checkpoint transport / status / cancellation | {checkpoint['transportCode'] or 'unknown'} / "
                     f"{number(checkpoint['httpStatus'])} / {checkpoint['cancellation'] or 'unknown'} |")
+        comparison = checkpoint["refComparison"]
+        if comparison is not None:
+            rows.append(f"| checkpoint final ref / delivery / matched acknowledgement | {comparison['relation']} / "
+                        f"{comparison['delivery']} / {'yes' if comparison['acknowledged'] else 'no'} |")
     diagnostics = value["providerDiagnostics"]
     if diagnostics is not None:
         rows.append(f"| provider diagnostics missing sends | {diagnostics['missingDispatches']} |")

@@ -242,6 +242,15 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
                 transportCode = checkpoint.TransportCode?.ToString(),
                 httpStatus = checkpoint.HttpStatus,
                 cancellation = checkpoint.Cancellation?.ToString(),
+                refComparison = checkpoint.RefComparison is not { } comparison ? null : new
+                {
+                    expectedCommit = comparison.ExpectedCommit,
+                    predecessorCommit = comparison.PredecessorCommit,
+                    observedCommit = comparison.ObservedCommit,
+                    relation = comparison.Relation.ToString(),
+                    delivery = comparison.Delivery.ToString(),
+                    acknowledged = comparison.Acknowledged,
+                },
             },
             accounting = observation is null ? null : new
             {
