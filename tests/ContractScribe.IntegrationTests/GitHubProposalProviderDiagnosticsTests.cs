@@ -87,7 +87,7 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     private static async Task AssertActualActionConsumer(string outside, string stdout, int exit, bool checkpoint = false,
-        bool publication = false, bool successful = false)
+        bool publication = false, bool successful = false, string? progressOutcome = null)
     {
         var start = new ProcessStartInfo("python3")
         {
@@ -108,7 +108,10 @@ public sealed partial class GitHubProposalCliProcessTests
             os.environ['GITHUB_OUTPUT'] = sys.argv[2]
             invoke.emit_outputs(parsed, data, int(sys.argv[3]))
             rows = usage.summary_rows(parsed['invocationUsage'])
-            if sys.argv[4] == 'successful':
+            if sys.argv[4] == 'progress':
+                assert parsed['outcome'] == 'github-proposal.' + sys.argv[5]
+                assert usage.valid(parsed['invocationUsage'])
+            elif sys.argv[4] == 'successful':
                 assert parsed['outcome'] == 'github-proposal.published'
                 assert parsed['publicationDiagnostic'] is None
                 assert parsed['invocationUsage']['calls']['activeSent'] == 0
@@ -138,7 +141,8 @@ public sealed partial class GitHubProposalCliProcessTests
         start.ArgumentList.Add(Path.Join(CampaignCliProcessTests.RepositoryRoot, "scripts", "action"));
         start.ArgumentList.Add(Path.Join(outside, "actual-action-outputs.txt"));
         start.ArgumentList.Add(exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        start.ArgumentList.Add(successful ? "successful" : publication ? "publication" : checkpoint ? "checkpoint" : "provider");
+        start.ArgumentList.Add(progressOutcome is not null ? "progress" : successful ? "successful" : publication ? "publication" : checkpoint ? "checkpoint" : "provider");
+        start.ArgumentList.Add(progressOutcome ?? "");
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

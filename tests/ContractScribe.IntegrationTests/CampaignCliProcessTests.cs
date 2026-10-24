@@ -889,8 +889,9 @@ public sealed partial class CampaignCliProcessTests
                         await stream.WriteAsync(transient, disposal.Token);
                         continue;
                     }
-                    var response = scenario == "semantic" ? CreateSemanticResponse(body) : scenario is "shared" or "shared-closed"
-                        ? CreateSharedResponse(body, skipAll: scenario == "shared-closed")
+                    var response = scenario == "semantic" ? CreateSemanticResponse(body) : scenario is "shared" or "shared-closed" or "shared-skip-one" or "shared-skip-four"
+                        ? CreateSharedResponse(body, skipAll: scenario == "shared-closed",
+                            skipMembers: scenario == "shared-skip-one" ? 1 : scenario == "shared-skip-four" ? 4 : 0)
                         : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal" || SkipProposals);
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");

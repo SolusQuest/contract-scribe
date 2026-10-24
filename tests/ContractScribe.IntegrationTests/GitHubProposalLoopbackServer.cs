@@ -59,7 +59,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         BaseOid = AddCommit(new JsonObject
         {
             ["tree"] = BuildTree(files),
-            ["parents"] = new JsonArray(new string('1', 40)),
+            ["parents"] = new JsonArray(),
             ["message"] = "Synthetic immutable base\n",
             ["author"] = Actor(),
             ["committer"] = Actor(),
@@ -197,11 +197,35 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         }
         if (path == "/repos/Owner/repo/git/trees")
         {
-            var oid = AddTree(body["tree"]!.AsArray().Select(e => new Entry(
+            var rows = body["tree"]!.AsArray();
+            var paths = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var entry in rows)
+            {
+                var name = entry!["path"]!.GetValue<string>();
+                // This fixture models the producer's direct entries, not GitHub's
+                // additional nested-path/base_tree construction API.
+                Assert.DoesNotContain('/', name);
+                var mode = entry["mode"]!.GetValue<string>();
+                Assert.True(mode is "100644" or "100755" or "040000", "Unsupported fixture tree mode");
+                var type = entry["type"]!.GetValue<string>();
+                var reference = entry["sha"]!.GetValue<string>();
+                var directory = mode == "040000";
+                if (name is "" or "." or ".." || name.Contains('\0') || !paths.Add(name)
+                    || type != (directory ? "tree" : "blob")
+                    || !(directory ? Trees.ContainsKey(reference) : Blobs.ContainsKey(reference)))
+                    return InvalidGraph();
+            }
+            var oid = AddTree(rows.Select(e => new Entry(
                 e!["path"]!.GetValue<string>(), e["mode"]!.GetValue<string>(), e["sha"]!.GetValue<string>())).ToArray());
             return (201, TreeResponse(oid));
         }
-        if (path == "/repos/Owner/repo/git/commits") return (201, CommitResponse(Commits[AddCommit(body)]));
+        if (path == "/repos/Owner/repo/git/commits")
+        {
+            if (!Trees.ContainsKey(body["tree"]!.GetValue<string>())
+                || body["parents"]!.AsArray().Any(parent => !Commits.ContainsKey(parent!.GetValue<string>())))
+                return InvalidGraph();
+            return (201, CommitResponse(Commits[AddCommit(body)]));
+        }
         if (path == "/graphql")
         {
             Assert.Equal("mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}", body["query"]!.GetValue<string>());
@@ -358,6 +382,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         }).ToArray(),
     };
     private static (int, object) Missing() => (404, new { message = "Not Found" });
+    private static (int, object) InvalidGraph() => (422, new { message = "Invalid synthetic Git object graph" });
     private static JsonObject Actor() => new()
     {
         ["name"] = "Synthetic",
