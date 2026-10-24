@@ -48,12 +48,21 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
     internal CancellationToken CheckpointToken => checkpointLifetime.Token;
     internal GitHubFailure? CheckpointFailure { get; private set; }
 
-    // One read or conditional-write transaction only. Mutable resources are
-    // never cached; each subsequent gate reauthenticates its own objects.
-    private sealed class ReadProof
+    // Independent proof-local validation; only a publication proof may stage
+    // authenticated payloads for a later gate in that same callback.
+    private sealed class ReadProof(PublicationPayloadPool? pool = null, string? head = null, bool effect = false) : IDisposable
     {
         internal Dictionary<string, GitHubCoordinationDocument> Documents { get; } = new(StringComparer.Ordinal);
         internal Dictionary<string, GitHubBlob> Blobs { get; } = new(StringComparer.Ordinal);
+        internal HashSet<string> PooledBlobs { get; } = new(StringComparer.Ordinal);
+        internal PublicationPayloadPool? Pool { get; } = pool;
+        internal string? CurrentHead { get; } = head;
+        internal string? EffectHead { get; } = effect ? head : null;
+        internal Dictionary<(Type Kind, string Oid), GitHubValue> Staged { get; } = [];
+        internal long StagedBytes { get; set; }
+        internal void Stage(GitHubValue value, CancellationToken token) => Pool?.Stage(this, value, token);
+        internal void Promote(CancellationToken token) => Pool?.Promote(this, token);
+        public void Dispose() => Pool?.Discard(this);
     }
 
     private sealed record RemoteCheckpoint(string Head, GitHubCoordinationDocument Document,
@@ -67,22 +76,27 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         ReadProof? proof = null)
     {
         token.ThrowIfCancellationRequested();
-        // Reuse immutable objects only within one complete authenticated history
-        // proof. The next gate starts a fresh proof, including its object reads.
+        // Parsed document acceptance is never carried across independent gates.
         if (proof?.Documents.TryGetValue(head, out var authenticated) == true)
         {
             documents[head] = authenticated;
             return authenticated;
         }
-        var commit = RequireRemote(await client.GetCommitAsync(head, token).ConfigureAwait(false));
-        var root = RequireRemote(await client.GetTreeAsync(commit.TreeOid, token).ConfigureAwait(false));
+        var effect = proof?.EffectHead == head;
+        var commit = await ReadProofCommitAsync(head, token, proof, effect).ConfigureAwait(false);
+        var root = await ReadProofTreeAsync(commit.TreeOid, token, proof, effect).ConfigureAwait(false);
         if (root.Entries.Length != 1 || root.Entries[0].Path != GitHubCoordinationObjects.RootPath
             || root.Entries[0].Mode != GitHubTreeMode.Directory) throw new GitHubCoordinationException();
-        var leaf = RequireRemote(await client.GetTreeAsync(root.Entries[0].Oid, token).ConfigureAwait(false));
+        var leaf = await ReadProofTreeAsync(root.Entries[0].Oid, token, proof, effect).ConfigureAwait(false);
         var stateEntry = leaf.Entries.SingleOrDefault(entry => entry.Path == GitHubCoordinationObjects.StatePath)
             ?? throw new GitHubCoordinationException();
-        var blob = await ReadBlobAsync(stateEntry.Oid, token, proof).ConfigureAwait(false);
+        var blob = await ReadBlobAsync(stateEntry.Oid, token, proof,
+            publicationPayload: true, fresh: effect || proof?.CurrentHead == head).ConfigureAwait(false);
         var document = AuthenticateDocument(commit, root, leaf, blob);
+        proof?.Stage(commit, token);
+        proof?.Stage(root, token);
+        proof?.Stage(leaf, token);
+        proof?.Stage(blob, token);
         documents[head] = document;
         if (proof is not null) proof.Documents[head] = document;
         return document;
@@ -173,14 +187,22 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         return document;
     }
 
-    private async ValueTask<GitHubBlob> ReadBlobAsync(string oid, CancellationToken token, ReadProof? proof = null)
+    private async ValueTask<GitHubBlob> ReadBlobAsync(string oid, CancellationToken token, ReadProof? proof = null,
+        bool publicationPayload = false, bool fresh = false)
     {
         token.ThrowIfCancellationRequested();
-        if (proof?.Blobs.TryGetValue(oid, out var authenticated) == true) return authenticated;
+        if (proof?.Blobs.TryGetValue(oid, out var authenticated) == true
+            && (!(fresh || !publicationPayload) || !proof.PooledBlobs.Contains(oid))) return authenticated;
+        if (publicationPayload && !fresh && proof?.Pool?.Read<GitHubBlob>(oid, token) is { } prior)
+        {
+            proof.Blobs[oid] = prior;
+            proof.PooledBlobs.Add(oid);
+            return prior;
+        }
         var blob = RequireRemote(await client.GetBlobAsync(oid, token).ConfigureAwait(false));
         if (blob.Oid != oid || GitHubCoordinationObjects.ObjectOid("blob", blob.Bytes.AsSpan()) != oid)
             throw new GitHubCoordinationException();
-        if (proof is not null) proof.Blobs[oid] = blob;
+        if (proof is not null) { proof.Blobs[oid] = blob; proof.PooledBlobs.Remove(oid); }
         return blob;
     }
 

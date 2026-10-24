@@ -326,6 +326,7 @@ internal sealed partial class GitHubCoordinationStore
     private void StopCheckpoint()
     {
         checkpointStopped = true;
+        StopPublicationPayloads();
         checkpointLifetime.Cancel();
     }
 
@@ -350,11 +351,13 @@ internal sealed partial class GitHubCoordinationStore
             publicationRenewalFailure = null;
             publicationActive = true;
             renewalComplete = true;
+            publicationPayloads = new(this, client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), token);
+            using var payloadCancellation = token.Register(static state => ((GitHubCoordinationStore)state!).StopPublicationPayloads(), this);
             return await publish().ConfigureAwait(false);
         }
         catch (Exception exception) when (!renewalComplete && exception is not (OutOfMemoryException or StackOverflowException))
         { ObserveCheckpointException(attempt, GitHubCheckpointStage.PredecessorRead, exception, token); throw; }
-        finally { publicationActive = false; checkpointGate.Release(); }
+        finally { StopPublicationPayloads(); publicationActive = false; checkpointGate.Release(); }
     }
 
     private bool publicationActive;
