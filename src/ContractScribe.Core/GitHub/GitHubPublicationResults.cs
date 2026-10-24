@@ -104,7 +104,8 @@ public sealed record GitHubPublicationRemoteFailure(GitHubPublicationRemoteFailu
 
 /// <summary>
 /// Closed result union. Only the detail property associated with <see cref="Kind"/>
-/// can be populated; raw requests, responses, exceptions, credentials, and byte
+/// can be populated, with verified content/ref residuals also permitted beside a remote failure;
+/// raw requests, responses, exceptions, credentials, and byte
 /// payloads are not representable.
 /// </summary>
 public sealed class GitHubPublicationResult
@@ -184,8 +185,12 @@ public sealed class GitHubPublicationResult
             staleDraft: ValidateStaleDraft(residual));
 
     public static GitHubPublicationResult FromRemoteFailure(
-        GitHubPublicationRemoteFailureKind kind)
+        GitHubPublicationRemoteFailureKind kind,
+        GitHubPublicationContentResidual? contentResidual = null,
+        GitHubPublicationRefResidual? refResidual = null)
     {
+        if (contentResidual is not null && refResidual is not null)
+            throw new ArgumentException("Only one verified resource residual can accompany a failure.");
         var resultKind = kind switch
         {
             GitHubPublicationRemoteFailureKind.Stale => GitHubPublicationResultKind.Stale,
@@ -198,7 +203,9 @@ public sealed class GitHubPublicationResult
             GitHubPublicationRemoteFailureKind.HostFailure => GitHubPublicationResultKind.HostFailure,
             _ => throw new ArgumentOutOfRangeException(nameof(kind)),
         };
-        return new(resultKind, remoteFailure: new(kind));
+        return new(resultKind, remoteFailure: new(kind),
+            contentResidual: contentResidual is null ? null : ValidateContentResidual(contentResidual),
+            refResidual: refResidual is null ? null : ValidateRefResidual(refResidual));
     }
 
     public override string ToString() => $"{nameof(GitHubPublicationResult)}:{Kind}";

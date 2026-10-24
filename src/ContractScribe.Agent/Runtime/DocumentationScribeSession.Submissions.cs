@@ -68,6 +68,8 @@ internal sealed partial class DocumentationScribeSession
         }
         try
         {
+            State.CallerCancellation.ThrowIfCancellationRequested();
+            token.ThrowIfCancellationRequested();
             if (!permit.TryBeginOperation())
             {
                 State.Scope.ObserveDeadline(permit);
@@ -78,6 +80,7 @@ internal sealed partial class DocumentationScribeSession
             State.ToolCallCount++;
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(Math.Max(1, permit.RemainingMilliseconds)), State.Scope.Allowance.Clock);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, State.CallerCancellation, deadline.Token);
+            permit.ObserveCancellation(deadline.Token, token, State.CallerCancellation, linked.Token);
             try
             {
                 _ = new UTF8Encoding(false, true).GetString(frame.Bytes.Span);
@@ -168,7 +171,11 @@ internal sealed partial class DocumentationScribeSession
                             throw;
                         }
                     }
-                    if (acknowledgement is null) throw new InvalidOperationException("scribe.submission.host-unconfirmed");
+                    if (acknowledgement is null)
+                    {
+                        linked.Token.ThrowIfCancellationRequested();
+                        throw new InvalidOperationException("scribe.submission.host-unconfirmed");
+                    }
                     // A correlated completed receipt remains a fact even if observation was just cancelled.
                     var accepted = DocumentationScribeValidation.AcknowledgeSubmission(validation, acknowledgement);
                     State.Submissions = State.Submissions.SetItem(targetId, accepted);
@@ -232,7 +239,10 @@ internal sealed partial class DocumentationScribeSession
                         pending = submissionHost.ObserveProgressAsync(progress, linked.Token).AsTask();
                         var acknowledgement = await pending.WaitAsync(linked.Token).ConfigureAwait(false);
                         if (acknowledgement?.ProgressSha256 != progress.ProgressSha256)
+                        {
+                            linked.Token.ThrowIfCancellationRequested();
                             Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
+                        }
                     }
                     catch (OperationCanceledException)
                     {

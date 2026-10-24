@@ -68,89 +68,91 @@ internal static class GitHubProposalCommand
             using var clientLifetime = client;
             using var finalization = new GitHubPublicationFinalization(cancellationToken, GitHubProposalProcessHooks.FinalizationClock);
             await using var checkpoint = GitHubCoordinationStore.Create(client);
-            var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, cancellationToken).ConfigureAwait(false);
-            if (observed.Failure is not null
-                && GitHubCampaignPreflight.Select(identity, operation, observed, null) is { } lifecycleStop)
-                return lifecycleStop;
-            var read = await checkpoint.ReadAsync(cancellationToken).ConfigureAwait(false);
-            if (checkpoint.CheckpointFailure is { } readFailure)
-                return GitHubProposalPresentation.Local(identity, operation, GitHubCampaignPreflight.TransportOutcome(readFailure));
-            var accepted = read.Kind == CampaignCheckpointReadKind.Found ? CampaignCheckpointAcceptance.AcceptCurrent(read) : null;
-            if (read.Kind is not (CampaignCheckpointReadKind.Found or CampaignCheckpointReadKind.NotFound)
-                || read.Kind == CampaignCheckpointReadKind.Found && accepted?.Kind != CampaignCheckpointAcceptanceKind.Accepted
-                || read.Kind == CampaignCheckpointReadKind.NotFound && observed.Ledger is not null)
-                return GitHubProposalPresentation.Preflight(identity, operation, "human-change", "invalid-recovery-authority", null);
-            usage.ObserveState(accepted?.Artifact);
-            operation = read.Kind == CampaignCheckpointReadKind.Found ? CampaignOperation.Resume : CampaignOperation.Start;
-            preflight = preflight with { Operation = operation.Value };
-            if (GitHubCampaignPreflight.Select(identity, operation, observed,
-                accepted?.Artifact?.CheckpointRevision) is { } verifiedStop) return verifiedStop;
-            // Lifecycle precedes the base-bound checkpoint write capability.
-            if (!await client.BindObservedCheckpointBaseAsync(observed, cancellationToken).ConfigureAwait(false))
-                return GitHubProposalPresentation.Preflight(identity, operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
-            var claim = await checkpoint.AcquireCheckpointAsync(cancellationToken).ConfigureAwait(false);
-            if (claim != CampaignCheckpointReadKind.Found)
+            try
             {
-                var outcome = checkpoint.CheckpointFailure?.Code switch
+                var observed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, cancellationToken).ConfigureAwait(false);
+                if (observed.Failure is not null
+                    && GitHubCampaignPreflight.Select(identity, operation, observed, null) is { } lifecycleStop)
+                    return lifecycleStop;
+                var read = await checkpoint.ReadAsync(cancellationToken).ConfigureAwait(false);
+                if (checkpoint.CheckpointFailure is { } readFailure)
+                    return GitHubProposalPresentation.Local(identity, operation, GitHubCampaignPreflight.TransportOutcome(readFailure));
+                var accepted = read.Kind == CampaignCheckpointReadKind.Found ? CampaignCheckpointAcceptance.AcceptCurrent(read) : null;
+                if (read.Kind is not (CampaignCheckpointReadKind.Found or CampaignCheckpointReadKind.NotFound)
+                    || read.Kind == CampaignCheckpointReadKind.Found && accepted?.Kind != CampaignCheckpointAcceptanceKind.Accepted
+                    || read.Kind == CampaignCheckpointReadKind.NotFound && observed.Ledger is not null)
+                    return GitHubProposalPresentation.Preflight(identity, operation, "human-change", "invalid-recovery-authority", null);
+                usage.ObserveState(accepted?.Artifact);
+                operation = read.Kind == CampaignCheckpointReadKind.Found ? CampaignOperation.Resume : CampaignOperation.Start;
+                preflight = preflight with { Operation = operation.Value };
+                if (GitHubCampaignPreflight.Select(identity, operation, observed,
+                    accepted?.Artifact?.CheckpointRevision) is { } verifiedStop) return verifiedStop;
+                // Lifecycle precedes the base-bound checkpoint write capability.
+                if (!await client.BindObservedCheckpointBaseAsync(observed, cancellationToken).ConfigureAwait(false))
+                    return GitHubProposalPresentation.Preflight(identity, operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
+                var claim = await checkpoint.AcquireCheckpointAsync(cancellationToken).ConfigureAwait(false);
+                if (claim != CampaignCheckpointReadKind.Found)
                 {
-                    GitHubFailureCode.Authentication or GitHubFailureCode.Permission => "permission",
-                    GitHubFailureCode.RateLimit => "rate-limit",
-                    GitHubFailureCode.Cancelled => "cancelled",
-                    GitHubFailureCode.Timeout => "timeout",
-                    _ => claim is CampaignCheckpointReadKind.LeaseConflict or CampaignCheckpointReadKind.LeaseUnverifiable
-                        ? "conflict" : claim == CampaignCheckpointReadKind.Invalid ? "human-change"
-                        : claim == CampaignCheckpointReadKind.Unreadable ? "host-failure" : "local-invalid",
-                };
-                return GitHubProposalPresentation.Local(identity, operation, outcome);
-            }
-            using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, checkpoint.CheckpointToken);
-            var claimed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, execution.Token).ConfigureAwait(false);
-            if (GitHubCampaignPreflight.Select(identity, operation, claimed,
-                accepted?.Artifact?.CheckpointRevision) is { } claimedStop) return claimedStop;
-            if (GitHubCampaignPreflight.NeedsPublicationRecovery(claimed))
-            {
-                var recoveryToken = finalization.Begin(execution.Token);
-                client.BindFinalizationDeadline(finalization.DeadlineToken);
-                claimed = await checkpoint.RecoverObservedPublicationAsync(recoveryToken).ConfigureAwait(false);
-                GitHubProposalProcessHooks.Reach("after-publication-recovery");
-                if (finalization.TimedOut && claimed.Failure?.Transport?.Code == GitHubFailureCode.Cancelled)
-                    return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
+                    var outcome = checkpoint.CheckpointFailure?.Code switch
+                    {
+                        GitHubFailureCode.Authentication or GitHubFailureCode.Permission => "permission",
+                        GitHubFailureCode.RateLimit => "rate-limit",
+                        GitHubFailureCode.Cancelled => "cancelled",
+                        GitHubFailureCode.Timeout => "timeout",
+                        _ => claim is CampaignCheckpointReadKind.LeaseConflict or CampaignCheckpointReadKind.LeaseUnverifiable
+                            ? "conflict" : claim == CampaignCheckpointReadKind.Invalid ? "human-change"
+                            : claim == CampaignCheckpointReadKind.Unreadable ? "host-failure" : "local-invalid",
+                    };
+                    return GitHubProposalPresentation.Local(identity, operation, outcome);
+                }
+                using var execution = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, checkpoint.CheckpointToken);
+                var claimed = await GitHubCampaignObserver.ObserveCheckpointAsync(client, checkpoint, execution.Token).ConfigureAwait(false);
                 if (GitHubCampaignPreflight.Select(identity, operation, claimed,
-                    accepted?.Artifact?.CheckpointRevision) is { } recoveredStop) return recoveredStop;
-                if (finalization.TimedOut) return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
-            }
-            if (claimed.TargetOid != observed.TargetOid)
-                return GitHubProposalPresentation.Preflight(identity, operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
-            if (!request.Revalidate() || !preflight.Configuration.Revalidate())
-                return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
-            preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Configuration, claimed) };
-            var originalOnly = claimed.Ledger?.Stage is GitHubCoordinationStage.Claimed
-                or GitHubCoordinationStage.ContentCreated or GitHubCoordinationStage.ProposalRefAdvanced;
-            var publicationSelection = new GitHubAutomaticPublicationSelection(request.Configuration, claimed);
-            var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request,
-                publicationSelection.ForState,
-                (publication, payload, token) => GitHubPublicationFacade.PublishCheckpointAsync(client, checkpoint,
-                    publication, payload, token),
-                async (bundle, token) =>
+                    accepted?.Artifact?.CheckpointRevision) is { } claimedStop) return claimedStop;
+                if (GitHubCampaignPreflight.NeedsPublicationRecovery(claimed))
                 {
-                    try
+                    var recoveryToken = finalization.Begin(execution.Token);
+                    client.BindFinalizationDeadline(finalization.DeadlineToken, () => finalization.TimedOut);
+                    claimed = await checkpoint.RecoverObservedPublicationAsync(recoveryToken).ConfigureAwait(false);
+                    GitHubProposalProcessHooks.Reach("after-publication-recovery");
+                    if (GitHubCampaignPreflight.Select(identity, operation, claimed,
+                        accepted?.Artifact?.CheckpointRevision) is { } recoveredStop) return recoveredStop;
+                    if (finalization.TimedOut) return GitHubProposalPresentation.Local(identity, operation, "timeout", accepted?.Artifact?.CheckpointRevision);
+                }
+                if (claimed.TargetOid != observed.TargetOid)
+                    return GitHubProposalPresentation.Preflight(identity, operation, "conflict", "changed-preflight", accepted?.Artifact?.CheckpointRevision);
+                if (!request.Revalidate() || !preflight.Configuration.Revalidate())
+                    return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
+                preflight = preflight with { SnapshotBinding = GitHubCampaignPreflight.SnapshotBinding(preflight, request.Configuration, claimed) };
+                var originalOnly = claimed.Ledger?.Stage is GitHubCoordinationStage.Claimed
+                    or GitHubCoordinationStage.ContentCreated or GitHubCoordinationStage.ProposalRefAdvanced;
+                var publicationSelection = new GitHubAutomaticPublicationSelection(request.Configuration, claimed);
+                var continuation = new CampaignAcceptedCandidateContinuation(identity, preflight, request,
+                    publicationSelection.ForState,
+                    (publication, payload, token) => GitHubPublicationFacade.PublishCheckpointAsync(client, checkpoint,
+                        publication, payload, token),
+                    async (bundle, token) =>
                     {
-                        if (!request.Revalidate() || !preflight.Configuration.Revalidate())
-                            return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
-                        var inputFailure = await GitHubCheckoutBinding.ValidateAsync(client, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false);
-                        return inputFailure is null ? null : GitHubProposalPresentation.Preflight(identity, operation,
-                            "stale", inputFailure, accepted?.Artifact?.CheckpointRevision);
-                    }
-                    catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
-                    {
-                        return GitHubProposalPresentation.Local(identity, operation,
-                            GitHubCampaignPreflight.TransportOutcome(exception.TransportFailure), accepted?.Artifact?.CheckpointRevision);
-                    }
-                },
-                finalization: finalization,
-                bindFinalizationDeadline: client.BindFinalizationDeadline, originalOperationOnly: originalOnly);
-            return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
-                accessor, continuation, checkpointStore: checkpoint, usage: usage).ConfigureAwait(false);
+                        try
+                        {
+                            if (!request.Revalidate() || !preflight.Configuration.Revalidate())
+                                return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
+                            var inputFailure = await GitHubCheckoutBinding.ValidateAsync(client, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false);
+                            return inputFailure is null ? null : GitHubProposalPresentation.Preflight(identity, operation,
+                                "stale", inputFailure, accepted?.Artifact?.CheckpointRevision);
+                        }
+                        catch (GitHubCoordinationException exception) when (exception.TransportFailure is not null)
+                        {
+                            return GitHubProposalPresentation.Local(identity, operation,
+                                GitHubCampaignPreflight.TransportOutcome(exception.TransportFailure), accepted?.Artifact?.CheckpointRevision);
+                        }
+                    },
+                    finalization: finalization,
+                    bindFinalizationDeadline: deadline => client.BindFinalizationDeadline(deadline, () => finalization.TimedOut), originalOperationOnly: originalOnly);
+                return await CampaignCommandRunner.RunAsync(identity, preflight, execution.Token,
+                    accessor, continuation, checkpointStore: checkpoint, usage: usage).ConfigureAwait(false);
+            }
+            finally { usage.ObserveCheckpoint(checkpoint.CheckpointDiagnostic); }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

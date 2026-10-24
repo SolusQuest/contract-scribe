@@ -56,6 +56,9 @@ One stable consumer-repository coordination ref per campaign stores complete rec
 
 Claims/reservations precede provider dispatch; accepted, settled and unknown facts are incremental. The checkpoint may retain bounded host-validated structured generated documentation, including unpublished/unmerged proposals, with necessary recovery facts. It excludes source-evidence bodies, prompts, raw provider responses, reasoning/transcripts, secrets and candidate bytes. Reconstruct and validate candidate source through Patching; see [Security boundary](security-boundary.md).
 
+For the campaign semantic checkpoint operation, the GitHub adapter carries the existing operation's absolute authorization/observation cutoffs through object creation, exact-ref CAS, actual readback and lost-response reconciliation. Recovery may observe a possibly delivered write after authorization ends, but cannot issue another mutation or query right. The actual accepted readback captures the confirmed owner lease; later renewal cannot extend that query's captured deadline. Every later operation still authenticates fresh mutable refs/resources, and observed ownership loss permanently stops the original fence. These are bounded lease observations, not an atomic lock against unobserved external ref changes. Other checkpoint/publication operations retain their existing recovery bounds.
+
+
 A batch has at most one PR and a campaign at most one active PR. Published draft/ready PRs receive no additional targets. Lost publication responses recover only the exact original operation/PR. Partial publication never authorizes a second PR for that batch. Human ready/merge/close decisions remain explicit; automatic rebase, merge or deletion is outside M7.
 
 ### Invocation observations

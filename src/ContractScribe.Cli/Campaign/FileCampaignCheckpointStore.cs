@@ -12,8 +12,21 @@ namespace ContractScribe.Cli;
 /// Owner-private implementation of the campaign checkpoint store port.
 /// The coordination files are deliberately an implementation detail of this adapter.
 /// </summary>
-internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
+internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointStore
 {
+    private CampaignSemanticCheckpointWindow? semanticWindow;
+    public object SemanticCheckpointIdentity => this;
+    public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => CampaignSemanticCheckpointStoreKind.Local;
+    public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window)
+    {
+        if (Interlocked.CompareExchange(ref semanticWindow, window, null) is not null)
+            throw new InvalidOperationException("campaign.semantic.window-overlap");
+        return new SemanticBinding(this, window);
+    }
+    private sealed class SemanticBinding(FileCampaignCheckpointStore store, CampaignSemanticCheckpointWindow window) : IDisposable
+    {
+        public void Dispose() => Interlocked.CompareExchange(ref store.semanticWindow, null, window);
+    }
     private const int OpenReadOnly = 0;
     private const int OpenReadWrite = 2;
     private const int OpenCreate = 0x40;
@@ -359,7 +372,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignCheckpointStore
             context.Dispose();
             context = null;
             cancellationToken.ThrowIfCancellationRequested();
-            return new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written);
+            var observed = readback.ToPublicResult();
+            semanticWindow?.ObserveLocalReadback(this, observed);
+            return CampaignCheckpointWriteResult.Written(observed);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

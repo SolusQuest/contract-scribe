@@ -1,11 +1,15 @@
 using System.Text.Json;
 using ContractScribe.Core;
+using ContractScribe.Agent.Providers;
+using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.Cli;
 
 /// <summary>One command's source-free observations, never an admission or checkpoint authority.</summary>
 internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocationId = null)
 {
+    // Retain the latest cause within the existing Action's 16 KiB whole-envelope bound.
+    internal const int MaximumProviderDiagnosticsRows = 16;
     private static readonly JsonSerializerOptions JsonOptions = new(JsonSerializerDefaults.Web);
     private readonly TimeProvider clock = clock ?? TimeProvider.System;
     private readonly long startedAt = (clock ?? TimeProvider.System).GetTimestamp();
@@ -19,6 +23,21 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
     private DocumentationScribeInvocationAllowance? allowance;
     private DocumentationScribeFinishReason? finish;
     private bool workUnavailable;
+    private readonly object providerGate = new();
+    private readonly SortedDictionary<int, OpenAiCompatibleProviderObservation> providerObservations = [];
+    private bool providerObservationsFrozen;
+    private GitHubCheckpointDiagnostic? checkpointFailure;
+
+    // The command supplies its own store's observation before disposal. Snapshot
+    // closes reporting; a later observer/cleanup callback cannot revise it.
+    internal void ObserveCheckpoint(GitHubCheckpointDiagnostic? observation)
+    {
+        lock (providerGate)
+        {
+            if (!providerObservationsFrozen && observation is { IsValid: true })
+                checkpointFailure ??= observation;
+        }
+    }
 
     internal static JsonElement Unavailable { get; } = JsonSerializer.SerializeToElement(new
     {
@@ -33,6 +52,8 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
         pullRequestUrl = (string?)null,
         work = (object?)null,
         calls = (object?)null,
+        providerDiagnostics = (object?)null,
+        checkpointFailure = (object?)null,
         tokens = (object?)null,
         accounting = (object?)null,
         history = (object?)null,
@@ -41,7 +62,29 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
         completeness = "unknown",
     }, JsonOptions);
 
-    internal void Bind(DocumentationScribeInvocationAllowance value) => allowance = value;
+    internal void Bind(DocumentationScribeInvocationAllowance value)
+    {
+        lock (providerGate)
+        {
+            if (!ReferenceEquals(allowance, value)) providerObservations.Clear();
+            allowance = value;
+        }
+    }
+
+    internal void ObserveProvider(DocumentationScribeInvocationAllowance expected,
+        OpenAiCompatibleProviderObservation observation)
+    {
+        lock (providerGate)
+        {
+            if (providerObservationsFrozen || !ReferenceEquals(allowance, expected)
+                || observation.PhysicalDispatchOrdinal <= 0
+                || observation.PhysicalDispatchOrdinal > expected.ProviderRequestCount
+                || observation.PhysicalDispatchOrdinal > expected.Limits.MaximumProviderRequests) return;
+            providerObservations.TryAdd(observation.PhysicalDispatchOrdinal, observation);
+            if (providerObservations.Count > Math.Min(MaximumProviderDiagnosticsRows, expected.Limits.MaximumProviderRequests))
+                providerObservations.Remove(providerObservations.First().Key);
+        }
+    }
 
     internal void ObserveState(CampaignCheckpointArtifact? artifact)
     {
@@ -122,7 +165,16 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
 
     private JsonElement CreateSnapshot(GitHubProposalEnvelope envelope)
     {
-        var observation = allowance?.Observe();
+        DocumentationScribeInvocationObservation? observation;
+        OpenAiCompatibleProviderObservation[] providerRows;
+        GitHubCheckpointDiagnostic? checkpoint;
+        lock (providerGate)
+        {
+            providerObservationsFrozen = true;
+            observation = allowance?.Observe();
+            providerRows = providerObservations.Values.ToArray();
+            checkpoint = checkpointFailure;
+        }
         var zero = new DocumentationScribeTokenObservation(0, 0);
         var tokens = new
         {
@@ -175,6 +227,31 @@ internal sealed class InvocationUsage(TimeProvider? clock = null, Guid? invocati
                 activeReserved = observation?.ActiveReserved ?? 0,
             },
             tokens,
+            providerDiagnostics = new
+            {
+                observations = providerRows,
+                missingDispatches = Math.Max(0, (observation?.PhysicalProviderDispatches ?? 0) - providerRows.Length),
+            },
+            checkpointFailure = checkpoint is null ? null : new
+            {
+                operationOrdinal = checkpoint.OperationOrdinal,
+                operation = checkpoint.Operation.ToString(),
+                attemptedRevision = checkpoint.AttemptedRevision,
+                stage = checkpoint.Stage.ToString(),
+                reason = checkpoint.Reason.ToString(),
+                transportCode = checkpoint.TransportCode?.ToString(),
+                httpStatus = checkpoint.HttpStatus,
+                cancellation = checkpoint.Cancellation?.ToString(),
+                refComparison = checkpoint.RefComparison is not { } comparison ? null : new
+                {
+                    expectedCommit = comparison.ExpectedCommit,
+                    predecessorCommit = comparison.PredecessorCommit,
+                    observedCommit = comparison.ObservedCommit,
+                    relation = comparison.Relation.ToString(),
+                    delivery = comparison.Delivery.ToString(),
+                    acknowledged = comparison.Acknowledged,
+                },
+            },
             accounting = observation is null ? null : new
             {
                 input = observation.InputCharge,

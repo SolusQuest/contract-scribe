@@ -94,7 +94,27 @@ public enum CampaignCheckpointWriteKind
     PublicationFailure,
 }
 
-public readonly record struct CampaignCheckpointWriteResult(CampaignCheckpointWriteKind Kind);
+public readonly record struct CampaignCheckpointWriteResult
+{
+    public CampaignCheckpointWriteResult(CampaignCheckpointWriteKind kind)
+    {
+        if (kind == CampaignCheckpointWriteKind.Written)
+            throw new ArgumentException("A successful write requires observed readback.", nameof(kind));
+        Kind = kind;
+        Readback = null;
+    }
+
+    private CampaignCheckpointWriteResult(CampaignCheckpointReadResult readback)
+    {
+        ArgumentNullException.ThrowIfNull(readback);
+        Kind = CampaignCheckpointWriteKind.Written;
+        Readback = readback;
+    }
+
+    public CampaignCheckpointWriteKind Kind { get; }
+    public CampaignCheckpointReadResult? Readback { get; }
+    public static CampaignCheckpointWriteResult Written(CampaignCheckpointReadResult observedReadback) => new(observedReadback);
+}
 
 public interface ICampaignCheckpointStore
 {
@@ -436,11 +456,14 @@ public static class CampaignCheckpointAcceptance
                 return new CampaignCheckpointAcceptanceResult(MapWriteFailure(write.Kind), null);
             }
 
-            return await VerifyReadbackAsync(
-                store,
-                intended,
-                grantsDispatch: intended.State.ActiveReservation is not null,
-                cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            // The conditional store supplies its actual observation from the same
+            // transaction. Core still validates every byte and archive binding.
+            return write.Readback is { } observed && Match(observed, intended) == MatchKind.Exact
+                ? new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Accepted,
+                    new CampaignAcceptedCheckpoint(intended, intended.State.ActiveReservation is not null
+                        ? CampaignAcceptedCheckpointAuthorityKind.Writer : CampaignAcceptedCheckpointAuthorityKind.Observer))
+                : new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.ReadbackMismatch, null);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {

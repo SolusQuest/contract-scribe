@@ -44,11 +44,12 @@ internal sealed partial class GitHubCoordinationStore
             var next = Apply(current.State, update, current.HeadOid);
             ValidateSuccessor(current.State, next);
             var prepared = Prepare(next, current.Creation?.State ?? current.State);
-            if (!await WriteDocumentAsync(prepared.Document, [], token,
-                livePredecessor: remote.Document, publication: prepared.Event).ConfigureAwait(false))
+            if (await WriteDocumentAsync(prepared.Document, [], token,
+                livePredecessor: remote.Document, publication: prepared.Event,
+                attempt: BeginCheckpointOperation(GitHubCheckpointOperation.Publication)).ConfigureAwait(false) is { } failed)
             {
                 StopCheckpoint();
-                throw new GitHubCoordinationException(transportFailure: CheckpointFailure ?? new(GitHubFailureCode.Conflict));
+                throw new GitHubCoordinationException(failure: failed.Failure);
             }
             return await GitHubCampaignObserver.ObserveCheckpointAsync(client, this, token).ConfigureAwait(false);
         }
@@ -86,9 +87,9 @@ internal sealed partial class GitHubCoordinationStore
             // Keep the prepared physical parent stable through the paired CAS.
             guard = await ReadClaimAsync(current, token, renewClaim: false).ConfigureAwait(false);
             if (guard.Guard is null) return guard;
-            if (right.Absence is not null && !await GitHubProposalPullRequestStore.RevalidateAbsenceAsync(
-                right.Absence, this, current, token).ConfigureAwait(false))
-                return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            if (right.Absence is not null && await GitHubProposalPullRequestStore.RevalidateAbsenceAsync(
+                right.Absence, this, current, token).ConfigureAwait(false) is { } absenceFailure)
+                return new(GitHubCoordinationOutcome.Failed, failure: absenceFailure);
             var proposalRef = ProposalRef(current.State);
             var update = await client.UpdatePublicationRefsAsync(
                 new(coordinationRef, current.HeadOid, prepared.CommitOid, false),
@@ -111,6 +112,6 @@ internal sealed partial class GitHubCoordinationStore
                 publicationMutation: update);
         }
         catch (GitHubCoordinationException) { return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch); }
-        catch (OperationCanceledException) { return DomainFailure(GitHubCoordinationFailureKind.Transport, new(GitHubFailureCode.Cancelled)); }
+        catch (OperationCanceledException) { return DomainFailure(GitHubCoordinationFailureKind.Transport, client.CancellationFailure); }
     }
 }

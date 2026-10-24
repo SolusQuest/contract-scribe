@@ -40,6 +40,8 @@ internal static class CampaignProcessBoundaryHooks
     internal const string PhysicalReservationAfterReadback = "proposal.physical-reservation.after-readback";
     internal const string PhysicalSettlementAfterReadback = "proposal.physical-settlement.after-readback";
     internal const string RetryWaitAfterReadback = "proposal.retry-wait.after-readback";
+    internal const string SemanticAuthorizationReplacementScope = "proposal.semantic-authorization";
+    internal const string SemanticAuthorizationAfterReadback = "proposal.semantic-authorization.after-readback";
     internal const string ScribeMemberAfterReadback = "proposal.scribe-member.after-readback";
     internal const string ScribeMemberBeforePostflight = "proposal.scribe-member.before-postflight";
     internal const string ScribeMemberPostflightAdmitted = "proposal.scribe-member.postflight-admitted";
@@ -63,6 +65,9 @@ internal static class CampaignProcessBoundaryHooks
         PhysicalReservationAfterReadback,
         PhysicalSettlementAfterReadback,
         RetryWaitAfterReadback,
+        SemanticAuthorizationAfterReadback,
+        SemanticAuthorizationReplacementScope + "." + InReplacement,
+        SemanticAuthorizationReplacementScope + "." + AfterReplacementBeforeReadback,
         ScribeMemberAfterReadback,
         ScribeMemberBeforePostflight,
         ScribeMemberPostflightAdmitted,
@@ -124,6 +129,7 @@ internal static class CampaignProcessBoundaryHooks
         PhysicalReservationReplacementScope,
         PhysicalSettlementReplacementScope,
         RetryWaitReplacementScope,
+        SemanticAuthorizationReplacementScope,
         ScribeMemberReplacementScope,
         ScribeProgressReplacementScope,
         InitialReplacementScope,

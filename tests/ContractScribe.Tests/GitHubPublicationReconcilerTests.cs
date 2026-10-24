@@ -1153,6 +1153,7 @@ public sealed partial class GitHubPublicationReconcilerTests
     {
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            if (remote.BeforeRequest is { } beforeRequest) await beforeRequest(request, cancellationToken);
             var response = await remote.Reply(request, cancellationToken);
             if (remote.ServerNow is { } now)
             {
@@ -1167,6 +1168,8 @@ public sealed partial class GitHubPublicationReconcilerTests
     private sealed class Remote
     {
         internal readonly Branch.Remote Git = new();
+        internal GitHubActor ExpectedPublisher = Publisher;
+        internal Func<HttpRequestMessage, CancellationToken, Task>? BeforeRequest;
         internal DateTimeOffset? ServerNow;
         internal int SecondsPerRequest;
         internal readonly List<JsonObject> Prs = [];
@@ -1260,7 +1263,7 @@ public sealed partial class GitHubPublicationReconcilerTests
                         created_at = "2026-01-01T00:00:00Z",
                         title = payload["title"]!.GetValue<string>(),
                         body = payload["body"]!.GetValue<string>(),
-                        user = new { id = Publisher.Id, node_id = Publisher.NodeId, login = Publisher.Login, type = "Bot" },
+                        user = new { id = ExpectedPublisher.Id, node_id = ExpectedPublisher.NodeId, login = ExpectedPublisher.Login, type = "Bot" },
                         head = new { @ref = payload["head"]!.GetValue<string>(), sha = Git.Refs["refs/heads/" + payload["head"]!.GetValue<string>()], repo = Repo() },
                         @base = new { @ref = payload["base"]!.GetValue<string>(), sha = Git.Refs["refs/heads/main"], repo = Repo() },
                         maintainer_can_modify = false,

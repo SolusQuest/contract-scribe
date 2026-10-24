@@ -45,12 +45,15 @@ public sealed class GitHubArchitectureTests
         Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
-        Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync",
+        Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync", "EnterSemanticRecovery",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
             "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+        var semanticRecovery = client.GetMethod("EnterSemanticRecovery", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(typeof(IDisposable), semanticRecovery.ReturnType);
+        Assert.Equal(new[] { typeof(CampaignSemanticCheckpointWindow) }, semanticRecovery.GetParameters().Select(parameter => parameter.ParameterType));
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
         var properties = client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "CheckpointAuthority", "HasMutationAuthority", "ObjectOperation", "ReadAuthority", "ServerTime" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "CancellationFailure", "CheckpointAuthority", "HasMutationAuthority", "ObjectOperation", "ReadAuthority", "ServerTime" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
         var authority = Assert.Single(properties, p => p.Name == "Authority");
         Assert.Equal("Authority", authority.Name);
         Assert.Equal(typeof(ValidatedGitHubPublicationAuthority), authority.PropertyType);

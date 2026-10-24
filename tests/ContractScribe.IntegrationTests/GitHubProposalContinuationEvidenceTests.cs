@@ -169,6 +169,8 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(received, fixture.Provider.RequestCount);
         var usage = EvidenceUsage(result);
         Assert.Equal(0, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+        Assert.Empty(usage.GetProperty("providerDiagnostics").GetProperty("observations").EnumerateArray());
+        Assert.Equal(0, usage.GetProperty("providerDiagnostics").GetProperty("missingDispatches").GetInt32());
         Assert.Equal(0, usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
         Assert.Equal(5, usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
         // ProposalComplete receipts are restored; they were not already M2 Accepted.

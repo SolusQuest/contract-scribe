@@ -1,4 +1,5 @@
 using System.Text.Json.Nodes;
+using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
 using ContractScribe.Cli;
@@ -313,6 +314,19 @@ public sealed partial class GitHubProposalCliProcessTests
             Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
             Assert.Equal(remaining - Math.Min(5, remaining), usage.GetProperty("work").GetProperty("deferredTargets").GetInt32());
             Assert.Equal(fixture.Provider.RequestCount - received, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+            var diagnostics = usage.GetProperty("providerDiagnostics");
+            Assert.Equal(0, diagnostics.GetProperty("missingDispatches").GetInt32());
+            var observations = diagnostics.GetProperty("observations").EnumerateArray().ToArray();
+            Assert.Equal(fixture.Provider.RequestCount - received, observations.Length);
+            Assert.Equal(Enumerable.Range(1, observations.Length), observations.Select(row => row.GetProperty("physicalDispatchOrdinal").GetInt32()));
+            Assert.All(observations, row =>
+            {
+                Assert.Equal(JsonValueKind.Null, row.GetProperty("failureCode").ValueKind);
+                Assert.Contains(row.GetProperty("codecDisposition").GetString(),
+                    new[] { "codec.accepted-tool", "codec.accepted-terminal" });
+                Assert.Equal(JsonValueKind.String, row.GetProperty("attemptId").ValueKind);
+            });
+            Assert.Contains(observations, row => row.GetProperty("codecDisposition").GetString() == "codec.accepted-terminal");
             Assert.Equal(fixture.Provider.RequestCount, usage.GetProperty("history").GetProperty("providerRequests").GetProperty("observed").GetInt64());
             AssertObservationPrivacy(fixture, published, checkpoint);
             Assert.Equal(posts + 1, fixture.GitHub.PrAttempts);

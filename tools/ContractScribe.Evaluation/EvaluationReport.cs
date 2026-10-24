@@ -31,39 +31,11 @@ internal sealed record EvaluationProviderFailureReport(
     int? HttpStatusCode)
 {
     internal static string CodeId(DocumentationScribeModelFailureCode code) =>
-        code switch
-        {
-            DocumentationScribeModelFailureCode.TransientUnavailable =>
-                "model.failure.transient-unavailable",
-            DocumentationScribeModelFailureCode.RateLimited =>
-                "model.failure.rate-limited",
-            DocumentationScribeModelFailureCode.PermanentUnavailable =>
-                "model.failure.permanent-unavailable",
-            DocumentationScribeModelFailureCode.Authentication =>
-                "model.failure.authentication",
-            DocumentationScribeModelFailureCode.Unsupported =>
-                "model.failure.unsupported",
-            DocumentationScribeModelFailureCode.ContextLimit => "model.failure.context-limit",
-            DocumentationScribeModelFailureCode.MalformedResponse =>
-                "model.failure.malformed-response",
-            _ => throw new ArgumentOutOfRangeException(nameof(code)),
-        };
+        DocumentationScribeModelFailure.CodeId(code);
 
     internal static string OriginId(DocumentationScribeModelFailureOrigin origin) =>
-        origin switch
-        {
-            DocumentationScribeModelFailureOrigin.RequestPreparation =>
-                "model.failure-origin.request-preparation",
-            DocumentationScribeModelFailureOrigin.HttpStatus =>
-                "model.failure-origin.http-status",
-            DocumentationScribeModelFailureOrigin.Transport =>
-                "model.failure-origin.transport",
-            DocumentationScribeModelFailureOrigin.SuccessfulResponse =>
-                "model.failure-origin.successful-response",
-            DocumentationScribeModelFailureOrigin.ResponseCodec =>
-                "model.failure-origin.response-codec",
-            _ => throw new ArgumentOutOfRangeException(nameof(origin)),
-        };
+        DocumentationScribeModelFailure.OriginId(origin);
+
 }
 
 internal sealed record EvaluationProviderResponseReport(

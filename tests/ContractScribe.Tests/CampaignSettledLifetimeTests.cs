@@ -50,7 +50,8 @@ public sealed partial class CampaignStateContractTests
             DocumentationScribeHostOperation.SemanticTool, DocumentationScribeHostOperation.RegisteredTool,
             DocumentationScribeHostOperation.RetryWait, DocumentationScribeHostOperation.Continuation })
         {
-            var transition = CampaignStateReducer.AdvanceHostOperation(parent, phase, 0, 10, completing: false);
+            var transition = CampaignStateReducer.AdvanceHostOperation(parent, phase, 0,
+                phase == DocumentationScribeHostOperation.SemanticTool ? 70000 : 10, completing: false);
             Assert.Equal(equality ? CampaignTransitionKind.Applied : CampaignTransitionKind.Rejected, transition.Kind);
             if (!equality)
             {

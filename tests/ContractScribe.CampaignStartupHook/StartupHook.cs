@@ -136,6 +136,9 @@ internal static class StartupHook
         var deadlineClock = deadlineBoundary is null ? null : new FinalizationClock();
         if (deadlineClock is not null)
             boundaries.GetMethod("RegisterFinalizationClock", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [deadlineClock]);
+        else if (observations is not null)
+            boundaries.GetMethod("RegisterFinalizationClock", BindingFlags.Static | BindingFlags.NonPublic)!
+                .Invoke(null, [new ObservedFinalizationClock(observations)]);
         if (terminal is not null)
             boundaries.GetMethod("RegisterTerminal", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [terminal, (long?)12]);
         Action<string> callback = name =>
@@ -151,6 +154,19 @@ internal static class StartupHook
                 throw new TimeoutException("Synthetic physical-output pause expired.");
         };
         boundaries.GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!.Invoke(null, [callback]);
+    }
+
+    // Observe the original real timer; do not replace its elapsed-time source,
+    // due time or cancellation. Fault scenarios above keep their existing clock.
+    private sealed class ObservedFinalizationClock(string path) : TimeProvider
+    {
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            if (dueTime != TimeSpan.FromMinutes(5)) throw new InvalidOperationException("Unexpected finalization timer.");
+            File.AppendAllText(path, "finalization-start:"
+                + global::System.Diagnostics.Stopwatch.GetTimestamp().ToString(global::System.Globalization.CultureInfo.InvariantCulture) + "\n");
+            return TimeProvider.System.CreateTimer(callback, state, dueTime, period);
+        }
     }
 
     private sealed class FinalizationClock : TimeProvider

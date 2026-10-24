@@ -9,6 +9,25 @@ namespace ContractScribe.Tests;
 
 public sealed class GitHubPublicationContractTests
 {
+    [Fact]
+    public void Verified_resource_residual_does_not_suppress_the_remote_failure()
+    {
+        var content = new GitHubPublicationContentResidual(GitHubPublicationResourceKind.Commit, new string('a', 40), new string('b', 64));
+        var reference = new GitHubPublicationRefResidual("refs/heads/proposal", new string('0', 40), new string('a', 40), new string('b', 64));
+        foreach (var kind in Enum.GetValues<GitHubPublicationRemoteFailureKind>())
+        {
+            var contentFailure = GitHubPublicationResult.FromRemoteFailure(kind, contentResidual: content);
+            var refFailure = GitHubPublicationResult.FromRemoteFailure(kind, refResidual: reference);
+            Assert.Equal(kind, contentFailure.RemoteFailure!.Kind);
+            Assert.Equal(kind, refFailure.RemoteFailure!.Kind);
+            Assert.Same(content, contentFailure.ContentResidual);
+            Assert.Same(reference, refFailure.RefResidual);
+            Assert.Equal(GitHubPublicationResult.FromRemoteFailure(kind).Kind, contentFailure.Kind);
+            Assert.Equal(contentFailure.Kind, refFailure.Kind);
+        }
+        Assert.Throws<ArgumentException>(() => GitHubPublicationResult.FromRemoteFailure(GitHubPublicationRemoteFailureKind.Timeout, content, reference));
+    }
+
     private static readonly byte[] OriginalBytes = Encoding.UTF8.GetBytes("original\n");
     private static readonly byte[] CandidateBytes = Encoding.UTF8.GetBytes("candidate\n");
 

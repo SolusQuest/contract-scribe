@@ -31,10 +31,21 @@ internal static class GitHubPublicationFacade
                 finally { client.UnbindPublication(); }
             }, token).ConfigureAwait(false);
         }
+        catch (GitHubCoordinationException exception) when (exception.Failure is { })
+        {
+            var attempt = GitHubPublicationReconciler.Project(
+                new(GitHubCoordinationOutcome.Failed, failure: exception.Failure), GitHubPublicationBoundary.CoordinationClaim);
+            return Observe(authority, attempt.Result, client.AuthenticatedRepository, attempt.Diagnostic);
+        }
+        catch (OperationCanceledException)
+        {
+            var attempt = GitHubPublicationReconciler.Project(new(GitHubCoordinationOutcome.Failed,
+                failure: new(GitHubCoordinationFailureKind.Transport, client.CancellationFailure)), GitHubPublicationBoundary.CoordinationClaim);
+            return Observe(authority, attempt.Result, client.AuthenticatedRepository, attempt.Diagnostic);
+        }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            return new(GitHubPublicationResult.FromRemoteFailure(token.IsCancellationRequested
-                ? GitHubPublicationRemoteFailureKind.Cancelled : GitHubPublicationRemoteFailureKind.HostFailure), null, null, null);
+            return new(GitHubPublicationResult.FromRemoteFailure(GitHubPublicationRemoteFailureKind.HostFailure), null, null, null);
         }
     }
 

@@ -405,9 +405,20 @@ jobs:
 
 
   integration_github_proposal:
+    name: integration_github_proposal (${{ matrix.lane }})
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: compiler-inputs
+            filter: 'FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.G3_'
+          - lane: automatic
+            filter: 'FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.Automatic_'
+          - lane: remaining
+            filter: 'FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.G3_&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.Automatic_'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -456,9 +467,9 @@ jobs:
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
-          --filter "FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests."
+          --filter "FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.&${{ matrix.filter }}"
           --logger "console;verbosity=normal"
-          --logger "trx;LogFilePrefix=integration-github-proposal-${{ runner.os }}"
+          --logger "trx;LogFilePrefix=integration-github-proposal-${{ matrix.lane }}-${{ runner.os }}"
           --results-directory TestResults/ci/integration-github-proposal
       - name: Require complete other github proposal tests
         id: integration_test_count
@@ -517,7 +528,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: integration-github-proposal-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          name: integration-github-proposal-${{ matrix.lane }}-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: TestResults/ci/integration-github-proposal/*.trx
           if-no-files-found: error
       - name: Aggregate other github proposal outcomes
@@ -534,9 +545,18 @@ jobs:
 
 
   integration_other:
+    name: integration_other (${{ matrix.lane }})
     permissions:
       contents: read
       packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - lane: campaign
+            filter: 'FullyQualifiedName~ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.'
+          - lane: remaining
+            filter: 'FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
@@ -585,9 +605,9 @@ jobs:
         run: >-
           dotnet test tests/ContractScribe.IntegrationTests/ContractScribe.IntegrationTests.csproj
           --configuration Release --no-build --no-restore
-          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalHttpLoss"
+          --filter "FullyQualifiedName!=ContractScribe.Roslyn.IntegrationTests.CampaignCliProcessTests.EveryFrozenBoundary_IsAcknowledgedTerminatedAndReinvokedAgainstTheSameCheckpoint&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalCliProcessTests.&FullyQualifiedName!~ContractScribe.Roslyn.IntegrationTests.GitHubProposalHttpLoss&${{ matrix.filter }}"
           --logger "console;verbosity=normal"
-          --logger "trx;LogFilePrefix=integration-other-${{ runner.os }}"
+          --logger "trx;LogFilePrefix=integration-other-${{ matrix.lane }}-${{ runner.os }}"
           --results-directory TestResults/ci/integration-other
       - name: Require complete other integration tests
         id: integration_test_count
@@ -646,7 +666,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
-          name: integration-other-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
+          name: integration-other-${{ matrix.lane }}-trx-${{ runner.os }}-attempt-${{ github.run_attempt }}
           path: TestResults/ci/integration-other/*.trx
           if-no-files-found: error
       - name: Aggregate other integration outcomes

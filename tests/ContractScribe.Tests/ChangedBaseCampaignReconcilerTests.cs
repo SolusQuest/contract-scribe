@@ -390,7 +390,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
                 Cancellation!.Cancel();
                 cancellationToken.ThrowIfCancellationRequested();
             }
-            return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+            return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
         }
     }
 }

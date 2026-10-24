@@ -23,6 +23,8 @@ public sealed partial class DocumentationScribeCompositionTests
         var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
             campaign.Input(fixture, store, exchange, RuntimeOptions()));
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, outcome.Kind);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, outcome.CheckpointFailure);
+        Assert.Equal(settlement ? 2 : 1, outcome.Artifact!.CheckpointRevision);
         Assert.Equal(settlement ? 1 : 0, exchange.RequestCount);
         var interrupted = store.Current!;
         var claim = Assert.IsType<CampaignProviderReservation>(interrupted.State.ActiveReservation);
