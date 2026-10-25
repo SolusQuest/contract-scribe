@@ -39,21 +39,26 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     {
         await using var fixture = await EndToEndFixture.CreateAsync(additionalSources: AdditionalPatchSources());
         var elapsed = dimension.StartsWith("elapsed", StringComparison.Ordinal);
-        var campaign = LifetimeAdmissionCampaign(fixture, dimension, elapsed ? 1000 : 100);
+        var campaign = LifetimeAdmissionCampaign(fixture, dimension, dimension == "elapsed-host" ? 31000 : elapsed ? 1000 : 100);
         var store = new PatchMemoryStore(CampaignStateJson.CreateArtifact(campaign.InitialState));
-        var clock = new LifetimeAdmissionClock(() => store.Current.State, elapsed ? overrun ? 1001 : 1000 : 0);
+        var clock = new LifetimeAdmissionClock(() => store.Current.State, dimension == "elapsed-host" ? 1000 : 0);
         var allowance = StopCauseAllowance(fixture, clock, output: 100);
         var work = campaign.Plan.WorkItems.First(w => w.Disposition.Kind == CampaignPlanningDispositionKind.Executable);
         var request = campaign.Requests[work.Targets[0].SymbolRef];
-        var exchange = new LifetimeAdmissionExchange(request.Request, dimension, overrun);
+        var exchange = new LifetimeAdmissionExchange(request.Request, dimension, overrun,
+            () => { if (dimension == "elapsed-provider") clock.Advance(overrun ? 1001 : 1000); });
         var credentials = 0;
         var stopped = await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store,
             request, allowance, clock, exchange: null, deferred: () => { credentials++; return exchange; }));
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.BudgetExhausted, stopped.Kind);
         Assert.Equal(1, exchange.Sends);
         Assert.Equal(1, credentials);
-        Assert.Equal(overrun && !elapsed ? 0 : 1, clock.ToolCompletions);
-        Assert.Equal(overrun && !elapsed ? 0 : 1, allowance.ToolCallCount);
+        var expectedTools = dimension == "elapsed-provider" || overrun && !elapsed ? 0 : 1;
+        Assert.Equal(expectedTools, clock.ToolCompletions);
+        Assert.Equal(expectedTools, allowance.ToolCallCount);
+        if (dimension == "elapsed-host")
+            Assert.Equal(30000, CampaignBudgetAccounting.RemainingLifetimeElapsed(store.Current.State.LineageCharges,
+                store.Current.State.ConfiguredCeilings.CampaignBudget));
         Assert.Null(store.Current.State.ActiveReservation);
         Assert.Equal(CampaignTerminalReason.LifetimeCap, store.Current.State.TerminalOutcome!.Reason);
         var retained = store.Current.State.WorkItems.Single(w => w.WorkItemKey == work.WorkItemKey);
@@ -88,7 +93,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         Assert.True(before.AsSpan().SequenceEqual(store.Current.ExactUtf8Json.AsSpan()));
 
         var budget = campaign.PlanningInput.ExecutionPolicy.CampaignBudget;
-        var cap = clear ? (long?)null : elapsed ? 3000 : 10000;
+        var cap = clear ? (long?)null : dimension == "elapsed-host" ? 100000 : elapsed ? 3000 : 10000;
         budget = dimension switch
         {
             "output" => budget with { MaximumOutputTokens = cap },
@@ -179,7 +184,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         return original with { PlanningInput = planning, Plan = plan, InitialState = state };
     }
 
-    private sealed class LifetimeAdmissionExchange(DocumentationScribeRequest request, string dimension, bool overrun)
+    private sealed class LifetimeAdmissionExchange(DocumentationScribeRequest request, string dimension, bool overrun, Action observeProviderElapsed)
         : IDocumentationScribeModelExchange
     {
         internal int Sends { get; private set; }
@@ -194,6 +199,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             if (Sends > 1) return ValueTask.FromResult(new DocumentationScribeModelResponse([],
                 [new(ScribeProtocolFixture.Submit(modelRequest, CampaignProposalTerminal(request)))], usage: new(0, 0, 0, 0),
                 cost: dimension == "cost" ? new("currency.synthetic", 0) : null));
+            observeProviderElapsed();
             var calls = ImmutableArray.CreateBuilder<DocumentationScribeModelToolCall>();
             var count = dimension == "elapsed-host" ? 2 : 1;
             for (var index = 0; index < count; index++)
@@ -221,11 +227,12 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
     {
         private long timestamp;
         internal int ToolCompletions { get; private set; }
+        internal void Advance(int milliseconds) => timestamp += milliseconds;
         public override long TimestampFrequency => 1000;
         public override long GetTimestamp() => timestamp;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period) =>
             current().ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.SemanticTool } claim
-                && dueTime.TotalMilliseconds == claim.Exposure.ElapsedMilliseconds
+                && dueTime.TotalMilliseconds is > 0 and <= CampaignSemanticCheckpointWindow.MaximumQueryMilliseconds
                 ? new LifetimeToolCompletionTimer(() => { ToolCompletions++; if (ToolCompletions == 1) timestamp += elapsed; })
                 : new NoopTimer();
     }

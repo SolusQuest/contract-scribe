@@ -374,6 +374,28 @@ public sealed class DocumentationScribeModelFailure
     public bool IsTransient => Code is DocumentationScribeModelFailureCode.TransientUnavailable
         or DocumentationScribeModelFailureCode.RateLimited;
 
+    public static string CodeId(DocumentationScribeModelFailureCode code) => code switch
+    {
+        DocumentationScribeModelFailureCode.TransientUnavailable => "model.failure.transient-unavailable",
+        DocumentationScribeModelFailureCode.RateLimited => "model.failure.rate-limited",
+        DocumentationScribeModelFailureCode.PermanentUnavailable => "model.failure.permanent-unavailable",
+        DocumentationScribeModelFailureCode.Authentication => "model.failure.authentication",
+        DocumentationScribeModelFailureCode.Unsupported => "model.failure.unsupported",
+        DocumentationScribeModelFailureCode.ContextLimit => "model.failure.context-limit",
+        DocumentationScribeModelFailureCode.MalformedResponse => "model.failure.malformed-response",
+        _ => throw new ArgumentOutOfRangeException(nameof(code)),
+    };
+
+    public static string OriginId(DocumentationScribeModelFailureOrigin origin) => origin switch
+    {
+        DocumentationScribeModelFailureOrigin.RequestPreparation => "model.failure-origin.request-preparation",
+        DocumentationScribeModelFailureOrigin.HttpStatus => "model.failure-origin.http-status",
+        DocumentationScribeModelFailureOrigin.Transport => "model.failure-origin.transport",
+        DocumentationScribeModelFailureOrigin.SuccessfulResponse => "model.failure-origin.successful-response",
+        DocumentationScribeModelFailureOrigin.ResponseCodec => "model.failure-origin.response-codec",
+        _ => throw new ArgumentOutOfRangeException(nameof(origin)),
+    };
+
     public override string ToString() => nameof(DocumentationScribeModelFailure);
 }
 

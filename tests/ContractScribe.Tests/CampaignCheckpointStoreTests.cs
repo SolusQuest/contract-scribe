@@ -1506,11 +1506,11 @@ public sealed class CampaignCheckpointStoreTests
     {
         if (mutation == "wrong-marker")
         {
-            Assert.Empty(File.ReadAllBytes(leasePath));
+            Assert.Empty(ReadNativeBytes(leasePath));
             Assert.Equal(changedMarker, ReadObjectMarker(leasePath));
             return;
         }
-        Assert.Equal(changedBytes, File.ReadAllBytes(leasePath));
+        Assert.Equal(changedBytes, ReadNativeBytes(leasePath));
         Assert.Equal(
             (nint)(-1),
             GetExtendedAttributeSize(

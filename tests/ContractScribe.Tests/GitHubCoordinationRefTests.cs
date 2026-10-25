@@ -2944,6 +2944,11 @@ public sealed partial class GitHubCoordinationRefTests
             ForceCoordinationHead(value.CommitOid);
         }
 
+        internal void CorruptBlob(string oid)
+        {
+            lock (gate) blobs[oid] = [.. blobs[oid], (byte)' '];
+        }
+
         internal string SeedBlob(byte[] bytes)
         {
             var oid = GitHubCoordinationObjects.ObjectOid("blob", bytes);

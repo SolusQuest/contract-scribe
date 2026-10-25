@@ -56,5 +56,8 @@
   {"hook":"proposal.scribe-member.after-readback","scenario":"accepted"},
   {"hook":"proposal.scribe-progress.in-replacement","scenario":"accepted"},
   {"hook":"proposal.scribe-progress.after-replacement-before-readback","scenario":"accepted"},
-  {"hook":"proposal.scribe-progress.after-readback","scenario":"accepted"}
+  {"hook":"proposal.scribe-progress.after-readback","scenario":"accepted"},
+  {"hook":"proposal.semantic-authorization.in-replacement","scenario":"semantic"},
+  {"hook":"proposal.semantic-authorization.after-replacement-before-readback","scenario":"semantic"},
+  {"hook":"proposal.semantic-authorization.after-readback","scenario":"semantic"}
 ]

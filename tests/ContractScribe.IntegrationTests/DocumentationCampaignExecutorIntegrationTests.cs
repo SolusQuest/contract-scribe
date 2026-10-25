@@ -1006,8 +1006,21 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
 
     private sealed class PatchStoreCrashException : Exception;
 
-    private sealed class PatchMemoryStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
+    private sealed class PatchMemoryStore(CampaignCheckpointArtifact initial) : ICampaignSemanticCheckpointStore
     {
+        private CampaignSemanticCheckpointWindow? semanticWindow;
+        public object SemanticCheckpointIdentity => this;
+        public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => CampaignSemanticCheckpointStoreKind.Local;
+        public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window)
+        {
+            Assert.Null(semanticWindow);
+            semanticWindow = window;
+            return new PatchSemanticBinding(this);
+        }
+        private sealed class PatchSemanticBinding(PatchMemoryStore store) : IDisposable
+        {
+            public void Dispose() => store.semanticWindow = null;
+        }
         private readonly object gate = new();
         private CampaignCheckpointArtifact current = initial;
         private int replaceAttemptCount;
@@ -1039,10 +1052,12 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                     return ValueTask.FromResult(CampaignCheckpointReadResult.Unreadable());
                 }
 
-                return ValueTask.FromResult(CampaignCheckpointReadResult.Found(
+                var actual = CampaignCheckpointReadResult.Found(
                     current.ExactUtf8Json.AsSpan(),
                     current.CheckpointRevision,
-                    current.Sha256));
+                    current.Sha256);
+                semanticWindow?.ObserveLocalReadback(this, actual);
+                return ValueTask.FromResult(actual);
             }
         }
 
@@ -1107,8 +1122,7 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
                         failNextRead = true;
                     }
                 }
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(
-                    CampaignCheckpointWriteKind.Written));
+                return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
             }
         }
     }

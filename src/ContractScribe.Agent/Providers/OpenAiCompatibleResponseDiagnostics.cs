@@ -26,6 +26,8 @@ public enum OpenAiCompatibleResponseCodecDisposition
     ArgumentsInvalid,
     TerminalMixed,
     UsageInvalid,
+    FinishReasonLength,
+    FinishReasonStop,
     FinishReasonUnsupported,
     FinishReasonInconsistent,
     TerminalArgumentsExceedsLimit,
@@ -89,6 +91,16 @@ public sealed class OpenAiCompatibleResponseDiagnostics : IDisposable
     }
 
     public static OpenAiCompatibleResponseDiagnostics CreateClosedObservations() => new(capture: null);
+
+    internal static OpenAiCompatibleResponseDiagnostics ForProviderRequest(int number, int maximum)
+    {
+        var result = CreateClosedObservations();
+        result.BeginCase(maximum);
+        if (number <= 0 || number > maximum) throw new ArgumentOutOfRangeException(nameof(number));
+        result.lastProviderRequestNumber = number - 1;
+        result.BeginProviderRequest(number);
+        return result;
+    }
 
     [SupportedOSPlatform("linux")]
     public static OpenAiCompatibleResponseDiagnostics CreateUnsafeLinuxCapture(
@@ -250,6 +262,8 @@ internal static class OpenAiCompatibleResponseDiagnosticVocabulary
         OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid => "codec.arguments.invalid",
         OpenAiCompatibleResponseCodecDisposition.TerminalMixed => "codec.terminal.mixed",
         OpenAiCompatibleResponseCodecDisposition.UsageInvalid => "codec.usage.invalid",
+        OpenAiCompatibleResponseCodecDisposition.FinishReasonLength => "codec.finish-reason.length",
+        OpenAiCompatibleResponseCodecDisposition.FinishReasonStop => "codec.finish-reason.stop",
         OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported =>
             "codec.finish-reason.unsupported",
         OpenAiCompatibleResponseCodecDisposition.FinishReasonInconsistent =>

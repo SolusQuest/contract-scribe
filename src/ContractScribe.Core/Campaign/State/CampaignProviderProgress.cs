@@ -16,7 +16,7 @@ public static partial class CampaignStateReducer
         {
             var claim = CurrentClaim(invocation);
             var allowance = invocation.InvocationAllowance!;
-            if (claim.OperationKind != CampaignProviderOperationKind.Host || !permit.OwnedBy(allowance)
+            if (invocation.ProgressStopped || claim.OperationKind != CampaignProviderOperationKind.Host || !permit.OwnedBy(allowance)
                 || permit.DispatchStarted || !HasProviderCompletionRevisionHeadroom(predecessor.State)
                 || descriptor.ProviderRequestNumber != checked(claim.CurrentExecutionSettledProviderRequests + 1)
                 || descriptor.LogicalAttemptNumber != checked(claim.RetryProgress.RetryableFailureCount + 1)
@@ -65,7 +65,7 @@ public static partial class CampaignStateReducer
         try
         {
             var claim = CurrentClaim(invocation);
-            if (claim.OperationKind != CampaignProviderOperationKind.Dispatch
+            if (invocation.ProgressStopped || claim.OperationKind != CampaignProviderOperationKind.Dispatch
                 || !permit.OwnedBy(invocation.InvocationAllowance!)
                 || claim.Exposure != CampaignBudgetAccounting.ProviderExposure(predecessor.State.ConfiguredCeilings.CampaignBudget, permit.Exposure)
                 || !Enum.IsDefined(settlement.Disposition) || !Enum.IsDefined(settlement.Cache)
@@ -128,7 +128,7 @@ public static partial class CampaignStateReducer
         try
         {
             var claim = CurrentClaim(invocation);
-            if (claim.OperationKind != CampaignProviderOperationKind.Host || !Enum.IsDefined(phase)
+            if (invocation.ProgressStopped || claim.OperationKind != CampaignProviderOperationKind.Host || !Enum.IsDefined(phase)
                 || elapsed < 0 || maximumMilliseconds < 0
                 || completing && claim.HostPhase != (CampaignProviderHostPhase)phase)
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
@@ -145,6 +145,12 @@ public static partial class CampaignStateReducer
                 var lifetime = CampaignBudgetAccounting.RemainingLifetimeElapsed(charges, predecessor.State.ConfiguredCeilings.CampaignBudget);
                 var exposure = Math.Min(maximumMilliseconds, Math.Min(lifetime, invocation.InvocationAllowance!.RemainingMilliseconds));
                 if (exposure <= 0 || !HasProviderCompletionRevisionHeadroom(predecessor.State))
+                    return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
+                if (phase == DocumentationScribeHostOperation.SemanticTool
+                    && (exposure <= CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds
+                        || exposure > CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds
+                        || !CampaignBudgetAccounting.FitsProviderBudget(charges,
+                            CampaignBudgetAccounting.HostExposure(exposure), predecessor.State.ConfiguredCeilings.CampaignBudget)))
                     return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
                 next = next with
                 {
@@ -193,14 +199,16 @@ public static partial class CampaignStateReducer
     }
 
     internal static CampaignTransitionResult PauseProviderInvocation(CampaignProviderInvocationAuthority invocation,
-        int elapsed, bool lifetimeStop, bool checkpointCapacityStop = false, bool projectionCapacityStop = false)
+        int elapsed, bool lifetimeStop, bool checkpointCapacityStop = false, bool projectionCapacityStop = false,
+        bool invocationHeadroomStop = false)
     {
         var predecessor = invocation.AcceptedCheckpoint.Artifact;
         try
         {
             var claim = CurrentClaim(invocation);
             if (claim.OperationKind != CampaignProviderOperationKind.Host
-                || !lifetimeStop && !checkpointCapacityStop && !projectionCapacityStop && invocation.InvocationAllowance?.HasCheckedStop != true)
+                || !lifetimeStop && !checkpointCapacityStop && !projectionCapacityStop && !invocationHeadroomStop
+                    && invocation.InvocationAllowance?.HasCheckedStop != true)
                 return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
             var state = predecessor.State;
             var charges = CampaignBudgetAccounting.SettleHostInterval(state.LineageCharges, elapsed, claim.Exposure.ElapsedMilliseconds);

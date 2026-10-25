@@ -4,7 +4,8 @@ using ContractScribe.Core;
 namespace ContractScribe.Roslyn;
 
 public sealed class DocumentationScribeManifestSemanticToolPort
-    : IDocumentationScribeToolPort<DocumentationScribeSemanticToolRequest, DocumentationScribeSemanticToolResult>
+    : IDocumentationScribeToolPort<DocumentationScribeSemanticToolRequest, DocumentationScribeSemanticToolResult>,
+      IDocumentationScribeToolResultReleaseValidator
 {
     private readonly DocumentationScribeLoadedManifestContext manifest;
     private readonly ImmutableDictionary<string, DocumentationScribeSemanticToolPort> ports;
@@ -20,6 +21,8 @@ public sealed class DocumentationScribeManifestSemanticToolPort
     }
 
     public ImmutableArray<string> TargetIds { get; }
+
+    public bool ValidateResultRelease(CancellationToken cancellationToken) => manifest.VerifyFreshness(cancellationToken);
 
     public async ValueTask<DocumentationScribeSemanticToolResult> InvokeAsync(
         DocumentationScribeSemanticToolRequest request, CancellationToken cancellationToken)

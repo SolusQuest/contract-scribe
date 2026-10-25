@@ -85,9 +85,6 @@ internal sealed class CampaignAcceptedCandidateContinuation(
             if (!preflight.Configuration.Revalidate() || !request.Revalidate())
                 return new(null, GitHubProposalPresentation.Local(identity, preflight.Operation, "local-invalid", revision));
             var observed = await publish(admitted.Authority!, admitted.Payload!, context.CancellationToken).ConfigureAwait(false);
-            if (observed.Result.Kind == GitHubPublicationResultKind.Cancelled
-                && FinalizationFailure(revision) is { } publicationDeadline)
-                return new(null, publicationDeadline);
             var state = context.CurrentCheckpoint.State;
             var partial = state.CandidateObservation!.AcceptedWorkItemKeys.Length != state.Batch.SelectedTargetKeys.Length;
             return new(null, GitHubProposalPresentation.Publication(identity, preflight.Operation, revision, observed, partial));

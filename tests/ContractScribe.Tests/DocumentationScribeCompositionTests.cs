@@ -21,6 +21,200 @@ public sealed class CampaignProcessBoundaryHookCollection;
 [Collection("Campaign process boundary hook")]
 public sealed partial class DocumentationScribeCompositionTests
 {
+    [Theory]
+    [InlineData(70000, 0, 0, 10000)]
+    [InlineData(70000, 0, 9999, 1)]
+    [InlineData(70000, 0, 10000, 0)]
+    [InlineData(70000, 0, 11000, 0)]
+    [InlineData(70000, 13164, 9999, 1)]
+    [InlineData(70000, 13164, 10000, 0)]
+    [InlineData(50000, 13164, 6835, 1)]
+    [InlineData(50000, 13164, 6836, 0)]
+    public Task Semantic_post_acceptance_callback_consumes_the_original_query_deadline(
+        int envelope, int authorizationElapsed, int issuanceDelay, int expectedQuery) =>
+        CampaignStateContractTests.AssertSemanticAcceptanceDelayAsync(envelope, authorizationElapsed, issuanceDelay, expectedQuery);
+
+    [Fact]
+    [System.Runtime.Versioning.UnsupportedOSPlatform("windows")]
+    public async Task Native_File_semantic_readback_issues_the_same_independent_query_window()
+    {
+        if (!OperatingSystem.IsLinux() && !DarwinFileSystem.IsSupported) return;
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var outside = Directory.CreateTempSubdirectory("contractscribe-semantic-state-");
+        try
+        {
+            File.SetUnixFileMode(outside.FullName, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var stateDirectory = Path.Join(outside.FullName, "state");
+            Directory.CreateDirectory(stateDirectory);
+            File.SetUnixFileMode(stateDirectory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+            var actual = new FileCampaignCheckpointStore(Path.Join(stateDirectory, "checkpoint.json"), fixture.Root);
+            var campaign = fixture.CreateCampaign();
+            var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+            Assert.Equal(CampaignCheckpointWriteKind.Written, (await actual.CreateIfAbsentAsync(
+                initial.ExactUtf8Json.AsMemory(), initial.CheckpointRevision, initial.Sha256, default)).Kind);
+            var clock = new ControlledCompositionClock();
+            var trace = new DelayedSemanticFileStore(actual, clock);
+            var exchange = new SemanticThenProposalExchange(fixture.Request);
+            var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+                campaign.Input(fixture, trace, exchange, RuntimeOptions(), timeProvider: clock));
+            Assert.True(exchange.SawSemanticEvidence);
+            Assert.Equal(3, exchange.RequestCount);
+            Assert.Equal(1, trace.SemanticReadbacks);
+            Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
+            Assert.NotNull(outcome.TrustedProposal);
+            Assert.Null(outcome.Artifact!.State.ActiveReservation);
+            Assert.Equal(13164, outcome.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+            Assert.Equal(outcome.Artifact.Sha256, (await actual.ReadAsync(default)).Sha256);
+        }
+        finally { outside.Delete(recursive: true); }
+    }
+
+    private sealed class DelayedSemanticFileStore(FileCampaignCheckpointStore actual, ControlledCompositionClock clock)
+        : ICampaignSemanticCheckpointStore
+    {
+        internal int SemanticReadbacks { get; private set; }
+        public object SemanticCheckpointIdentity => actual.SemanticCheckpointIdentity;
+        public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => actual.SemanticCheckpointKind;
+        public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window) => actual.EnterSemanticCheckpointWindow(window);
+        public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token) => actual.ReadAsync(token);
+        public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) =>
+            actual.CreateIfAbsentAsync(bytes, revision, sha, token);
+        public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expected, string expectedSha,
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+        {
+            var next = CampaignStateJson.Parse(bytes).Artifact!;
+            var result = await actual.ReplaceIfCurrentAsync(expected, expectedSha, bytes, revision, sha, token);
+            if (result.Kind == CampaignCheckpointWriteKind.Written && next.State.ActiveReservation is CampaignProviderReservation
+                { HostPhase: CampaignProviderHostPhase.SemanticTool })
+            { SemanticReadbacks++; clock.Advance(13164); }
+            return result;
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Semantic_result_release_revalidates_original_source_after_delayed_checkpoint_closure(bool sourceChanged)
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var clock = new ControlledCompositionClock();
+        var semantic = false;
+        var closed = false;
+        MemoryCampaignStore? store = null;
+        store = new MemoryCampaignStore(CampaignStateJson.CreateArtifact(campaign.InitialState))
+        {
+            AfterSuccessfulReplace = _ =>
+            {
+                var phase = (store!.Current!.State.ActiveReservation as CampaignProviderReservation)?.HostPhase;
+                if (phase == CampaignProviderHostPhase.SemanticTool) semantic = true;
+                else if (semantic && !closed && phase == CampaignProviderHostPhase.Continuation)
+                {
+                    closed = true;
+                    clock.Advance(15000);
+                    if (sourceChanged) File.AppendAllText(fixture.SourcePath, "\n// changed during semantic closure\n");
+                }
+            }
+        };
+        var exchange = new SemanticThenProposalExchange(fixture.Request);
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, store, exchange, RuntimeOptions(), timeProvider: clock));
+        Assert.True(semantic);
+        Assert.True(closed);
+        Assert.Equal(!sourceChanged, exchange.SawSemanticEvidence);
+        Assert.Equal(sourceChanged ? 1 : 3, exchange.RequestCount);
+        Assert.Equal(!sourceChanged, outcome.TrustedProposal is not null);
+        Assert.Null(outcome.Artifact!.State.ActiveReservation);
+        Assert.Equal(15000, outcome.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        if (sourceChanged)
+            Assert.Equal(CampaignWorkOutcomeCode.ToolProtocolFailure,
+                outcome.Artifact.State.WorkItems.Single(item => item.WorkItemKey == campaign.Plan.WorkItems[0].WorkItemKey).ClosedOutcome!.Code);
+    }
+
+    [Fact]
+    public async Task Semantic_query_after_13164ms_authorization_reaches_the_next_model_with_original_elapsed_charged()
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, campaign.InitialState.CampaignLineage, handler);
+        await using var actual = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await actual.AcquireCheckpointAsync(default));
+        Assert.True(await actual.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(campaign.Plan), default));
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await actual.CreateIfAbsentAsync(
+            initial.ExactUtf8Json.AsMemory(), initial.CheckpointRevision, initial.Sha256, default)).Kind);
+
+        var clock = new ControlledCompositionClock();
+        var trace = new RuntimeCheckpointTrace(actual, duplicate: false, delay: 13164, clock, clock.Advance);
+        handler.BeforeRequest = request =>
+        {
+            trace.Observe(request);
+            return Task.CompletedTask;
+        };
+        var exchange = new SemanticThenProposalExchange(fixture.Request);
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, trace, exchange, RuntimeOptions(), executionToken: actual.CheckpointToken, timeProvider: clock));
+
+        Assert.True(exchange.SawSemanticEvidence);
+        Assert.Equal(3, exchange.RequestCount);
+        Assert.NotNull(outcome.TrustedProposal);
+        Assert.Equal(13164, Assert.Single(trace.SemanticWrites).ElapsedMilliseconds);
+        Assert.Equal(13164, outcome.Artifact!.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
+        Assert.Null(outcome.Artifact.State.ActiveReservation);
+    }
+
+    [Theory]
+    [InlineData(false, 0, true, 3)]
+    [InlineData(true, 0, true, 3)]
+    [InlineData(false, 13000, true, 3)]
+    public async Task Real_semantic_query_progress_uses_the_single_GitHub_checkpoint_transaction(
+        bool duplicateReadback, int additionalDelay, bool reachesSemantic, int expectedRequests)
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var campaign = fixture.CreateCampaign();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, campaign.InitialState.CampaignLineage, handler);
+        await using var actual = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await actual.AcquireCheckpointAsync(default));
+        Assert.True(await actual.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(campaign.Plan), default));
+        var initial = CampaignStateJson.CreateArtifact(campaign.InitialState);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await actual.CreateIfAbsentAsync(
+            initial.ExactUtf8Json.AsMemory(), initial.CheckpointRevision, initial.Sha256, default)).Kind);
+        var clock = new ControlledCompositionClock();
+        var trace = new RuntimeCheckpointTrace(actual, duplicateReadback, additionalDelay, clock, clock.Advance);
+        // Same prospective 175ms schedule as the direct Runtime boundary pair.
+        handler.BeforeRequest = request =>
+        {
+            clock.Advance(175);
+            remote.ServerNow = remote.ServerNow.AddMilliseconds(175);
+            trace.Observe(request);
+            return Task.CompletedTask;
+        };
+        var exchange = new SemanticThenProposalExchange(fixture.Request);
+        var outcome = await DocumentationCampaignProposalExecutor.ExecuteAsync(
+            campaign.Input(fixture, trace, exchange, RuntimeOptions(), executionToken: actual.CheckpointToken, timeProvider: clock));
+        Assert.Equal(reachesSemantic, exchange.SawSemanticEvidence);
+        Assert.Equal(expectedRequests, exchange.RequestCount);
+        // Four fewer GETs per conditional transaction now allow the finish send
+        // even with13s extra authorization delay. No request or time cap changed.
+        // Every HTTP exchange keeps consuming the existing invocation clock.
+        // The real semantic query progresses; later terminal persistence reaches
+        // this fixture's original 120s invocation cap rather than gaining time.
+        Assert.Equal(reachesSemantic, outcome.TrustedProposal is not null);
+        if (reachesSemantic)
+            Assert.Equal(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted, outcome.Kind);
+        Assert.Single(trace.SemanticWrites);
+        var observed = trace.SemanticWrites[0];
+        Assert.Equal(duplicateReadback ? 3 : 2, observed.PredecessorCommitReads);
+        Assert.True(reachesSemantic ? observed.ElapsedMilliseconds < 30000 : observed.ElapsedMilliseconds >= 30000,
+            $"duplicate={duplicateReadback}; requests={observed.Requests}; elapsed={observed.ElapsedMilliseconds}");
+        if (!reachesSemantic) Assert.Equal("campaign.timed-out", outcome.Code);
+        Assert.Null(outcome.Artifact!.State.ActiveReservation);
+    }
+
     [Fact]
     public async Task Production_prepare_and_consume_preserve_the_exact_bound_outcome()
     {
@@ -960,6 +1154,7 @@ public sealed partial class DocumentationScribeCompositionTests
         : IDocumentationScribeModelExchange
     {
         internal int RequestCount { get; private set; }
+        internal bool SawSemanticEvidence { get; private set; }
 
         public ValueTask<DocumentationScribeModelResponse> SendAsync(
             DocumentationScribeModelRequest modelRequest,
@@ -986,7 +1181,14 @@ public sealed partial class DocumentationScribeCompositionTests
                 return ValueTask.FromResult(new DocumentationScribeModelResponse([], [new(ScribeResultFixture.Finish(modelRequest))], usage: new(0, 0, 0, 0, 0)));
             }
             Assert.Equal(2, RequestCount);
-            Assert.Single(modelRequest.CompletedToolExchanges);
+            var semanticResult = Assert.Single(modelRequest.CompletedToolExchanges);
+            Assert.Equal("get-target-evidence", semanticResult.OperationId);
+            Assert.Contains(semanticResult.OutcomeId, new[] { DocumentationScribeToolOutcome.Complete.Id, DocumentationScribeToolOutcome.Incomplete.Id });
+            using var semanticJson = JsonDocument.Parse(semanticResult.ResultUtf8Json);
+            Assert.Equal(request.ExecutionTarget.Target.SymbolRef.DocumentationCommentId,
+                semanticJson.RootElement.GetProperty("page").GetProperty("core").GetProperty("method")
+                    .GetProperty("symbolRef").GetProperty("documentationCommentId").GetString());
+            SawSemanticEvidence = true;
             return ValueTask.FromResult(new DocumentationScribeModelResponse(
                 [],
                 [new DocumentationScribeModelTerminalSubmission(ScribeResultFixture.Submit(modelRequest, ProposalTerminal(request)))],
@@ -1914,8 +2116,21 @@ public sealed partial class DocumentationScribeCompositionTests
                     DocumentationScribeValidation.ParseRequest(fixture.RequestBytes).Request!.Limits, timeProvider));
     }
 
-    private sealed class MemoryCampaignStore(CampaignCheckpointArtifact initial) : ICampaignCheckpointStore
+    private sealed class MemoryCampaignStore(CampaignCheckpointArtifact initial) : ICampaignSemanticCheckpointStore
     {
+        private CampaignSemanticCheckpointWindow? semanticWindow;
+        public object SemanticCheckpointIdentity => this;
+        public CampaignSemanticCheckpointStoreKind SemanticCheckpointKind => CampaignSemanticCheckpointStoreKind.Local;
+        public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window)
+        {
+            Assert.Null(semanticWindow);
+            semanticWindow = window;
+            return new MemorySemanticBinding(this);
+        }
+        private sealed class MemorySemanticBinding(MemoryCampaignStore store) : IDisposable
+        {
+            public void Dispose() => store.semanticWindow = null;
+        }
         private readonly object gate = new();
         private CampaignCheckpointArtifact? current = initial;
         private int replaceAttemptCount;
@@ -1945,12 +2160,14 @@ public sealed partial class DocumentationScribeCompositionTests
             cancellationToken.ThrowIfCancellationRequested();
             lock (gate)
             {
-                return ValueTask.FromResult(current is null
+                var actual = current is null
                     ? CampaignCheckpointReadResult.NotFound()
                     : CampaignCheckpointReadResult.Found(
                         current.ExactUtf8Json.AsSpan(),
                         current.CheckpointRevision,
-                        current.Sha256));
+                        current.Sha256);
+                semanticWindow?.ObserveLocalReadback(this, actual);
+                return ValueTask.FromResult(actual);
             }
         }
 
@@ -1970,7 +2187,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 }
 
                 current = Parse(exactUtf8Json);
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+                return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
             }
         }
 
@@ -2026,7 +2243,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 current = Parse(exactUtf8Json);
                 SuccessfulReplaceCount++;
                 AfterSuccessfulReplace?.Invoke(SuccessfulReplaceCount);
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.Written));
+                return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));
             }
         }
 

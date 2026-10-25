@@ -159,7 +159,7 @@ public sealed partial class CampaignCliProcessTests
     internal sealed partial class ProposalLoopbackServer
     {
         internal static byte[] CreateSharedResponse(byte[] body, bool batch = true, bool includeUsage = true,
-            int usageOutputTokens = 7, string? summaryText = null, bool skipAll = false)
+            int usageOutputTokens = 7, string? summaryText = null, bool skipAll = false, int skipMembers = 0, string? repairScenario = null)
         {
             using var wire = JsonDocument.Parse(body);
             var messages = wire.RootElement.GetProperty("messages");
@@ -174,6 +174,8 @@ public sealed partial class CampaignCliProcessTests
             if (pending.Length == 0)
                 return TerminalResponse(Encoding.UTF8.GetString(ScribeProtocolFixture.Finish(policy.RootElement)), true, 0, true, messages.GetArrayLength());
             pending = pending.Take(batch ? DocumentationScribeValidation.MaximumSubmissionBatchSize : 1).ToArray();
+            var skipped = facts.GetProperty("executableTargetIds").EnumerateArray().Select(id => id.GetString()!)
+                .TakeLast(skipMembers).ToHashSet(StringComparer.Ordinal);
             var references = facts.GetProperty("evidenceReferences").EnumerateArray().Select(item => item.Clone()).ToList();
             foreach (var message in messages.EnumerateArray().Where(message => message.GetProperty("role").GetString() == "tool"))
             {
@@ -185,7 +187,8 @@ public sealed partial class CampaignCliProcessTests
                     reference.GetProperty("subject").TryGetProperty("symbolRef", out var symbol)
                     && JsonNode.DeepEquals(JsonNode.Parse(symbol.GetRawText()), JsonNode.Parse(member.GetProperty("symbolRef").GetRawText())))
                 .Cast<JsonElement?>().FirstOrDefault();
-            var missing = pending.Where(member => !skipAll && member.GetProperty("applicableComponents").GetArrayLength() == 0
+            var missing = pending.Where(member => !skipAll && !skipped.Contains(member.GetProperty("targetId").GetString()!)
+                && member.GetProperty("applicableComponents").GetArrayLength() == 0
                 && Evidence(member) is null).ToArray();
             if (missing.Length > 0)
             {
@@ -212,9 +215,11 @@ public sealed partial class CampaignCliProcessTests
                 return JsonSerializer.SerializeToUtf8Bytes(response);
             }
             var items = new JsonArray();
-            foreach (var member in pending)
+            // Exercise durable closed skips before the unfinished document member.
+            foreach (var member in pending.OrderBy(member => skipped.Contains(member.GetProperty("targetId").GetString()!) ? 0 : 1))
             {
-                if (skipAll || member.GetProperty("applicableComponents").GetArrayLength() > 0)
+                if (skipAll || skipped.Contains(member.GetProperty("targetId").GetString()!)
+                    || member.GetProperty("applicableComponents").GetArrayLength() > 0)
                 {
                     items.Add(new JsonObject
                     {
@@ -242,13 +247,19 @@ public sealed partial class CampaignCliProcessTests
                     },
                 });
             }
-            return TerminalResponse(new JsonObject
+            if (repairScenario is not null && facts.GetProperty("nextSequence").GetInt32() == 1)
+            {
+                foreach (var item in items.Skip(repairScenario == "shared-mixed-repair" ? 1 : 0))
+                    item!["result"]!["contentUnits"]![0]!["lines"] = new JsonArray("<summary>Raw documentation is not a logical line.</summary>");
+            }
+            var malformedRepair = repairScenario == "shared-malformed-repair" && facts.GetProperty("nextSequence").GetInt32() == 2;
+            return TerminalResponse(malformedRepair ? "{" : new JsonObject
             {
                 ["kind"] = "submit",
                 ["scribeRequestSha256"] = policy.RootElement.GetProperty("artifactSha256").GetString(),
                 ["sequence"] = facts.GetProperty("nextSequence").GetInt32(),
                 ["items"] = items
-            }.ToJsonString(), includeUsage, usageOutputTokens, turn: messages.GetArrayLength());
+            }.ToJsonString(), includeUsage && !malformedRepair, usageOutputTokens, turn: messages.GetArrayLength());
         }
     }
 }

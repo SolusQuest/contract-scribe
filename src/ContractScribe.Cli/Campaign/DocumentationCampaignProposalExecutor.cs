@@ -304,10 +304,12 @@ internal static class DocumentationCampaignProposalExecutor
         if (dispatchGuardRejected || coordinator.Conflict)
         {
             return new DocumentationCampaignProposalOutcome(
-                DocumentationCampaignProposalOutcomeKind.StateConflict,
-                "campaign.reservation.conflict",
+                coordinator.CheckpointCancelledByHostDeadline
+                    ? DocumentationCampaignProposalOutcomeKind.TimedOut : DocumentationCampaignProposalOutcomeKind.StateConflict,
+                coordinator.CheckpointCancelledByHostDeadline ? "campaign.timed-out" : "campaign.reservation.conflict",
                 selectedState.WorkItemKey,
-                reserved.Artifact);
+                coordinator.LatestAcknowledgedArtifact,
+                checkpointFailure: coordinator.CheckpointFailure);
         }
         CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ProposalAfterProviderBeforeResultTransition);
         CampaignTransitionResult completed;
@@ -335,7 +337,8 @@ internal static class DocumentationCampaignProposalExecutor
         {
             completed = CampaignStateReducer.PauseProviderInvocation(invocation, coordinator.CurrentElapsed,
                 prepared.Kind == DocumentationCampaignPreparationKind.StopLifetimeExhausted
-                    || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeStop || coordinator.LifetimeElapsedExhausted);
+                    || coordinator.Scope.LifetimeDeadlineReached || coordinator.LifetimeStop || coordinator.LifetimeElapsedExhausted,
+                invocationHeadroomStop: coordinator.Scope.SemanticInvocationHeadroomReached);
         }
         else if (prepared.Kind is DocumentationCampaignPreparationKind.StopCancelled
             or DocumentationCampaignPreparationKind.StopTimedOut
@@ -398,7 +401,8 @@ internal static class DocumentationCampaignProposalExecutor
             ? Outcome(DocumentationCampaignProposalOutcomeKind.StateConflict, "campaign.settlement.conflict")
             : Outcome(DocumentationCampaignProposalOutcomeKind.AmbiguousDispatch, "campaign.settlement.unconfirmed");
         return new DocumentationCampaignProposalOutcome(
-            settlementFailure.Kind, settlementFailure.Code, checkpointFailure: settled.Kind);
+            settlementFailure.Kind, settlementFailure.Code, selectedState.WorkItemKey,
+            coordinator.LatestAcknowledgedArtifact, checkpointFailure: settled.Kind);
     }
 
     private static bool TrySelectAudit(

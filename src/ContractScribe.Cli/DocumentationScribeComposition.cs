@@ -687,7 +687,7 @@ internal static partial class DocumentationScribeComposition
             if (coordinator.Scope.LifetimeDeadlineReached || coordinator.Scope.LifetimeAdmissionDenied || coordinator.Scope.SettledLifetimeBudgetExceeded
                 || m3 is null && coordinator.LifetimeElapsedExhausted)
                 resourceOwner = DocumentationScribeDeadlineOwner.Lifetime;
-            else if (coordinator.Scope.Allowance.HasCheckedStop)
+            else if (coordinator.Scope.Allowance.HasCheckedStop || coordinator.Scope.SemanticInvocationHeadroomReached)
                 resourceOwner = DocumentationScribeDeadlineOwner.Invocation;
         }
         if (resourceOwner is DocumentationScribeDeadlineOwner.Lifetime or DocumentationScribeDeadlineOwner.Invocation)
@@ -1244,14 +1244,16 @@ internal static partial class DocumentationScribeComposition
 
             var permit = executionScope is null ? null
                 : await executionScope.BeginHostAsync(DocumentationScribeHostOperation.RepositoryTool, cancellationToken).ConfigureAwait(false);
-            if (executionScope is not null && (permit is null || !permit.TryBeginOperation()))
+            if (executionScope is not null && permit is null)
                 throw new OperationCanceledException();
-            using var readDeadline = permit is null ? null : new CancellationTokenSource(
-                TimeSpan.FromMilliseconds(Math.Max(1, permit.RemainingMilliseconds)), executionScope!.Allowance.Clock);
-            using var readCancellation = readDeadline is null ? null : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, readDeadline.Token);
             DocumentationScribeRepositoryReadExcerptResult result;
             try
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (permit is not null && !permit.TryBeginOperation()) throw new OperationCanceledException();
+                using var readDeadline = permit is null ? null : new CancellationTokenSource(
+                    TimeSpan.FromMilliseconds(Math.Max(1, permit.RemainingMilliseconds)), executionScope!.Allowance.Clock);
+                using var readCancellation = readDeadline is null ? null : CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, readDeadline.Token);
                 result = await repository.ReadExcerpt.InvokeAsync(
                 new DocumentationScribeRepositoryReadExcerptRequest(
                     reference.ContextReferenceId,
@@ -1585,6 +1587,7 @@ internal static partial class DocumentationScribeComposition
         var schema = JsonNode.Parse(SemanticInputSchema.Span)!.AsObject();
         schema["properties"]!["targetId"]!["enum"] = new JsonArray(targetIds
             .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());
+        schema["properties"]!["pageSize"]!["maximum"] = DocumentationScribeSemanticToolLimits.Production.MaximumPageSize;
         return JsonSerializer.SerializeToUtf8Bytes(schema);
     }
 

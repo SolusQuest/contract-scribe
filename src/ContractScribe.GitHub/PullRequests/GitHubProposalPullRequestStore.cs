@@ -31,7 +31,9 @@ internal sealed record GitHubProposalResult(GitHubProposalOutcome Outcome,
     IGitHubProposalObservation? Observation = null, GitHubFailure? Failure = null,
     GitHubDelivery Delivery = GitHubDelivery.Read,
     GitHubCoordinationFailureKind? Cause = null,
-    IGitHubProposalAbsence? Absence = null) : GitHubValue;
+    IGitHubProposalAbsence? Absence = null,
+    GitHubCoordinationFailure? CoordinationFailure = null, GitHubMutationContext? Context = null,
+    GitHubPermissionAlternatives? Permissions = null) : GitHubValue;
 
 // R6 chooses an explicit operation. Recovery is deliberately incapable of creating a PR.
 internal sealed class GitHubProposalPullRequestStore
@@ -95,29 +97,38 @@ internal sealed class GitHubProposalPullRequestStore
         && coordination.Owns(state) && coordination.ResolvePublicationHead(owned.HeadOid) == state.HeadOid
         && owned.Operation == state.OperationCommitmentSha256;
 
-    internal static async ValueTask<bool> RevalidateAbsenceAsync(IGitHubProposalAbsence absence,
+    internal static async ValueTask<GitHubCoordinationFailure?> RevalidateAbsenceAsync(IGitHubProposalAbsence absence,
         GitHubCoordinationStore coordination, IGitHubCoordinationStateCapability state, CancellationToken token)
     {
-        if (!AuthenticatesAbsence(absence, coordination, state)) return false;
+        if (!AuthenticatesAbsence(absence, coordination, state)) return new(GitHubCoordinationFailureKind.Conflict);
         var owner = ((Absence)absence).Owner;
-        // The caller has prepared a physical CAS parent. Recheck without renewing
-        // that parent; expiry stops this write rather than changing its preimage.
+        // Rechecking the prepared physical parent must not renew or replace it.
         var guard = await coordination.ReadClaimAsync(state, token, renewClaim: false).ConfigureAwait(false);
-        if (guard.Guard is null) return false;
+        if (guard.Guard is null) return guard.Failure ?? new(GitHubCoordinationFailureKind.Conflict);
         var reference = coordination.ProposalRefFor(state)!;
         var campaign = GitHubPublicationFactory.CreateCoordinationRef(owner.client.Authority).Split('/')[^1];
         var collection = await owner.ReadCampaign(reference, campaign, null, [], token).ConfigureAwait(false);
-        if (collection.Failure is not null || collection.Items.Any(pr => pr.Open || "refs/heads/" + pr.Head.Ref == reference))
-            return false;
+        if (collection.Failure is { } failed) return CoordinationFailureOf(failed);
+        if (collection.Items.Any(pr => pr.Open || "refs/heads/" + pr.Head.Ref == reference))
+            return new(GitHubCoordinationFailureKind.Conflict);
         var proposal = await owner.client.GetRefAsync(reference, token).ConfigureAwait(false);
+        if (proposal.Value is null && proposal.Failure?.Code != GitHubFailureCode.NotFound)
+            return new(GitHubCoordinationFailureKind.Transport, proposal.Failure, proposal.Delivery, proposal.Context, proposal.RequiredPermissions);
         if (state.Stage == GitHubCoordinationStage.ContentCreated
             ? proposal.Value is not null || proposal.Failure?.Code != GitHubFailureCode.NotFound
             : state.Stage != GitHubCoordinationStage.ProposalRefAdvanced
                 || proposal.Value?.Oid != state.ProposalCommitOid)
-            return false;
+            return proposal.Failure is { } failure
+                ? new(GitHubCoordinationFailureKind.Conflict, failure, proposal.Delivery, proposal.Context, proposal.RequiredPermissions)
+                : new(GitHubCoordinationFailureKind.Conflict);
         guard = await coordination.ReadClaimAsync(state, token, renewClaim: false).ConfigureAwait(false);
-        return guard.Guard is not null;
+        return guard.Guard is not null ? null : guard.Failure ?? new(GitHubCoordinationFailureKind.Conflict);
     }
+
+    internal static GitHubCoordinationFailure CoordinationFailureOf(GitHubProposalResult result) =>
+        result.CoordinationFailure ?? new(result.Cause ?? (result.Failure is null
+            ? GitHubCoordinationFailureKind.Conflict : GitHubCoordinationFailureKind.Transport),
+            result.Failure, result.Delivery, result.Context, result.Permissions);
 
     internal ValueTask<GitHubProposalResult> CreateAuthorizedAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubPullRequestEntitlement entitlement, CancellationToken token = default) =>
@@ -189,7 +200,25 @@ internal sealed class GitHubProposalPullRequestStore
         using var recovery = client.CreateRecoveryScope(recoveryTimeout);
         var result = await ObserveCoreAsync(state, expected, null, true, recovery.Token).ConfigureAwait(false);
         if (recovery.IsCancellationRequested)
-            return new(GitHubProposalOutcome.Failed, Failure: new(GitHubFailureCode.Timeout), Delivery: created.Delivery);
+        {
+            if (result.Failure is { Code: GitHubFailureCode.Cancelled } cancelled
+                && (result.CoordinationFailure is null || result.CoordinationFailure.Kind
+                    is GitHubCoordinationFailureKind.Transport or GitHubCoordinationFailureKind.Unresolved))
+            {
+                var detail = result.CoordinationFailure;
+                result = result with
+                {
+                    Failure = cancelled with { Code = GitHubFailureCode.Timeout },
+                    CoordinationFailure = detail is null ? null : new(detail.Kind,
+                        detail.ReadbackFailure is null ? RecoveryFailure(detail.TransportFailure) : detail.TransportFailure,
+                        detail.Delivery, detail.Context, detail.Permissions, RecoveryFailure(detail.ReadbackFailure)),
+                };
+            }
+            // Do not issue a success/unknown capability after the original recovery
+            // deadline. An already observed domain or service failure keeps its cause.
+            else if (result.Failure is null && result.Cause is null && result.Outcome != GitHubProposalOutcome.Conflict)
+                return new(GitHubProposalOutcome.Failed, Failure: new(GitHubFailureCode.Timeout), Delivery: created.Delivery);
+        }
         if (created.Value is { } receipt && result.Observation is { } proof
             && (receipt.Id != proof.PullRequest.Id || receipt.NodeId != proof.PullRequest.NodeId
                 || receipt.Number != proof.PullRequest.Number)) return Conflict();
@@ -394,15 +423,20 @@ internal sealed class GitHubProposalPullRequestStore
         && (list.MaintainerCanModify is null || list.MaintainerCanModify == detail.MaintainerCanModify);
 
     private static string Hash(string value) => Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
+    private static GitHubFailure? RecoveryFailure(GitHubFailure? failure) =>
+        failure?.Code == GitHubFailureCode.Cancelled ? failure with { Code = GitHubFailureCode.Timeout } : failure;
+
     private static GitHubProposalResult Conflict() => new(GitHubProposalOutcome.Conflict);
     private static GitHubProposalResult HumanChange() => new(GitHubProposalOutcome.Conflict,
         Cause: GitHubCoordinationFailureKind.HumanChange);
     private static GitHubProposalResult ClaimFailure(GitHubCoordinationResult result) =>
         new(result.Failure?.Kind == GitHubCoordinationFailureKind.Transport ? GitHubProposalOutcome.Failed : GitHubProposalOutcome.Conflict,
             Failure: result.Failure?.ReadbackFailure ?? result.Failure?.TransportFailure,
-            Delivery: result.Failure?.Delivery ?? GitHubDelivery.Read, Cause: result.Failure?.Kind);
+            Delivery: result.Failure?.Delivery ?? GitHubDelivery.Read, Cause: result.Failure?.Kind,
+            CoordinationFailure: result.Failure);
     private static GitHubProposalResult Failed<T>(GitHubApiResult<T> result) where T : class =>
-        new(GitHubProposalOutcome.Failed, Failure: result.Failure, Delivery: result.Delivery);
+        new(GitHubProposalOutcome.Failed, Failure: result.Failure, Delivery: result.Delivery,
+            Context: result.Context, Permissions: result.RequiredPermissions);
 
     private sealed class Observation(GitHubProposalPullRequestStore owner, GitHubProposalOutcome outcome,
         GitHubPullRequest pullRequest, GitHubProposalMetadata metadata, IGitHubCoordinationStateCapability state)

@@ -44,6 +44,10 @@ public static partial class CampaignStateFactory
                 && exposure.OutputTokens == 0 && exposure.CostMicrounits == 0
                 && (exposure.ElapsedMilliseconds > 0 || provider.HostPhase == CampaignProviderHostPhase.Retirement),
                 CampaignStateValidationCode.InvalidShape);
+            Require(provider.HostPhase != CampaignProviderHostPhase.SemanticTool
+                || exposure.ElapsedMilliseconds is > CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds
+                    and <= CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds,
+                CampaignStateValidationCode.InvalidBound);
         }
         else
         {

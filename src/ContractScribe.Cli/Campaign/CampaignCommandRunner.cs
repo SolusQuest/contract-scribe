@@ -573,7 +573,9 @@ internal static class CampaignCommandRunner
                 ConfiguredAgentEntrypoint: null,
                 ExecutionToken: cancellationToken,
                 SettlementToken: settlementCancellation.Token,
-                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor, configuration.Budgets.Invocation.MaximumConnectMilliseconds),
+                DeferredExchange: () => CreateExchange(configuration.Provider, credentialAccessor,
+                    configuration.Budgets.Invocation.MaximumConnectMilliseconds,
+                    observation => usage?.ObserveProvider(invocationAllowance, observation)),
                 DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
                 TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance, Usage: usage)).ConfigureAwait(false);
             usage?.ObserveState(proposal.Artifact);
@@ -592,13 +594,7 @@ internal static class CampaignCommandRunner
                 reconstructPriorAccepted = !stoppedArtifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete);
                 continue;
             }
-            var proposalOutcome = proposal.Artifact?.State.TerminalOutcome?.Kind == CampaignTerminalKind.Complete
-                ? CompletionOutcome(proposal.Artifact.State)
-                : proposal.CheckpointFailure is { } proposalFailure
-                ? AcceptanceOutcome(proposalFailure)
-                : proposal.Code == "campaign.credential.invalid"
-                ? "campaign.invalid-configuration"
-                : ProposalOutcome(proposal.Kind);
+            var proposalOutcome = ProposalResultOutcome(proposal);
             return Terminal(preflight.Operation,
                 proposal.Kind == DocumentationCampaignProposalOutcomeKind.CheckpointCapacity ? "state" : "execution", proposalOutcome,
                 proposal.Artifact is null ? current : AcceptedObservation(proposal.Artifact));
@@ -638,7 +634,8 @@ internal static class CampaignCommandRunner
 
     internal static IDocumentationScribeModelExchange? CreateExchange(
         CampaignProviderConfiguration provider,
-        Func<string, string?> credentialAccessor, int maximumConnectMilliseconds = 15_000)
+        Func<string, string?> credentialAccessor, int maximumConnectMilliseconds = 15_000,
+        Action<OpenAiCompatibleProviderObservation>? observer = null)
     {
         ArgumentNullException.ThrowIfNull(provider);
         ArgumentNullException.ThrowIfNull(credentialAccessor);
@@ -660,7 +657,8 @@ internal static class CampaignCommandRunner
                 provider.RequestProfile,
                 networkEnabled: true,
                 credential, maximumConnectMilliseconds);
-            return new CampaignHookedModelExchange(new OpenAiCompatibleHttpModelExchange(options));
+            return new CampaignHookedModelExchange(observer is null ? new OpenAiCompatibleHttpModelExchange(options)
+                : new OpenAiCompatibleHttpModelExchange(options, observer));
         }
         catch (Exception exception) when (exception is not OutOfMemoryException)
         {
@@ -904,6 +902,16 @@ internal static class CampaignCommandRunner
             _ => "campaign.state-corrupt",
         };
     }
+
+    internal static string ProposalResultOutcome(DocumentationCampaignProposalOutcome proposal) =>
+        proposal.Artifact?.State.TerminalOutcome?.Kind == CampaignTerminalKind.Complete
+            ? CompletionOutcome(proposal.Artifact.State)
+            : proposal.Kind == DocumentationCampaignProposalOutcomeKind.TimedOut
+                && proposal.CheckpointFailure == CampaignCheckpointAcceptanceKind.Cancelled
+            ? ProposalOutcome(proposal.Kind)
+            : proposal.CheckpointFailure is { } failure ? AcceptanceOutcome(failure)
+            : proposal.Code == "campaign.credential.invalid" ? "campaign.invalid-configuration"
+            : ProposalOutcome(proposal.Kind);
 
     private static string AcceptanceOutcome(CampaignCheckpointAcceptanceKind kind) => kind switch
     {

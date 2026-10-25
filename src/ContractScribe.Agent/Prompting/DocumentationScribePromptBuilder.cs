@@ -123,6 +123,8 @@ internal static class DocumentationScribePromptBuilder
                         "proposal-terminal-root-has-only-kind-target-contentUnits",
                         "skip-terminal-root-has-only-kind-reason-evidenceReferenceIds",
                         "content-unit-components-use-componentIdentity-never-identity",
+                        "Each content-unit lines item is one unwrapped plain-text logical line. The Host adds XML wrappers and escaping. Do not include ///, XML tags, CDATA, entity spellings, or embedded line breaks; ordinary ampersands remain literal text.",
+                        "content.inherit-doc uses an empty lines array instead of documentation text or XML.",
                         "applicableComponents-is-guidance-not-a-terminal-property",
                         "proposal-evidenceReferenceIds-appear-only-inside-contentUnits-never-at-root",
                         "proposal-target-is-the-manifest-members-proposalTarget-object-never-a-string",

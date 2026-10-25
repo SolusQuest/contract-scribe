@@ -191,11 +191,21 @@ public sealed partial class GitHubCoordinationRefTests
                 Assert.Equal(checkpoint, FixtureDocuments[replay.State.HeadOid].Checkpoint);
                 Assert.NotNull((await store.ReadCurrentAsync()).State);
                 remote.RemoveCommit(remote.State(originalHead));
-                Assert.Null((await store.ReadCurrentAsync()).State);
+                // This callback already authenticated the exact immutable payload.
+                // Its accessibility is deliberately not reobserved by the pool.
+                Assert.NotNull((await store.ReadCurrentAsync()).State);
                 return true;
             }
             finally { client.UnbindPublication(); }
         }, default);
+        client.BindPublication(authority);
+        try
+        {
+            // The original missing-history rejection remains mandatory once the
+            // callback-local pool is gone and a new independent proof begins.
+            Assert.Null((await store.ReadCurrentAsync()).State);
+        }
+        finally { client.UnbindPublication(); }
     }
 
     private static GitHubCheckpointPointer SeedPublicationCheckpoint(CoordinationRemote remote)

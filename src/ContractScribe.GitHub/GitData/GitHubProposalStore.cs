@@ -44,11 +44,11 @@ internal sealed class GitHubProposalStore
     private readonly ValidatedGitHubPublicationAuthority authority;
     private readonly string proposalRef;
     private readonly string generationKey;
-    private readonly Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<bool>>? mutationPreflight;
+    private readonly Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<GitHubProposalFailure?>>? mutationPreflight;
     private const string Zero = GitHubPublicationContract.MissingGitObjectId;
 
     private GitHubProposalStore(GitHubApiClient client, GitHubCoordinationStore coordination,
-        Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<bool>>? mutationPreflight)
+        Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<GitHubProposalFailure?>>? mutationPreflight)
     {
         this.client = client;
         this.coordination = coordination;
@@ -59,7 +59,7 @@ internal sealed class GitHubProposalStore
     }
 
     internal static GitHubProposalStore Create(GitHubApiClient client, GitHubCoordinationStore coordination,
-        Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<bool>>? mutationPreflight = null)
+        Func<IGitHubCoordinationStateCapability, CancellationToken, ValueTask<GitHubProposalFailure?>>? mutationPreflight = null)
     {
         ArgumentNullException.ThrowIfNull(client);
         ArgumentNullException.ThrowIfNull(coordination);
@@ -367,8 +367,8 @@ internal sealed class GitHubProposalStore
         if (plan.ReadOnly) return oid;
         if (oid != plan.BeforeOid && !(allowSuccessor && oid == plan.Commit.ExpectedOid))
             throw new FailureException(new(GitHubProposalFailureKind.Conflict));
-        if (mutationPreflight is not null && !await mutationPreflight(guarded, token).ConfigureAwait(false))
-            throw new FailureException(new(GitHubProposalFailureKind.Conflict));
+        if (mutationPreflight is not null && await mutationPreflight(guarded, token).ConfigureAwait(false) is { } failure)
+            throw new FailureException(failure);
         if (guarded.Stage == GitHubCoordinationStage.ProposalRefAdvanced && oid != plan.Commit.ExpectedOid)
             throw new FailureException(new(GitHubProposalFailureKind.Conflict));
         return oid;
@@ -486,8 +486,12 @@ internal sealed class GitHubProposalStore
         if (!matches)
             throw new FailureException(new(observed.Value is null ? GitHubProposalFailureKind.Unresolved : GitHubProposalFailureKind.Integrity,
                 mutation.Failure, mutation.Delivery, mutation.Context, mutation.RequiredPermissions,
-                recovery.IsCancellationRequested ? new(GitHubFailureCode.Timeout) : observed.Failure));
+                RecoveryFailure(observed.Failure, recovery)));
     }
+
+    private static GitHubFailure? RecoveryFailure(GitHubFailure? failure, CancellationTokenSource recovery) =>
+        failure?.Code == GitHubFailureCode.Cancelled && recovery.IsCancellationRequested
+            ? failure with { Code = GitHubFailureCode.Timeout } : failure;
 
     private async ValueTask FinalVerification<T>(GitHubApiResult<T> mutation,
         Func<CancellationToken, ValueTask> verify, Func<IGitHubProposalContent?> residual) where T : class
@@ -498,8 +502,7 @@ internal sealed class GitHubProposalStore
         {
             throw new FailureException(new(failure.Failure.Kind, mutation.Failure, mutation.Delivery,
                 mutation.Context, mutation.RequiredPermissions,
-                recovery.IsCancellationRequested ? new(GitHubFailureCode.Timeout)
-                    : failure.Failure.Readback ?? failure.Failure.Transport,
+                RecoveryFailure(failure.Failure.Readback ?? failure.Failure.Transport, recovery),
                 failure.Failure.CoordinationCause), residual());
         }
         catch (Exception failure)
@@ -507,16 +510,16 @@ internal sealed class GitHubProposalStore
             var integrity = failure is GitHubProposalException or ArgumentException;
             throw new FailureException(new(integrity ? GitHubProposalFailureKind.Integrity : GitHubProposalFailureKind.Transport,
                 mutation.Failure, mutation.Delivery, mutation.Context, mutation.RequiredPermissions,
-                new(recovery.IsCancellationRequested ? GitHubFailureCode.Timeout
-                    : integrity ? GitHubFailureCode.InvalidResponse : GitHubFailureCode.HostFailure)), residual());
+                failure is OperationCanceledException ? RecoveryFailure(client.CancellationFailure, recovery)
+                    : new(integrity ? GitHubFailureCode.InvalidResponse : GitHubFailureCode.HostFailure)), residual());
         }
     }
 
-    private static async ValueTask<GitHubProposalResult> Run(Func<ValueTask<GitHubProposalResult>> action)
+    private async ValueTask<GitHubProposalResult> Run(Func<ValueTask<GitHubProposalResult>> action)
     {
         try { return await action(); }
         catch (FailureException failure) { return new(GitHubProposalOutcome.Failed, Content: failure.Content, Failure: failure.Failure); }
-        catch (OperationCanceledException) { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.Transport, new(GitHubFailureCode.Cancelled))); }
+        catch (OperationCanceledException) { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.Transport, client.CancellationFailure)); }
         catch (GitHubProposalException) { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.Integrity)); }
         catch { return new(GitHubProposalOutcome.Failed, Failure: new(GitHubProposalFailureKind.InvalidInput)); }
     }

@@ -75,6 +75,8 @@ public sealed class CampaignPatchInvocationAuthority
 public sealed class CampaignProviderInvocationAuthority
 {
     private int registrarGrant = 1;
+    private int stoppedProgress;
+    internal bool ProgressStopped => Volatile.Read(ref stoppedProgress) != 0;
     private readonly CampaignAcceptedCheckpoint executionStartCheckpoint;
 
     internal CampaignProviderInvocationAuthority(
@@ -118,7 +120,7 @@ public sealed class CampaignProviderInvocationAuthority
     internal CampaignScribeHostRejection? HostRejection { get; private set; }
     internal bool TryRecordHostRejection(DocumentationScribeValidatedSubmission submission, CampaignProviderCompletionKind kind)
     {
-        if (!(LifecycleAvailable || DispatchStarted) || InvocationAllowance is null
+        if (ProgressStopped || !(LifecycleAvailable || DispatchStarted) || InvocationAllowance is null
             || AcceptedCheckpoint.Artifact.State.ActiveReservation is not CampaignProviderReservation
             { OperationKind: CampaignProviderOperationKind.Host, HostPhase: CampaignProviderHostPhase.TerminalSubmission } claim
             || claim.ExecutionStartRevision != ExecutionStartRevision || claim.AttemptId != AttemptId
@@ -135,7 +137,7 @@ public sealed class CampaignProviderInvocationAuthority
 
     public bool TryBeginDispatch(out DocumentationScribeAttemptId attemptId)
     {
-        if (!executionStartCheckpoint.ReservationLifecycle.TryBeginDispatch())
+        if (ProgressStopped || !executionStartCheckpoint.ReservationLifecycle.TryBeginDispatch())
         {
             attemptId = default;
             return false;
@@ -187,7 +189,8 @@ public sealed class CampaignProviderInvocationAuthority
     }
 
     internal bool ValidateOutcome(DocumentationScribeValidatedRunOutcome outcome) =>
-        string.Equals(outcome.Request.ArtifactSha256, ScribeRequestSha256, StringComparison.Ordinal)
+        (!ProgressStopped || outcome.RunResult.Stop is DocumentationScribeFailureTerminal or DocumentationScribeCancelledTerminal)
+        && string.Equals(outcome.Request.ArtifactSha256, ScribeRequestSha256, StringComparison.Ordinal)
         && outcome.RunResult.AttemptId == AttemptId
         && AcceptedCheckpoint.Artifact.State.ActiveReservation is CampaignProviderReservation claim
         && claim.OperationKind == CampaignProviderOperationKind.Host
@@ -216,7 +219,7 @@ public sealed class CampaignProviderInvocationAuthority
 
     internal bool AdvanceAcceptedProgress(CampaignTransitionResult transition, CampaignAcceptedCheckpoint accepted)
     {
-        if (!(LifecycleAvailable || DispatchStarted) || transition.Kind != CampaignTransitionKind.Applied
+        if (ProgressStopped || !(LifecycleAvailable || DispatchStarted) || transition.Kind != CampaignTransitionKind.Applied
             || transition.Predecessor.Sha256 != AcceptedCheckpoint.Artifact.Sha256
             || accepted.Artifact.Sha256 != transition.Artifact.Sha256
             || accepted.Artifact.CheckpointRevision != transition.Artifact.CheckpointRevision
@@ -225,6 +228,24 @@ public sealed class CampaignProviderInvocationAuthority
             || claim.ScribeRequestSha256 != ScribeRequestSha256 || claim.AttemptId != AttemptId
             || !accepted.TryIssueInvocation()) return false;
         AcceptedCheckpoint = accepted;
+        return true;
+    }
+
+    // An exact observation after authorization closes is useful only to settle
+    // the original attempt. It consumes no Writer/query grant and permanently
+    // disables every progress producer on this invocation.
+    internal bool ObserveStoppedProgress(CampaignTransitionResult transition, CampaignAcceptedCheckpoint observed)
+    {
+        if (!(LifecycleAvailable || DispatchStarted) || transition.Kind != CampaignTransitionKind.Applied
+            || transition.Predecessor.Sha256 != AcceptedCheckpoint.Artifact.Sha256
+            || observed.Artifact.Sha256 != transition.Artifact.Sha256
+                && observed.Artifact.Sha256 != transition.Predecessor.Sha256
+            || observed.Artifact.State.ActiveReservation is not CampaignProviderReservation
+            { OperationKind: CampaignProviderOperationKind.Host } claim
+            || claim.ExecutionStartRevision != ExecutionStartRevision
+            || claim.ScribeRequestSha256 != ScribeRequestSha256 || claim.AttemptId != AttemptId
+            || Interlocked.CompareExchange(ref stoppedProgress, 1, 0) != 0) return false;
+        AcceptedCheckpoint = observed;
         return true;
     }
 

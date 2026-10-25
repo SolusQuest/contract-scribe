@@ -34,6 +34,7 @@ internal sealed class RunState
         this.options = options;
         this.timeProvider = timeProvider;
         startedAt = timeProvider.GetTimestamp();
+        Scope.BindRuntimeWindow(request, timeProvider, startedAt);
         AttemptNumber = checked(Scope.RestoredRetryableProviderFailures + 1);
         PerOperationToolCalls = new int[registry.Registrations.Length];
         EvidenceItemCount = request.EvidenceReferences.Length;
@@ -153,7 +154,7 @@ internal sealed class RunState
         0,
         Math.Min(Request.Limits.MaximumElapsedMilliseconds - ElapsedMilliseconds, Scope.Allowance.RemainingMilliseconds));
 
-    internal bool IsObservedBudgetExceeded => Scope.Allowance.HasCheckedStop || Scope.LifetimeDeadlineReached || arithmeticOverflow
+    internal bool IsObservedBudgetExceeded => Scope.Allowance.HasCheckedStop || Scope.LifetimeDeadlineReached || Scope.SemanticHeadroomReached || arithmeticOverflow
         || HasUnrepresentableObservation
         || EvidenceItemCount > Request.Limits.MaximumEvidenceReferences
         || EvidenceUtf8ByteCount > Request.Limits.MaximumEvidenceUtf8Bytes

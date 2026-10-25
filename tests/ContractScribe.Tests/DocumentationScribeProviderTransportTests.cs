@@ -1643,7 +1643,9 @@ public sealed partial class DocumentationScribeProviderTransportTests
             (Body("{\"role\":\"assistant\",\"tool_calls\":[{\"id\":\"call.one\",\"type\":\"function\",\"function\":{\"name\":\"cs_tool_000\",\"arguments\":\"{\"}}]}"), OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid),
             (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "," + terminal + "]}"), OpenAiCompatibleResponseCodecDisposition.TerminalMixed),
             (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", suffix: ",\"usage\":[]"), OpenAiCompatibleResponseCodecDisposition.UsageInvalid),
-            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", "stop"), OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", "length"), OpenAiCompatibleResponseCodecDisposition.FinishReasonLength),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", "stop"), OpenAiCompatibleResponseCodecDisposition.FinishReasonStop),
+            (Body("{\"role\":\"assistant\",\"tool_calls\":[" + ordinary + "]}", "synthetic-unsupported"), OpenAiCompatibleResponseCodecDisposition.FinishReasonUnsupported),
             (Body("{\"role\":\"assistant\",\"tool_calls\":[]}", "tool_calls"), OpenAiCompatibleResponseCodecDisposition.FinishReasonInconsistent),
         ];
 

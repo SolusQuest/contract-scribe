@@ -143,14 +143,16 @@ The complete first-disposition allowlist, in production evaluation order, is:
 18. `codec.arguments.invalid`
 19. `codec.terminal.mixed`
 20. `codec.usage.invalid`
-21. `codec.finish-reason.unsupported`
-22. `codec.finish-reason.inconsistent`
-23. `codec.terminal.arguments-exceeds-limit`
-24. `codec.continuation.missing`
-25. `codec.tool-calls.exceeds-limit`
-26. `codec.tool-call.arguments-exceeds-limit`
+21. `codec.finish-reason.length`
+22. `codec.finish-reason.stop`
+23. `codec.finish-reason.unsupported`
+24. `codec.finish-reason.inconsistent`
+25. `codec.terminal.arguments-exceeds-limit`
+26. `codec.continuation.missing`
+27. `codec.tool-calls.exceeds-limit`
+28. `codec.tool-call.arguments-exceeds-limit`
 
-`codec.response.exceeds-limit` covers both the direct raw codec ceiling and a structurally valid response whose combined normalized representation exceeds the normalized aggregate ceiling. If multiple defects exist, only the first check reached in the production parser is recorded. The thinking-content identifier deliberately avoids reproducing the provider wire-field spelling that the report scanner forbids.
+`codec.response.exceeds-limit` covers both the direct raw codec ceiling and a structurally valid response whose combined normalized representation exceeds the normalized aggregate ceiling. The fixed `codec.finish-reason.length` and `codec.finish-reason.stop` identifiers distinguish those two known wire outcomes; all other unsupported finish values retain `codec.finish-reason.unsupported`. These remain Unsupported failures with unchanged retry policy; no arbitrary finish text is emitted. If multiple defects exist, only the first check reached in the production parser is recorded. The thinking-content identifier deliberately avoids reproducing the provider wire-field spelling that the report scanner forbids.
 
 The report allowlist contains corpus/selection/cost/source identities; bounded case IDs, status codes, counts, usage/cache/cost completeness, case-level expectation status and difference IDs, and live elapsed time; proposal-validation and M2 outcomes; and production-validated bounded content units with claim category and sorted evidence IDs for local human review. Offline differences cover the frozen outcome and observation oracle rather than treating deterministic byte equality or declarative input-coverage labels as semantic conformance.
 

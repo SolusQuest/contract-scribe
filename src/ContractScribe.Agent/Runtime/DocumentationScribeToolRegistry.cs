@@ -253,7 +253,7 @@ public sealed class DocumentationScribeToolRegistry
     public override string ToString() => nameof(DocumentationScribeToolRegistry);
 }
 
-internal abstract class ToolRegistration
+internal abstract class ToolRegistration : IDocumentationScribeToolResultReleaseValidator
 {
     protected ToolRegistration(
         string operationId,
@@ -276,6 +276,7 @@ internal abstract class ToolRegistration
     internal DocumentationScribeModelToolDefinition Definition { get; }
 
     internal abstract PreparedToolCall Prepare(DocumentationScribeModelToolCall call);
+    public abstract bool ValidateResultRelease(CancellationToken cancellationToken);
 }
 
 internal sealed class TypedToolRegistration<TRequest, TResult> : ToolRegistration
@@ -317,6 +318,10 @@ internal sealed class TypedToolRegistration<TRequest, TResult> : ToolRegistratio
 
         return new TypedPreparedToolCall<TRequest, TResult>(call, decoded.Request, port, codec);
     }
+
+    public override bool ValidateResultRelease(CancellationToken cancellationToken) =>
+        port is IDocumentationScribeToolResultReleaseValidator validator
+        && validator.ValidateResultRelease(cancellationToken);
 }
 
 internal abstract class PreparedToolCall

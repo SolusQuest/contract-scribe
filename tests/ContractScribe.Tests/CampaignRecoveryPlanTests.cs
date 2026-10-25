@@ -310,6 +310,56 @@ public sealed partial class CampaignStateContractTests
         Assert.False(projection.Matches(System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(changed)));
     }
 
+    [Theory]
+    [InlineData("valid")]
+    [InlineData("missing")]
+    [InlineData("stale")]
+    public async Task Conditional_remote_readback_must_bind_archive_evidence_to_the_actual_successor(string fault)
+    {
+        var scenario = CreateProposalScenario(targetLimit: 1, maximumProviderRequests: null,
+            maximumInputTokens: null, maximumUncachedInputTokens: null, maximumOutputTokens: null,
+            maximumCostMicrounits: null, maximumElapsedMilliseconds: null);
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(scenario))]))]);
+        var (artifact, _) = await CompleteC3RuntimeAsync(scenario, exchange);
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, artifact.State.CampaignLineage);
+        await using var store = ContractScribe.GitHub.Coordination.GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(scenario.Plan), default));
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(
+            artifact.ExactUtf8Json.AsMemory(), artifact.CheckpointRevision, artifact.Sha256, default)).Kind);
+        var accepted = CampaignCheckpointAcceptance.AcceptCurrent(await store.ReadAsync(default));
+        var archived = Assert.IsType<CampaignCheckpointArtifact>(CampaignDispatchArchive.Prepare(accepted.AcceptedCheckpoint!));
+        var compacted = await store.ReplaceIfCurrentAsync(artifact.CheckpointRevision, artifact.Sha256,
+            archived.ExactUtf8Json.AsMemory(), archived.CheckpointRevision, archived.Sha256, default);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, compacted.Kind);
+        Assert.Equal(archived.Sha256, compacted.Readback!.VerifiedArchive!.CheckpointSha256);
+        var transition = CampaignStateReducer.Stop(archived, CampaignTerminalKind.Cancelled);
+        Assert.Equal(CampaignTransitionKind.Applied, transition.Kind);
+        var filtered = new ArchiveReadbackStore(store, fault, compacted.Readback.VerifiedArchive);
+        var result = await CampaignCheckpointAcceptance.AcceptAsync(filtered, transition);
+        Assert.Equal(fault == "valid" ? CampaignCheckpointAcceptanceKind.Accepted : CampaignCheckpointAcceptanceKind.ReadbackMismatch,
+            result.Kind);
+        Assert.Equal(fault == "valid", result.AcceptedCheckpoint is not null);
+    }
+
+    private sealed class ArchiveReadbackStore(ICampaignCheckpointStore inner, string fault,
+        CampaignVerifiedArchive stale) : ICampaignCheckpointStore
+    {
+        public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token) => inner.ReadAsync(token);
+        public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha,
+            CancellationToken token) => inner.CreateIfAbsentAsync(bytes, revision, sha, token);
+        public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision, string expectedSha,
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+        {
+            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
+            if (fault == "valid" || result.Readback is not { } observed) return result;
+            return CampaignCheckpointWriteResult.Written(CampaignCheckpointReadResult.Found(observed.ExactUtf8Json.AsSpan(),
+                observed.CheckpointRevision!.Value, observed.Sha256!, fault == "missing" ? null : stale));
+        }
+    }
+
     [Fact]
     public async Task Archived_usage_requires_exact_predecessor_evidence_at_checkpoint_acceptance()
     {
