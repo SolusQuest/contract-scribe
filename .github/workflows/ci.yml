@@ -15,6 +15,10 @@ on:
 permissions:
   contents: read
 
+env:
+  # Pin SDK provisioning; global.json still governs SDK selection for builds.
+  CI_DOTNET_SDK_VERSION: '10.0.403'
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -42,7 +46,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -164,7 +168,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -297,7 +301,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -437,7 +441,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -575,7 +579,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -704,7 +708,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -831,7 +835,7 @@ jobs:
           }
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Record runner, toolchain, and concurrency facts
         shell: pwsh
         env:
@@ -978,7 +982,7 @@ jobs:
           path: kit
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: kit/global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Verify packed payload
         id: packed_verify
         continue-on-error: true
@@ -1049,7 +1053,7 @@ jobs:
           path: producer-payload
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: kit/global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Restore independent CLI runtime graph
         env:
           NuGetPackageSourceCredentials_solusagent: Username=${{ github.actor }};Password=${{ secrets.GITHUB_TOKEN }};ValidAuthenticationTypes=Basic
@@ -1390,7 +1394,7 @@ jobs:
           path: producer-payload
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: kit/global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Build target fixture as a real git repository
         id: target
         shell: bash
@@ -1581,7 +1585,7 @@ jobs:
           path: producer-diagnostics
       - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
         with:
-          global-json-file: kit/global.json
+          dotnet-version: ${{ env.CI_DOTNET_SDK_VERSION }}
       - name: Rebuild the identical target fixture
         id: target
         shell: bash
