@@ -267,6 +267,7 @@ internal static class DocumentationScribeTerminalSchema
             },
             "baseUnitProperties": {
               "lines": {
+                "description": "Each item is one unwrapped plain-text logical line. The Host adds XML wrappers and escaping. Do not include ///, XML tags, CDATA, entity spellings, or embedded line breaks; ordinary ampersands remain literal text.",
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 128,

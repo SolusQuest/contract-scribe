@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Core;
 using Json.Schema;
@@ -784,6 +785,37 @@ public sealed partial class DocumentationScribeRuntimeTests
             message.Kind == DocumentationScribeMessageKind.SystemPolicy).Content, StringComparison.Ordinal);
         Assert.DoesNotContain(hostile, modelRequest.Messages.Single(message =>
             message.Kind == DocumentationScribeMessageKind.RunPolicy).Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Encoded_prompt_and_terminal_schema_explain_plain_logical_lines()
+    {
+        var exchange = Script(SubmitResponse(ReadTerminal("skip-result.json")), FinishResponse());
+        await CreateRuntime(exchange, EmptyRegistry()).RunAsync(Request(), Attempt(), Prompt());
+        var prepared = OpenAiCompatibleChatCompletionsCodec.Prepare(exchange.Requests[0], "synthetic-model");
+        using var wire = JsonDocument.Parse(prepared.BodyUtf8);
+        using var policy = JsonDocument.Parse(wire.RootElement.GetProperty("messages")[0].GetProperty("content").GetString()!);
+        var behavior = string.Join("\n", policy.RootElement.GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        var schema = wire.RootElement.GetProperty("tools").EnumerateArray()
+            .Single(tool => tool.GetProperty("function").GetProperty("name").GetString() == "cs_terminal")
+            .GetProperty("function").GetProperty("parameters").GetProperty("$defs");
+        var lines = schema.GetProperty("baseUnitProperties").GetProperty("lines");
+        var description = lines.TryGetProperty("description", out var text) ? text.GetString()! : string.Empty;
+        var missing = new List<string>();
+        foreach (var phrase in new[]
+                 {
+                     "unwrapped plain-text logical line", "Host adds XML wrappers and escaping",
+                     "///", "XML tags", "CDATA", "entity spellings", "embedded line breaks", "ordinary ampersands",
+                 })
+        {
+            if (!behavior.Contains(phrase, StringComparison.Ordinal)) missing.Add("system policy: " + phrase);
+            if (!description.Contains(phrase, StringComparison.Ordinal)) missing.Add("encoded lines schema: " + phrase);
+        }
+        if (!behavior.Contains("content.inherit-doc uses an empty lines array", StringComparison.Ordinal))
+            missing.Add("system policy: inherit-doc empty lines exception");
+        Assert.Empty(missing);
+        Assert.Equal(1, lines.GetProperty("minItems").GetInt32());
+        Assert.Equal(0, schema.GetProperty("inheritDocUnit").GetProperty("properties").GetProperty("lines").GetProperty("maxItems").GetInt32());
     }
 
     [Fact]
@@ -1623,7 +1655,7 @@ public sealed partial class DocumentationScribeRuntimeTests
             Assert.Equal(5, exchange.Requests[2].Messages.Length);
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            Assert.Equal("9b422a2844e9fe032ed8cfb2e7de2d897730d714de0720c95eb6fc5353468ac4", digest);
+            Assert.Equal("d68e1060e69c0800034c7f3acd6528ed084d40681a5a0c4463c6f85264f14d00", digest);
         }
         finally
         {

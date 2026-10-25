@@ -679,6 +679,13 @@ public sealed class DocumentationScribeContractTests
     [Fact]
     public void Structured_proposals_are_complete_m2_safe_blocks()
     {
+        foreach (var forbidden in new[] { "/// Raw documentation prefix.", "<![CDATA[Raw documentation.]]>", "First line.\nSecond line." })
+        {
+            AssertResultMutationFails(
+                null,
+                result => ScribeResultFixture.Payload(result)["contentUnits"]![0]!["lines"]![0] = forbidden,
+                "scribe.result.invalid-content");
+        }
         AssertResultMutationFails(
             request => request["manifest"]![0]!["styleProfile"]!["summary"]!["disposition"] = "optional",
             result => ScribeResultFixture.Payload(result)["contentUnits"]!.AsArray().RemoveAt(0),

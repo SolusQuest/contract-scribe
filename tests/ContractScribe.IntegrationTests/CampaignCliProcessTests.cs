@@ -890,8 +890,10 @@ public sealed partial class CampaignCliProcessTests
                         continue;
                     }
                     var response = scenario == "semantic" ? CreateSemanticResponse(body) : scenario is "shared" or "shared-closed" or "shared-skip-one" or "shared-skip-four"
+                        or "shared-repair" or "shared-mixed-repair" or "shared-malformed-repair"
                         ? CreateSharedResponse(body, skipAll: scenario == "shared-closed",
-                            skipMembers: scenario == "shared-skip-one" ? 1 : scenario == "shared-skip-four" ? 4 : 0)
+                            skipMembers: scenario == "shared-skip-one" ? 1 : scenario == "shared-skip-four" ? 4 : 0,
+                            repairScenario: scenario is "shared-repair" or "shared-mixed-repair" or "shared-malformed-repair" ? scenario : null)
                         : CreateProposalResponse(body, summaryText, includeUsage, usageOutputTokens, scenario == "closed-proposal" || SkipProposals);
                     var headers = Encoding.ASCII.GetBytes(
                         $"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {response.Length}\r\nConnection: close\r\n\r\n");
