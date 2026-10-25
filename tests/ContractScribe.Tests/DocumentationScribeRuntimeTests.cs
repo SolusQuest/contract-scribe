@@ -1655,7 +1655,11 @@ public sealed partial class DocumentationScribeRuntimeTests
             Assert.Equal(5, exchange.Requests[2].Messages.Length);
             Assert.Equal(["tool.alpha", "tool.zeta"], exchange.Requests[2].Tools.Select(tool => tool.OperationId));
             var digest = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-            Assert.Equal("d68e1060e69c0800034c7f3acd6528ed084d40681a5a0c4463c6f85264f14d00", digest);
+            var encodedDigest = OpenAiCompatibleChatCompletionsCodec.Digest(
+                OpenAiCompatibleChatCompletionsCodec.Prepare(exchange.Requests[2], "synthetic-model").BodyUtf8);
+            Assert.True(digest == "2c138c690b1928347c72a92bca79032fe6b8fd7a140fa11734985843577fa823"
+                && encodedDigest == "dcf56abf1c5d8a986383d11be51f33946233b68cbb9d10482a4cb46c016ac609",
+                $"Canonical logical request SHA256: {digest}; encoded HTTP SHA256: {encodedDigest}");
         }
         finally
         {

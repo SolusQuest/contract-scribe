@@ -120,6 +120,22 @@ public sealed partial class DocumentationScribeCompositionTests
         var startup = exchange.Requests[0];
         using var targetData = JsonDocument.Parse(startup.Messages.Single(message => message.Kind == DocumentationScribeMessageKind.TargetEvidence).Content);
         Assert.Equal(request.Manifest.Length, targetData.RootElement.GetProperty("manifest").GetArrayLength());
+        using var wire = JsonDocument.Parse(OpenAiCompatibleChatCompletionsCodec.Prepare(startup, "synthetic-model").BodyUtf8);
+        using var wirePolicy = JsonDocument.Parse(wire.RootElement.GetProperty("messages")[0].GetProperty("content").GetString()!);
+        var guidance = string.Join("\n", wirePolicy.RootElement.GetProperty("behavior").EnumerateArray().Select(item => item.GetString()));
+        foreach (var phrase in new[]
+                 {
+                     "empty initial evidenceReferenceIds list can reflect lazy evidence loading",
+                     "not an assertion that the member's source or target-specific tools are unavailable",
+                     "targetId is its sourceScopeId",
+                     "within current availability, freshness and limits",
+                     "that member's own evidence",
+                     "Shared file bytes and contentRef do not grant sibling citation authority",
+                     "insufficient-evidence skip remains permitted when evidence cannot safely justify content",
+                 })
+            Assert.Contains(phrase, guidance, StringComparison.Ordinal);
+        using var wireTargets = JsonDocument.Parse(wire.RootElement.GetProperty("messages")[4].GetProperty("content").GetString()!);
+        Assert.Equal(targetData.RootElement.GetRawText(), wireTargets.RootElement.GetRawText());
         Assert.True(startup.DeterministicUtf8.Length < 1_048_576);
         Assert.Equal(2, outcome.RunResult.RunEnvelope.ProviderRequestCount);
         using var semanticSchema = JsonDocument.Parse(startup.Tools.Single(tool =>
