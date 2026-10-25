@@ -2,6 +2,7 @@ using System.Collections.Immutable;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using ContractScribe.Agent.Providers;
 using ContractScribe.Agent.Runtime;
 using ContractScribe.Cli;
 using ContractScribe.Core;
@@ -12,6 +13,32 @@ namespace ContractScribe.Tests;
 
 public sealed partial class DocumentationScribeCompositionTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Semantic_page_schema_matches_the_composed_production_port(bool encodedHttp)
+    {
+        await using var fixture = await CompositionFixture.CreateProposalStageAsync();
+        var exchange = new ScriptedDocumentationScribeModelExchange([
+            ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Submit(fixture.Request,
+                """{"kind":"skip","reason":"scribe.skip.insufficient-evidence","evidenceReferenceIds":[]}"""u8.ToArray()))], usage: new(0, 0, 0, 0))),
+            ScriptedDocumentationScribeStep.Return(new([], [new(ScribeResultFixture.Finish(fixture.Request))], usage: new(0, 0, 0, 0))),
+        ]);
+        _ = await PrepareAsync(fixture, exchange);
+        var startup = exchange.Requests[0];
+        using var schema = encodedHttp
+            ? JsonDocument.Parse(OpenAiCompatibleChatCompletionsCodec.Prepare(startup, "synthetic-model").BodyUtf8)
+            : JsonDocument.Parse(startup.Tools.Single(tool =>
+                tool.OperationId == DocumentationScribeSemanticToolSelection.OperationId).InputSchemaJson);
+        var parameters = encodedHttp
+            ? schema.RootElement.GetProperty("tools").EnumerateArray().Select(tool => tool.GetProperty("function").GetProperty("parameters"))
+                .Single(value => value.TryGetProperty("properties", out var properties) && properties.TryGetProperty("targetId", out _))
+            : schema.RootElement;
+        Assert.Equal(DocumentationScribeSemanticToolLimits.Production.MaximumPageSize,
+            parameters.GetProperty("properties").GetProperty("pageSize").GetProperty("maximum").GetInt32());
+        Assert.Equal(100, DocumentationScribeSemanticToolRequest.Create("target.synthetic", 100).PageSize);
+    }
+
     [Fact]
     public async Task Prepared_patch_retains_instruction_freshness_and_exact_manifest_selection()
     {
@@ -97,6 +124,8 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(2, outcome.RunResult.RunEnvelope.ProviderRequestCount);
         using var semanticSchema = JsonDocument.Parse(startup.Tools.Single(tool =>
             tool.OperationId == DocumentationScribeSemanticToolSelection.OperationId).InputSchemaJson);
+        Assert.Equal(DocumentationScribeSemanticToolLimits.Production.MaximumPageSize,
+            semanticSchema.RootElement.GetProperty("properties").GetProperty("pageSize").GetProperty("maximum").GetInt32());
         Assert.Equal(request.Manifest.Where(member => all[member.Target.SymbolRef].M3Eligible)
                 .Select(member => member.TargetId).Order(StringComparer.Ordinal),
             semanticSchema.RootElement.GetProperty("properties").GetProperty("targetId").GetProperty("enum")

@@ -10,6 +10,126 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData("semantic-page-default", false)]
+    [InlineData("semantic-page-boundary", false)]
+    [InlineData("semantic-page-overflow", true)]
+    public async Task Semantic_page_limit_survives_five_target_publication_and_Action(string scenario, bool rejected)
+    {
+        await using var fixture = await FiveTargetFixture(scenario);
+        var layer = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
+        layer["provider"]!["requestProfile"] = new JsonObject
+        {
+            ["thinkingMode"] = "enabled",
+            ["reasoningEffort"] = "high",
+            ["toolChoice"] = "auto",
+            ["continuationPolicy"] = "required-for-tool-calls",
+            ["outputTokenField"] = "max_tokens",
+        };
+        layer["budgets"] = JsonSerializer.SerializeToNode(new
+        {
+            campaign = new
+            {
+                maximumProviderRequests = 8,
+                maximumAttemptsPerTarget = 2,
+                maximumInputTokens = 349244,
+                maximumUncachedInputTokens = 174622,
+                maximumOutputTokens = 32768,
+                maximumCostMicrounits = 960640,
+                maximumElapsedMilliseconds = 7200000,
+                maximumCandidatesPerBlock = 30
+            },
+            invocation = new
+            {
+                maximumTargets = 5,
+                maximumProviderRequests = 8,
+                maximumCachedInputTokens = 174622,
+                maximumUncachedInputTokens = 174622,
+                maximumOutputTokens = 32768,
+                maximumRequestOutputTokens = 4096,
+                maximumRequestElapsedMilliseconds = 90000,
+                maximumConnectMilliseconds = 10000,
+                maximumElapsedMilliseconds = 600000,
+                maximumToolCalls = 64,
+                maximumToolCallsPerResponse = 8
+            },
+        });
+        layer["costPolicy"] = JsonSerializer.SerializeToNode(new
+        {
+            currencyId = "currency.cny",
+            ratePolicyId = "synthetic-reduced-page-boundary",
+            cachedInputMicrounitsPerMillion = 40000,
+            uncachedInputMicrounitsPerMillion = 2000000,
+            outputMicrounitsPerMillion = 8000000,
+            reasoningMicrounitsPerMillion = 0,
+        });
+        await File.WriteAllTextAsync(fixture.Configuration!, layer.ToJsonString());
+        var result = await fixture.Run();
+        AssertResult(result, rejected ? 5 : 0, rejected ? "host-failure" : "published");
+        var checkpoint = fixture.Checkpoint();
+        var progress = checkpoint.State.ScribeProgress!;
+        Assert.True(progress.Session!.Ended);
+        Assert.Equal(5, progress.Session.AdmittedWorkItemKeys.Length);
+        Assert.Equal(rejected ? 1 : 5, progress.Members.Length);
+        Assert.Null(checkpoint.State.ActiveReservation);
+        using var envelope = JsonDocument.Parse(result.Stdout);
+        var usage = envelope.RootElement.GetProperty("invocationUsage");
+        Assert.Equal(checkpoint.CheckpointRevision, usage.GetProperty("checkpointRevision").GetInt64());
+        Assert.Equal(rejected ? 1 : 4, fixture.Provider.RequestCount);
+        Assert.Equal(fixture.Provider.RequestCount, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+        Assert.Equal(0, usage.GetProperty("calls").GetProperty("retryDispatches").GetInt32());
+        Assert.Equal(rejected ? 1 : 7, usage.GetProperty("calls").GetProperty("toolCalls").GetInt32());
+        foreach (var bytes in fixture.Provider.RequestBodies)
+        {
+            using var wire = JsonDocument.Parse(bytes);
+            var semantic = wire.RootElement.GetProperty("tools").EnumerateArray().Select(tool => tool.GetProperty("function"))
+                .Single(tool => tool.GetProperty("parameters").TryGetProperty("properties", out var properties)
+                    && properties.TryGetProperty("targetId", out _));
+            Assert.Equal(DocumentationScribeSemanticToolLimits.Production.MaximumPageSize,
+                semantic.GetProperty("parameters").GetProperty("properties").GetProperty("pageSize").GetProperty("maximum").GetInt32());
+        }
+        if (rejected)
+        {
+            Assert.Equal(6, checkpoint.CheckpointRevision);
+            Assert.Contains("campaign.provider-terminal", envelope.RootElement.GetProperty("diagnosticCodes").EnumerateArray().Select(x => x.GetString()));
+            Assert.Equal("codec.accepted-tool", usage.GetProperty("providerDiagnostics").GetProperty("observations")[0].GetProperty("codecDisposition").GetString());
+            Assert.Equal(1, usage.GetProperty("work").GetProperty("failedTargets").GetInt32());
+            Assert.Equal(0, checkpoint.State.LineageCharges.PatchValidationInvocations);
+            Assert.Null(checkpoint.State.CandidateObservation);
+            Assert.Empty(fixture.GitHub.PullRequests);
+            Assert.Equal(0, fixture.GitHub.PrAttempts);
+            Assert.Equal(0, fixture.GitHub.PublicationWrites);
+            Assert.Equal(CampaignWorkOutcomeCode.ToolProtocolFailure,
+                Assert.Single(checkpoint.State.WorkItems.Where(work => work.ClosedOutcome is not null)).ClosedOutcome!.Code);
+        }
+        else
+        {
+            Assert.Equal(5, usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
+            Assert.Equal(1, checkpoint.State.LineageCharges.PatchValidationInvocations);
+            Assert.Equal(5, checkpoint.State.CandidateObservation!.AcceptedWorkItemKeys.Length);
+            var pr = Assert.Single(fixture.GitHub.PullRequests);
+            Assert.Equal(41898282, pr["user"]!["id"]!.GetValue<int>());
+            Assert.True(pr["draft"]!.GetValue<bool>());
+            var tree = fixture.GitHub.Commits[pr["head"]!["sha"]!.GetValue<string>()]["tree"]!["sha"]!.GetValue<string>();
+            tree = fixture.GitHub.Trees[tree].Single(entry => entry.Path == "App").Oid;
+            var blob = fixture.GitHub.Trees[tree].Single(entry => entry.Path == "App.cs").Oid;
+            var patched = Encoding.UTF8.GetString(fixture.GitHub.Blobs[blob]);
+            var original = Encoding.UTF8.GetString(fixture.Source);
+            Assert.Equal(5, Regex.Matches(patched, "<summary>").Count - Regex.Matches(original, "<summary>").Count);
+            static string NoDocs(string text) => Regex.Replace(text, @"(?m)^[ \t]*///[^\r\n]*(?:\r?\n|$)", "");
+            Assert.Equal(NoDocs(original), NoDocs(patched));
+            using var continued = JsonDocument.Parse(fixture.Provider.RequestBodies[1]);
+            var firstTool = continued.RootElement.GetProperty("messages").EnumerateArray()
+                .Single(message => message.GetProperty("role").GetString() == "assistant").GetProperty("tool_calls")[0];
+            using var arguments = JsonDocument.Parse(firstTool.GetProperty("function").GetProperty("arguments").GetString()!);
+            Assert.Equal(scenario == "semantic-page-boundary", arguments.RootElement.TryGetProperty("pageSize", out var page));
+            if (scenario == "semantic-page-boundary") Assert.Equal(20, page.GetInt32());
+        }
+        Assert.True(fixture.GitHub.CoordinationDocument()["claim"]!["expiresUnixSeconds"]!.GetValue<long>() <= fixture.GitHub.ServerNow.ToUnixTimeSeconds());
+        await AssertActualActionConsumer(fixture.Outside, result.Stdout, result.ExitCode, progressOutcome: rejected ? "host-failure" : "published");
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData("shared-repair")]
     [InlineData("shared-mixed-repair")]
     [InlineData("shared-malformed-repair")]

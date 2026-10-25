@@ -1587,6 +1587,7 @@ internal static partial class DocumentationScribeComposition
         var schema = JsonNode.Parse(SemanticInputSchema.Span)!.AsObject();
         schema["properties"]!["targetId"]!["enum"] = new JsonArray(targetIds
             .Select(id => (JsonNode?)JsonValue.Create(id)).ToArray());
+        schema["properties"]!["pageSize"]!["maximum"] = DocumentationScribeSemanticToolLimits.Production.MaximumPageSize;
         return JsonSerializer.SerializeToUtf8Bytes(schema);
     }
 
