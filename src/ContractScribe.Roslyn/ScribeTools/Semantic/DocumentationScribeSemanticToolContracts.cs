@@ -536,6 +536,16 @@ public sealed record DocumentationScribeSemanticToolResult : IDocumentationScrib
 
     public DocumentationScribeSemanticFailureReason? FailureReason { get; }
 
+    DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory => FailureReason switch
+    {
+        DocumentationScribeSemanticFailureReason.InvalidRequest => DocumentationScribeToolFailureReason.InvalidRequest,
+        DocumentationScribeSemanticFailureReason.InvalidCursor => DocumentationScribeToolFailureReason.InvalidCursor,
+        DocumentationScribeSemanticFailureReason.StaleContext or DocumentationScribeSemanticFailureReason.SourceDrift =>
+            DocumentationScribeToolFailureReason.Stale,
+        DocumentationScribeSemanticFailureReason.UnsafeSource => DocumentationScribeToolFailureReason.UnsafeObject,
+        _ => DocumentationScribeToolFailureReason.Unknown,
+    };
+
     public override string ToString() =>
         $"{nameof(DocumentationScribeSemanticToolResult)} {{ Outcome = {Outcome.Id}, HasPage = {Page is not null}, FailureReason = {FailureReason?.ToString() ?? "none"} }}";
 }

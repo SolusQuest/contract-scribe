@@ -2,6 +2,7 @@ using System.Buffers;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
+using ContractScribe.Core;
 
 namespace ContractScribe.Cli;
 
@@ -9,7 +10,8 @@ internal sealed record CampaignTerminal(
     string TerminalLayer,
     CampaignOperation? Operation,
     string Outcome,
-    long? CheckpointRevision);
+    long? CheckpointRevision,
+    string? ToolFailureDiagnosticCode = null);
 
 internal static class CampaignCliPresentation
 {
@@ -63,7 +65,8 @@ internal static class CampaignCliPresentation
             terminal.TerminalLayer,
             terminal.Outcome,
             terminal.CheckpointRevision,
-            diagnostics);
+            diagnostics,
+            terminal.Outcome == "campaign.provider-terminal" ? terminal.ToolFailureDiagnosticCode : null);
     }
 
     private static CliExecutionResult Result(
@@ -73,7 +76,8 @@ internal static class CampaignCliPresentation
         string terminalLayer,
         string outcome,
         long? checkpointRevision,
-        IReadOnlyList<CliDiagnostic> diagnostics)
+        IReadOnlyList<CliDiagnostic> diagnostics,
+        string? toolFailureDiagnosticCode = null)
     {
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(
@@ -103,6 +107,8 @@ internal static class CampaignCliPresentation
             {
                 writer.WriteStringValue(diagnostic.Code);
             }
+            if (DocumentationScribeToolFailureDiagnostics.IsKnownCode(toolFailureDiagnosticCode))
+                writer.WriteStringValue(toolFailureDiagnosticCode);
             writer.WriteEndArray();
             if (checkpointRevision is null)
             {

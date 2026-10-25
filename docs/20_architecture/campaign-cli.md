@@ -55,6 +55,14 @@ The closed exit groups are: success `0`, usage `2`, bounded resumable stop `3`, 
 
 `campaign.checkpoint-too-large` is a state-layer admission stop with exit4. It identifies a valid complete plan whose full canonical checkpoint exceeds the existing 4 MiB capacity, rather than a host-contract error. Start publishes no checkpoint and reports a null revision; changed-base resume preserves and reports the exact accepted predecessor. Neither path reads provider credentials or dispatches provider/M2 work. Reducing an invocation quota cannot reduce the complete manifest's bytes.
 
+### Bounded tool-failure observation
+
+For `campaign.provider-terminal`, `diagnosticCodes` may append one observation `campaign.tool-failure.<operation>.<reason>` after the original outcome code. The controlled stderr record remains exactly the single original line; the extra code is stdout observation metadata, not a second stderr record. All JSON fields, version `1`, exit mapping, and output bounds are unchanged. The new fixed diagnostic vocabulary is a current draft semantic change.
+
+Operations are `read-excerpt`, `list-files`, `search-text`, `get-target-evidence`, and `unknown`. Known reasons are `argument-schema`, `invalid-request`, `invalid-cursor`, `scope-denied`, `stale`, `unsafe-object`, `invalid-encoding`, `invalid-result`, `result-encoding`, `result-canonical`, `evidence`, and `release-rejected`. Both components come from closed product vocabulary. An unknown or absent reason produces no extra code. In particular, `invalid-request` does not claim which range, path, or literal was rejected. No argument, path, subject, call ID, ordinal, hash, cursor, provider content, reasoning, or exception text is included.
+
+The first reason is captured at its original typed boundary and bound to that attempt's active tool round. Projection requires the same original request/attempt's validated tool-protocol result, its accepted closed checkpoint transition, and the unchanged terminal outcome. Higher-priority cancellation, deadline, budget, ownership or settlement failures suppress it. It does not grant an acknowledgement, change a stop into repair/skip, or permit another request. Old compact state and later read-only observations cannot manufacture it on resume. Failed tool responses remain terminal and are not added to the model's usable tool history.
+
 ## Security and non-goals
 
 The configuration is non-secret. `CONTRACTSCRIBE_PROVIDER_API_KEY` is the only credential name, is read at most when a provider-backed reservation is admissible, and is passed only to the selected existing transport. The command does not enumerate or forward the environment. Help, usage, preflight, unsafe/missing/corrupt/conflicting state, incompatibility, M1/C1 failure, no-work, unsupported-work, and pre-provider budget exhaustion do not read it.

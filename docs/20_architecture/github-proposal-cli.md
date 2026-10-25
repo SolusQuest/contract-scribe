@@ -98,6 +98,8 @@ campaignOperation, publicationOperationId, generationId, outcome, diagnosticCode
 checkpointRevision, pullRequestUrl, publicationDiagnostic, invocationUsage
 ```
 
+When the campaign stops with `campaign.provider-terminal`, the existing `diagnosticCodes` array may contain the one additional [bounded tool-failure observation](campaign-cli.md#bounded-tool-failure-observation). The original code, outcome, exit, single controlled stderr line, and strict stop are retained. This requires the original validated result and accepted closed transition; it is not reconstructed from durable state. No JSON field, invocation-usage member, publication diagnostic, provider diagnostic, or archive member is added. The code remains subject to the existing bounded string/count rules; success and unknown detail do not acquire a failure observation.
+
 A successful publication with unresolved selected members reports `published-partial` (exit 0), retaining the PR URL and operation/generation. It does not claim those members are resolved or authorize another PR for the batch. A complete selected result reports `published`.
 
 Envelope version is `1`. Layers are `usage`, `preflight`, `campaign`, `publication`, or `presentation`. Campaign operation is `start`, `resume`, or null when unavailable. Unavailable operation ID, generation, revision, and PR URL are explicitly null. Successful results have no stderr; controlled failures have exactly one closed, sanitized stderr line. No raw HTTP/header/exception, credential, source, candidate, private path or provider data is emitted.

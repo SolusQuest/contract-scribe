@@ -20,6 +20,28 @@ internal sealed class RunState
     private DocumentationScribeCacheObservation? cache;
     private bool arithmeticOverflow;
     private int inputReports, outputReports, cachedReports, uncachedReports, reasoningReports, costReports, cacheReports;
+    private readonly object toolFailureGate = new();
+    private int toolBoundary;
+    private string? firstToolFailureReference;
+
+    internal void SetToolBoundary(int boundary)
+    {
+        lock (toolFailureGate) toolBoundary = boundary;
+    }
+
+    internal void ObserveToolFailure(int originBoundary, string operationId, DocumentationScribeToolFailureReason reason)
+    {
+        lock (toolFailureGate)
+        {
+            if (originBoundary == toolBoundary)
+                firstToolFailureReference ??= DocumentationScribeToolFailureDiagnostics.CreateReference(operationId, reason);
+        }
+    }
+
+    private string ToolFailureReference(string fallback)
+    {
+        lock (toolFailureGate) return firstToolFailureReference ?? fallback;
+    }
 
     internal RunState(
         DocumentationScribeRequest request,
@@ -278,7 +300,7 @@ internal sealed class RunState
                 [new DocumentationScribeDiagnosticInput(
                     "scribe.diagnostic.tool-failure",
                     "tool",
-                    DocumentationScribeBoundary.ValidateIdentifier(referenceId, nameof(referenceId)))],
+                    DocumentationScribeBoundary.ValidateIdentifier(ToolFailureReference(referenceId), nameof(referenceId)))],
                 elapsedMilliseconds,
                 allowObservedOverrun: false)));
 

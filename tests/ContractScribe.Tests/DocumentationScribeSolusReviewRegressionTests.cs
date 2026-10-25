@@ -322,7 +322,12 @@ public sealed partial class CampaignStateContractTests
         new DocumentationScribeToolRegistryBuilder(request.ToolPolicyId).Add(new ReviewBoundaryDescriptor(operationId), port,
             new ReviewBoundaryCodec(), "Read synthetic target evidence.", "{\"type\":\"object\",\"additionalProperties\":false}"u8.ToArray(), 16).Build();
     private sealed record ReviewBoundaryRequest : IDocumentationScribeToolRequest<ReviewBoundaryResult>;
-    private sealed record ReviewBoundaryResult(DocumentationScribeToolOutcome Outcome) : IDocumentationScribeToolResult;
+    private sealed record ReviewBoundaryResult(DocumentationScribeToolOutcome Outcome) : IDocumentationScribeToolResult
+    {
+        DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory =>
+            Outcome == DocumentationScribeToolOutcome.Failure
+                ? DocumentationScribeToolFailureReason.InvalidRequest : DocumentationScribeToolFailureReason.Unknown;
+    }
     private sealed class ReviewBoundaryDescriptor(string operationId) : IDocumentationScribeToolDescriptor<ReviewBoundaryRequest, ReviewBoundaryResult>
     { public string OperationId => operationId; }
     private sealed class ReviewBoundaryCodec : IDocumentationScribeToolCodec<ReviewBoundaryRequest, ReviewBoundaryResult>
@@ -345,7 +350,7 @@ public sealed partial class CampaignStateContractTests
             throw new InvalidOperationException("The infinite operation must end through cancellation.");
         }
     }
-    private sealed class ReviewBoundaryPort(Exception? failure = null) : IDocumentationScribeToolPort<ReviewBoundaryRequest, ReviewBoundaryResult>, IDocumentationScribeToolResultReleaseValidator
+    private sealed class ReviewBoundaryPort(Exception? failure = null, bool toolFailure = false) : IDocumentationScribeToolPort<ReviewBoundaryRequest, ReviewBoundaryResult>, IDocumentationScribeToolResultReleaseValidator
     {
         public bool ValidateResultRelease(CancellationToken cancellationToken)
         { cancellationToken.ThrowIfCancellationRequested(); return true; }
@@ -353,8 +358,32 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<ReviewBoundaryResult> InvokeAsync(ReviewBoundaryRequest request, CancellationToken cancellationToken)
         {
             Calls++;
-            return failure is null ? ValueTask.FromResult(new ReviewBoundaryResult(DocumentationScribeToolOutcome.Complete))
+            return failure is null ? ValueTask.FromResult(new ReviewBoundaryResult(
+                toolFailure ? DocumentationScribeToolOutcome.Failure : DocumentationScribeToolOutcome.Complete))
                 : ValueTask.FromException<ReviewBoundaryResult>(failure);
         }
+    }
+
+    [Fact]
+    public async Task A_typed_tool_reason_does_not_escape_failed_mandatory_completion_as_a_tool_failure()
+    {
+        const string marker = "synthetic-private-completion-fault";
+        var trial = await SolusTrialAsync();
+        var completionReached = false;
+        trial.Store.HostCompletionReadback = phase =>
+        {
+            if (phase != CampaignProviderHostPhase.SemanticTool) return;
+            completionReached = true;
+            throw new IOException(marker);
+        };
+        var port = new ReviewBoundaryPort(toolFailure: true);
+        var exchange = ReviewBoundaryToolExchange();
+        var result = await trial.Session(exchange, ReviewBoundaryRegistry(trial.Request, port)).RunAsync();
+        Assert.Equal(1, port.Calls);
+        Assert.Single(exchange.Requests);
+        Assert.True(completionReached);
+        Assert.Equal(DocumentationScribeFailureCode.Internal, Assert.IsType<DocumentationScribeFailureTerminal>(result.Stop).Code);
+        Assert.Null(DocumentationScribeToolFailureDiagnostics.FromResult(result));
+        Assert.DoesNotContain(marker, JsonSerializer.Serialize(result.RunEnvelope.Diagnostics), StringComparison.Ordinal);
     }
 }

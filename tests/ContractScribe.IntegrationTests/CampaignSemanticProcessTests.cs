@@ -95,26 +95,36 @@ public sealed partial class CampaignCliProcessTests
 
     internal sealed partial class ProposalLoopbackServer
     {
-        private static byte[] CreateSemanticResponse(byte[] body, int? pageSize = 1, bool sharedBatch = false)
+        private static byte[] CreateSemanticResponse(byte[] body, int? pageSize = 1, bool sharedBatch = false,
+            int targetCount = 1)
         {
             using var wire = JsonDocument.Parse(body);
             var messages = wire.RootElement.GetProperty("messages");
             if (messages.EnumerateArray().Any(message => message.GetProperty("role").GetString() == "tool"))
                 return CreateSharedResponse(body, batch: sharedBatch, includeUsage: true, usageOutputTokens: 0);
             using var targets = JsonDocument.Parse(messages[4].GetProperty("content").GetString()!);
-            var target = targets.RootElement.GetProperty("executableTargetIds")[0].GetString();
+            var selected = targets.RootElement.GetProperty("executableTargetIds").EnumerateArray()
+                .Take(targetCount).Select(target => target.GetString()).ToArray();
             var tool = wire.RootElement.GetProperty("tools").EnumerateArray().Select(item => item.GetProperty("function"))
                 .Single(item => item.GetProperty("parameters").TryGetProperty("properties", out var properties)
                     && properties.TryGetProperty("targetId", out _) && properties.TryGetProperty("pageSize", out _));
-            var arguments = new JsonObject { ["targetId"] = target };
-            if (pageSize is { } size) arguments["pageSize"] = size;
+            var calls = selected.Select((target, index) =>
+            {
+                var arguments = new JsonObject { ["targetId"] = target };
+                if (pageSize is { } size) arguments["pageSize"] = size;
+                return new
+                {
+                    id = targetCount == 1 ? "call.semantic" : "call.semantic." + index,
+                    type = "function",
+                    function = new { name = tool.GetProperty("name").GetString(), arguments = arguments.ToJsonString() },
+                };
+            }).ToArray();
             return JsonSerializer.SerializeToUtf8Bytes(new
             {
                 choices = new[] { new { index = 0, message = new
                 {
                     role = "assistant", content = (string?)null, reasoning_content = "synthetic-semantic-read",
-                    tool_calls = new[] { new { id = "call.semantic", type = "function", function = new
-                    { name = tool.GetProperty("name").GetString(), arguments = arguments.ToJsonString() } } },
+                    tool_calls = calls,
                 }, finish_reason = "tool_calls" } },
                 usage = new
                 {

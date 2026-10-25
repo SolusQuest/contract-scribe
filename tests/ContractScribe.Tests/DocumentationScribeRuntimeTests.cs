@@ -248,6 +248,7 @@ public sealed partial class DocumentationScribeRuntimeTests
         Assert.Empty(port.References);
         Assert.Equal(0, result.RunEnvelope.ToolRoundCount);
         Assert.Equal(0, result.RunEnvelope.ToolCallCount);
+        Assert.Null(DocumentationScribeToolFailureDiagnostics.FromResult(result));
     }
 
     [Theory]
@@ -557,7 +558,8 @@ public sealed partial class DocumentationScribeRuntimeTests
             .RunAsync(Request(), Attempt(), Prompt());
 
         Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
-        Assert.Equal("tool.read", result.RunEnvelope.Diagnostics.Single().ReferenceId);
+        Assert.Equal("tool-failure.unknown.result-encoding", result.RunEnvelope.Diagnostics.Single().ReferenceId);
+        Assert.Equal("campaign.tool-failure.unknown.result-encoding", DocumentationScribeToolFailureDiagnostics.FromResult(result));
     }
 
     [Fact]
@@ -1154,7 +1156,8 @@ public sealed partial class DocumentationScribeRuntimeTests
 
         Assert.Equal(DocumentationScribeFailureCode.ToolProtocol, FailureCode(result));
         var diagnostic = Assert.Single(result.RunEnvelope.Diagnostics);
-        Assert.Equal("tool.read", diagnostic.ReferenceId);
+        Assert.Equal("tool-failure.unknown.unknown", diagnostic.ReferenceId);
+        Assert.Null(DocumentationScribeToolFailureDiagnostics.FromResult(result));
         Assert.DoesNotContain(opaque, JsonSerializer.Serialize(result), StringComparison.Ordinal);
     }
 

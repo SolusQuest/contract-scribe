@@ -145,10 +145,11 @@ internal static class CampaignCommandRunner
         CampaignInvocationTargetLimit targetLimit,
         CancellationToken cancellationToken, InvocationUsage? usage)
     {
-        CampaignTerminal Terminal(CampaignOperation operation, string layer, string outcome, CampaignAcceptedCheckpoint? checkpoint)
+        CampaignTerminal Terminal(CampaignOperation operation, string layer, string outcome, CampaignAcceptedCheckpoint? checkpoint,
+            string? toolFailureDiagnosticCode = null)
         {
             usage?.ObserveState(checkpoint?.Artifact);
-            return new(layer, operation, outcome, checkpoint?.Artifact.CheckpointRevision);
+            return new(layer, operation, outcome, checkpoint?.Artifact.CheckpointRevision, toolFailureDiagnosticCode);
         }
         if (!preflight.Configuration.Revalidate())
         {
@@ -597,7 +598,7 @@ internal static class CampaignCommandRunner
             var proposalOutcome = ProposalResultOutcome(proposal);
             return Terminal(preflight.Operation,
                 proposal.Kind == DocumentationCampaignProposalOutcomeKind.CheckpointCapacity ? "state" : "execution", proposalOutcome,
-                proposal.Artifact is null ? current : AcceptedObservation(proposal.Artifact));
+                proposal.Artifact is null ? current : AcceptedObservation(proposal.Artifact), proposal.ToolFailureDiagnosticCode);
         }
 
         return Terminal(preflight.Operation, "execution", "campaign.host-contract-error", current);

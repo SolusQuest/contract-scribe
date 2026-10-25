@@ -1153,6 +1153,10 @@ public sealed record DocumentationScribeToolOutcome
 public interface IDocumentationScribeToolResult
 {
     DocumentationScribeToolOutcome Outcome { get; }
+
+    /// <summary>Optional closed provenance from a failed typed operation, never its input.</summary>
+    [System.Text.Json.Serialization.JsonIgnore]
+    DocumentationScribeToolFailureReason FailureReasonCategory => DocumentationScribeToolFailureReason.Unknown;
 }
 
 public interface IDocumentationScribeToolRequest<TResult>

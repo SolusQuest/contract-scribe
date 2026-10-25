@@ -391,7 +391,14 @@ internal static class DocumentationCampaignProposalExecutor
             if (coordinator.Scope.Allowance.HasCheckedStop && settled.Artifact.State.TerminalOutcome is null)
                 return new(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted,
                     "campaign.invocation-budget-exhausted", selectedState.WorkItemKey, settled.Artifact);
-            return FromArtifact(settled.Artifact, selectedState.WorkItemKey);
+            var originalResult = prepared.CompletionAuthority?.Outcome?.RunResult;
+            var closed = settled.Artifact.State.WorkItems.Single(item => item.WorkItemKey == selectedState.WorkItemKey).ClosedOutcome;
+            var toolFailure = originalResult is not null
+                && closed is { Stage: CampaignWorkOutcomeStage.Scribe, Code: CampaignWorkOutcomeCode.ToolProtocolFailure }
+                && closed.AttemptId == originalResult.AttemptId
+                && closed.ScribeRequestSha256 == originalResult.RunEnvelope.ScribeRequestSha256
+                    ? DocumentationScribeToolFailureDiagnostics.FromResult(originalResult) : null;
+            return FromArtifact(settled.Artifact, selectedState.WorkItemKey, toolFailure);
         }
 
         var settlementFailure = settled.Kind is CampaignCheckpointAcceptanceKind.Conflict
@@ -426,11 +433,12 @@ internal static class DocumentationCampaignProposalExecutor
         }
     }
 
-    private static DocumentationCampaignProposalOutcome FromArtifact(CampaignCheckpointArtifact artifact, string workKey)
+    private static DocumentationCampaignProposalOutcome FromArtifact(CampaignCheckpointArtifact artifact, string workKey,
+        string? toolFailureDiagnosticCode = null)
     {
         var work = artifact.State.WorkItems.Single(item => item.WorkItemKey == workKey);
         if (artifact.State.TerminalOutcome?.Kind is CampaignTerminalKind.Cancelled or CampaignTerminalKind.Timeout or CampaignTerminalKind.Failed)
-            return FromTerminal(artifact);
+            return FromTerminal(artifact, toolFailureDiagnosticCode);
         if (artifact.State.WorkItems.Any(item => item.Status == CampaignWorkStatus.ProposalComplete))
             return new(DocumentationCampaignProposalOutcomeKind.ProposalReady, "campaign.proposal.ready", workKey, artifact);
         if (work.ClosedOutcome is
@@ -441,10 +449,11 @@ internal static class DocumentationCampaignProposalExecutor
             return new(DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.provider.retryable", workKey, artifact);
         if (artifact.State.ScribeProgress?.Session is { Ended: false } && artifact.State.TerminalOutcome is null)
             return new(DocumentationCampaignProposalOutcomeKind.RetryableStop, "campaign.session.pending", workKey, artifact);
-        return FromTerminal(artifact);
+        return FromTerminal(artifact, toolFailureDiagnosticCode);
     }
 
-    private static DocumentationCampaignProposalOutcome FromTerminal(CampaignCheckpointArtifact artifact) =>
+    private static DocumentationCampaignProposalOutcome FromTerminal(CampaignCheckpointArtifact artifact,
+        string? toolFailureDiagnosticCode = null) =>
         artifact.State.TerminalOutcome switch
         {
             { Kind: CampaignTerminalKind.Cancelled } => new(DocumentationCampaignProposalOutcomeKind.Cancelled, "campaign.cancelled", artifact: artifact),
@@ -454,7 +463,8 @@ internal static class DocumentationCampaignProposalExecutor
             { Kind: CampaignTerminalKind.Complete, Reason: CampaignTerminalReason.AllWorkClosed or CampaignTerminalReason.Unresolved }
                 when artifact.State.WorkItems.All(item => item.ClosedOutcome?.Stage == CampaignWorkOutcomeStage.Planning) =>
                 new(DocumentationCampaignProposalOutcomeKind.UnsupportedOnly, "campaign.unsupported-only", artifact: artifact),
-            _ => new(DocumentationCampaignProposalOutcomeKind.TerminalStop, "campaign.terminal", artifact: artifact),
+            _ => new(DocumentationCampaignProposalOutcomeKind.TerminalStop, "campaign.terminal", artifact: artifact,
+                toolFailureDiagnosticCode: toolFailureDiagnosticCode),
         };
 
     private static DocumentationCampaignProposalOutcome Outcome(

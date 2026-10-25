@@ -313,7 +313,7 @@ internal sealed class TypedToolRegistration<TRequest, TResult> : ToolRegistratio
 
         if (!decoded.IsValid || decoded.Request is null)
         {
-            throw new ToolProtocolException(call.OperationId);
+            throw new ToolProtocolException(call.OperationId, DocumentationScribeToolFailureReason.ArgumentSchema);
         }
 
         return new TypedPreparedToolCall<TRequest, TResult>(call, decoded.Request, port, codec);
@@ -371,7 +371,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
 
         if (result is null || result.Outcome is null || !DocumentationScribeBoundary.IsKnownOutcome(result.Outcome))
         {
-            throw new ToolProtocolException(Call.OperationId);
+            throw new ToolProtocolException(Call.OperationId, DocumentationScribeToolFailureReason.InvalidResult);
         }
 
         var outcome = result.Outcome;
@@ -380,7 +380,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
             || outcome == DocumentationScribeToolOutcome.Cancelled
             || outcome == DocumentationScribeToolOutcome.Failure)
         {
-            return new ToolInvocationResult(outcome, default, []);
+            return new ToolInvocationResult(outcome, default, [], result.FailureReasonCategory);
         }
 
         DocumentationScribeToolEncodeResult encoded;
@@ -395,7 +395,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
 
         if (!encoded.IsValid || encoded.Payload is null)
         {
-            throw new ToolProtocolException(Call.OperationId);
+            throw new ToolProtocolException(Call.OperationId, DocumentationScribeToolFailureReason.ResultEncoding);
         }
 
         ImmutableArray<byte> normalized;
@@ -405,7 +405,7 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
         }
         catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
         {
-            throw new ToolProtocolException(Call.OperationId);
+            throw new ToolProtocolException(Call.OperationId, DocumentationScribeToolFailureReason.ResultCanonical);
         }
 
         return new ToolInvocationResult(
@@ -418,12 +418,15 @@ internal sealed class TypedPreparedToolCall<TRequest, TResult> : PreparedToolCal
 internal readonly record struct ToolInvocationResult(
     DocumentationScribeToolOutcome Outcome,
     ImmutableArray<byte> ResultUtf8Json,
-    ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence);
+    ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence,
+    DocumentationScribeToolFailureReason FailureReason = DocumentationScribeToolFailureReason.Unknown);
 
 internal sealed class ToolProtocolException : Exception
 {
-    internal ToolProtocolException(string referenceId) : base("The tool boundary rejected an operation.") =>
-        ReferenceId = referenceId;
+    internal ToolProtocolException(string referenceId, DocumentationScribeToolFailureReason reason)
+        : base("The tool boundary rejected an operation.") => (ReferenceId, Reason) = (referenceId, reason);
+
+    internal DocumentationScribeToolFailureReason Reason { get; }
 
     internal string ReferenceId { get; }
 }
