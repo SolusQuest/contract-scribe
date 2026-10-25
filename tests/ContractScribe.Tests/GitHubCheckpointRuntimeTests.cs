@@ -8,6 +8,56 @@ namespace ContractScribe.Tests;
 public sealed partial class CampaignStateContractTests
 {
     [Fact]
+    public async Task B_delayed_checkpoint_grants_only_the_actual_original_Core_invocation()
+    {
+        var trial = await SolusTrialAsync();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, trial.Scenario.InitialState.CampaignLineage, handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(trial.Scenario.Plan), default));
+        var initial = CampaignStateJson.CreateArtifact(trial.Scenario.InitialState);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(initial.ExactUtf8Json.AsMemory(),
+            initial.CheckpointRevision, initial.Sha256, default)).Kind);
+        var before = remote.CoordinationHead!;
+        var writes = remote.RefMutationAttempts;
+        var refReads = 0;
+        handler.AfterResponse = (request, response) =>
+        {
+            if (remote.RefMutationAttempts > writes && request.Method == HttpMethod.Get
+                && request.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal) && ++refReads == 1)
+            {
+                Assert.Equal(writes + 1, remote.RefMutationAttempts);
+                Assert.Null(store.CheckpointDiagnostic);
+                var node = System.Text.Json.Nodes.JsonNode.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult())!;
+                node["object"]!["sha"] = before;
+                response.Content.Dispose();
+                response.Content = new StringContent(node.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+            }
+            return Task.FromResult(response);
+        };
+        var allowance = new DocumentationScribeInvocationAllowance(trial.Coordinator.Scope.Allowance.Limits);
+        var admission = CampaignStateReducer.AdmitProviderInvocation(initial, trial.Scenario.ExecutionAuthority, "style.synthetic",
+            trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Scenario.Plan.WorkItems[0].WorkItemKey,
+            trial.Request, CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
+        var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, trial.Scenario.ExecutionAuthority,
+            "style.synthetic", trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Request);
+        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
+        Assert.True(authority.TryBeginDispatch(out _));
+        var port = new ReviewBoundaryPort();
+        var session = new ScribeSessionTestDriver(trial.Request, trial.Attempt, trial.Prompt,
+            ReviewBoundaryRegistry(trial.Request, port), ReviewBoundaryToolExchange(), coordinator.Scope);
+        var result = await session.RunAsync();
+        Assert.Equal(1, port.Calls);
+        Assert.Equal(1, result.RunEnvelope.ToolCallCount);
+        Assert.True(refReads > 3);
+        Assert.Null(store.CheckpointDiagnostic);
+    }
+
+    [Fact]
     public async Task Conditional_checkpoint_reuses_only_authenticated_created_document_objects_within_its_gate()
     {
         var trial = await SolusTrialAsync();

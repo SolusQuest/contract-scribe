@@ -8,6 +8,74 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Five_target_delayed_checkpoint_confirmation_reaches_actual_patch_PR_cleanup_and_Action(bool renew)
+    {
+        await using var fixture = await FiveTargetFixture("shared");
+        string? reference = null, predecessor = null, expected = null;
+        var armed = false;
+        var injected = false;
+        var reads = 0;
+        fixture.GitHub.BeforeBody = (request, body) =>
+        {
+            if (expected is not null || request.Method != "POST" || request.Path != "/graphql") return;
+            var updates = JsonNode.Parse(body)!["variables"]!["input"]!["refUpdates"]!.AsArray();
+            if (updates.Count != 1) return;
+            var update = updates[0]!;
+            var before = update["beforeOid"]!.GetValue<string>();
+            if (before == new string('0', 40)) return;
+            var after = update["afterOid"]!.GetValue<string>();
+            var prior = fixture.GitHub.DocumentAt(before);
+            var next = fixture.GitHub.DocumentAt(after);
+            if (prior["checkpoint"] is null || next["publication"] is not null) return;
+            var checkpoint = fixture.Checkpoint();
+            var sameCheckpoint = JsonNode.DeepEquals(prior["checkpoint"], next["checkpoint"]);
+            if (renew ? !sameCheckpoint || checkpoint.State.CandidateObservation is null || checkpoint.State.ScribeProgress?.Session?.Ended != true
+                : sameCheckpoint || checkpoint.State.WorkItems.All(work => work.TrustedProposal is null)) return;
+            reference = update["name"]!.GetValue<string>();
+            predecessor = before;
+            expected = after;
+        };
+        fixture.GitHub.Before = request =>
+        {
+            if (!armed || injected || request.Method != "GET" || request.Path != "/repos/Owner/repo/git/ref/" + reference![5..]) return;
+            // Model one stale REST observation, not a second mutation. Dispatch
+            // snapshots this response before After restores the actual head.
+            fixture.GitHub.Refs[reference] = predecessor!;
+        };
+        fixture.GitHub.After = request =>
+        {
+            if (expected is null) return;
+            if (request.Method == "POST" && request.Path == "/graphql" && !injected) armed = true;
+            if (!armed || request.Method != "GET" || request.Path != "/repos/Owner/repo/git/ref/" + reference![5..]) return;
+            reads++;
+            if (!injected)
+            {
+                fixture.GitHub.Refs[reference] = expected;
+                injected = true;
+            }
+        };
+        var result = await fixture.Run();
+        Assert.True(injected);
+        Assert.True(reads >= 3); // predecessor, physical expected, independent final fence
+        AssertResult(result, 0, "published");
+        var checkpoint = fixture.Checkpoint();
+        Assert.True(checkpoint.State.ScribeProgress!.Session!.Ended);
+        Assert.Equal(5, checkpoint.State.CandidateObservation!.AcceptedWorkItemKeys.Length);
+        Assert.Equal(1, checkpoint.State.LineageCharges.PatchValidationInvocations);
+        Assert.Null(checkpoint.State.ActiveReservation);
+        Assert.Single(fixture.GitHub.PullRequests);
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
+        Assert.True(fixture.GitHub.CoordinationDocument()["claim"]!["expiresUnixSeconds"]!.GetValue<long>() <= fixture.GitHub.ServerNow.ToUnixTimeSeconds());
+        using var envelope = JsonDocument.Parse(result.Stdout);
+        Assert.Equal(JsonValueKind.Null, envelope.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure").ValueKind);
+        Assert.Equal(0, envelope.RootElement.GetProperty("invocationUsage").GetProperty("calls").GetProperty("retryDispatches").GetInt32());
+        await AssertActualActionConsumer(fixture.Outside, result.Stdout, result.ExitCode, progressOutcome: "published");
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
     [InlineData(403, "Permission")]
     [InlineData(404, "NotFound")]
     public async Task Five_target_publication_entry_failed_confirmation_stops_actual_CLI_cleanup(int status, string transport)

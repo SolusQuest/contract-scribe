@@ -121,6 +121,7 @@ public sealed partial class GitHubCoordinationRefTests
 
     [Theory]
     [InlineData("predecessor", false)]
+    [InlineData("predecessor", true)]
     [InlineData("foreign", false)]
     [InlineData("foreign", true)]
     [InlineData("missing", false)]
@@ -179,7 +180,7 @@ public sealed partial class GitHubCoordinationRefTests
             Assert.False(callback);
             Assert.True(store.CheckpointToken.IsCancellationRequested);
             Assert.Equal(initialCas + 1, remote.RefMutationAttempts);
-            Assert.Equal(1, refGets);
+            Assert.Equal(fault == "predecessor" && !lostAck ? 3 : 1, refGets);
             var first = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
             Assert.Equal(GitHubCheckpointOperation.Renew, first.Operation);
             Assert.Equal(GitHubCheckpointStage.FinalRef, first.Stage);

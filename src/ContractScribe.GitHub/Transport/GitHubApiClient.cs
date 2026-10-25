@@ -400,6 +400,14 @@ internal sealed class GitHubApiClient : IDisposable
         return new("graphql", element => GraphQl(element, mutationId), body, context, Status: 200);
     }, cancellationToken);
 
+    // Confirm the exact already-bound request, without reconstructing mutation
+    // commitments in a resource owner or treating the acknowledgement as an OID.
+    internal bool MatchesRefAcknowledgement(GitHubApiResult<GitHubAcknowledgement> result, GitHubUpdateRef request) =>
+        result is { Value: not null, Failure: null, Delivery: GitHubDelivery.NeedsReadback }
+        && AuthenticatedRepository is { } identity
+        && result.Context == new GitHubRefContext(identity, ObjectOperation,
+            request.Ref, request.BeforeOid, request.AfterOid, MutationId(identity, request));
+
     internal ValueTask<GitHubApiResult<GitHubAcknowledgement>> UpdatePublicationRefsAsync(
         GitHubUpdateRef coordination, GitHubUpdateRef proposal, CancellationToken token) => RunAsync<GitHubAcknowledgement>(() =>
     {

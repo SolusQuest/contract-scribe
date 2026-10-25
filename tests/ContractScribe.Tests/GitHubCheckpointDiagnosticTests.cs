@@ -135,11 +135,12 @@ public sealed partial class GitHubCoordinationRefTests
         var blob = GitHubCoordinationObjects.ObjectOid("blob", next.Artifact.ExactUtf8Json.AsSpan());
         var cas = false;
         var injected = false;
+        var predecessorObservations = 0;
         handler.AfterResponse = (request, response) =>
         {
             var path = request.RequestUri!.AbsolutePath;
             if (request.Method == HttpMethod.Post && path == "/graphql") cas = true;
-            if (cas && !injected && (fault == "ref"
+            if (cas && (!injected || fault == "ref") && (fault == "ref"
                 ? path.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal)
                 : path.EndsWith("/git/blobs/" + blob, StringComparison.Ordinal)))
             {
@@ -151,14 +152,18 @@ public sealed partial class GitHubCoordinationRefTests
                     return Task.FromResult(new HttpResponseMessage(fault == "missing" ? HttpStatusCode.NotFound : HttpStatusCode.Forbidden));
                 }
                 var node = JsonNode.Parse(response.Content.ReadAsStringAsync().GetAwaiter().GetResult())!;
-                if (fault == "ref") node["object"]!["sha"] = oldHead;
+                // Under B a single predecessor is pending, so the negative
+                // first-closed-failure control must exhaust all three reads.
+                if (fault == "ref") { node["object"]!["sha"] = oldHead; predecessorObservations++; }
                 else node["content"] = Convert.ToBase64String("{}"u8);
+                response.Content.Dispose();
                 response.Content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
             }
             return Task.FromResult(response);
         };
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, next);
         Assert.True(injected);
+        if (fault == "ref") Assert.Equal(3, predecessorObservations);
         Assert.Equal(CampaignCheckpointAcceptanceKind.PublicationFailure, accepted.Kind);
         Assert.Null(accepted.AcceptedCheckpoint);
         Assert.True(store.CheckpointToken.IsCancellationRequested);

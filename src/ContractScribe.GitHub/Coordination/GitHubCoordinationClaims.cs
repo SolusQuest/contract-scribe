@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics;
 using System.Security.Cryptography;
 using ContractScribe.Core;
 using ContractScribe.GitHub.Transport;
@@ -109,7 +110,7 @@ internal sealed partial class GitHubCoordinationStore
                 document = document with { Archive = new(witness.Oid, evidence.WitnessSha256, GitHubCoordinationDocument.CurrentCommit) };
             }
             stage = GitHubCheckpointStage.CreateObjects;
-            if (await WriteDocumentAsync(document, blobs, token, proof: proof, attempt: attempt).ConfigureAwait(false) is not null)
+            if (await WriteDocumentAsync(document, blobs, token, livePredecessor: remote.Document, proof: proof, attempt: attempt).ConfigureAwait(false) is not null)
             { StopCheckpoint(); return new(CampaignCheckpointWriteKind.PublicationFailure); }
             stage = GitHubCheckpointStage.CheckpointReadback;
             var observed = await ReadCallerCheckpointAsync(token, proof, verifyTarget: true, attempt: attempt, stage: stage).ConfigureAwait(false);
@@ -197,8 +198,9 @@ internal sealed partial class GitHubCoordinationStore
                 return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.Conflict));
             }
             stage = GitHubCheckpointStage.RefMutation;
-            var result = await UpdateCoordinationRefAsync(new(coordinationRef, document.PredecessorOid,
-                prepared.CommitOid, document.PredecessorOid == ZeroOid), token).ConfigureAwait(false);
+            var update = new GitHubUpdateRef(coordinationRef, document.PredecessorOid,
+                prepared.CommitOid, document.PredecessorOid == ZeroOid);
+            var result = await UpdateCoordinationRefAsync(update, token).ConfigureAwait(false);
             if (result.Delivery == GitHubDelivery.NotDispatched)
             {
                 ObserveCheckpointFailure(attempt, stage, result.Failure?.Code == GitHubFailureCode.Cancelled
@@ -210,13 +212,74 @@ internal sealed partial class GitHubCoordinationStore
                 return failed;
             }
             using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
+            using var confirmation = CancellationTokenSource.CreateLinkedTokenSource(recovery.Token, token, checkpointLifetime.Token);
+            var activeToken = recovery.Token;
+            var delayed = false;
+            var failedFinalRead = true;
             stage = GitHubCheckpointStage.FinalRef;
-            var comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
+            GitHubCheckpointRefComparison? comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
             try
             {
                 var finalRef = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
+                failedFinalRead = finalRef.Failure is not null;
+                var observedAt = Stopwatch.GetTimestamp();
                 comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
                 var current = GitHubObservedProposalIntegrity.Read(finalRef);
+                if (current?.Oid == document.PredecessorOid && document.PredecessorOid != ZeroOid && requireLiveClaim
+                    && attempt?.Operation is GitHubCheckpointOperation.Write or GitHubCheckpointOperation.Renew
+                    && livePredecessor is not null && Owns(livePredecessor) && !checkpointExpiry.IsCancellationRequested
+                    && client.MatchesRefAcknowledgement(result, update))
+                {
+                    delayed = true;
+                    activeToken = confirmation.Token;
+                    RequirePendingCheckpointLease(livePredecessor, activeToken, attempt);
+                    using var polling = CancellationTokenSource.CreateLinkedTokenSource(activeToken);
+                    var window = TimeSpan.FromSeconds(3);
+                    var residual = window - Stopwatch.GetElapsedTime(observedAt);
+                    if (residual > TimeSpan.Zero) polling.CancelAfter(residual);
+                    else polling.Cancel();
+                    foreach (var delay in new[] { 250, 750 })
+                    {
+                        RequirePendingCheckpointLease(livePredecessor, activeToken, attempt);
+                        if (window - Stopwatch.GetElapsedTime(observedAt) <= TimeSpan.FromMilliseconds(delay)) break;
+                        // No failed GET exists during backoff. Its cancellation
+                        // cannot borrow the preceding provisional comparison.
+                        var predecessorComparison = comparison;
+                        comparison = null;
+                        activeToken = polling.Token;
+                        try { await Task.Delay(delay, activeToken).ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (polling.IsCancellationRequested && !confirmation.IsCancellationRequested)
+                        {
+                            comparison = predecessorComparison;
+                            activeToken = confirmation.Token;
+                            break; // polling exhausted without a failed GET
+                        }
+                        RequirePendingCheckpointLease(livePredecessor, confirmation.Token, attempt);
+                        if (Stopwatch.GetElapsedTime(observedAt) >= window)
+                        {
+                            comparison = predecessorComparison;
+                            activeToken = confirmation.Token;
+                            break; // timer callbacks need not run before us
+                        }
+                        activeToken.ThrowIfCancellationRequested();
+                        comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
+                        failedFinalRead = true;
+                        finalRef = await client.GetRefAsync(coordinationRef, activeToken).ConfigureAwait(false);
+                        if (Stopwatch.GetElapsedTime(observedAt) >= window) polling.Cancel();
+                        failedFinalRead = finalRef.Failure is not null;
+                        comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
+                        current = GitHubObservedProposalIntegrity.Read(finalRef);
+                        if (activeToken.IsCancellationRequested && (finalRef.Failure?.Code is GitHubFailureCode.Cancelled or GitHubFailureCode.Timeout
+                            || finalRef.Failure is null && current?.Oid == prepared.CommitOid))
+                            throw new OperationCanceledException("Checkpoint confirmation was cancelled.",
+                                new GitHubCoordinationException(transportFailure: finalRef.Failure), activeToken);
+                        activeToken = confirmation.Token;
+                        // Only a valid exact predecessor can repeat. In
+                        // particular, never skip a foreign or failed sample.
+                        if (current?.Oid != document.PredecessorOid) break;
+                    }
+                    activeToken = confirmation.Token;
+                }
                 if (current?.Oid != prepared.CommitOid)
                 {
                     ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, finalRef.Failure, refComparison: comparison);
@@ -226,12 +289,46 @@ internal sealed partial class GitHubCoordinationStore
                         RecoveryFailure(finalRef.Failure, recovery)));
                 }
                 stage = GitHubCheckpointStage.CanonicalDocument;
-                var read = await ReadDocumentAsync(prepared.CommitOid, recovery.Token, proof).ConfigureAwait(false);
+                if (delayed) RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                var read = await ReadDocumentAsync(prepared.CommitOid, activeToken, proof).ConfigureAwait(false);
                 if (read != document)
                 {
                     ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.DocumentMismatch);
                     return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch,
                         result.Failure, result.Delivery, result.Context, result.RequiredPermissions));
+                }
+                if (delayed)
+                {
+                    // Immutable successor authentication does not establish
+                    // current authority. These three physical reads are never
+                    // pooled or polled, and retain the ORIGINAL recovery scope.
+                    stage = GitHubCheckpointStage.OwnerConfirmation;
+                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    var repository = RequireRemote(await client.GetRepositoryAsync(activeToken).ConfigureAwait(false));
+                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    if (repository.Identity != result.Context!.Repository) throw new GitHubCoordinationException();
+                    var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, activeToken).ConfigureAwait(false));
+                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    if (target.Oid != client.CheckpointAuthority!.ExpectedBaseOid) throw new GitHubCoordinationException();
+                    stage = GitHubCheckpointStage.FinalRef;
+                    comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
+                    failedFinalRead = true;
+                    finalRef = await client.GetRefAsync(coordinationRef, activeToken).ConfigureAwait(false);
+                    failedFinalRead = finalRef.Failure is not null;
+                    comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
+                    if (activeToken.IsCancellationRequested && (finalRef.Failure?.Code is GitHubFailureCode.Cancelled or GitHubFailureCode.Timeout
+                        || finalRef.Failure is null && finalRef.Value?.Oid == prepared.CommitOid))
+                        throw new OperationCanceledException("Checkpoint confirmation was cancelled.",
+                            new GitHubCoordinationException(transportFailure: finalRef.Failure), activeToken);
+                    if (GitHubObservedProposalIntegrity.Read(finalRef)?.Oid != prepared.CommitOid)
+                    {
+                        ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, finalRef.Failure, refComparison: comparison);
+                        return RetainCheckpointFailure(DomainFailure(finalRef.Failure is null
+                            ? GitHubCoordinationFailureKind.Conflict : GitHubCoordinationFailureKind.Transport,
+                            result.Failure, result.Delivery, result.Context, result.RequiredPermissions,
+                            RecoveryFailure(finalRef.Failure, recovery)));
+                    }
+                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
                 }
                 stage = GitHubCheckpointStage.LeaseConfirmation;
                 if (requireLiveClaim && !ConfirmCheckpointLease(read, attempt))
@@ -244,7 +341,14 @@ internal sealed partial class GitHubCoordinationStore
             }
             catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
             {
-                ObserveCheckpointException(attempt, stage, exception, recovery.Token, recovery: true,
+                // Background callers can pass the owner token as their
+                // operation token. Inspect the original sources before our
+                // explicit Stop, rather than mislabel linked owner/recovery
+                // cancellation as an independent operation cancellation.
+                var operationCancelled = delayed && token.IsCancellationRequested
+                    && !checkpointLifetime.IsCancellationRequested && !recovery.IsCancellationRequested;
+                if (delayed && exception is OperationCanceledException && !failedFinalRead) comparison = null;
+                ObserveCheckpointException(attempt, stage, exception, operationCancelled ? token : activeToken, recovery: !operationCancelled,
                     refComparison: stage == GitHubCheckpointStage.FinalRef ? comparison : null);
                 var failure = CheckpointExceptionFailure(exception).Failure!;
                 return RetainCheckpointFailure(DomainFailure(failure.Kind, result.Failure, result.Delivery,
@@ -262,6 +366,14 @@ internal sealed partial class GitHubCoordinationStore
             return RetainCheckpointFailure(CheckpointExceptionFailure(exception));
         }
         finally { client.BindCheckpointWrite(null); }
+    }
+
+    private void RequirePendingCheckpointLease(GitHubCoordinationDocument prior, CancellationToken token, CheckpointAttempt? attempt)
+    {
+        token.ThrowIfCancellationRequested();
+        if (Owns(prior) && !checkpointExpiry.IsCancellationRequested) return;
+        ObserveCheckpointFailure(attempt, GitHubCheckpointStage.LeaseConfirmation, GitHubCheckpointReason.LeaseUnverifiable);
+        throw new GitHubCoordinationException();
     }
 
     private static GitHubBlob Blob(ReadOnlySpan<byte> bytes) => new(
