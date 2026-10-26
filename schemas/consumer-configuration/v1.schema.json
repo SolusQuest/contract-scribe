@@ -117,6 +117,62 @@
         }
       }
     },
+    "timeouts": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "terminalSubmissionMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86399999
+        },
+        "repositoryToolMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86399999
+        },
+        "checkpointAcceptanceMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86399999
+        },
+        "gitHubRequestMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86399999
+        },
+        "gitHubConnectMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 86399999
+        },
+        "publicationMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 300000
+        },
+        "semanticAuthorizationMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        },
+        "semanticQueryMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "semanticClosureMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        },
+        "settlementTailMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        }
+      }
+    },
     "scribeRequest": {
       "type": "object",
       "additionalProperties": false,

@@ -21,6 +21,7 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
     public const int MaximumClosureMilliseconds = 30_000;
     public const int MaximumEnvelopeMilliseconds = 70_000;
     private readonly object storeIdentity;
+    private readonly CampaignSemanticDurations durations;
     private readonly CampaignSemanticCheckpointStoreKind storeKind;
     private readonly string checkpointSha;
     private readonly long checkpointRevision;
@@ -54,12 +55,14 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
         ArgumentNullException.ThrowIfNull(intended);
         ArgumentNullException.ThrowIfNull(clock);
         if (!Enum.IsDefined(store.SemanticCheckpointKind)
-            || envelopeMilliseconds is <= MaximumClosureMilliseconds or > MaximumEnvelopeMilliseconds
             || intended.State.ActiveReservation is not CampaignProviderReservation
             { OperationKind: CampaignProviderOperationKind.Host, HostPhase: CampaignProviderHostPhase.SemanticTool } claim
+            || claim.SemanticDurations is not { } policy
+            || envelopeMilliseconds <= policy.ClosureMilliseconds || envelopeMilliseconds > policy.EnvelopeMilliseconds
             || claim.Exposure.ElapsedMilliseconds != envelopeMilliseconds)
             throw new ArgumentException("Invalid semantic checkpoint window.", nameof(intended));
         storeIdentity = store.SemanticCheckpointIdentity ?? throw new ArgumentException("Missing semantic store identity.", nameof(store));
+        durations = policy;
         storeKind = store.SemanticCheckpointKind;
         checkpointSha = intended.Sha256;
         checkpointRevision = intended.CheckpointRevision;
@@ -67,9 +70,9 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
         this.startedAt = startedAt;
         this.progressGuard = progressGuard;
         EnvelopeMilliseconds = envelopeMilliseconds;
-        AuthorizationMilliseconds = Math.Min(MaximumAuthorizationMilliseconds,
-            envelopeMilliseconds - MaximumClosureMilliseconds);
-        observationEnd = Math.Min(envelopeMilliseconds, AuthorizationMilliseconds + MaximumClosureMilliseconds);
+        AuthorizationMilliseconds = Math.Min(durations.AuthorizationMilliseconds,
+            envelopeMilliseconds - durations.ClosureMilliseconds);
+        observationEnd = Math.Min(envelopeMilliseconds, AuthorizationMilliseconds + durations.ClosureMilliseconds);
         authorization = new(TimeSpan.FromMilliseconds(Math.Max(0, AuthorizationMilliseconds - ElapsedMilliseconds)), clock);
         authorizationObservation = new(TimeSpan.FromMilliseconds(Math.Max(0, observationEnd - ElapsedMilliseconds)), clock);
         authorizationToken = authorization.Token;
@@ -101,7 +104,7 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
             var now = Clock.GetTimestamp();
             var leaseRemaining = leaseMilliseconds is { } lease ? lease - Elapsed(leaseObservedAt, now) : int.MaxValue;
             return Math.Max(0, Math.Min(queryMilliseconds - Elapsed(queryAcceptedAt, now),
-                Math.Min(EnvelopeMilliseconds - MaximumClosureMilliseconds - Elapsed(startedAt, now), leaseRemaining)));
+                Math.Min(EnvelopeMilliseconds - durations.ClosureMilliseconds - Elapsed(startedAt, now), leaseRemaining)));
         }
     }
 
@@ -141,8 +144,8 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
         var now = Clock.GetTimestamp();
         var acceptedElapsed = Elapsed(acceptedAt, now);
         var leaseRemaining = leaseMilliseconds is { } lease ? Math.Max(0, lease - Elapsed(leaseObservedAt, now)) : int.MaxValue;
-        milliseconds = Math.Max(0, Math.Min(MaximumQueryMilliseconds - acceptedElapsed, Math.Min(leaseRemaining,
-            Math.Min(EnvelopeMilliseconds - MaximumClosureMilliseconds - Elapsed(startedAt, now),
+        milliseconds = Math.Max(0, Math.Min(durations.QueryMilliseconds - acceptedElapsed, Math.Min(leaseRemaining,
+            Math.Min(EnvelopeMilliseconds - durations.ClosureMilliseconds - Elapsed(startedAt, now),
                 Math.Min(invocationRemaining, targetRemaining)))));
         if (milliseconds <= 0 || Interlocked.CompareExchange(ref stage, 1, 0) != 0) return false;
         // Both the original ten-second bound and any shorter authority remain
@@ -162,7 +165,7 @@ public sealed class CampaignSemanticCheckpointWindow : IDisposable
         var previous = Interlocked.Exchange(ref stage, 2);
         if (previous == 2 || Volatile.Read(ref disposed) != 0) return;
         var boundary = previous == 0 ? Math.Min(ElapsedMilliseconds, AuthorizationMilliseconds) : ElapsedMilliseconds;
-        observationEnd = Math.Min(EnvelopeMilliseconds, checked(boundary + MaximumClosureMilliseconds));
+        observationEnd = Math.Min(EnvelopeMilliseconds, checked(boundary + durations.ClosureMilliseconds));
         closure = new(TimeSpan.FromMilliseconds(RemainingObservationMilliseconds), Clock);
         closureToken = closure.Token;
         if (RemainingObservationMilliseconds == 0) closure.Cancel();

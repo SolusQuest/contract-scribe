@@ -8,6 +8,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private readonly ICampaignCheckpointStore store;
     private readonly TimeProvider clock;
     private readonly CancellationToken settlementToken;
+    private readonly int checkpointAcceptanceMilliseconds;
     private readonly Func<bool>? guard;
     private long operationStartedAt;
     private CampaignSemanticCheckpointWindow? semanticWindow;
@@ -15,11 +16,15 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private CheckpointRejection? checkpointFailure;
     internal CampaignScribeExecutionCoordinator(CampaignProviderInvocationAuthority invocation,
         DocumentationScribeInvocationAllowance allowance, ICampaignCheckpointStore store,
-        CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt)
+        CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt,
+        DocumentationScribeHostTimeouts? hostTimeouts = null, int checkpointAcceptanceMilliseconds = 30_000)
     {
+        if (checkpointAcceptanceMilliseconds is < 1 or > DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds)
+            throw new ArgumentOutOfRangeException(nameof(checkpointAcceptanceMilliseconds));
+        this.checkpointAcceptanceMilliseconds = checkpointAcceptanceMilliseconds;
         this.invocation = invocation; this.store = store; this.settlementToken = settlementToken;
         this.guard = guard; clock = allowance.Clock; this.operationStartedAt = operationStartedAt;
-        Scope = DocumentationScribeExecutionScope.ForCampaign(invocation, allowance, this);
+        Scope = DocumentationScribeExecutionScope.ForCampaign(invocation, allowance, this, hostTimeouts);
     }
     internal DocumentationScribeExecutionScope Scope { get; }
     internal bool CheckpointCapacityStop { get; private set; }
@@ -102,6 +107,10 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         }
         using var boundaryScope = operation == DocumentationScribeHostOperation.RetryWait
             ? CampaignProcessBoundaryHooks.EnterReplacementScope(CampaignProcessBoundaryHooks.RetryWaitReplacementScope) : null;
+        // Admission readback also settles an already-started checkpoint write.
+        // Retain its observation scope on execution cancellation; the permit
+        // still measures from the original pre-admission boundary and cannot
+        // execute after that boundary's applicable deadline.
         if (!await AcceptProgressAsync(transition, boundary).ConfigureAwait(false)) return null;
         if (operation == DocumentationScribeHostOperation.RetryWait)
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.RetryWaitAfterReadback);
@@ -117,10 +126,10 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         // Capture the shorter original target bound at this transition's own
         // boundary, rather than borrowing time spent since Scope's first check.
         maximumMilliseconds = Math.Min(maximumMilliseconds, Scope.RemainingTargetMilliseconds);
-        if (maximumMilliseconds <= CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds)
+        if (maximumMilliseconds <= Scope.HostTimeouts.Semantic.ClosureMilliseconds)
         { Scope.ObserveSemanticHeadroom(); return null; }
         var transition = CampaignStateReducer.AdvanceHostOperation(invocation, DocumentationScribeHostOperation.SemanticTool,
-            ElapsedAt(boundary), maximumMilliseconds, completing: false);
+            ElapsedAt(boundary), maximumMilliseconds, completing: false, Scope.HostTimeouts.Semantic);
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
             if (transition.Failure == CampaignTransitionFailure.BudgetExhausted)
@@ -251,17 +260,17 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         if (guard is not null && !guard()) { Conflict = true; return false; }
         if (transition.Kind != CampaignTransitionKind.Unchanged)
             return await AcceptProgressAsync(transition, operationStartedAt, cancellationToken).ConfigureAwait(false);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(checkpointAcceptanceMilliseconds), clock);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, cancellationToken, deadline.Token);
         var cancelledByHost = -1;
         using var cancellation = bounded.Token.Register(() =>
             Interlocked.CompareExchange(ref cancelledByHost, HostDeadlineCancellation(cancellationToken, deadline.Token) ? 1 : 0, -1));
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, bounded.Token).ConfigureAwait(false);
-        var valid = !cancellationToken.IsCancellationRequested
+        var valid = !bounded.IsCancellationRequested
             && (invocation.LifecycleAvailable || invocation.DispatchStarted)
             && accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted
             && accepted.Artifact?.Sha256 == invocation.AcceptedCheckpoint.Artifact.Sha256;
-        if (!valid) RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
+        if (!valid) RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && bounded.IsCancellationRequested
             ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind, Volatile.Read(ref cancelledByHost) == 1);
         return valid;
     }
@@ -282,7 +291,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
                 || !(Scope.LifetimeAdmissionDenied || Scope.Allowance.HasCheckedStop);
             return false;
         }
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(checkpointAcceptanceMilliseconds), clock);
         using var boundedSettlement = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, deadline.Token, cancellationToken);
         // Snapshot when this acceptance is first cancelled. A later Host timer
         // cannot turn an earlier checkpoint deadline/owner loss into a timeout.

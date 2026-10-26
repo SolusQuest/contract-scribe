@@ -120,8 +120,8 @@ internal static class StartupHook
         {
             var adapter = Assembly.Load("ContractScribe.GitHub");
             var hook = adapter.GetType("ContractScribe.GitHub.Transport.GitHubTransportTestHook", true)!;
-            var milliseconds = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_TIMEOUT") is { } value
-                ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : 30000;
+            int? milliseconds = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_TIMEOUT") is { } value
+                ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : null;
             _ = hook.GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
                 .Invoke(null, [new Uri(endpoint), null, milliseconds]);
         }

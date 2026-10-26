@@ -41,6 +41,18 @@
       "maximumToolCallsPerResponse": 16
     }
   },
+  "timeouts": {
+    "terminalSubmissionMilliseconds": 300000,
+    "repositoryToolMilliseconds": 30000,
+    "checkpointAcceptanceMilliseconds": 30000,
+    "gitHubRequestMilliseconds": 30000,
+    "gitHubConnectMilliseconds": 10000,
+    "publicationMilliseconds": 300000,
+    "semanticAuthorizationMilliseconds": 30000,
+    "semanticQueryMilliseconds": 10000,
+    "semanticClosureMilliseconds": 30000,
+    "settlementTailMilliseconds": 30000
+  },
   "retry": {
     "retryPolicyId": "retry.policy.v1",
     "retryPolicyVersion": 1

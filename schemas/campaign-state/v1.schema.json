@@ -888,12 +888,209 @@
     "providerReservation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["kind","workItemKey","scribeRequestSha256","attemptId","exposure","executionStartRevision","currentOperationOrdinal","lastDispatchOrdinal","currentExecutionSettledProviderRequests","restoredRetryableProviderFailures","operationKind","hostPhase","requestCommitmentSha256","retryProgress"],
-      "properties": { "kind": { "const": "provider" }, "workItemKey": { "type": "string", "pattern": "^campaign-work\\.[0-9a-f]{64}$" }, "scribeRequestSha256": { "$ref": "#/$defs/sha256" }, "attemptId": { "$ref": "#/$defs/scribeAttemptId" }, "exposure": { "type": "object", "additionalProperties": false, "required": ["providerRequests","inputTokens","uncachedInputTokens","outputTokens","costMicrounits","elapsedMilliseconds","cachedInputTokens"], "properties": { "providerRequests": { "type": "integer", "minimum": 0, "maximum": 128 }, "inputTokens": { "type": "integer", "minimum": 0, "maximum": 134217727 }, "uncachedInputTokens": { "type": "integer", "minimum": 0, "maximum": 134217727 }, "outputTokens": { "type": "integer", "minimum": 0, "maximum": 1048575 }, "costMicrounits": { "type": "integer", "minimum": 0, "maximum": 1000000000000000 }, "elapsedMilliseconds": { "type": "integer", "minimum": 0, "maximum": 86399999 }, "cachedInputTokens": {"type":"integer","minimum":0,"maximum":134217727} } }, "executionStartRevision": {"type":"integer","minimum":1,"maximum":1000000000000000}, "currentOperationOrdinal": {"type":"integer","minimum":1,"maximum":1000000000000000}, "lastDispatchOrdinal": {"type":"integer","minimum":0,"maximum":1000000000000000}, "currentExecutionSettledProviderRequests": {"type":"integer","minimum":0,"maximum":128}, "restoredRetryableProviderFailures": {"type":"integer","minimum":0,"maximum":999999}, "operationKind": {"enum":["host","dispatch"]}, "hostPhase": {"enum":[null,"preflight","repository-tool","semantic-tool","registered-tool","terminal-submission","retry-wait","continuation","postflight","retirement"]}, "requestCommitmentSha256": {"$ref":"#/$defs/nullableSha"}, "retryProgress": {"$ref":"#/$defs/retryProgress"} },
+      "required": [
+        "kind",
+        "workItemKey",
+        "scribeRequestSha256",
+        "attemptId",
+        "exposure",
+        "executionStartRevision",
+        "currentOperationOrdinal",
+        "lastDispatchOrdinal",
+        "currentExecutionSettledProviderRequests",
+        "restoredRetryableProviderFailures",
+        "operationKind",
+        "hostPhase",
+        "semanticDurations",
+        "requestCommitmentSha256",
+        "retryProgress"
+      ],
+      "properties": {
+        "kind": {
+          "const": "provider"
+        },
+        "workItemKey": {
+          "type": "string",
+          "pattern": "^campaign-work\\.[0-9a-f]{64}$"
+        },
+        "scribeRequestSha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "attemptId": {
+          "$ref": "#/$defs/scribeAttemptId"
+        },
+        "exposure": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "providerRequests",
+            "inputTokens",
+            "uncachedInputTokens",
+            "outputTokens",
+            "costMicrounits",
+            "elapsedMilliseconds",
+            "cachedInputTokens"
+          ],
+          "properties": {
+            "providerRequests": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 128
+            },
+            "inputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 134217727
+            },
+            "uncachedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 134217727
+            },
+            "outputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1048575
+            },
+            "costMicrounits": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 1000000000000000
+            },
+            "elapsedMilliseconds": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 86399999
+            },
+            "cachedInputTokens": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 134217727
+            }
+          }
+        },
+        "executionStartRevision": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000000000
+        },
+        "currentOperationOrdinal": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000000000000000
+        },
+        "lastDispatchOrdinal": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 1000000000000000
+        },
+        "currentExecutionSettledProviderRequests": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 128
+        },
+        "restoredRetryableProviderFailures": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 999999
+        },
+        "operationKind": {
+          "enum": [
+            "host",
+            "dispatch"
+          ]
+        },
+        "hostPhase": {
+          "enum": [
+            null,
+            "preflight",
+            "repository-tool",
+            "semantic-tool",
+            "registered-tool",
+            "terminal-submission",
+            "retry-wait",
+            "continuation",
+            "postflight",
+            "retirement"
+          ]
+        },
+        "requestCommitmentSha256": {
+          "$ref": "#/$defs/nullableSha"
+        },
+        "retryProgress": {
+          "$ref": "#/$defs/retryProgress"
+        },
+        "semanticDurations": {
+          "oneOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/semanticDurations"
+            }
+          ]
+        }
+      },
       "allOf": [
         {
-          "if": { "properties": { "hostPhase": { "const": "semantic-tool" } }, "required": ["hostPhase"] },
-          "then": { "properties": { "exposure": { "properties": { "elapsedMilliseconds": { "minimum": 30001, "maximum": 70000 } } } } }
+          "if": {
+            "properties": {
+              "hostPhase": {
+                "const": "semantic-tool"
+              }
+            },
+            "required": [
+              "hostPhase"
+            ]
+          },
+          "then": {
+            "properties": {
+              "semanticDurations": {
+                "$ref": "#/$defs/semanticDurations"
+              },
+              "exposure": {
+                "properties": {
+                  "elapsedMilliseconds": {
+                    "minimum": 2,
+                    "maximum": 70000
+                  }
+                }
+              }
+            },
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "semanticDurations": {
+                      "const": {
+                        "authorizationMilliseconds": 30000,
+                        "queryMilliseconds": 10000,
+                        "closureMilliseconds": 30000
+                      }
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "exposure": {
+                      "properties": {
+                        "elapsedMilliseconds": {
+                          "minimum": 30001
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "else": {
+            "properties": {
+              "semanticDurations": {
+                "type": "null"
+              }
+            }
+          }
         }
       ],
       "oneOf": [
@@ -968,6 +1165,32 @@
           }
         }
       ]
+    },
+    "semanticDurations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "authorizationMilliseconds",
+        "queryMilliseconds",
+        "closureMilliseconds"
+      ],
+      "properties": {
+        "authorizationMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        },
+        "queryMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10000
+        },
+        "closureMilliseconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 30000
+        }
+      }
     },
     "patchReservation": {
       "type": "object", "additionalProperties": false, "required": ["kind", "patchRequestSha256", "expectedCheckpointRevision", "patchAttemptCount", "elapsedMilliseconds"],

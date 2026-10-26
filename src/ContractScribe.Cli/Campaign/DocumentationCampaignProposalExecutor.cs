@@ -29,7 +29,8 @@ internal sealed record DocumentationCampaignProposalInput(
     Func<bool>? DispatchGuard = null,
     CampaignInvocationTargetAllowance? TargetAllowance = null,
     DocumentationScribeInvocationAllowance? InvocationAllowance = null,
-    InvocationUsage? Usage = null);
+    InvocationUsage? Usage = null,
+    CampaignTimeoutConfiguration? OperationalTimeouts = null);
 
 internal static class DocumentationCampaignProposalExecutor
 {
@@ -294,7 +295,8 @@ internal static class DocumentationCampaignProposalExecutor
                 reserved.Artifact);
         }
         var coordinator = new CampaignScribeExecutionCoordinator(invocation, input.InvocationAllowance,
-            input.Store, input.SettlementToken, GuardDispatch, executionStartedAt);
+            input.Store, input.SettlementToken, GuardDispatch, executionStartedAt,
+            input.OperationalTimeouts?.Host, input.OperationalTimeouts?.CheckpointAcceptanceMilliseconds ?? 30_000);
         var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
             manifestSelection, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
             input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken,

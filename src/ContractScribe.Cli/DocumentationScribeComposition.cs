@@ -1119,6 +1119,7 @@ internal static partial class DocumentationScribeComposition
         var repositoryLimits = DocumentationScribeRepositoryToolLimits.Create(
             maximumBytesReadPerRun: 67_108_864,
             maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
+            maximumElapsedMilliseconds: executionScope?.HostTimeouts.RepositoryToolMilliseconds ?? 30_000,
             maximumCallsPerOperation: checked(
                 Math.Max(1, request.Limits.MaximumToolCalls + nonInstructionContextCount)));
         var repository = DocumentationScribeRepositoryToolBundle.Create(

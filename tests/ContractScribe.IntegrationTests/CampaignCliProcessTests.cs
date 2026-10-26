@@ -549,7 +549,7 @@ public sealed partial class CampaignCliProcessTests
     }
 
     [UnsupportedOSPlatform("windows")]
-    private static async Task RunCrashVectorAsync(BoundaryVector vector)
+    private static async Task RunCrashVectorAsync(BoundaryVector vector, bool changedOperationalTimeouts = false)
     {
         await using var fixture = await LoaderFixture.CreateAsync();
         await SetSingleWorkItemSourceAsync(fixture.Root);
@@ -581,6 +581,17 @@ public sealed partial class CampaignCliProcessTests
             configurationPath,
             server.Endpoint,
             vector.Scenario == "closed-patch" ? 1 : null);
+        if (changedOperationalTimeouts)
+        {
+            var configuration = JsonNode.Parse(await File.ReadAllBytesAsync(configurationPath))!;
+            configuration["timeouts"] = new JsonObject
+            {
+                ["semanticAuthorizationMilliseconds"] = 10000,
+                ["semanticQueryMilliseconds"] = 5000,
+                ["semanticClosureMilliseconds"] = 10000,
+            };
+            await File.WriteAllTextAsync(configurationPath, configuration.ToJsonString());
+        }
 
         var startOperation = "start";
         if (vector.Scenario == "retry-wait")
@@ -620,10 +631,49 @@ public sealed partial class CampaignCliProcessTests
             }
 
             var operation = File.Exists(statePath) ? "resume" : "start";
+            var interruptedRequests = server.RequestCount;
+            if (changedOperationalTimeouts)
+            {
+                var saved = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
+                var claim = Assert.IsType<CampaignProviderReservation>(saved.State.ActiveReservation);
+                Assert.Equal(CampaignProviderHostPhase.SemanticTool, claim.HostPhase);
+                Assert.Equal(CampaignSemanticDurations.Create(10000, 5000, 10000), claim.SemanticDurations);
+                Assert.Equal(25000, claim.Exposure.ElapsedMilliseconds);
+                var configuration = JsonNode.Parse(await File.ReadAllBytesAsync(configurationPath))!;
+                configuration["timeouts"] = new JsonObject
+                {
+                    ["semanticAuthorizationMilliseconds"] = 30000,
+                    ["semanticQueryMilliseconds"] = 10000,
+                    ["semanticClosureMilliseconds"] = 30000,
+                    ["terminalSubmissionMilliseconds"] = 600000,
+                };
+                configuration["budgets"] = new JsonObject
+                {
+                    ["invocation"] = new JsonObject { ["maximumProviderRequests"] = 0 },
+                };
+                await File.WriteAllTextAsync(configurationPath, configuration.ToJsonString());
+            }
             var recovered = await RunAsync(
                 Args(operation, fixture.Root, statePath, configurationPath, "snapshot.boundary"),
                 timeout: TimeSpan.FromMinutes(5));
             AssertControlledCampaign(recovered, vector.Hook);
+            if (changedOperationalTimeouts)
+            {
+                var retired = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
+                Assert.Null(retired.State.ActiveReservation);
+                Assert.Equal(25000, retired.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+                Assert.Equal(interruptedRequests, server.RequestCount);
+                Assert.Null(retired.State.CandidateObservation);
+                Assert.Equal(0, retired.State.LineageCharges.PatchValidationInvocations);
+                var observedAgain = await RunAsync(
+                    Args("resume", fixture.Root, statePath, configurationPath, "snapshot.boundary"),
+                    timeout: TimeSpan.FromMinutes(3));
+                AssertControlledCampaign(observedAgain, vector.Hook);
+                var sameHistory = CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).Artifact!;
+                Assert.Equal(retired.State.LineageCharges, sameHistory.State.LineageCharges);
+                Assert.Equal(retired.ExactUtf8Json.ToArray(), sameHistory.ExactUtf8Json.ToArray());
+                Assert.Equal(interruptedRequests, server.RequestCount);
+            }
             if (File.Exists(statePath))
             {
                 Assert.True(CampaignStateJson.Parse(await File.ReadAllBytesAsync(statePath)).IsValid,

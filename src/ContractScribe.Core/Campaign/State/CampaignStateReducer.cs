@@ -2025,6 +2025,7 @@ public static partial class CampaignStateReducer
             RestoredRetryableProviderFailures = DocumentationScribeContract.MaximumAttempts - 1,
             OperationKind = CampaignProviderOperationKind.Dispatch,
             HostPhase = null,
+            SemanticDurations = null,
             RequestCommitmentSha256 = new string('0', 64),
             RetryProgress = progress,
             Exposure = new(1, DocumentationScribeContract.MaximumConfiguredInputTokens,
@@ -2037,6 +2038,19 @@ public static partial class CampaignStateReducer
             state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations, null, state.Predecessor)
         { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = state.ScribeProgress };
         maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(activeUpper));
+        // Semantic policy is canonical only during its phase. Include its
+        // longest valid representation as well as the dispatch upper bound.
+        var semanticUpper = new CampaignCheckpointState(state.ProductRevision, state.CampaignLineage, state.Snapshot,
+            Maximum, state.ConfiguredCeilings, charges, state.WorkItems, state.Batch, maximumClaim with
+            {
+                OperationKind = CampaignProviderOperationKind.Host,
+                HostPhase = CampaignProviderHostPhase.SemanticTool,
+                SemanticDurations = CampaignSemanticDurations.Default,
+                RequestCommitmentSha256 = null,
+                Exposure = CampaignBudgetAccounting.HostExposure(CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds),
+            }, state.CandidateObservation, state.CumulativeOutcome, state.KnownCompletedOperations, null, state.Predecessor)
+        { AcceptedCandidateOrigin = state.AcceptedCandidateOrigin, DispatchObservations = state.DispatchObservations, ArchivedDispatchPrefix = state.ArchivedDispatchPrefix, ScribeProgress = state.ScribeProgress };
+        maximumSize = Math.Max(maximumSize, CampaignStateJson.ValidateEncodedSize(semanticUpper));
         var pausedItems = state.WorkItems.Select(item => item.WorkItemKey == reservation.WorkItemKey ? item with
         {
             PausedProviderAttempt = new(reservation.ScribeRequestSha256, reservation.AttemptId, Maximum, progress),

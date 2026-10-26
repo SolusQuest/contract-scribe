@@ -93,29 +93,32 @@ internal sealed class GitHubApiClient : IDisposable
         invoker = new(handler, disposeHandler: true);
     }
 
-    internal static GitHubApiClient Create(ValidatedGitHubPublicationAuthority authority, string credential)
+    internal static GitHubApiClient Create(ValidatedGitHubPublicationAuthority authority, string credential,
+        GitHubTransportTimeouts? timeouts = null)
     {
         Require(authority is not null && RepositoryPart(authority.RepositoryOwner)
             && RepositoryPart(authority.RepositoryName), GitHubFailureCode.InvalidRequest);
-        return CreateCore(GitHubPublicationFactory.CreateCampaignReadAuthority(authority!), authority, credential);
+        return CreateCore(GitHubPublicationFactory.CreateCampaignReadAuthority(authority!), authority, credential, timeouts);
     }
 
-    internal static GitHubApiClient CreateReadOnly(ValidatedGitHubCampaignReadAuthority authority, string credential)
+    internal static GitHubApiClient CreateReadOnly(ValidatedGitHubCampaignReadAuthority authority, string credential,
+        GitHubTransportTimeouts? timeouts = null)
     {
         Require(authority is not null && RepositoryPart(authority.RepositoryOwner)
             && RepositoryPart(authority.RepositoryName), GitHubFailureCode.InvalidRequest);
-        return CreateCore(authority!, null, credential);
+        return CreateCore(authority!, null, credential, timeouts);
     }
 
     private static GitHubApiClient CreateCore(ValidatedGitHubCampaignReadAuthority readAuthority,
-        ValidatedGitHubPublicationAuthority? authority, string credential)
+        ValidatedGitHubPublicationAuthority? authority, string credential, GitHubTransportTimeouts? timeouts)
     {
         Require(credential is { Length: > 0 and <= 8192 }
             && credential.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_' or '~' or '+' or '/' or '='),
             GitHubFailureCode.InvalidRequest);
         var test = GitHubTransportTestHook.Take(credential);
+        timeouts ??= GitHubTransportTimeouts.Default;
         return new(readAuthority, authority, credential, test?.Endpoint ?? new Uri(ProductionOrigin),
-            test?.Handler ?? CreateProductionHandler(), test?.TimeoutMilliseconds ?? 30_000);
+            test?.Handler ?? CreateProductionHandler(timeouts), test?.TimeoutMilliseconds ?? timeouts.RequestMilliseconds);
     }
 
     internal ValidatedGitHubCheckpointAuthority? CheckpointAuthority => checkpointAuthority;
@@ -128,10 +131,11 @@ internal sealed class GitHubApiClient : IDisposable
         }
     }
 
-    internal static GitHubApiClient CreateCheckpoint(ValidatedGitHubCheckpointAuthority authority, string credential)
+    internal static GitHubApiClient CreateCheckpoint(ValidatedGitHubCheckpointAuthority authority, string credential,
+        GitHubTransportTimeouts? timeouts = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
-        var client = CreateCore(authority.ReadAuthority, null, credential);
+        var client = CreateCore(authority.ReadAuthority, null, credential, timeouts);
         client.checkpointAuthority = authority;
         return client;
     }
@@ -181,7 +185,7 @@ internal sealed class GitHubApiClient : IDisposable
         ?? (checkpointWrite is { } write ? Digest("checkpoint:" + write.Prepared.CommitOid)
             : throw new GitHubProtocolException(GitHubFailureCode.InvalidRequest));
 
-    internal static SocketsHttpHandler CreateProductionHandler() => new()
+    internal static SocketsHttpHandler CreateProductionHandler(GitHubTransportTimeouts? timeouts = null) => new()
     {
         ActivityHeadersPropagator = null,
         AllowAutoRedirect = false,
@@ -192,7 +196,7 @@ internal sealed class GitHubApiClient : IDisposable
         MaxResponseHeadersLength = 64,
         MaxResponseDrainSize = 0,
         ResponseDrainTimeout = TimeSpan.Zero,
-        ConnectTimeout = TimeSpan.FromSeconds(10),
+        ConnectTimeout = TimeSpan.FromMilliseconds((timeouts ?? GitHubTransportTimeouts.Default).ConnectMilliseconds),
     };
 
     internal ValueTask<GitHubApiResult<GitHubRepository>> GetRepositoryAsync(CancellationToken cancellationToken = default) =>

@@ -463,7 +463,8 @@ public sealed partial class CampaignStateContractTests
     private static async Task<SolusTrial> SolusTrialAsync(int attempts = 3, TimeProvider? clock = null,
         int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null,
         DocumentationScribeInvocationLimits? invocationLimits = null, int? targetToolCalls = null,
-        Func<bool>? dispatchGuard = null)
+        Func<bool>? dispatchGuard = null, DocumentationScribeHostTimeouts? hostTimeouts = null,
+        int checkpointAcceptanceMilliseconds = 30_000, CancellationToken settlementToken = default)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
@@ -499,7 +500,9 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
         var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, scenario.ExecutionAuthority,
             "style.synthetic", scenario.StyleProjection, scenario.Input, scenario.Plan, request);
-        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, dispatchGuard, allowance.Clock.GetTimestamp());
+        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, settlementToken, dispatchGuard, allowance.Clock.GetTimestamp(),
+            hostTimeouts ?? (hostMilliseconds is { } host ? DocumentationScribeHostTimeouts.Create(terminalSubmissionMilliseconds: host) : null),
+            checkpointAcceptanceMilliseconds);
         Assert.True(authority.TryBeginDispatch(out _));
         var attempt = Assert.IsType<CampaignProviderReservation>(accepted.Artifact!.State.ActiveReservation).AttemptId;
         return new(scenario, request, attempt, store, authority, coordinator);
