@@ -889,7 +889,9 @@ public sealed partial class CampaignCliProcessTests
                         await stream.WriteAsync(transient, disposal.Token);
                         continue;
                     }
-                    var response = scenario.StartsWith("semantic-page-", StringComparison.Ordinal)
+                    var response = scenario.StartsWith("tool-diagnostic-", StringComparison.Ordinal)
+                        ? CreateToolDiagnosticResponse(body, scenario, count)
+                        : scenario.StartsWith("semantic-page-", StringComparison.Ordinal)
                         ? CreateSemanticResponse(body, scenario == "semantic-page-default" ? null
                             : scenario == "semantic-page-boundary" ? 20 : 21, sharedBatch: true)
                         : scenario == "semantic" ? CreateSemanticResponse(body) : scenario is "shared" or "shared-closed" or "shared-skip-one" or "shared-skip-four"

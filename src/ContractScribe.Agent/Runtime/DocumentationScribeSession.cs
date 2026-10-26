@@ -28,8 +28,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
     private readonly ScribeProvider provider;
     private ImmutableDictionary<string, (int Epoch, DocumentationScribeCompletedToolExchange Exchange)> results =
         ImmutableDictionary.Create<string, (int, DocumentationScribeCompletedToolExchange)>(StringComparer.Ordinal);
-    private ImmutableDictionary<string, DocumentationScribeModelToolCall> calls =
-        ImmutableDictionary.Create<string, DocumentationScribeModelToolCall>(StringComparer.Ordinal);
+    private ImmutableDictionary<string, (int Boundary, DocumentationScribeModelToolCall Call)> calls =
+        ImmutableDictionary.Create<string, (int, DocumentationScribeModelToolCall)>(StringComparer.Ordinal);
     private DocumentationScribeAssistantContinuation? continuation;
     private ReadOnlyMemory<byte>? terminalBytes;
     private int epoch;
@@ -338,6 +338,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                 {
                     owner.State.AttemptNumber++;
                     owner.epoch++;
+                    owner.State.SetToolBoundary(-1);
                     owner.calls = owner.calls.Clear();
                     owner.results = owner.results.Clear();
                     owner.terminalBytes = null;
@@ -351,6 +352,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                 owner.retryableFailure = false;
                 // Until the scoped operation completes, HTTP may have begun even if a runtime cut
                 // prevents this callback from reporting again. Keep the channel conservatively Unknown.
+                owner.State.SetToolBoundary(-1);
                 var before = owner.State.Scope.PhysicalProviderRequestCount;
                 var product = owner.ProductRequest(request, token);
                 owner.State.Scope.ObserveProviderAttempt(request.Attempt.LogicalCallId, request.Attempt.AttemptNumber);
@@ -426,6 +428,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                     owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Budget);
                     throw new ProviderContractException(ProviderError.LimitExceeded);
                 }
+                var toolBoundary = owner.State.ToolRoundCount + 1;
+                owner.State.SetToolBoundary(toolBoundary);
                 var counts = new int[owner.registry.Registrations.Length];
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 var mapped = new List<ToolCall>();
@@ -448,7 +452,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                     // unique across its retained inventory without changing original wire/C4 call identity.
                     var runtimeId = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(
                         "scribe/tool-call/v1\n" + request.Attempt.PhysicalAttemptId.ToString("N") + "\n" + call.CallId))).ToLowerInvariant();
-                    owner.calls = owner.calls.Add(runtimeId, call);
+                    owner.calls = owner.calls.Add(runtimeId, (toolBoundary, call));
                     mapped.Add(new(runtimeId, RuntimeToolName(index), Wrap(Encoding.UTF8.GetString(call.ArgumentsUtf8Json.Span))));
                 }
                 owner.State.ToolRoundCount++;
@@ -465,6 +469,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
             }
             catch (ToolProtocolException exception)
             {
+                owner.State.ObserveToolFailure(owner.State.ToolRoundCount + 1, exception.ReferenceId, exception.Reason);
                 owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, exception.ReferenceId);
                 throw new ProviderContractException(ProviderError.InvalidResponse);
             }
@@ -517,7 +522,8 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
 
         private async Task<ToolOutput> InvokeProductCoreAsync(ToolCall call, CancellationToken token)
         {
-            var original = owner.calls[call.CallId];
+            var bound = owner.calls[call.CallId];
+            var original = bound.Call;
             if (Encoding.UTF8.GetString(original.ArgumentsUtf8Json.Span) != Unwrap(call.ArgumentsJson))
                 throw new ToolContractException(ToolError.InvalidArguments);
             var phase = original.OperationId is "read-excerpt" or "list-files" or "search-text"
@@ -554,12 +560,22 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                         try { result = await invocation.WaitAsync(linked.Token); }
                         catch (OperationCanceledException) when (!invocation.IsCompleted)
                         { _ = DocumentationScribeTaskObservation.ObserveLateAsync(invocation); throw; }
+                        if (result is { Outcome: var returnedOutcome } observed
+                            && (returnedOutcome == DocumentationScribeToolOutcome.Failure
+                                || returnedOutcome == DocumentationScribeToolOutcome.Cancelled
+                                    && !token.IsCancellationRequested && !owner.State.CallerCancellation.IsCancellationRequested))
+                            owner.State.ObserveToolFailure(bound.Boundary, original.OperationId, observed.FailureReason);
                         linked.Token.ThrowIfCancellationRequested();
                         if (permit.RemainingMilliseconds <= 0)
                         {
                             owner.State.Scope.ObserveDeadline(permit);
                             timedOut = true;
                         }
+                    }
+                    catch (ToolProtocolException exception)
+                    {
+                        owner.State.ObserveToolFailure(bound.Boundary, original.OperationId, exception.Reason);
+                        throw;
                     }
                     catch (OperationCanceledException) when (deadline.IsCancellationRequested && !token.IsCancellationRequested
                         && !owner.State.CallerCancellation.IsCancellationRequested)
@@ -589,9 +605,14 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
                 owner.Result = new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token,
                     owner.State.Scope.ResourceBudgetReached ? DocumentationScribeFailureCode.Budget : DocumentationScribeFailureCode.Timeout);
             if (owner.Result is null && !permit.ResultReleaseAccepted)
+            {
+                if (!permit.ResultReleaseDeadlineReached)
+                    owner.State.ObserveToolFailure(bound.Boundary, original.OperationId,
+                        DocumentationScribeToolFailureReason.ReleaseRejected);
                 owner.Result = permit.ResultReleaseDeadlineReached
                     ? new DocumentationScribeTerminalReducer().CommitFailure(owner.State, token, DocumentationScribeFailureCode.Timeout)
                     : new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
+            }
             if (owner.Result is not null) throw new ToolContractException(ToolError.InvocationFailed);
             var returned = result ?? throw new InvalidOperationException("scribe.tool.result-missing");
             if (returned.Outcome == DocumentationScribeToolOutcome.BudgetExhausted
@@ -661,6 +682,7 @@ internal sealed partial class DocumentationScribeSession : ICandidateHost, IRunt
 
             ToolContractException RejectEvidence()
             {
+                owner.State.ObserveToolFailure(bound.Boundary, original.OperationId, DocumentationScribeToolFailureReason.Evidence);
                 owner.Result = new DocumentationScribeTerminalReducer().CommitToolProtocol(owner.State, token, original.OperationId);
                 return new(ToolError.InvalidResult);
             }

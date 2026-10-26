@@ -10,7 +10,7 @@ namespace ContractScribe.Cli;
 internal sealed record GitHubProposalEnvelope(CliBuildIdentity Identity, CampaignOperation? Operation,
     string Layer, string Outcome, long? Revision, IReadOnlyList<CliDiagnostic> Diagnostics,
     string? PublicationOperation, string? Generation, string? Url,
-    GitHubPublicationDiagnostic? PublicationDiagnostic, string StopSource);
+    GitHubPublicationDiagnostic? PublicationDiagnostic, string StopSource, string? ToolFailureDiagnosticCode);
 
 internal static class GitHubProposalPresentation
 {
@@ -35,7 +35,9 @@ internal static class GitHubProposalPresentation
         if (outcome is null) return ContractError(identity, terminal.Operation, terminal.CheckpointRevision);
         var diagnostics = outcome == "no-op" ? Array.Empty<CliDiagnostic>() :
             [new CliDiagnostic(terminal.Outcome, "github proposal stopped before publication: " + terminal.Outcome)];
-        return Result(identity, terminal.Operation, "campaign", outcome, terminal.CheckpointRevision, diagnostics, stopSource: terminal.Outcome);
+        return Result(identity, terminal.Operation, "campaign", outcome, terminal.CheckpointRevision, diagnostics,
+            stopSource: terminal.Outcome,
+            toolFailureDiagnosticCode: terminal.Outcome == "campaign.provider-terminal" ? terminal.ToolFailureDiagnosticCode : null);
     }
 
     internal static CliExecutionResult ContractError(CliBuildIdentity identity, CampaignOperation? operation, long? revision) =>
@@ -109,10 +111,12 @@ internal static class GitHubProposalPresentation
     private static CliExecutionResult Result(CliBuildIdentity identity, CampaignOperation? operation,
         string layer, string outcome, long? revision, IReadOnlyList<CliDiagnostic> diagnostics,
         string? publicationOperation = null, string? generation = null, string? url = null, int? exitOverride = null,
-        GitHubPublicationDiagnostic? publicationDiagnostic = null, string? stopSource = null)
+        GitHubPublicationDiagnostic? publicationDiagnostic = null, string? stopSource = null,
+        string? toolFailureDiagnosticCode = null)
     {
         var envelope = new GitHubProposalEnvelope(identity, operation, layer, outcome, revision, diagnostics,
-            publicationOperation, generation, url, publicationDiagnostic, stopSource ?? outcome);
+            publicationOperation, generation, url, publicationDiagnostic, stopSource ?? outcome,
+            DocumentationScribeToolFailureDiagnostics.IsKnownCode(toolFailureDiagnosticCode) ? toolFailureDiagnosticCode : null);
         return new CliExecutionResult(exitOverride ?? Exit(outcome), Serialize(envelope, InvocationUsage.Unavailable), diagnostics)
         { AuthoritativeCheckpointRevision = revision, GitHubEnvelope = envelope };
     }
@@ -123,7 +127,7 @@ internal static class GitHubProposalPresentation
     private static string Serialize(GitHubProposalEnvelope envelope, JsonElement usage)
     {
         var (identity, operation, layer, outcome, revision, diagnostics, publicationOperation, generation, url,
-            publicationDiagnostic, _) = envelope;
+            publicationDiagnostic, _, toolFailureDiagnosticCode) = envelope;
         var buffer = new ArrayBufferWriter<byte>();
         using (var writer = new Utf8JsonWriter(buffer, new() { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
         {
@@ -143,6 +147,8 @@ internal static class GitHubProposalPresentation
             writer.WriteString("outcome", "github-proposal." + outcome);
             writer.WriteStartArray("diagnosticCodes");
             foreach (var diagnostic in diagnostics) writer.WriteStringValue(diagnostic.Code);
+            if (DocumentationScribeToolFailureDiagnostics.IsKnownCode(toolFailureDiagnosticCode))
+                writer.WriteStringValue(toolFailureDiagnosticCode);
             writer.WriteEndArray();
             if (revision is null) writer.WriteNull("checkpointRevision");
             else writer.WriteNumber("checkpointRevision", revision.Value);

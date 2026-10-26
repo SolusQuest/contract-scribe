@@ -32,6 +32,17 @@ public static class DocumentationScribeRepositoryToolFailureCodes
     public const string Budget = "repository.budget-exhausted";
     public const string Timeout = "repository.timed-out";
     public const string Cancelled = "repository.cancelled";
+
+    internal static DocumentationScribeToolFailureReason Category(string? code) => code switch
+    {
+        InvalidRequest => DocumentationScribeToolFailureReason.InvalidRequest,
+        InvalidCursor => DocumentationScribeToolFailureReason.InvalidCursor,
+        ScopeDenied => DocumentationScribeToolFailureReason.ScopeDenied,
+        Stale => DocumentationScribeToolFailureReason.Stale,
+        UnsafeObject => DocumentationScribeToolFailureReason.UnsafeObject,
+        InvalidEncoding => DocumentationScribeToolFailureReason.InvalidEncoding,
+        _ => DocumentationScribeToolFailureReason.Unknown,
+    };
 }
 
 public sealed record DocumentationScribeRepositoryToolLimits
@@ -335,6 +346,9 @@ public sealed record DocumentationScribeRepositoryReadExcerptResult(
     DocumentationScribeInstructionRouteFact? Route,
     ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence) : IDocumentationScribeToolResult
 {
+    DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory =>
+        DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
+
     public override string ToString() =>
         $"{nameof(DocumentationScribeRepositoryReadExcerptResult)} {{ Outcome = {Outcome.Id}, FailureCode = {FailureCode ?? "none"}, HasContent = {Excerpt is not null} }}";
 }
@@ -345,6 +359,9 @@ public sealed record DocumentationScribeRepositoryListFilesResult(
     ImmutableArray<DocumentationScribeRepositoryFileItem> Items,
     string? Cursor) : IDocumentationScribeToolResult
 {
+    DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory =>
+        DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
+
     public override string ToString() =>
         $"{nameof(DocumentationScribeRepositoryListFilesResult)} {{ Outcome = {Outcome.Id}, FailureCode = {FailureCode ?? "none"}, Items = {Items.Length}, HasCursor = {Cursor is not null} }}";
 }
@@ -357,6 +374,9 @@ public sealed record DocumentationScribeRepositorySearchTextResult(
     ImmutableArray<DocumentationScribeInstructionRouteFact> Routes,
     ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence) : IDocumentationScribeToolResult
 {
+    DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory =>
+        DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
+
     public override string ToString() =>
         $"{nameof(DocumentationScribeRepositorySearchTextResult)} {{ Outcome = {Outcome.Id}, FailureCode = {FailureCode ?? "none"}, Items = {Items.Length}, HasCursor = {Cursor is not null} }}";
 }

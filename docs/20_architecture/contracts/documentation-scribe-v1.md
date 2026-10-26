@@ -236,6 +236,10 @@ Diagnostics are stable code plus code-specific allowlisted metadata:
 | `scribe.diagnostic.result-rejected` | `result` | `validationCode` |
 | `scribe.diagnostic.runtime-failure` | `runtime` | none |
 
+An observed typed tool failure may use the inert `referenceId` vocabulary `tool-failure.<operation>.<reason>`. Operation is one of `read-excerpt`, `list-files`, `search-text`, `get-target-evidence`, or `unknown`; it is selected from the reviewed registration, never copied from a provider call ID or arbitrary operation name. Reason is `argument-schema`, `invalid-request`, `invalid-cursor`, `scope-denied`, `stale`, `unsafe-object`, `invalid-encoding`, `invalid-result`, `result-encoding`, `result-canonical`, `evidence`, `release-rejected`, or `unknown`. The reason comes from the original typed result or rejecting boundary. `invalid-request` does not distinguish range, path, or literal errors. The first observation, including an unknown reason, is immutable within that attempt; callbacks from an inactive tool round cannot replace it. Unclassified diagnostics remain unclassified. This reference does not grant evidence or tool authority and is not a new result field, persisted checkpoint component, or artifact version.
+
+Only a final tool-protocol stop can project a known reference into the optional [closed CLI observation](../campaign-cli.md#bounded-tool-failure-observation). Cancellation, timeout, budget, failed settlement, and other primary outcomes do not gain that observation. A resumed compact checkpoint does not reconstruct discarded detail. This is a change to current draft diagnostic semantics, not a compatibility promise for earlier revisions.
+
 The envelope and session stop contain no credential, complete prompt, tool argument/result, transcript, source excerpt, raw provider response or error, arbitrary exception text, hidden reasoning, absolute path, GitHub identity, or arbitrary metadata dictionary.
 
 ## Provider-neutral typed read/tool seam
@@ -258,6 +262,8 @@ Every typed result carries one Core-owned closed `DocumentationScribeToolOutcome
 - cancelled;
 - operation-local timed out;
 - budget exhausted.
+
+`IDocumentationScribeToolResult.FailureReasonCategory` is optional inert Core-owned diagnostic metadata with the closed `DocumentationScribeToolFailureReason` vocabulary above and default `Unknown`. Concrete repository and semantic results derive it from their existing typed failure and implement it explicitly, so their provider-visible JSON gains no property. It never changes outcome, admission, recovery, counters, evidence validation, or whether a failed tool result is returned to the model.
 
 Operation results add only their bounded typed data, including optional ID-free dynamic-evidence inputs on complete or incomplete outcomes. Encoders do not accept an evidence-item count; the runtime derives semantic counts and encoded exchange bytes from the accepted typed values. The seam exposes no physical or absolute path, workspace/filesystem object, writer, mutable session, generic network object, credential, or mutation method. Repository-relative locator values are bounded data, not ambient filesystem authority. R1 defines no fake-only normative operation and does not freeze the later provider-visible tool inventory, names, JSON schemas, grouping, cursors, paging, or Roslyn mechanics.
 

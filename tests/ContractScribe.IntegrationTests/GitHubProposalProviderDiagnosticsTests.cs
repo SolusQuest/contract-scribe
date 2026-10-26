@@ -229,7 +229,7 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     private static async Task AssertActualActionConsumer(string outside, string stdout, int exit, bool checkpoint = false,
-        bool publication = false, bool successful = false, string? progressOutcome = null)
+        bool publication = false, bool successful = false, string? progressOutcome = null, string? actualStderr = null)
     {
         var start = new ProcessStartInfo("python3")
         {
@@ -240,13 +240,13 @@ public sealed partial class GitHubProposalCliProcessTests
         };
         start.ArgumentList.Add("-c");
         start.ArgumentList.Add("""
-            import json, os, sys
+            import base64, json, os, sys
             sys.dont_write_bytecode = True
             sys.path.insert(0, sys.argv[1])
             import invoke, usage, common
             data = sys.stdin.buffer.read()
             assert len(data) <= common.BOUND_ENVELOPE
-            parsed = invoke.parse_envelope(data, b'', int(sys.argv[3]))
+            parsed = invoke.parse_envelope(data, base64.b64decode(sys.argv[6]), int(sys.argv[3]))
             os.environ['GITHUB_OUTPUT'] = sys.argv[2]
             invoke.emit_outputs(parsed, data, int(sys.argv[3]))
             rows = usage.summary_rows(parsed['invocationUsage'])
@@ -289,6 +289,7 @@ public sealed partial class GitHubProposalCliProcessTests
         start.ArgumentList.Add(exit.ToString(System.Globalization.CultureInfo.InvariantCulture));
         start.ArgumentList.Add(progressOutcome is not null ? "progress" : successful ? "successful" : publication ? "publication" : checkpoint ? "checkpoint" : "provider");
         start.ArgumentList.Add(progressOutcome ?? "");
+        start.ArgumentList.Add(Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(actualStderr ?? "")));
         using var process = Process.Start(start)!;
         var output = process.StandardOutput.ReadToEndAsync();
         var error = process.StandardError.ReadToEndAsync();

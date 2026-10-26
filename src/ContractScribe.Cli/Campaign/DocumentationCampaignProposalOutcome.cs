@@ -15,7 +15,8 @@ internal sealed class DocumentationCampaignProposalOutcome
         string code,
         string? workItemKey = null,
         CampaignCheckpointArtifact? artifact = null,
-        CampaignCheckpointAcceptanceKind? checkpointFailure = null)
+        CampaignCheckpointAcceptanceKind? checkpointFailure = null,
+        string? toolFailureDiagnosticCode = null)
     {
         if (!ValidCode(kind, code))
         {
@@ -27,6 +28,8 @@ internal sealed class DocumentationCampaignProposalOutcome
         WorkItemKey = workItemKey;
         Artifact = artifact;
         CheckpointFailure = checkpointFailure;
+        ToolFailureDiagnosticCode = DocumentationScribeToolFailureDiagnostics.IsKnownCode(toolFailureDiagnosticCode)
+            ? toolFailureDiagnosticCode : null;
     }
 
     internal DocumentationCampaignProposalOutcomeKind Kind { get; }
@@ -34,6 +37,7 @@ internal sealed class DocumentationCampaignProposalOutcome
     internal string? WorkItemKey { get; }
     internal CampaignCheckpointArtifact? Artifact { get; }
     internal CampaignCheckpointAcceptanceKind? CheckpointFailure { get; }
+    internal string? ToolFailureDiagnosticCode { get; }
     internal CampaignTrustedProposal? TrustedProposal => WorkItemKey is null || Artifact is null
         ? null
         : Artifact.State.WorkItems.SingleOrDefault(item =>
