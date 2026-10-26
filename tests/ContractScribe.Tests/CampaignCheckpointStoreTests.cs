@@ -9,6 +9,43 @@ namespace ContractScribe.Tests;
 
 public sealed class CampaignCheckpointStoreTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Native_mutation_stop_fences_replacement_and_preserves_already_published_observation(bool published)
+    {
+        if (!IsSupportedStorePlatform()) return;
+        using var fixture = StoreFixture.Create();
+        var initial = CreateOpenArtifact();
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await WriteInitialAsync(fixture.Store, initial)).Kind);
+        var next = CampaignStateReducer.Stop(initial, CampaignTerminalKind.Cancelled).Artifact;
+        using var mutation = new CancellationTokenSource();
+        var reached = false;
+        var store = new FileCampaignCheckpointStore(fixture.CheckpointPath, RepositoryRoot(), phase =>
+        {
+            if (phase != (published ? "after-publish-before-readback" : "before-publish")) return;
+            reached = true;
+            mutation.Cancel();
+        });
+        if (published)
+        {
+            var result = await store.ReplaceIfCurrentAsync(initial.CheckpointRevision, initial.Sha256,
+                next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default, mutation.Token);
+            Assert.Equal(CampaignCheckpointWriteKind.Written, result.Kind);
+            AssertExact(Assert.IsType<CampaignCheckpointReadResult>(result.Readback), next);
+        }
+        else
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.ReplaceIfCurrentAsync(
+                initial.CheckpointRevision, initial.Sha256, next.ExactUtf8Json.AsMemory(), next.CheckpointRevision,
+                next.Sha256, default, mutation.Token).AsTask());
+        }
+        Assert.True(reached);
+        AssertExact(await fixture.Store.ReadAsync(default), published ? next : initial);
+        Assert.Single(Directory.EnumerateFileSystemEntries(fixture.StateDirectory));
+    }
+
     [Fact]
     public void Constructor_rejects_relative_repository_overlap_and_reserved_names()
     {

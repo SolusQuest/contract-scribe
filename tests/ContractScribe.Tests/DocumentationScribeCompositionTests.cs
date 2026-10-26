@@ -80,10 +80,11 @@ public sealed partial class DocumentationScribeCompositionTests
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) =>
             actual.CreateIfAbsentAsync(bytes, revision, sha, token);
         public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expected, string expectedSha,
-            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             var next = CampaignStateJson.Parse(bytes).Artifact!;
-            var result = await actual.ReplaceIfCurrentAsync(expected, expectedSha, bytes, revision, sha, token);
+            var result = await actual.ReplaceIfCurrentAsync(expected, expectedSha, bytes, revision, sha, token, mutationCancellationToken);
             if (result.Kind == CampaignCheckpointWriteKind.Written && next.State.ActiveReservation is CampaignProviderReservation
                 { HostPhase: CampaignProviderHostPhase.SemanticTool })
             { SemanticReadbacks++; clock.Advance(13164); }
@@ -2197,8 +2198,9 @@ public sealed partial class DocumentationScribeCompositionTests
             ReadOnlyMemory<byte> exactUtf8Json,
             long checkpointRevision,
             string sha256,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             cancellationToken.ThrowIfCancellationRequested();
             lock (gate)
             {

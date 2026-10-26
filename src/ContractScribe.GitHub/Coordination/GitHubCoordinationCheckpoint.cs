@@ -365,6 +365,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
 
     public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedCheckpointRevision,
         string expectedSha256, ReadOnlyMemory<byte> exactUtf8Json, long checkpointRevision, string sha256,
-        CancellationToken cancellationToken) => WriteCheckpointAsync(expectedCheckpointRevision, expectedSha256,
-            exactUtf8Json, checkpointRevision, sha256, cancellationToken);
+        CancellationToken cancellationToken, CancellationToken mutationCancellationToken = default) =>
+        WriteCheckpointAsync(expectedCheckpointRevision, expectedSha256,
+            exactUtf8Json, checkpointRevision, sha256, cancellationToken, mutationCancellationToken);
 }

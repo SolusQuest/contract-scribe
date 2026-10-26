@@ -34,7 +34,7 @@ public interface IDocumentationScribeExecutionOperations
     ValueTask<bool> SettleProviderAsync(DocumentationScribeInvocationProviderPermit permit,
         DocumentationScribeDispatchSettlement settlement, CancellationToken cancellationToken);
     ValueTask<DocumentationScribeHostAdmission?> BeginHostAsync(DocumentationScribeHostOperation operation,
-        int maximumMilliseconds, CancellationToken cancellationToken);
+        int maximumMilliseconds, long startedAt, CancellationToken cancellationToken);
     ValueTask<bool> CompleteHostAsync(DocumentationScribeHostOperation operation,
         int elapsedMilliseconds, CancellationToken cancellationToken);
 }
@@ -263,7 +263,7 @@ public sealed class DocumentationScribeExecutionScope
         CampaignSemanticCheckpointWindow? semanticWindow = null;
         if (operations is not null)
         {
-            var admitted = await operations.BeginHostAsync(operation, milliseconds, cancellationToken).ConfigureAwait(false);
+            var admitted = await operations.BeginHostAsync(operation, milliseconds, startedAt, cancellationToken).ConfigureAwait(false);
             if (admitted is null)
             {
                 Volatile.Write(ref operationGrant, 0);

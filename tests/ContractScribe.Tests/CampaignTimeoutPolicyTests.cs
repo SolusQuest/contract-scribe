@@ -8,6 +8,31 @@ namespace ContractScribe.Tests;
 public sealed partial class CampaignStateContractTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Host_admission_cannot_begin_a_checkpoint_write_after_original_deadline_or_caller_stop(bool caller)
+    {
+        var clock = new SolusDeadlineClock();
+        using var cancellation = new CancellationTokenSource();
+        var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 10000, invocationMilliseconds: 10000,
+            hostTimeouts: DocumentationScribeHostTimeouts.Create(terminalSubmissionMilliseconds: 100),
+            checkpointAcceptanceMilliseconds: 1000);
+        trial.Coordinator.Scope.BindRuntimeWindow(trial.Request, clock, clock.GetTimestamp());
+        var predecessor = trial.Store.Current.ExactUtf8Json.ToArray();
+        trial.Store.BeforeNextRead = () =>
+        {
+            if (caller) cancellation.Cancel();
+            else clock.Advance(200);
+        };
+        var permit = await trial.Coordinator.Scope.BeginHostAsync(DocumentationScribeHostOperation.TerminalSubmission, cancellation.Token);
+        Assert.DoesNotContain(CampaignProviderHostPhase.TerminalSubmission, trial.Store.AdmittedHostPhases);
+        Assert.Equal(predecessor, trial.Store.Current.ExactUtf8Json.ToArray());
+        Assert.Null(permit);
+        Assert.Equal(0, trial.Coordinator.Scope.Allowance.ToolCallCount);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Cancelled, trial.Coordinator.CheckpointFailure);
+    }
+
+    [Theory]
     [InlineData(600000, 600000, 300000)]
     [InlineData(120000, 600000, 120000)]
     [InlineData(600000, 110000, 110000)]

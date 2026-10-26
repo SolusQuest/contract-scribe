@@ -778,7 +778,8 @@ internal static partial class DocumentationScribeComposition
             }
 
             if (coordinator is not null && await coordinator.BeginHostAsync(DocumentationScribeHostOperation.Postflight,
-                Math.Min(executionScope!.Allowance.RemainingMilliseconds, executionScope.Allowance.Limits.MaximumRequestElapsedMilliseconds), cancellationToken).ConfigureAwait(false) is null)
+                Math.Min(executionScope!.Allowance.RemainingMilliseconds, executionScope.Allowance.Limits.MaximumRequestElapsedMilliseconds),
+                executionScope.Allowance.Clock.GetTimestamp(), cancellationToken).ConfigureAwait(false) is null)
                 return CreatePrepared(DocumentationScribeCompositionStatus.BudgetExhausted, "scribe.failure.budget", bound,
                     resourceStopOwner: coordinator.LifetimeElapsedExhausted ? DocumentationScribeDeadlineOwner.Lifetime
                         : executionScope.Allowance.RemainingMilliseconds <= 0 ? DocumentationScribeDeadlineOwner.Invocation : null);

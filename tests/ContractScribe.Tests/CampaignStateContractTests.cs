@@ -5781,8 +5781,9 @@ public sealed partial class CampaignStateContractTests
             ReadOnlyMemory<byte> exactUtf8Json,
             long checkpointRevision,
             string sha256,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             if (ReplaceResult != CampaignCheckpointWriteKind.Written)
             {
                 _artifact = WinnerOnRejectedWrite ?? _artifact;

@@ -81,7 +81,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         return accepted;
     }
     public async ValueTask<DocumentationScribeHostAdmission?> BeginHostAsync(DocumentationScribeHostOperation operation,
-        int maximumMilliseconds, CancellationToken cancellationToken)
+        int maximumMilliseconds, long startedAt, CancellationToken cancellationToken)
     {
         if (guard is not null && !guard()) { Conflict = true; return null; }
         if (operation == DocumentationScribeHostOperation.SemanticTool)
@@ -107,11 +107,26 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         }
         using var boundaryScope = operation == DocumentationScribeHostOperation.RetryWait
             ? CampaignProcessBoundaryHooks.EnterReplacementScope(CampaignProcessBoundaryHooks.RetryWaitReplacementScope) : null;
-        // Admission readback also settles an already-started checkpoint write.
-        // Retain its observation scope on execution cancellation; the permit
-        // still measures from the original pre-admission boundary and cannot
-        // execute after that boundary's applicable deadline.
-        if (!await AcceptProgressAsync(transition, boundary).ConfigureAwait(false)) return null;
+        if (transition.Kind != CampaignTransitionKind.Applied)
+        {
+            await AcceptProgressAsync(transition, boundary).ConfigureAwait(false);
+            return null;
+        }
+        var stateAfterAdmission = transition.Artifact.State;
+        var exposure = ((CampaignProviderReservation)stateAfterAdmission.ActiveReservation!).Exposure.ElapsedMilliseconds;
+        var originalRemaining = maximumMilliseconds - Scope.Allowance.ElapsedSince(startedAt);
+        var remaining = Math.Max(0, Math.Min(exposure, originalRemaining));
+        var hostOwnsDeadline = Scope.Allowance.RemainingMilliseconds > remaining
+            && CampaignBudgetAccounting.RemainingLifetimeElapsed(stateAfterAdmission.LineageCharges,
+                stateAfterAdmission.ConfiguredCeilings.CampaignBudget) > remaining;
+        using var hostDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(remaining), clock);
+        if (remaining == 0) hostDeadline.Cancel();
+        using var mutation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hostDeadline.Token);
+        // New mutation issuance retains the original pre-admission start and
+        // execution stop. A write already dispatched still has bounded readback.
+        if (!await AcceptProgressAsync(transition, boundary, mutationCancellationToken: mutation.Token,
+                mutationHostDeadline: () => hostOwnsDeadline && hostDeadline.IsCancellationRequested
+                    && !cancellationToken.IsCancellationRequested).ConfigureAwait(false)) return null;
         if (operation == DocumentationScribeHostOperation.RetryWait)
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.RetryWaitAfterReadback);
         return new(((CampaignProviderReservation)invocation.AcceptedCheckpoint.Artifact.State.ActiveReservation!).Exposure.ElapsedMilliseconds, CurrentDeadlineOwner);
@@ -276,7 +291,8 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     }
 
     private async ValueTask<bool> AcceptProgressAsync(CampaignTransitionResult transition, long boundary,
-        CancellationToken cancellationToken = default, CampaignSemanticCheckpointWindow? semanticObservation = null)
+        CancellationToken cancellationToken = default, CampaignSemanticCheckpointWindow? semanticObservation = null,
+        CancellationToken mutationCancellationToken = default, Func<bool>? mutationHostDeadline = null)
     {
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
@@ -293,17 +309,23 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         }
         using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(checkpointAcceptanceMilliseconds), clock);
         using var boundedSettlement = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, deadline.Token, cancellationToken);
+        using var stopped = CancellationTokenSource.CreateLinkedTokenSource(boundedSettlement.Token, mutationCancellationToken);
         // Snapshot when this acceptance is first cancelled. A later Host timer
         // cannot turn an earlier checkpoint deadline/owner loss into a timeout.
         var cancelledByHost = -1;
-        using var cancellation = boundedSettlement.Token.Register(() =>
-            Interlocked.CompareExchange(ref cancelledByHost, HostDeadlineCancellation(cancellationToken, deadline.Token) ? 1 : 0, -1));
-        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token).ConfigureAwait(false);
-        if (cancellationToken.IsCancellationRequested || semanticObservation is { ObservationOpen: false }
+        using var cancellation = stopped.Token.Register(() =>
+            Interlocked.CompareExchange(ref cancelledByHost, !deadline.IsCancellationRequested && !settlementToken.IsCancellationRequested
+                && (mutationHostDeadline?.Invoke() == true || HostDeadlineCancellation(cancellationToken, deadline.Token)) ? 1 : 0, -1));
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token,
+            mutationCancellationToken).ConfigureAwait(false);
+        // An admission already written before execution stopped may still be
+        // acknowledged for mandatory settlement. Its original permit cannot
+        // execute late; an expired acceptance itself must never advance Writer.
+        if (boundedSettlement.IsCancellationRequested || semanticObservation is { ObservationOpen: false }
             || accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
             || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
         {
-            RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
+            RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && boundedSettlement.IsCancellationRequested
                 ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind, Volatile.Read(ref cancelledByHost) == 1);
             return false;
         }

@@ -126,13 +126,16 @@ public interface ICampaignCheckpointStore
         string sha256,
         CancellationToken cancellationToken);
 
+    // Mutation cancellation fences new writes, including adapter preparation.
+    // An already-issued write retains only the bounded readback token.
     ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(
         long expectedCheckpointRevision,
         string expectedSha256,
         ReadOnlyMemory<byte> exactUtf8Json,
         long checkpointRevision,
         string sha256,
-        CancellationToken cancellationToken);
+        CancellationToken cancellationToken,
+        CancellationToken mutationCancellationToken = default);
 }
 
 public enum CampaignCheckpointAcceptanceKind
@@ -355,7 +358,8 @@ public static class CampaignCheckpointAcceptance
     public static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptAsync(
         ICampaignCheckpointStore store,
         CampaignTransitionResult transition,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        CancellationToken mutationCancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(store);
         ArgumentNullException.ThrowIfNull(transition);
@@ -371,7 +375,8 @@ public static class CampaignCheckpointAcceptance
             transition.Predecessor,
             transition.Artifact,
             acceptExactConcurrentWinner: true,
-            cancellationToken).ConfigureAwait(false);
+            cancellationToken,
+            mutationCancellationToken).ConfigureAwait(false);
     }
 
     private static async ValueTask<CampaignCheckpointAcceptanceResult> AcceptCoreAsync(
@@ -379,11 +384,15 @@ public static class CampaignCheckpointAcceptance
         CampaignCheckpointArtifact? expectedPredecessor,
         CampaignCheckpointArtifact intended,
         bool acceptExactConcurrentWinner,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken mutationCancellationToken = default)
     {
+        using var mutation = mutationCancellationToken.CanBeCanceled
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, mutationCancellationToken) : null;
+        var mutationToken = mutation?.Token ?? cancellationToken;
         try
         {
-            var current = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
+            var current = await store.ReadAsync(mutationToken).ConfigureAwait(false);
             var currentMatch = Match(current, intended);
             if (currentMatch == MatchKind.Invalid)
             {
@@ -406,6 +415,7 @@ public static class CampaignCheckpointAcceptance
             }
 
             CampaignCheckpointWriteResult write;
+            mutationToken.ThrowIfCancellationRequested();
             if (expectedPredecessor is null)
             {
                 if (current.Kind != CampaignCheckpointReadKind.NotFound)
@@ -417,7 +427,7 @@ public static class CampaignCheckpointAcceptance
                     intended.ExactUtf8Json.AsMemory(),
                     intended.CheckpointRevision,
                     intended.Sha256,
-                    cancellationToken).ConfigureAwait(false);
+                    mutationToken).ConfigureAwait(false);
             }
             else
             {
@@ -432,7 +442,8 @@ public static class CampaignCheckpointAcceptance
                     intended.ExactUtf8Json.AsMemory(),
                     intended.CheckpointRevision,
                     intended.Sha256,
-                    cancellationToken).ConfigureAwait(false);
+                    cancellationToken,
+                    mutationCancellationToken).ConfigureAwait(false);
             }
 
             if (write.Kind != CampaignCheckpointWriteKind.Written)
@@ -465,7 +476,7 @@ public static class CampaignCheckpointAcceptance
                         ? CampaignAcceptedCheckpointAuthorityKind.Writer : CampaignAcceptedCheckpointAuthorityKind.Observer))
                 : new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.ReadbackMismatch, null);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (mutationToken.IsCancellationRequested)
         {
             return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Cancelled, null);
         }

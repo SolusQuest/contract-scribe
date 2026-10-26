@@ -188,6 +188,6 @@ public sealed class CampaignStateTransitionTests
             ReadOnlyMemory<byte> exactUtf8Json,
             long checkpointRevision,
             string sha256,
-            CancellationToken cancellationToken) => throw new InvalidOperationException();
+            CancellationToken cancellationToken, CancellationToken mutationCancellationToken = default) => throw new InvalidOperationException();
     }
 }

@@ -227,8 +227,9 @@ public sealed partial class DocumentationScribeCompositionTests
             token.ThrowIfCancellationRequested();
         }
         public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long priorRevision, string priorSha,
-            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             token.ThrowIfCancellationRequested();
             var next = CampaignStateJson.Parse(bytes).Artifact!;
             var before = Current;
@@ -264,7 +265,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 }
             }
             var beforeRead = CampaignCheckpointReadResult.Found(before.ExactUtf8Json.AsSpan(), before.CheckpointRevision, before.Sha256);
-            var result = await inner.ReplaceIfCurrentAsync(priorRevision, priorSha, bytes, revision, sha, token);
+            var result = await inner.ReplaceIfCurrentAsync(priorRevision, priorSha, bytes, revision, sha, token, mutationCancellationToken);
             if (result.Kind == CampaignCheckpointWriteKind.Written)
             {
                 Current = next;
@@ -484,14 +485,15 @@ internal sealed class CampaignAcknowledgementFaultStore(
     public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes,
         long revision, string hash, CancellationToken token) => inner.CreateIfAbsentAsync(bytes, revision, hash, token);
     public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long previousRevision, string previousHash,
-        ReadOnlyMemory<byte> bytes, long revision, string hash, CancellationToken token)
+        ReadOnlyMemory<byte> bytes, long revision, string hash, CancellationToken token, CancellationToken mutationCancellationToken = default)
     {
+        mutationCancellationToken.ThrowIfCancellationRequested();
         var before = await inner.ReadAsync(token);
         var predecessor = CampaignStateJson.Parse(before.ExactUtf8Json.AsMemory()).Artifact!;
         var successor = CampaignStateJson.Parse(bytes).Artifact!;
         if (successor.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.SemanticTool })
             beforeSemanticWrite?.Invoke();
-        var actual = await inner.ReplaceIfCurrentAsync(previousRevision, previousHash, bytes, revision, hash, token);
+        var actual = await inner.ReplaceIfCurrentAsync(previousRevision, previousHash, bytes, revision, hash, token, mutationCancellationToken);
         var selected = select?.Invoke(predecessor, successor) ?? successor.State.ActiveReservation is
             CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission };
         if (fault == "clean" || AfterFault is not null || !selected) return actual;

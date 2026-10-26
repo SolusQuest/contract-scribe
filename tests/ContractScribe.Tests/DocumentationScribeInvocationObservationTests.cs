@@ -88,7 +88,7 @@ public sealed class DocumentationScribeInvocationObservationTests
         public ValueTask<bool> SettleProviderAsync(DocumentationScribeInvocationProviderPermit permit,
             DocumentationScribeDispatchSettlement settlement, CancellationToken token) => ValueTask.FromResult(false);
         public ValueTask<DocumentationScribeHostAdmission?> BeginHostAsync(DocumentationScribeHostOperation operation,
-            int milliseconds, CancellationToken token) => ValueTask.FromResult<DocumentationScribeHostAdmission?>(null);
+            int milliseconds, long startedAt, CancellationToken token) => ValueTask.FromResult<DocumentationScribeHostAdmission?>(null);
         public ValueTask<bool> CompleteHostAsync(DocumentationScribeHostOperation operation,
             int milliseconds, CancellationToken token) => ValueTask.FromResult(false);
     }

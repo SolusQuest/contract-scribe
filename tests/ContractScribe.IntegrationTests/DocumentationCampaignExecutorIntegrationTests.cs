@@ -1075,8 +1075,9 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
             ReadOnlyMemory<byte> exactUtf8Json,
             long checkpointRevision,
             string sha256,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             cancellationToken.ThrowIfCancellationRequested();
             lock (gate)
             {

@@ -571,6 +571,7 @@ public sealed partial class CampaignStateContractTests
         internal Action? RetryReadback { get; set; }
         internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
         internal Action? DelayedReadback { get; set; }
+        internal Action? BeforeNextRead { get; set; }
         internal Action<CampaignProviderHostPhase>? HostCompletionReadback { get; set; }
         internal bool HoldSemanticReadback { get; set; }
         internal CampaignSemanticCheckpointWindow? SemanticWindowForTest => semanticWindow;
@@ -585,6 +586,9 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token)
         {
             Reads++;
+            var before = BeforeNextRead;
+            BeforeNextRead = null;
+            before?.Invoke();
             if (Current.State.ActiveReservation is CampaignProviderReservation delayed
                 && delayed.HostPhase == DelayedReadbackPhase && DelayedReadback is { } delay)
             {
@@ -609,8 +613,9 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) =>
             inner.CreateIfAbsentAsync(bytes, revision, sha, token);
         public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision, string expectedSha,
-            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             var next = CampaignStateJson.Parse(bytes).Artifact!;
             var completedHost = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } previous
                 && next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } successor
@@ -631,7 +636,7 @@ public sealed partial class CampaignStateContractTests
                 if (HoldSettlement) await ReleaseSettlement.Task;
                 if (FailSettlement) return new(CampaignCheckpointWriteKind.CurrentMismatch);
             }
-            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
+            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token, mutationCancellationToken);
             if (result.Kind == CampaignCheckpointWriteKind.Written)
             {
                 if (next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host, HostPhase: { } admittedPhase }
