@@ -464,7 +464,8 @@ public sealed partial class CampaignStateContractTests
         int? targetMilliseconds = null, int? invocationMilliseconds = null, int? hostMilliseconds = null,
         DocumentationScribeInvocationLimits? invocationLimits = null, int? targetToolCalls = null,
         Func<bool>? dispatchGuard = null, DocumentationScribeHostTimeouts? hostTimeouts = null,
-        int checkpointAcceptanceMilliseconds = 30_000, CancellationToken settlementToken = default)
+        int checkpointAcceptanceMilliseconds = 30_000, CancellationToken settlementToken = default,
+        int? campaignMilliseconds = null)
     {
         var node = ReadJsonFixture("documentation-scribe", "v1", "valid", "request.json");
         var limits = node["limits"]!.AsObject();
@@ -475,7 +476,7 @@ public sealed partial class CampaignStateContractTests
         var template = DocumentationScribeValidation.ParseRequest(Encoding.UTF8.GetBytes(node.ToJsonString())).Request!;
         var scenario = CreateProposalScenario(scribeRequestTemplate: template, targetLimit: 1,
             maximumAttemptsPerTarget: attempts, maximumProviderRequests: null, maximumInputTokens: null,
-            maximumUncachedInputTokens: null, maximumOutputTokens: null, maximumCostMicrounits: null, maximumElapsedMilliseconds: null);
+            maximumUncachedInputTokens: null, maximumOutputTokens: null, maximumCostMicrounits: null, maximumElapsedMilliseconds: campaignMilliseconds);
         var request = CreateScribeExchange(scenario.Plan.WorkItems[0], requestMutation: root => root["limits"] = limits.DeepClone(),
             resultMutation: root => root["runEnvelope"]!["elapsedMilliseconds"] = 0, scenario: scenario).Request;
         var initial = CampaignStateJson.CreateArtifact(scenario.InitialState);
@@ -572,6 +573,7 @@ public sealed partial class CampaignStateContractTests
         internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
         internal Action? DelayedReadback { get; set; }
         internal Action? BeforeNextRead { get; set; }
+        internal Action? BeforeRetryAdmissionRead { get; set; }
         internal Action<CampaignProviderHostPhase>? HostCompletionReadback { get; set; }
         internal bool HoldSemanticReadback { get; set; }
         internal CampaignSemanticCheckpointWindow? SemanticWindowForTest => semanticWindow;
@@ -661,6 +663,13 @@ public sealed partial class CampaignStateContractTests
                 // the same delay and fault hooks exercised by independent reads.
                 var observation = await ReadAsync(token);
                 semanticWindow?.ObserveLocalReadback(this, observation);
+                if (settlement && next.State.ActiveReservation is CampaignProviderReservation
+                    { RetryProgress.PendingRetryAfterMilliseconds: > 0 } && BeforeRetryAdmissionRead is { } preparation)
+                {
+                    Assert.Null(BeforeNextRead);
+                    BeforeRetryAdmissionRead = null;
+                    BeforeNextRead = preparation;
+                }
                 return CampaignCheckpointWriteResult.Written(observation);
             }
             return result;

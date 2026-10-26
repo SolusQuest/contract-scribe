@@ -116,16 +116,25 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         var exposure = ((CampaignProviderReservation)stateAfterAdmission.ActiveReservation!).Exposure.ElapsedMilliseconds;
         var originalRemaining = maximumMilliseconds - Scope.Allowance.ElapsedSince(startedAt);
         var remaining = Math.Max(0, Math.Min(exposure, originalRemaining));
-        var hostOwnsDeadline = Scope.Allowance.RemainingMilliseconds > remaining
+        var lifetimeRemaining = CampaignBudgetAccounting.RemainingLifetimeElapsed(stateAfterAdmission.LineageCharges,
+            stateAfterAdmission.ConfiguredCeilings.CampaignBudget);
+        // Retry-After is a minimum wait, so preparation may satisfy it. New
+        // issuance still retains the original invocation and lifetime bounds.
+        var mutationRemaining = operation == DocumentationScribeHostOperation.RetryWait
+            ? Math.Max(0, Math.Min(Scope.Allowance.RemainingMilliseconds,
+                lifetimeRemaining - Scope.Allowance.ElapsedSince(boundary)))
+            : remaining;
+        var hostOwnsDeadline = operation != DocumentationScribeHostOperation.RetryWait
+            && Scope.Allowance.RemainingMilliseconds > remaining
             && CampaignBudgetAccounting.RemainingLifetimeElapsed(stateAfterAdmission.LineageCharges,
                 stateAfterAdmission.ConfiguredCeilings.CampaignBudget) > remaining;
-        using var hostDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(remaining), clock);
-        if (remaining == 0) hostDeadline.Cancel();
-        using var mutation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hostDeadline.Token);
+        using var mutationDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(mutationRemaining), clock);
+        if (mutationRemaining == 0) mutationDeadline.Cancel();
+        using var mutation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, mutationDeadline.Token);
         // New mutation issuance retains the original pre-admission start and
         // execution stop. A write already dispatched still has bounded readback.
         if (!await AcceptProgressAsync(transition, boundary, mutationCancellationToken: mutation.Token,
-                mutationHostDeadline: () => hostOwnsDeadline && hostDeadline.IsCancellationRequested
+                mutationHostDeadline: () => hostOwnsDeadline && mutationDeadline.IsCancellationRequested
                     && !cancellationToken.IsCancellationRequested).ConfigureAwait(false)) return null;
         if (operation == DocumentationScribeHostOperation.RetryWait)
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.RetryWaitAfterReadback);
