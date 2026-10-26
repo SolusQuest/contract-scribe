@@ -34,7 +34,7 @@ public interface IDocumentationScribeExecutionOperations
     ValueTask<bool> SettleProviderAsync(DocumentationScribeInvocationProviderPermit permit,
         DocumentationScribeDispatchSettlement settlement, CancellationToken cancellationToken);
     ValueTask<DocumentationScribeHostAdmission?> BeginHostAsync(DocumentationScribeHostOperation operation,
-        int maximumMilliseconds, CancellationToken cancellationToken);
+        int maximumMilliseconds, long startedAt, CancellationToken cancellationToken);
     ValueTask<bool> CompleteHostAsync(DocumentationScribeHostOperation operation,
         int elapsedMilliseconds, CancellationToken cancellationToken);
 }
@@ -102,12 +102,15 @@ public sealed class DocumentationScribeExecutionScope
     private int runtimeMaximumMilliseconds;
     private (Guid LogicalCallId, int AttemptNumber)? nextProviderAttempt;
     internal DocumentationScribeExecutionScope(DocumentationScribeInvocationAllowance allowance,
-        IDocumentationScribeExecutionOperations? operations, int restoredFailures, int pendingRetryAfter)
+        IDocumentationScribeExecutionOperations? operations, int restoredFailures, int pendingRetryAfter,
+        DocumentationScribeHostTimeouts? hostTimeouts = null)
     {
         Allowance = allowance; MaximumTargets = allowance.Limits.MaximumTargets; this.operations = operations;
         RestoredRetryableProviderFailures = restoredFailures; PendingRetryAfterMilliseconds = pendingRetryAfter;
+        HostTimeouts = hostTimeouts ?? DocumentationScribeHostTimeouts.Default;
     }
     public DocumentationScribeInvocationAllowance Allowance { get; }
+    public DocumentationScribeHostTimeouts HostTimeouts { get; }
     public int MaximumTargets { get; private init; }
     public int RestoredRetryableProviderFailures { get; }
     public int PendingRetryAfterMilliseconds { get; private set; }
@@ -171,15 +174,17 @@ public sealed class DocumentationScribeExecutionScope
     }
     public bool Failed => Volatile.Read(ref failed) != 0;
     public static DocumentationScribeExecutionScope ForStandalone(DocumentationScribeRequest request,
-        TimeProvider? clock = null) => new(DocumentationScribeInvocationAllowance.ForStandalone(request, clock), null, 0, 0);
+        TimeProvider? clock = null, DocumentationScribeHostTimeouts? hostTimeouts = null) =>
+        new(DocumentationScribeInvocationAllowance.ForStandalone(request, clock), null, 0, 0, hostTimeouts);
     internal static DocumentationScribeExecutionScope ForCampaign(CampaignProviderInvocationAuthority authority,
-        DocumentationScribeInvocationAllowance allowance, IDocumentationScribeExecutionOperations operations)
+        DocumentationScribeInvocationAllowance allowance, IDocumentationScribeExecutionOperations operations,
+        DocumentationScribeHostTimeouts? hostTimeouts = null)
     {
         ArgumentNullException.ThrowIfNull(operations);
         if (!allowance.IsCampaignScope || !authority.BindInvocationAllowance(allowance))
             throw new InvalidOperationException("scribe.scope.invalid-authority");
         var progress = ((CampaignProviderReservation)authority.AcceptedCheckpoint.Artifact.State.ActiveReservation!).RetryProgress;
-        return new(allowance, operations, authority.RestoredRetryableProviderFailures, progress.PendingRetryAfterMilliseconds)
+        return new(allowance, operations, authority.RestoredRetryableProviderFailures, progress.PendingRetryAfterMilliseconds, hostTimeouts)
         {
             MaximumTargets = authority.Request.ExecutableTargetIds.Length,
             campaignRequestSha = authority.Request.ArtifactSha256,
@@ -234,16 +239,20 @@ public sealed class DocumentationScribeExecutionScope
         var semantic = operations is not null && operation == DocumentationScribeHostOperation.SemanticTool;
         var safety = operation switch
         {
-            DocumentationScribeHostOperation.RepositoryTool => 30_000,
-            DocumentationScribeHostOperation.SemanticTool => 10_000,
+            DocumentationScribeHostOperation.RepositoryTool => HostTimeouts.RepositoryToolMilliseconds,
+            DocumentationScribeHostOperation.SemanticTool => HostTimeouts.Semantic.QueryMilliseconds,
+            DocumentationScribeHostOperation.TerminalSubmission => HostTimeouts.TerminalSubmissionMilliseconds,
             DocumentationScribeHostOperation.RetryWait => PendingRetryAfterMilliseconds,
             _ => Allowance.Limits.MaximumRequestElapsedMilliseconds,
         };
         var remaining = Allowance.RemainingMilliseconds;
         var milliseconds = semantic
-            ? Math.Min(CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds, Math.Min(remaining, RemainingTargetMilliseconds))
+            ? Math.Min(HostTimeouts.Semantic.EnvelopeMilliseconds, Math.Min(remaining, RemainingTargetMilliseconds))
             : Math.Min(safety, remaining);
-        if (semantic && milliseconds <= CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds)
+        if (!semantic && runtimeStartedAt is not null
+            && operation is DocumentationScribeHostOperation.TerminalSubmission or DocumentationScribeHostOperation.RepositoryTool)
+            milliseconds = Math.Min(milliseconds, RemainingTargetMilliseconds);
+        if (semantic && milliseconds <= HostTimeouts.Semantic.ClosureMilliseconds)
         {
             ObserveSemanticHeadroom();
             Volatile.Write(ref operationGrant, 0);
@@ -254,7 +263,7 @@ public sealed class DocumentationScribeExecutionScope
         CampaignSemanticCheckpointWindow? semanticWindow = null;
         if (operations is not null)
         {
-            var admitted = await operations.BeginHostAsync(operation, milliseconds, cancellationToken).ConfigureAwait(false);
+            var admitted = await operations.BeginHostAsync(operation, milliseconds, startedAt, cancellationToken).ConfigureAwait(false);
             if (admitted is null)
             {
                 Volatile.Write(ref operationGrant, 0);

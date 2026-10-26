@@ -42,7 +42,7 @@ public sealed class GitHubArchitectureTests
         var client = typeof(GitHubApiClient);
         Assert.All(client.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance), ctor => Assert.True(ctor.IsPrivate));
         var factory = client.GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static)!;
-        Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string), typeof(GitHubTransportTimeouts) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
         Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync", "EnterSemanticRecovery",
@@ -72,7 +72,7 @@ public sealed class GitHubArchitectureTests
     {
         var observer = typeof(GitHubCampaignObserver);
         Assert.All(observer.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance), constructor => Assert.True(constructor.IsPrivate));
-        Assert.Equal(new[] { typeof(ValidatedGitHubCampaignReadAuthority), typeof(string) }, observer
+        Assert.Equal(new[] { typeof(ValidatedGitHubCampaignReadAuthority), typeof(string), typeof(GitHubTransportTimeouts) }, observer
             .GetMethod("Create", BindingFlags.Static | BindingFlags.NonPublic)!.GetParameters().Select(parameter => parameter.ParameterType));
         Assert.Equal(new[] { "Dispose", "ObserveAsync", "ToString" }, observer
             .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly)

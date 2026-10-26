@@ -351,9 +351,10 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha,
             CancellationToken token) => inner.CreateIfAbsentAsync(bytes, revision, sha, token);
         public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision, string expectedSha,
-            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
-            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
+            mutationCancellationToken.ThrowIfCancellationRequested();
+            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token, mutationCancellationToken);
             if (fault == "valid" || result.Readback is not { } observed) return result;
             return CampaignCheckpointWriteResult.Written(CampaignCheckpointReadResult.Found(observed.ExactUtf8Json.AsSpan(),
                 observed.CheckpointRevision!.Value, observed.Sha256!, fault == "missing" ? null : stale));

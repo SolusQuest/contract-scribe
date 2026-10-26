@@ -47,6 +47,7 @@ Some fields of the resolved document are never read from a consumer layer:
 | `budgets.campaign.*` (8 limits) | public |
 | `budgets.scribe.*` (5 context/evidence/attempt limits) | public |
 | `budgets.invocation.*` (11 execution limits) | public |
+| `timeouts.*` (10 positive finite operational durations) | public |
 | `retry.*` | product-owned |
 | `scribeRequest.scribeRequestVersion` | product-owned (`1`) |
 | `scribeRequest.agentProtocolId` | product-owned |
@@ -88,6 +89,29 @@ The consumer layer schema is published at `schemas/consumer-configuration/v1.sch
 - `costPolicy`: `null` — no invented pricing; a finite lifetime cost cap requires configured rate/currency authority; unlimited runs without it retain unpriced history.
 - Authority identifiers: the frozen product-owned `*.v1` vocabulary (`proposal.documentation.v1`, `context.m1.v1`, `m2.projection.v1`, `retry.policy.v1`, `documentation-scribe.agent.v1`, `tools.registry.read-only.v1`, `tool-policy.read-only.v1`) plus the M3-accepted scribe protocol identity `scribe-protocol.v1`; `provider.configured.v1` / `model.configured.v1` source markers remain truthful under any effective endpoint/model because the complete provider object is committed as provider content authority.
 
+## Operational timeouts
+
+An optional `timeouts` object merges through the same defaults → consumer → invocation-override path. Omitted fields inherit; explicit null, zero, fractional, negative, overflowing and unknown values fail closed. Crossfield validation applies to the final merged GitHub pair. These execution settings preserve correctness identities, original selected membership, retry history and open/closed same-base gates.
+
+| Field | Default (ms) | Maximum (ms) |
+| --- | ---: | ---: |
+| `terminalSubmissionMilliseconds` | 300000 | 86399999 |
+| `repositoryToolMilliseconds` | 30000 | 86399999 |
+| `checkpointAcceptanceMilliseconds` | 30000 | 86399999 |
+| `gitHubRequestMilliseconds` | 30000 | 86399999 |
+| `gitHubConnectMilliseconds` | 10000 | 86399999, and no greater than request |
+| `publicationMilliseconds` | 300000 | 300000 |
+| `semanticAuthorizationMilliseconds` | 30000 | 30000 |
+| `semanticQueryMilliseconds` | 10000 | 10000 |
+| `semanticClosureMilliseconds` | 30000 | 30000 |
+| `settlementTailMilliseconds` | 30000 | 30000 |
+
+Terminal submission and finish have an independent configured ceiling rather than borrowing the physical provider-request deadline. Each admitted operation has one original start before admission; all ordered member validations, durable acceptances and progress reuse that permit. Remaining original Runtime, invocation, lifetime, caller and owner/lease authority can only shorten it. Members, saves, retries and progress never reset the operation clock. The physical provider request/connect settings remain under `budgets.invocation`.
+
+Repository elapsed applies to both the outer Host permit and each inner repository operation. Checkpoint elapsed applies to both Scribe coordinator phase/progress acceptances; it does not change every bootstrap, retirement or recovery store operation. Admission readback and settlement may observe a previously started write after execution cancellation, but cannot authorize a tool, submission or new effect after the original execution bound. The settlement tail remains anchored to the original invocation boundary and is observation-only, at most 30s; it grants no additional execution or publication.
+
+Semantic authorization, one query and closure use the configured triple and its checked sum, clipped by the same original parents. The scalar reservation carries that actual triple while semantic-active; restored state can retire exposure but cannot issue another query. Publication starts once on first finalization Begin (construction starts nothing); M2, recovery and cleanup share that same configured cutoff. Production GitHub request elapsed includes response bodies and uses the configured production handler connect bound. Existing 90s PR/history collection, 30s independent recovery, 3s bounded confirmation and owner claim/renewal fences retain their separate scopes; larger HTTP settings cannot extend them.
+
 ## Errors and admission
 
 Every source is admitted through the same bounded regular-file, no-follow, size, UTF-8, and content checks. Resolution failures surface as `campaign.invalid-configuration` before any repository audit, checkpoint read, credential read, or provider dispatch. Each admitted source is recorded with its path, length, timestamp, and SHA-256; the existing admission, in-session, dispatch-guard, and reconciler revalidation predicate now covers every source and preserves its existing stage-specific outcomes (`campaign.invalid-configuration`, reservation conflicts, `campaign.patch.configuration-changed`). A changed effective configuration cannot silently resume or reset consumptive totals.
@@ -102,4 +126,4 @@ Automatic CLI results expose versioned `invocationUsage`; the Action forwards it
 
 ## Non-goals
 
-No environment-variable configuration precedence, hot reload, remote includes, a YAML merge engine, compatibility readers, aliases, migrations, deprecation periods, or a second public consumer shape. No new model/provider capability, M4 state-semantics change, or GitHub-publication behavior is introduced here.
+No environment-variable configuration precedence, hot reload, remote includes, a YAML merge engine, compatibility readers, aliases, migrations, deprecation periods, or a second public consumer shape. The duration controls change elapsed policy within the bounds above; they do not change target selection, evidence validity, mutation permissions or retry/recovery grants.

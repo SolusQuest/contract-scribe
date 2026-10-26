@@ -44,14 +44,16 @@ public static partial class CampaignStateFactory
                 && exposure.OutputTokens == 0 && exposure.CostMicrounits == 0
                 && (exposure.ElapsedMilliseconds > 0 || provider.HostPhase == CampaignProviderHostPhase.Retirement),
                 CampaignStateValidationCode.InvalidShape);
-            Require(provider.HostPhase != CampaignProviderHostPhase.SemanticTool
-                || exposure.ElapsedMilliseconds is > CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds
-                    and <= CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds,
+            Require(provider.HostPhase == CampaignProviderHostPhase.SemanticTool
+                ? provider.SemanticDurations is { } semantic
+                    && exposure.ElapsedMilliseconds > semantic.ClosureMilliseconds
+                    && exposure.ElapsedMilliseconds <= semantic.EnvelopeMilliseconds
+                : provider.SemanticDurations is null,
                 CampaignStateValidationCode.InvalidBound);
         }
         else
         {
-            Require(provider.HostPhase is null && IsSha256(provider.RequestCommitmentSha256)
+            Require(provider.HostPhase is null && provider.SemanticDurations is null && IsSha256(provider.RequestCommitmentSha256)
                 && provider.LastDispatchOrdinal > provider.RetryProgress.LastSettledDispatchOrdinal
                 && exposure.ProviderRequests == 1
                 && exposure.CachedInputTokens > 0 && exposure.UncachedInputTokens > 0

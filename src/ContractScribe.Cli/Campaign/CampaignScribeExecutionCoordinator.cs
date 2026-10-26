@@ -8,6 +8,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private readonly ICampaignCheckpointStore store;
     private readonly TimeProvider clock;
     private readonly CancellationToken settlementToken;
+    private readonly int checkpointAcceptanceMilliseconds;
     private readonly Func<bool>? guard;
     private long operationStartedAt;
     private CampaignSemanticCheckpointWindow? semanticWindow;
@@ -15,11 +16,15 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private CheckpointRejection? checkpointFailure;
     internal CampaignScribeExecutionCoordinator(CampaignProviderInvocationAuthority invocation,
         DocumentationScribeInvocationAllowance allowance, ICampaignCheckpointStore store,
-        CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt)
+        CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt,
+        DocumentationScribeHostTimeouts? hostTimeouts = null, int checkpointAcceptanceMilliseconds = 30_000)
     {
+        if (checkpointAcceptanceMilliseconds is < 1 or > DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds)
+            throw new ArgumentOutOfRangeException(nameof(checkpointAcceptanceMilliseconds));
+        this.checkpointAcceptanceMilliseconds = checkpointAcceptanceMilliseconds;
         this.invocation = invocation; this.store = store; this.settlementToken = settlementToken;
         this.guard = guard; clock = allowance.Clock; this.operationStartedAt = operationStartedAt;
-        Scope = DocumentationScribeExecutionScope.ForCampaign(invocation, allowance, this);
+        Scope = DocumentationScribeExecutionScope.ForCampaign(invocation, allowance, this, hostTimeouts);
     }
     internal DocumentationScribeExecutionScope Scope { get; }
     internal bool CheckpointCapacityStop { get; private set; }
@@ -76,7 +81,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         return accepted;
     }
     public async ValueTask<DocumentationScribeHostAdmission?> BeginHostAsync(DocumentationScribeHostOperation operation,
-        int maximumMilliseconds, CancellationToken cancellationToken)
+        int maximumMilliseconds, long startedAt, CancellationToken cancellationToken)
     {
         if (guard is not null && !guard()) { Conflict = true; return null; }
         if (operation == DocumentationScribeHostOperation.SemanticTool)
@@ -102,7 +107,26 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         }
         using var boundaryScope = operation == DocumentationScribeHostOperation.RetryWait
             ? CampaignProcessBoundaryHooks.EnterReplacementScope(CampaignProcessBoundaryHooks.RetryWaitReplacementScope) : null;
-        if (!await AcceptProgressAsync(transition, boundary).ConfigureAwait(false)) return null;
+        if (transition.Kind != CampaignTransitionKind.Applied)
+        {
+            await AcceptProgressAsync(transition, boundary).ConfigureAwait(false);
+            return null;
+        }
+        var stateAfterAdmission = transition.Artifact.State;
+        var exposure = ((CampaignProviderReservation)stateAfterAdmission.ActiveReservation!).Exposure.ElapsedMilliseconds;
+        var originalRemaining = maximumMilliseconds - Scope.Allowance.ElapsedSince(startedAt);
+        var remaining = Math.Max(0, Math.Min(exposure, originalRemaining));
+        var hostOwnsDeadline = Scope.Allowance.RemainingMilliseconds > remaining
+            && CampaignBudgetAccounting.RemainingLifetimeElapsed(stateAfterAdmission.LineageCharges,
+                stateAfterAdmission.ConfiguredCeilings.CampaignBudget) > remaining;
+        using var hostDeadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(remaining), clock);
+        if (remaining == 0) hostDeadline.Cancel();
+        using var mutation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, hostDeadline.Token);
+        // New mutation issuance retains the original pre-admission start and
+        // execution stop. A write already dispatched still has bounded readback.
+        if (!await AcceptProgressAsync(transition, boundary, mutationCancellationToken: mutation.Token,
+                mutationHostDeadline: () => hostOwnsDeadline && hostDeadline.IsCancellationRequested
+                    && !cancellationToken.IsCancellationRequested).ConfigureAwait(false)) return null;
         if (operation == DocumentationScribeHostOperation.RetryWait)
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.RetryWaitAfterReadback);
         return new(((CampaignProviderReservation)invocation.AcceptedCheckpoint.Artifact.State.ActiveReservation!).Exposure.ElapsedMilliseconds, CurrentDeadlineOwner);
@@ -117,10 +141,10 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         // Capture the shorter original target bound at this transition's own
         // boundary, rather than borrowing time spent since Scope's first check.
         maximumMilliseconds = Math.Min(maximumMilliseconds, Scope.RemainingTargetMilliseconds);
-        if (maximumMilliseconds <= CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds)
+        if (maximumMilliseconds <= Scope.HostTimeouts.Semantic.ClosureMilliseconds)
         { Scope.ObserveSemanticHeadroom(); return null; }
         var transition = CampaignStateReducer.AdvanceHostOperation(invocation, DocumentationScribeHostOperation.SemanticTool,
-            ElapsedAt(boundary), maximumMilliseconds, completing: false);
+            ElapsedAt(boundary), maximumMilliseconds, completing: false, Scope.HostTimeouts.Semantic);
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
             if (transition.Failure == CampaignTransitionFailure.BudgetExhausted)
@@ -251,23 +275,24 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         if (guard is not null && !guard()) { Conflict = true; return false; }
         if (transition.Kind != CampaignTransitionKind.Unchanged)
             return await AcceptProgressAsync(transition, operationStartedAt, cancellationToken).ConfigureAwait(false);
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(checkpointAcceptanceMilliseconds), clock);
         using var bounded = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, cancellationToken, deadline.Token);
         var cancelledByHost = -1;
         using var cancellation = bounded.Token.Register(() =>
             Interlocked.CompareExchange(ref cancelledByHost, HostDeadlineCancellation(cancellationToken, deadline.Token) ? 1 : 0, -1));
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, bounded.Token).ConfigureAwait(false);
-        var valid = !cancellationToken.IsCancellationRequested
+        var valid = !bounded.IsCancellationRequested
             && (invocation.LifecycleAvailable || invocation.DispatchStarted)
             && accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted
             && accepted.Artifact?.Sha256 == invocation.AcceptedCheckpoint.Artifact.Sha256;
-        if (!valid) RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
+        if (!valid) RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && bounded.IsCancellationRequested
             ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind, Volatile.Read(ref cancelledByHost) == 1);
         return valid;
     }
 
     private async ValueTask<bool> AcceptProgressAsync(CampaignTransitionResult transition, long boundary,
-        CancellationToken cancellationToken = default, CampaignSemanticCheckpointWindow? semanticObservation = null)
+        CancellationToken cancellationToken = default, CampaignSemanticCheckpointWindow? semanticObservation = null,
+        CancellationToken mutationCancellationToken = default, Func<bool>? mutationHostDeadline = null)
     {
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
@@ -282,19 +307,25 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
                 || !(Scope.LifetimeAdmissionDenied || Scope.Allowance.HasCheckedStop);
             return false;
         }
-        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30), clock);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(checkpointAcceptanceMilliseconds), clock);
         using var boundedSettlement = CancellationTokenSource.CreateLinkedTokenSource(settlementToken, deadline.Token, cancellationToken);
+        using var stopped = CancellationTokenSource.CreateLinkedTokenSource(boundedSettlement.Token, mutationCancellationToken);
         // Snapshot when this acceptance is first cancelled. A later Host timer
         // cannot turn an earlier checkpoint deadline/owner loss into a timeout.
         var cancelledByHost = -1;
-        using var cancellation = boundedSettlement.Token.Register(() =>
-            Interlocked.CompareExchange(ref cancelledByHost, HostDeadlineCancellation(cancellationToken, deadline.Token) ? 1 : 0, -1));
-        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token).ConfigureAwait(false);
-        if (cancellationToken.IsCancellationRequested || semanticObservation is { ObservationOpen: false }
+        using var cancellation = stopped.Token.Register(() =>
+            Interlocked.CompareExchange(ref cancelledByHost, !deadline.IsCancellationRequested && !settlementToken.IsCancellationRequested
+                && (mutationHostDeadline?.Invoke() == true || HostDeadlineCancellation(cancellationToken, deadline.Token)) ? 1 : 0, -1));
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token,
+            mutationCancellationToken).ConfigureAwait(false);
+        // An admission already written before execution stopped may still be
+        // acknowledged for mandatory settlement. Its original permit cannot
+        // execute late; an expired acceptance itself must never advance Writer.
+        if (boundedSettlement.IsCancellationRequested || semanticObservation is { ObservationOpen: false }
             || accepted.Kind != CampaignCheckpointAcceptanceKind.Accepted || accepted.AcceptedCheckpoint is null
             || !invocation.AdvanceAcceptedProgress(transition, accepted.AcceptedCheckpoint))
         {
-            RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && cancellationToken.IsCancellationRequested
+            RejectCheckpoint(accepted.Kind == CampaignCheckpointAcceptanceKind.Accepted && boundedSettlement.IsCancellationRequested
                 ? CampaignCheckpointAcceptanceKind.Cancelled : accepted.Kind, Volatile.Read(ref cancelledByHost) == 1);
             return false;
         }

@@ -389,6 +389,7 @@ public sealed record CampaignProviderReservation(
     public int RestoredRetryableProviderFailures { get; init; }
     public CampaignProviderOperationKind OperationKind { get; init; }
     public CampaignProviderHostPhase? HostPhase { get; init; } = CampaignProviderHostPhase.Preflight;
+    public CampaignSemanticDurations? SemanticDurations { get; init; }
     public string? RequestCommitmentSha256 { get; init; }
     public CampaignProviderRetryProgress RetryProgress { get; init; } = CampaignProviderRetryProgress.Empty;
 }

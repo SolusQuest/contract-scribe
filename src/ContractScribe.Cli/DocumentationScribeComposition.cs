@@ -778,7 +778,8 @@ internal static partial class DocumentationScribeComposition
             }
 
             if (coordinator is not null && await coordinator.BeginHostAsync(DocumentationScribeHostOperation.Postflight,
-                Math.Min(executionScope!.Allowance.RemainingMilliseconds, executionScope.Allowance.Limits.MaximumRequestElapsedMilliseconds), cancellationToken).ConfigureAwait(false) is null)
+                Math.Min(executionScope!.Allowance.RemainingMilliseconds, executionScope.Allowance.Limits.MaximumRequestElapsedMilliseconds),
+                executionScope.Allowance.Clock.GetTimestamp(), cancellationToken).ConfigureAwait(false) is null)
                 return CreatePrepared(DocumentationScribeCompositionStatus.BudgetExhausted, "scribe.failure.budget", bound,
                     resourceStopOwner: coordinator.LifetimeElapsedExhausted ? DocumentationScribeDeadlineOwner.Lifetime
                         : executionScope.Allowance.RemainingMilliseconds <= 0 ? DocumentationScribeDeadlineOwner.Invocation : null);
@@ -1119,6 +1120,7 @@ internal static partial class DocumentationScribeComposition
         var repositoryLimits = DocumentationScribeRepositoryToolLimits.Create(
             maximumBytesReadPerRun: 67_108_864,
             maximumReturnedUtf8BytesPerRun: DocumentationScribeContract.MaximumArtifactUtf8Bytes,
+            maximumElapsedMilliseconds: executionScope?.HostTimeouts.RepositoryToolMilliseconds ?? 30_000,
             maximumCallsPerOperation: checked(
                 Math.Max(1, request.Limits.MaximumToolCalls + nonInstructionContextCount)));
         var repository = DocumentationScribeRepositoryToolBundle.Create(

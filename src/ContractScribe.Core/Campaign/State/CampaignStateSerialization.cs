@@ -718,6 +718,16 @@ public static partial class CampaignStateJson
                 writer.WriteNumber("restoredRetryableProviderFailures", provider.RestoredRetryableProviderFailures);
                 writer.WriteString("operationKind", provider.OperationKind == CampaignProviderOperationKind.Dispatch ? "dispatch" : "host");
                 WriteNullableString(writer, "hostPhase", provider.HostPhase is { } phase ? HostPhaseId(phase) : null);
+                writer.WritePropertyName("semanticDurations");
+                if (provider.SemanticDurations is { } semantic)
+                {
+                    writer.WriteStartObject();
+                    writer.WriteNumber("authorizationMilliseconds", semantic.AuthorizationMilliseconds);
+                    writer.WriteNumber("queryMilliseconds", semantic.QueryMilliseconds);
+                    writer.WriteNumber("closureMilliseconds", semantic.ClosureMilliseconds);
+                    writer.WriteEndObject();
+                }
+                else writer.WriteNullValue();
                 WriteNullableString(writer, "requestCommitmentSha256", provider.RequestCommitmentSha256);
                 writer.WritePropertyName("retryProgress");
                 WriteRetryProgress(writer, provider.RetryProgress);
@@ -1561,7 +1571,7 @@ public static partial class CampaignStateJson
         ExpectObject(element, "kind", "workItemKey", "scribeRequestSha256", "attemptId", "exposure",
             "executionStartRevision", "currentOperationOrdinal", "lastDispatchOrdinal",
             "currentExecutionSettledProviderRequests", "restoredRetryableProviderFailures",
-            "operationKind", "hostPhase", "requestCommitmentSha256", "retryProgress");
+            "operationKind", "hostPhase", "semanticDurations", "requestCommitmentSha256", "retryProgress");
         if (!DocumentationScribeAttemptId.TryParse(ReadString(element, "attemptId"), out var attempt)) throw Vocabulary();
         var exposure = element.GetProperty("exposure");
         ExpectObject(exposure, "providerRequests", "inputTokens", "cachedInputTokens", "uncachedInputTokens",
@@ -1582,9 +1592,22 @@ public static partial class CampaignStateJson
             OperationKind = ReadString(element, "operationKind") switch
             { "host" => CampaignProviderOperationKind.Host, "dispatch" => CampaignProviderOperationKind.Dispatch, _ => throw Vocabulary() },
             HostPhase = ReadNullableString(element, "hostPhase") is { } phase ? ParseHostPhase(phase) : null,
+            SemanticDurations = ParseSemanticDurations(element.GetProperty("semanticDurations")),
             RequestCommitmentSha256 = ReadNullableString(element, "requestCommitmentSha256"),
             RetryProgress = ParseRetryProgress(element.GetProperty("retryProgress")),
         };
+    }
+
+    private static CampaignSemanticDurations? ParseSemanticDurations(JsonElement element)
+    {
+        if (element.ValueKind == JsonValueKind.Null) return null;
+        ExpectObject(element, "authorizationMilliseconds", "queryMilliseconds", "closureMilliseconds");
+        var authorization = ReadInt32(element, "authorizationMilliseconds");
+        var query = ReadInt32(element, "queryMilliseconds");
+        var closure = ReadInt32(element, "closureMilliseconds");
+        if (authorization is < 1 or > 30_000 || query is < 1 or > 10_000 || closure is < 1 or > 30_000)
+            throw CampaignStateFactory.Fail(CampaignStateValidationCode.InvalidBound, "Invalid semantic durations.");
+        return CampaignSemanticDurations.Create(authorization, query, closure);
     }
 
     private static CampaignPatchReservation ParsePatchReservation(JsonElement element)

@@ -62,11 +62,12 @@ internal static class GitHubProposalCommand
                 github.TargetRef, request.Configuration.CampaignLineage);
             GitHubProposalProcessHooks.Reach("token-read");
             GitHubApiClient client;
-            try { client = GitHubApiClient.CreateReadOnly(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!); }
+            try { client = GitHubApiClient.CreateReadOnly(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!, preflight.Configuration.Document.Timeouts.GitHub); }
             catch (Exception exception) when (exception is ArgumentException or GitHubProtocolException)
             { return GitHubProposalPresentation.Local(identity, operation, "permission"); }
             using var clientLifetime = client;
-            using var finalization = new GitHubPublicationFinalization(cancellationToken, GitHubProposalProcessHooks.FinalizationClock);
+            using var finalization = new GitHubPublicationFinalization(cancellationToken, GitHubProposalProcessHooks.FinalizationClock,
+                preflight.Configuration.Document.Timeouts.PublicationMilliseconds);
             await using var checkpoint = GitHubCoordinationStore.Create(client);
             try
             {

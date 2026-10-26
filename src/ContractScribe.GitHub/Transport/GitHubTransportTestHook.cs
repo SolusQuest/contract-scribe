@@ -9,7 +9,7 @@ internal static class GitHubTransportTestHook
     private static Registration? current;
 
     private static IDisposable Register(Uri endpoint, HttpMessageHandler? scriptedHandler = null,
-        int requestTimeoutMilliseconds = 30_000)
+        int? requestTimeoutMilliseconds = null)
     {
         if (endpoint is null || !endpoint.IsAbsoluteUri || endpoint.Scheme != "http"
             || endpoint.IsDefaultPort || endpoint.Port <= 0 || endpoint.AbsolutePath != "/"
@@ -26,7 +26,7 @@ internal static class GitHubTransportTestHook
         }
     }
 
-    internal static (Uri Endpoint, HttpMessageHandler? Handler, int TimeoutMilliseconds)? Take(string credential)
+    internal static (Uri Endpoint, HttpMessageHandler? Handler, int? TimeoutMilliseconds)? Take(string credential)
     {
         lock (Gate)
         {
@@ -42,11 +42,11 @@ internal static class GitHubTransportTestHook
         }
     }
 
-    private sealed class Registration(Uri endpoint, HttpMessageHandler? handler, int timeoutMilliseconds) : IDisposable
+    private sealed class Registration(Uri endpoint, HttpMessageHandler? handler, int? timeoutMilliseconds) : IDisposable
     {
         internal Uri Endpoint { get; } = endpoint;
         internal HttpMessageHandler? Handler { get; } = handler;
-        internal int TimeoutMilliseconds { get; } = timeoutMilliseconds;
+        internal int? TimeoutMilliseconds { get; } = timeoutMilliseconds;
         internal bool Taken { get; set; }
 
         public void Dispose()

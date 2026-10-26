@@ -204,8 +204,9 @@ internal sealed class RuntimeCheckpointTrace(ICampaignCheckpointStore inner, boo
     public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha,
         CancellationToken token) => inner.CreateIfAbsentAsync(bytes, revision, sha, token);
     public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision, string expectedSha,
-        ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+        ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
     {
+        mutationCancellationToken.ThrowIfCancellationRequested();
         var next = CampaignStateJson.Parse(bytes).Artifact!;
         // Only admission to SemanticTool, not its completion, reconstructs
         // the removed caller-side full proof in the counterfactual row.
@@ -213,7 +214,7 @@ internal sealed class RuntimeCheckpointTrace(ICampaignCheckpointStore inner, boo
         var started = readStarted;
         try
         {
-            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
+            var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token, mutationCancellationToken);
             if (measuring && result.Kind == CampaignCheckpointWriteKind.Written)
             {
                 if (duplicate) result = CampaignCheckpointWriteResult.Written(await inner.ReadAsync(token));

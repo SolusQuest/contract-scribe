@@ -40,6 +40,9 @@ public sealed partial class DocumentationScribeCompositionTests
             foreach (var property in template["manifest"]![0]!["styleProfile"]!.AsObject())
                 if (style.AsObject().ContainsKey(property.Key)) style[property.Key] = property.Value!.DeepClone();
             configuration["scribeRequest"]!["toolPolicyId"] = template["toolPolicyId"]!.DeepClone();
+            // These original failure-source cases deliberately retain a 90s
+            // terminal ceiling independently of the unchanged provider limit.
+            configuration["timeouts"]!["terminalSubmissionMilliseconds"] = 90_000;
             var config = CampaignConfiguration.Parse(JsonSerializer.SerializeToUtf8Bytes(configuration));
             var bundle = new ProductionRepositorySessionBundle(new(fixture.Root, fixture.Root,
                 fixture.Session.InputIdentity, fixture.Session.InputIdentity, []), fixture.Policy, fixture.Session,
@@ -87,7 +90,8 @@ public sealed partial class DocumentationScribeCompositionTests
                     fixture.Policy, fixture.AuditInputs, fixture.AuditDocument, campaign.PlanningInput, campaign.Plan,
                     campaign.ExecutionCapability, "style.public-api.v1", campaign.StyleProjection, bytes, store,
                     RuntimeOptions(), exchange, null, execution.Token, owner.Token, clock,
-                    DispatchGuard: () => !owner.IsCancellationRequested, InvocationAllowance: allowance))
+                    DispatchGuard: () => !owner.IsCancellationRequested, InvocationAllowance: allowance,
+                    OperationalTimeouts: config.Timeouts))
                     .WaitAsync(TimeSpan.FromSeconds(10));
             }
             else
@@ -100,7 +104,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
                 var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!,
                     campaign.ExecutionCapability, "style.public-api.v1", campaign.StyleProjection, campaign.PlanningInput, campaign.Plan, request);
-                coordinator = new(authority, allowance, store, owner.Token, () => !owner.IsCancellationRequested, clock.GetTimestamp());
+                coordinator = new(authority, allowance, store, owner.Token, () => !owner.IsCancellationRequested, clock.GetTimestamp(), config.Timeouts.Host);
                 var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(built.Selection, bytes, authority, null,
                     RuntimeOptions(), exchange, clock, execution.Token, () => !owner.IsCancellationRequested, coordinator)
                     .WaitAsync(TimeSpan.FromSeconds(10));
@@ -223,8 +227,9 @@ public sealed partial class DocumentationScribeCompositionTests
             token.ThrowIfCancellationRequested();
         }
         public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long priorRevision, string priorSha,
-            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+            ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             token.ThrowIfCancellationRequested();
             var next = CampaignStateJson.Parse(bytes).Artifact!;
             var before = Current;
@@ -260,7 +265,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 }
             }
             var beforeRead = CampaignCheckpointReadResult.Found(before.ExactUtf8Json.AsSpan(), before.CheckpointRevision, before.Sha256);
-            var result = await inner.ReplaceIfCurrentAsync(priorRevision, priorSha, bytes, revision, sha, token);
+            var result = await inner.ReplaceIfCurrentAsync(priorRevision, priorSha, bytes, revision, sha, token, mutationCancellationToken);
             if (result.Kind == CampaignCheckpointWriteKind.Written)
             {
                 Current = next;
@@ -431,7 +436,8 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(14, persisted.CheckpointRevision);
         var claim = Assert.IsType<CampaignProviderReservation>(persisted.State.ActiveReservation);
         Assert.Equal(CampaignProviderHostPhase.TerminalSubmission, claim.HostPhase);
-        Assert.Equal(90_000, claim.Exposure.ElapsedMilliseconds);
+        Assert.Equal(300_000, claim.Exposure.ElapsedMilliseconds);
+        Assert.Equal(90_000, allowance.Limits.MaximumRequestElapsedMilliseconds);
         Assert.Equal(3, persisted.State.LineageCharges.ProviderRequests.Observed);
         Assert.Equal(300, persisted.State.LineageCharges.InputTokens.Observed);
         Assert.Equal(30, persisted.State.LineageCharges.OutputTokens.Observed);
@@ -479,14 +485,15 @@ internal sealed class CampaignAcknowledgementFaultStore(
     public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes,
         long revision, string hash, CancellationToken token) => inner.CreateIfAbsentAsync(bytes, revision, hash, token);
     public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long previousRevision, string previousHash,
-        ReadOnlyMemory<byte> bytes, long revision, string hash, CancellationToken token)
+        ReadOnlyMemory<byte> bytes, long revision, string hash, CancellationToken token, CancellationToken mutationCancellationToken = default)
     {
+        mutationCancellationToken.ThrowIfCancellationRequested();
         var before = await inner.ReadAsync(token);
         var predecessor = CampaignStateJson.Parse(before.ExactUtf8Json.AsMemory()).Artifact!;
         var successor = CampaignStateJson.Parse(bytes).Artifact!;
         if (successor.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.SemanticTool })
             beforeSemanticWrite?.Invoke();
-        var actual = await inner.ReplaceIfCurrentAsync(previousRevision, previousHash, bytes, revision, hash, token);
+        var actual = await inner.ReplaceIfCurrentAsync(previousRevision, previousHash, bytes, revision, hash, token, mutationCancellationToken);
         var selected = select?.Invoke(predecessor, successor) ?? successor.State.ActiveReservation is
             CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission };
         if (fault == "clean" || AfterFault is not null || !selected) return actual;

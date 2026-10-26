@@ -350,7 +350,7 @@ internal static class CampaignCommandRunner
 
         usage?.ObserveState(current.Artifact);
         using var settlementCancellation = new CancellationTokenSource(TimeSpan.FromMilliseconds(
-            checked(configuration.Budgets.Invocation.MaximumElapsedMilliseconds + 30_000)));
+            checked(configuration.Budgets.Invocation.MaximumElapsedMilliseconds + configuration.Timeouts.SettlementTailMilliseconds)));
         if (current.Artifact.State.ActiveReservation is CampaignProviderReservation)
         {
             var retirementAcceptance = await AcceptProviderRetirementAsync(current, store, settlementCancellation.Token).ConfigureAwait(false);
@@ -578,7 +578,8 @@ internal static class CampaignCommandRunner
                     configuration.Budgets.Invocation.MaximumConnectMilliseconds,
                     observation => usage?.ObserveProvider(invocationAllowance, observation)),
                 DispatchGuard: () => preflight.Configuration.Revalidate() && (continuation?.RevalidateInputs() ?? true),
-                TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance, Usage: usage)).ConfigureAwait(false);
+                TargetAllowance: targetAllowance, InvocationAllowance: invocationAllowance, Usage: usage,
+                OperationalTimeouts: configuration.Timeouts)).ConfigureAwait(false);
             usage?.ObserveState(proposal.Artifact);
             if (proposal.Kind == DocumentationCampaignProposalOutcomeKind.ProposalReady)
             {

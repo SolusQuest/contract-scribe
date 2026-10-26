@@ -1088,6 +1088,7 @@ case_real_stale_contract() {
     provider_before="$(wc -l < "$WORK/provider-requests.log")"
     env CS_WORK_DIR="$CS_WORK_DIR" GITHUB_OUTPUT="$w/invoke.txt" \
         DOTNET_STARTUP_HOOKS="$HOOK_DLL" \
+        CONTRACTSCRIBE_TEST_GITHUB_TIMEOUT=30000 \
         CONTRACTSCRIBE_TEST_GITHUB_ENDPOINT="$GITHUB_ENDPOINT" \
         CONTRACTSCRIBE_TEST_GITHUB_OBSERVATIONS="$w/observations.txt" \
         CONTRACTSCRIBE_GITHUB_TOKEN="$PRODUCT_TOKEN" \

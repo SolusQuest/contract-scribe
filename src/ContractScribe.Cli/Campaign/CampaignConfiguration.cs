@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using ContractScribe.Agent.Providers;
 using ContractScribe.Core;
+using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.Cli;
 
@@ -14,6 +15,7 @@ internal sealed class CampaignConfigurationException : FormatException
 internal sealed record CampaignConfigurationDocument(
     CampaignPlanningConfiguration Planning,
     CampaignBudgetConfiguration Budgets,
+    CampaignTimeoutConfiguration Timeouts,
     CampaignRetryConfiguration Retry,
     CampaignScribeRequestConfiguration ScribeRequest,
     CampaignProviderConfiguration Provider,
@@ -151,6 +153,13 @@ internal sealed record CampaignAggregateBudgetConfiguration(
 
 internal sealed record CampaignRetryConfiguration(string RetryPolicyId);
 
+internal sealed record CampaignTimeoutConfiguration(
+    DocumentationScribeHostTimeouts Host,
+    int CheckpointAcceptanceMilliseconds,
+    int SettlementTailMilliseconds,
+    GitHubTransportTimeouts GitHub,
+    int PublicationMilliseconds);
+
 internal sealed record CampaignScribeRequestConfiguration(
     string AgentProtocolId,
     string ToolPolicyAndRegistryId,
@@ -241,6 +250,7 @@ internal static class CampaignConfiguration
                 "campaignConfigurationVersion",
                 "planning",
                 "budgets",
+                "timeouts",
                 "retry",
                 "scribeRequest",
                 "provider",
@@ -257,6 +267,7 @@ internal static class CampaignConfiguration
             return new CampaignConfigurationDocument(
                 planning,
                 budgets,
+                ParseTimeouts(root.GetProperty("timeouts")),
                 ParseRetry(root.GetProperty("retry")),
                 ParseScribeRequest(root.GetProperty("scribeRequest")),
                 ParseProvider(root.GetProperty("provider")),
@@ -306,6 +317,26 @@ internal static class CampaignConfiguration
             Int(value, "maximumPatchElapsedMilliseconds", 1, int.MaxValue),
             Id(value, "productContractRevisionId", 512),
             Sha(value, "productContractRevisionSha256"));
+    }
+
+    private static CampaignTimeoutConfiguration ParseTimeouts(JsonElement value)
+    {
+        Expect(value, ["terminalSubmissionMilliseconds", "repositoryToolMilliseconds", "checkpointAcceptanceMilliseconds",
+            "gitHubRequestMilliseconds", "gitHubConnectMilliseconds", "publicationMilliseconds",
+            "semanticAuthorizationMilliseconds", "semanticQueryMilliseconds", "semanticClosureMilliseconds", "settlementTailMilliseconds"]);
+        var semantic = CampaignSemanticDurations.Create(
+            Int(value, "semanticAuthorizationMilliseconds", 1, 30_000),
+            Int(value, "semanticQueryMilliseconds", 1, 10_000),
+            Int(value, "semanticClosureMilliseconds", 1, 30_000));
+        return new(DocumentationScribeHostTimeouts.Create(
+                Int(value, "terminalSubmissionMilliseconds", 1, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds),
+                Int(value, "repositoryToolMilliseconds", 1, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds), semantic),
+            Int(value, "checkpointAcceptanceMilliseconds", 1, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds),
+            Int(value, "settlementTailMilliseconds", 1, 30_000),
+            GitHubTransportTimeouts.Create(
+                Int(value, "gitHubRequestMilliseconds", 1, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds),
+                Int(value, "gitHubConnectMilliseconds", 1, DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds)),
+            Int(value, "publicationMilliseconds", 1, 300_000));
     }
 
     private static CampaignBudgetConfiguration ParseBudgets(JsonElement value)

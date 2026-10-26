@@ -494,8 +494,9 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes,
             long revision, string sha, CancellationToken token) => throw new InvalidOperationException();
         public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision,
-            string expectedSha, ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token)
+            string expectedSha, ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             Writes++;
             if (expectedRevision != Artifact.CheckpointRevision || expectedSha != Artifact.Sha256)
                 return ValueTask.FromResult(new CampaignCheckpointWriteResult(CampaignCheckpointWriteKind.CurrentMismatch));

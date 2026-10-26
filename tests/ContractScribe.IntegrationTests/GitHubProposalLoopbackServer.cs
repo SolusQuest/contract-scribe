@@ -45,6 +45,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
     internal string? RejectPath { get; set; }
     internal int RejectionStatus = 403;
     internal bool DelayResponses { get; set; }
+    internal CancellationToken Stopping => stop.Token;
     internal bool IncompletePagination { get; set; }
     internal Action<Request, byte[]>? BeforeBody { get; set; }
     internal Action<Request>? Before { get; set; }

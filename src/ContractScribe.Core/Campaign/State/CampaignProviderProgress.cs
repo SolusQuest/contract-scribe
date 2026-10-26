@@ -41,6 +41,7 @@ public static partial class CampaignStateReducer
                 LastDispatchOrdinal = checked(claim.LastDispatchOrdinal + 1),
                 OperationKind = CampaignProviderOperationKind.Dispatch,
                 HostPhase = null,
+                SemanticDurations = null,
                 RequestCommitmentSha256 = descriptor.RequestCommitmentSha256,
                 Exposure = exposure,
             };
@@ -122,12 +123,17 @@ public static partial class CampaignStateReducer
     }
 
     internal static CampaignTransitionResult AdvanceHostOperation(CampaignProviderInvocationAuthority invocation,
-        DocumentationScribeHostOperation phase, int elapsed, int maximumMilliseconds, bool completing)
+        DocumentationScribeHostOperation phase, int elapsed, int maximumMilliseconds, bool completing,
+        CampaignSemanticDurations? semanticDurations = null)
     {
         var predecessor = invocation.AcceptedCheckpoint.Artifact;
         try
         {
             var claim = CurrentClaim(invocation);
+            if (semanticDurations is not null && (completing || phase != DocumentationScribeHostOperation.SemanticTool))
+                return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority);
+            var semantic = phase == DocumentationScribeHostOperation.SemanticTool
+                ? semanticDurations ?? CampaignSemanticDurations.Default : null;
             if (invocation.ProgressStopped || claim.OperationKind != CampaignProviderOperationKind.Host || !Enum.IsDefined(phase)
                 || elapsed < 0 || maximumMilliseconds < 0
                 || completing && claim.HostPhase != (CampaignProviderHostPhase)phase)
@@ -147,14 +153,15 @@ public static partial class CampaignStateReducer
                 if (exposure <= 0 || !HasProviderCompletionRevisionHeadroom(predecessor.State))
                     return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
                 if (phase == DocumentationScribeHostOperation.SemanticTool
-                    && (exposure <= CampaignSemanticCheckpointWindow.MaximumClosureMilliseconds
-                        || exposure > CampaignSemanticCheckpointWindow.MaximumEnvelopeMilliseconds
+                    && (exposure <= semantic!.ClosureMilliseconds
+                        || exposure > semantic.EnvelopeMilliseconds
                         || !CampaignBudgetAccounting.FitsProviderBudget(charges,
                             CampaignBudgetAccounting.HostExposure(exposure), predecessor.State.ConfiguredCeilings.CampaignBudget)))
                     return Reject(predecessor, CampaignTransitionFailure.BudgetExhausted);
                 next = next with
                 {
                     HostPhase = (CampaignProviderHostPhase)phase,
+                    SemanticDurations = semantic,
                     Exposure = CampaignBudgetAccounting.HostExposure(exposure)
                 };
             }
@@ -354,6 +361,7 @@ public static partial class CampaignStateReducer
             OperationKind = CampaignProviderOperationKind.Host,
             RequestCommitmentSha256 = null,
             HostPhase = duration > 0 ? CampaignProviderHostPhase.Continuation : CampaignProviderHostPhase.Retirement,
+            SemanticDurations = null,
             Exposure = CampaignBudgetAccounting.HostExposure(duration),
         };
     }

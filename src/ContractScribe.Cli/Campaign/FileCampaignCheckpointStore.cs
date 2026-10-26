@@ -170,14 +170,16 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
         ReadOnlyMemory<byte> exactUtf8Json,
         long checkpointRevision,
         string sha256,
-        CancellationToken cancellationToken) => ValueTask.FromResult(WriteCore(
+        CancellationToken cancellationToken,
+        CancellationToken mutationCancellationToken = default) => ValueTask.FromResult(WriteCore(
             OperationKind.Replace,
             expectedCheckpointRevision,
             expectedSha256,
             exactUtf8Json,
             checkpointRevision,
             sha256,
-            cancellationToken));
+            cancellationToken,
+            mutationCancellationToken));
 
     private CampaignCheckpointWriteResult WriteCore(
         OperationKind operation,
@@ -186,9 +188,13 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
         ReadOnlyMemory<byte> intendedBytes,
         long intendedRevision,
         string intendedSha256,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        CancellationToken mutationCancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
+        using var mutationScope = mutationCancellationToken.CanBeCanceled && mutationCancellationToken != cancellationToken
+            ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, mutationCancellationToken) : null;
+        var mutation = mutationScope?.Token ?? cancellationToken;
+        mutation.ThrowIfCancellationRequested();
         if (!IsSupportedPlatform()
             || !TryValidateIntended(intendedBytes, intendedRevision, intendedSha256)
             || operation == OperationKind.Replace
@@ -253,8 +259,8 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
                 return PublicationFailure();
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            var current = ReadEntry(context, checkpointName, cancellationToken);
+            mutation.ThrowIfCancellationRequested();
+            var current = ReadEntry(context, checkpointName, mutation);
             var conditional = ClassifyConditional(operation, current, expectedRevision, expectedSha256);
             if (conditional != CampaignCheckpointWriteKind.Written)
             {
@@ -264,7 +270,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
                 {
                     return PublicationFailure();
                 }
-                cancellationToken.ThrowIfCancellationRequested();
+                mutation.ThrowIfCancellationRequested();
                 return new CampaignCheckpointWriteResult(conditional);
             }
 
@@ -274,7 +280,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
             var staged = ReadEntry(
                 context,
                 active.Record.TempName,
-                cancellationToken,
+                mutation,
                 active.Record.TempMarkerBytes);
             if (!staged.IsExact(intendedBytes.Span, intendedRevision, intendedSha256)
                 || staged.Identity != active.Record.TempIdentity)
@@ -284,10 +290,11 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
                 return PublicationFailure();
             }
 
-            cancellationToken.ThrowIfCancellationRequested();
+            mutation.ThrowIfCancellationRequested();
             testHook?.Invoke("before-publish");
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.CheckpointBeforeReplacement);
             CampaignProcessBoundaryHooks.ReachReplacement(CampaignProcessBoundaryHooks.InReplacement);
+            mutation.ThrowIfCancellationRequested();
 
             // No callback, cancellation observation, or caller code is admitted from the
             // final identity/predecessor revalidation through the rename linearization point.
@@ -376,7 +383,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
             semanticWindow?.ObserveLocalReadback(this, observed);
             return CampaignCheckpointWriteResult.Written(observed);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (mutation.IsCancellationRequested)
         {
             if (!cleanupComplete && !cleanupAttempted)
             {

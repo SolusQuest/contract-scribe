@@ -58,8 +58,23 @@ public sealed partial class DocumentationScribeEndToEndIntegrationTests
         var sends = 0;
         var credentials = 0;
         var exchange = new StopCauseExchange(request.Request, () => sends++);
-        var result = await DocumentationCampaignProposalExecutor.ExecuteAsync(StopCauseInput(fixture, campaign, store,
-            request, allowance, clock, exchange: null, deferred: () => { credentials++; return exchange; }, cancellationToken: caller.Token));
+        var input = StopCauseInput(fixture, campaign, store,
+            request, allowance, clock, exchange: null, deferred: () => { credentials++; return exchange; }, cancellationToken: caller.Token);
+        if (completion == "timeout")
+        {
+            // This case requires an earlier terminal deadline to own the stop,
+            // independently of the unchanged 500ms provider-request deadline.
+            var timeouts = CampaignConfiguration.Parse(await File.ReadAllBytesAsync(Path.Join(
+                FindRepositoryRoot(), "tests", "fixtures", "campaign", "cli", "configuration-valid.json"))).Timeouts;
+            input = input with
+            {
+                OperationalTimeouts = timeouts with
+                {
+                    Host = DocumentationScribeHostTimeouts.Create(terminalSubmissionMilliseconds: 500)
+                }
+            };
+        }
+        var result = await DocumentationCampaignProposalExecutor.ExecuteAsync(input);
         Assert.True(clock.SawPostflight);
         Assert.Equal(1, sends);
         Assert.Equal(1, credentials);

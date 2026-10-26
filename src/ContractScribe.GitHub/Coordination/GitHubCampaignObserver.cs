@@ -25,8 +25,8 @@ internal sealed class GitHubCampaignObserver : IDisposable
             ? new GitHubCampaignObserver(client, coordination).ObserveAsync(token)
             : throw new ArgumentException("Invalid campaign observation binding.");
 
-    internal static GitHubCampaignObserver Create(ValidatedGitHubCampaignReadAuthority authority, string credential) =>
-        new(GitHubApiClient.CreateReadOnly(authority, credential));
+    internal static GitHubCampaignObserver Create(ValidatedGitHubCampaignReadAuthority authority, string credential,
+        GitHubTransportTimeouts? timeouts = null) => new(GitHubApiClient.CreateReadOnly(authority, credential, timeouts));
 
     internal async ValueTask<GitHubCampaignObservation> ObserveAsync(CancellationToken token = default)
     {

@@ -3,9 +3,10 @@ namespace ContractScribe.Cli;
 // One host window after model work. Its owner outlives checkpoint disposal so
 // independent mutation readback and claim cleanup share the same deadline.
 internal sealed class GitHubPublicationFinalization(
-    CancellationToken caller, TimeProvider? clock = null) : IDisposable
+    CancellationToken caller, TimeProvider? clock = null, int timeoutMilliseconds = 300_000) : IDisposable
 {
     internal static readonly TimeSpan DefaultTimeout = TimeSpan.FromMinutes(5);
+    private readonly TimeSpan timeout = ValidateTimeout(timeoutMilliseconds);
     private CancellationTokenSource? deadline;
     private CancellationTokenSource? execution;
     private CancellationTokenRegistration ownerStop, callerStop, deadlineStop;
@@ -16,7 +17,7 @@ internal sealed class GitHubPublicationFinalization(
         if (execution is not null) return execution.Token;
         if (caller.IsCancellationRequested) firstStop = 1;
         else if (ownedExecution.IsCancellationRequested) firstStop = 2;
-        deadline = new CancellationTokenSource(DefaultTimeout, clock ?? TimeProvider.System);
+        deadline = new CancellationTokenSource(timeout, clock ?? TimeProvider.System);
         execution = CancellationTokenSource.CreateLinkedTokenSource(caller, ownedExecution, deadline.Token);
         // Register after the execution link so the source is selected before
         // propagating cancellation to IO; later stop signals cannot replace it.
@@ -28,6 +29,9 @@ internal sealed class GitHubPublicationFinalization(
 
     internal CancellationToken DeadlineToken => deadline?.Token ?? default;
     internal bool TimedOut => Volatile.Read(ref firstStop) == 3;
+
+    private static TimeSpan ValidateTimeout(int milliseconds) => milliseconds is > 0 and <= 300_000
+        ? TimeSpan.FromMilliseconds(milliseconds) : throw new ArgumentOutOfRangeException(nameof(milliseconds));
 
     public void Dispose()
     {

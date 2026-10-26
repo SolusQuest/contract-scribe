@@ -391,6 +391,6 @@ public sealed partial class CampaignStateContractTests
         public IDisposable EnterSemanticCheckpointWindow(CampaignSemanticCheckpointWindow window) => throw new NotSupportedException();
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token) => throw new NotSupportedException();
         public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) => throw new NotSupportedException();
-        public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expected, string expectedSha, ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token) => throw new NotSupportedException();
+        public ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expected, string expectedSha, ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default) => throw new NotSupportedException();
     }
 }

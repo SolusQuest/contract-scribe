@@ -218,8 +218,9 @@ public sealed class DocumentationCampaignPatchExecutorTests
             ReadOnlyMemory<byte> exactUtf8Json,
             long checkpointRevision,
             string sha256,
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, CancellationToken mutationCancellationToken = default)
         {
+            mutationCancellationToken.ThrowIfCancellationRequested();
             CallCount++;
             throw new InvalidOperationException("Store must not be called.");
         }
