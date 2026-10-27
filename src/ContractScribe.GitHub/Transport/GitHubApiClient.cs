@@ -221,13 +221,13 @@ internal sealed class GitHubApiClient : IDisposable
             return actor;
         }), cancellationToken);
 
-    internal ValueTask<GitHubApiResult<GitHubRef>> GetRefAsync(string fullRef, CancellationToken cancellationToken = default) =>
+    internal ValueTask<GitHubApiResult<GitHubRef>> GetRefAsync(string fullRef, CancellationToken cancellationToken = default, bool singleAttempt = false) =>
         RunAsync<GitHubRef>(() =>
         {
             Input(RefName(fullRef));
             var relative = string.Join('/', fullRef[5..].Split('/').Select(Uri.EscapeDataString));
             return new(RepoPath() + "/git/ref/" + relative, element => Ref(element, fullRef));
-        }, cancellationToken);
+        }, cancellationToken, singleAttempt);
 
     internal ValueTask<GitHubApiResult<GitHubBlob>> GetBlobAsync(string oid, CancellationToken cancellationToken = default) =>
         RunAsync<GitHubBlob>(() =>
@@ -516,7 +516,7 @@ internal sealed class GitHubApiClient : IDisposable
         catch { return GitHubApiResult<GitHubPullRequestSet>.Failed(GitHubFailureCode.HostFailure, dispatched: dispatched); }
     }
 
-    private async ValueTask<GitHubApiResult<T>> RunAsync<T>(Func<Prepared<T>> prepare, CancellationToken cancellationToken) where T : class
+    private async ValueTask<GitHubApiResult<T>> RunAsync<T>(Func<Prepared<T>> prepare, CancellationToken cancellationToken, bool singleAttempt = false) where T : class
     {
         Prepared<T>? prepared = null;
         var dispatched = false;
@@ -531,7 +531,7 @@ internal sealed class GitHubApiClient : IDisposable
             var uri = new Uri(origin, prepared.Path);
             Input(uri.Scheme == origin.Scheme && uri.Host == origin.Host && uri.Port == origin.Port
                 && uri.UserInfo.Length == 0 && uri.Fragment.Length == 0);
-            for (var attempt = 0; attempt < (prepared.Context is null ? 2 : 1); attempt++)
+            for (var attempt = 0; attempt < (prepared.Context is null && !singleAttempt ? 2 : 1); attempt++)
             {
                 status = null;
                 retry = null;
@@ -579,7 +579,7 @@ internal sealed class GitHubApiClient : IDisposable
                     if (status != prepared.Status)
                     {
                         var code = StatusCode(status.Value, retry, bytes);
-                        if (prepared.Context is null && attempt == 0 && status is 502 or 503 or 504
+                        if (!singleAttempt && prepared.Context is null && attempt == 0 && status is 502 or 503 or 504
                             && retry.RetryAfterSeconds is null && retry.Remaining != 0)
                         {
                             await Task.Delay(250, timeout.Token).ConfigureAwait(false);
@@ -611,7 +611,7 @@ internal sealed class GitHubApiClient : IDisposable
                 }
                 catch (Exception exception) when (exception is HttpRequestException or IOException)
                 {
-                    if (prepared.Context is null && attempt == 0 && Transient(exception)
+                    if (!singleAttempt && prepared.Context is null && attempt == 0 && Transient(exception)
                         && (status is null or 502 or 503 or 504 || status == prepared.Status)
                         && retry?.RetryAfterSeconds is null && retry?.Remaining != 0)
                     {

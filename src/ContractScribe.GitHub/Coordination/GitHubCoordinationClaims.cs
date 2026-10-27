@@ -36,7 +36,8 @@ internal sealed partial class GitHubCoordinationStore
                 TargetCommitOid = authority.ExpectedBaseOid,
                 Claim = new(invocationOwner, invocationEpoch, now.AddSeconds(ClaimSeconds).ToUnixTimeSeconds()),
             };
-            if (await WriteDocumentAsync(document, [], token, attempt: attempt).ConfigureAwait(false) is not null)
+            if (await WriteDocumentAsync(document, [], token, attempt: attempt,
+                    takeoverPredecessor: remote?.Document.Claim is not null ? remote : null).ConfigureAwait(false) is not null)
             {
                 StopCheckpoint();
                 return CampaignCheckpointReadKind.LeaseUnverifiable;
@@ -181,7 +182,7 @@ internal sealed partial class GitHubCoordinationStore
     private async ValueTask<GitHubCoordinationResult?> WriteDocumentAsync(GitHubCoordinationDocument document, IEnumerable<GitHubBlob> blobs,
         CancellationToken token, bool requireLiveClaim = true, GitHubCoordinationDocument? livePredecessor = null,
         GitHubPublicationEvent? publication = null, ReadProof? proof = null, CheckpointAttempt? attempt = null,
-        CancellationToken? observationToken = null)
+        CancellationToken? observationToken = null, RemoteCheckpoint? takeoverPredecessor = null)
     {
         var prepared = GitHubCoordinationObjects.Prepare(document, publication);
         var payloads = blobs.Concat(publication is null ? [] : new[] { Blob(publication.Encode()) }).ToImmutableArray();
@@ -237,14 +238,33 @@ internal sealed partial class GitHubCoordinationStore
                 var observedAt = Stopwatch.GetTimestamp();
                 comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
                 var current = GitHubObservedProposalIntegrity.Read(finalRef);
+                // An expired foreign predecessor is evidence, never a live
+                // lease. Only Acquire can carry this exact ephemeral context.
+                var takeoverPending = attempt?.Operation == GitHubCheckpointOperation.Acquire
+                    && takeoverPredecessor is { Document.Claim: { } expired }
+                    && document.PredecessorOid == takeoverPredecessor.Head && document.PredecessorOid != ZeroOid
+                    && document.Claim is { } requested && requested.Owner != expired.Owner
+                    && requested.Epoch == expired.Epoch + 1
+                    && client.ServerTime is { } takeoverNow && takeoverNow.ToUnixTimeSeconds() >= expired.ExpiresUnixSeconds
+                    && document == takeoverPredecessor.Document.RetainAt(takeoverPredecessor.Head) with
+                    {
+                        PredecessorOid = takeoverPredecessor.Head,
+                        TargetCommitOid = client.CheckpointAuthority!.ExpectedBaseOid,
+                        Claim = requested,
+                    };
+                void RequirePendingAuthority(CancellationToken cancellation)
+                {
+                    if (takeoverPending) RequireUnconfirmedTakeover(document, cancellation, attempt);
+                    else RequirePendingCheckpointLease(livePredecessor!, cancellation, attempt);
+                }
                 if (current?.Oid == document.PredecessorOid && document.PredecessorOid != ZeroOid && requireLiveClaim
-                    && attempt?.Operation is GitHubCheckpointOperation.Write or GitHubCheckpointOperation.Renew
-                    && livePredecessor is not null && Owns(livePredecessor) && !checkpointExpiry.IsCancellationRequested
+                    && (takeoverPending || attempt?.Operation is GitHubCheckpointOperation.Write or GitHubCheckpointOperation.Renew
+                        && livePredecessor is not null && Owns(livePredecessor) && !checkpointExpiry.IsCancellationRequested)
                     && client.MatchesRefAcknowledgement(result, update))
                 {
                     delayed = true;
                     activeToken = confirmation.Token;
-                    RequirePendingCheckpointLease(livePredecessor, activeToken, attempt);
+                    RequirePendingAuthority(activeToken);
                     using var polling = CancellationTokenSource.CreateLinkedTokenSource(activeToken);
                     var window = TimeSpan.FromSeconds(3);
                     var residual = window - Stopwatch.GetElapsedTime(observedAt);
@@ -252,7 +272,7 @@ internal sealed partial class GitHubCoordinationStore
                     else polling.Cancel();
                     foreach (var delay in new[] { 250, 750 })
                     {
-                        RequirePendingCheckpointLease(livePredecessor, activeToken, attempt);
+                        RequirePendingAuthority(activeToken);
                         if (window - Stopwatch.GetElapsedTime(observedAt) <= TimeSpan.FromMilliseconds(delay)) break;
                         // No failed GET exists during backoff. Its cancellation
                         // cannot borrow the preceding provisional comparison.
@@ -266,7 +286,7 @@ internal sealed partial class GitHubCoordinationStore
                             activeToken = confirmation.Token;
                             break; // polling exhausted without a failed GET
                         }
-                        RequirePendingCheckpointLease(livePredecessor, confirmation.Token, attempt);
+                        RequirePendingAuthority(confirmation.Token);
                         if (Stopwatch.GetElapsedTime(observedAt) >= window)
                         {
                             comparison = predecessorComparison;
@@ -276,7 +296,7 @@ internal sealed partial class GitHubCoordinationStore
                         activeToken.ThrowIfCancellationRequested();
                         comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
                         failedFinalRead = true;
-                        finalRef = await client.GetRefAsync(coordinationRef, activeToken).ConfigureAwait(false);
+                        finalRef = await client.GetRefAsync(coordinationRef, activeToken, singleAttempt: takeoverPending).ConfigureAwait(false);
                         if (Stopwatch.GetElapsedTime(observedAt) >= window) polling.Cancel();
                         failedFinalRead = finalRef.Failure is not null;
                         comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
@@ -301,13 +321,22 @@ internal sealed partial class GitHubCoordinationStore
                         RecoveryFailure(finalRef.Failure, recovery)));
                 }
                 stage = GitHubCheckpointStage.CanonicalDocument;
-                if (delayed) RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
-                var read = await ReadDocumentAsync(prepared.CommitOid, activeToken, proof).ConfigureAwait(false);
+                if (delayed) RequirePendingAuthority(activeToken);
+                using var takeoverProof = delayed && takeoverPending ? new ReadProof() : null;
+                var read = takeoverProof is not null
+                    ? await ReadAcceptedDocumentAsync(prepared.CommitOid, activeToken, takeoverProof).ConfigureAwait(false)
+                    : await ReadDocumentAsync(prepared.CommitOid, activeToken, proof).ConfigureAwait(false);
                 if (read != document)
                 {
                     ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.DocumentMismatch);
                     return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch,
                         result.Failure, result.Delivery, result.Context, result.RequiredPermissions));
+                }
+                if (takeoverProof is not null)
+                {
+                    RequirePendingAuthority(activeToken);
+                    _ = await ReadCheckpointContentAsync(result.Context!.Repository, prepared.CommitOid,
+                        read, activeToken, takeoverProof).ConfigureAwait(false);
                 }
                 if (delayed)
                 {
@@ -315,17 +344,17 @@ internal sealed partial class GitHubCoordinationStore
                     // current authority. These three physical reads are never
                     // pooled or polled, and retain the ORIGINAL recovery scope.
                     stage = GitHubCheckpointStage.OwnerConfirmation;
-                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    RequirePendingAuthority(activeToken);
                     var repository = RequireRemote(await client.GetRepositoryAsync(activeToken).ConfigureAwait(false));
-                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    RequirePendingAuthority(activeToken);
                     if (repository.Identity != result.Context!.Repository) throw new GitHubCoordinationException();
                     var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, activeToken).ConfigureAwait(false));
-                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    RequirePendingAuthority(activeToken);
                     if (target.Oid != client.CheckpointAuthority!.ExpectedBaseOid) throw new GitHubCoordinationException();
                     stage = GitHubCheckpointStage.FinalRef;
                     comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, null, result);
                     failedFinalRead = true;
-                    finalRef = await client.GetRefAsync(coordinationRef, activeToken).ConfigureAwait(false);
+                    finalRef = await client.GetRefAsync(coordinationRef, activeToken, singleAttempt: takeoverPending).ConfigureAwait(false);
                     failedFinalRead = finalRef.Failure is not null;
                     comparison = GitHubCheckpointRefComparison.Create(prepared.CommitOid, document.PredecessorOid, finalRef.Value?.Oid, result);
                     if (activeToken.IsCancellationRequested && (finalRef.Failure?.Code is GitHubFailureCode.Cancelled or GitHubFailureCode.Timeout
@@ -340,7 +369,7 @@ internal sealed partial class GitHubCoordinationStore
                             result.Failure, result.Delivery, result.Context, result.RequiredPermissions,
                             RecoveryFailure(finalRef.Failure, recovery)));
                     }
-                    RequirePendingCheckpointLease(livePredecessor!, activeToken, attempt);
+                    RequirePendingAuthority(activeToken);
                 }
                 stage = GitHubCheckpointStage.LeaseConfirmation;
                 if (requireLiveClaim && !ConfirmCheckpointLease(read, attempt))
@@ -385,6 +414,16 @@ internal sealed partial class GitHubCoordinationStore
     {
         token.ThrowIfCancellationRequested();
         if (Owns(prior) && !checkpointExpiry.IsCancellationRequested) return;
+        ObserveCheckpointFailure(attempt, GitHubCheckpointStage.LeaseConfirmation, GitHubCheckpointReason.LeaseUnverifiable);
+        throw new GitHubCoordinationException();
+    }
+
+    private void RequireUnconfirmedTakeover(GitHubCoordinationDocument requested, CancellationToken token, CheckpointAttempt? attempt)
+    {
+        token.ThrowIfCancellationRequested();
+        // Owns checks the original requested owner/epoch and projected Date
+        // residual only. It does not confirm a lease or arm the expiry timer.
+        if (Owns(requested) && !checkpointExpiry.IsCancellationRequested) return;
         ObserveCheckpointFailure(attempt, GitHubCheckpointStage.LeaseConfirmation, GitHubCheckpointReason.LeaseUnverifiable);
         throw new GitHubCoordinationException();
     }

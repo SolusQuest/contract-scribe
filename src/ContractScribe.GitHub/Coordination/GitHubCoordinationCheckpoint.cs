@@ -216,27 +216,21 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         return artifact;
     }
 
-    private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token, ReadProof? transactionProof = null, bool verifyTarget = false, CheckpointAttempt? attempt = null)
+    // Authenticate immutable checkpoint/plan/archive/publication bindings at the
+    // already observed head. Mutable authority fences remain separate physical reads.
+    private async ValueTask<RemoteCheckpoint> ReadCheckpointContentAsync(GitHubRepositoryIdentity repository,
+        string head, GitHubCoordinationDocument document, CancellationToken token, ReadProof proof)
     {
-        var repository = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
-        var current = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
-        if (current.Value is null)
-        {
-            if (current.Failure?.Code == GitHubFailureCode.NotFound) return null;
-            throw new GitHubCoordinationException(transportFailure: current.Failure);
-        }
-        var proof = transactionProof ?? new ReadProof();
-        var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token, proof).ConfigureAwait(false);
         if (document.Publication is { } publication)
         {
             var retained = publication.Anchor == GitHubCoordinationDocument.CurrentCommit
-                ? publication with { Anchor = current.Value.Oid } : publication;
+                ? publication with { Anchor = head } : publication;
             // Immutable event provenance can be reused within this invocation;
             // every mutable head still passes the parent-retention check above.
             if (!verifiedCheckpointPublications.Contains(retained))
             {
                 var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
-                var result = await ReadStateAsync(repository.Identity, target, current.Value.Oid, token, matchAuthority: false, proof: proof)
+                var result = await ReadStateAsync(repository, target, head, token, matchAuthority: false, proof: proof)
                     .ConfigureAwait(false);
                 if (result.State is null) throw new GitHubCoordinationException(transportFailure: result.Failure?.TransportFailure);
                 verifiedCheckpointPublications.Add(retained);
@@ -256,8 +250,8 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
             if (artifact.State.ArchivedDispatchPrefix is { } prefix)
             {
                 var archive = document.Archive ?? throw new GitHubCoordinationException();
-                var anchor = archive.Anchor == GitHubCoordinationDocument.CurrentCommit ? current.Value.Oid : archive.Anchor;
-                var archiveDocument = anchor == current.Value.Oid ? document : await ReadDocumentAsync(anchor, token, proof).ConfigureAwait(false);
+                var anchor = archive.Anchor == GitHubCoordinationDocument.CurrentCommit ? head : archive.Anchor;
+                var archiveDocument = anchor == head ? document : await ReadDocumentAsync(anchor, token, proof).ConfigureAwait(false);
                 if (archiveDocument.Archive != archive with { Anchor = GitHubCoordinationDocument.CurrentCommit }
                     || archive.WitnessSha256 != prefix.WitnessSha256
                     || archiveDocument.PredecessorOid == ZeroOid) throw new GitHubCoordinationException();
@@ -268,13 +262,28 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
                 if ((predecessor.State.ArchivedDispatchPrefix?.WitnessSha256) != before.Archive?.WitnessSha256)
                     throw new GitHubCoordinationException();
                 if (archiveDocument.Checkpoint is not { } transitionPointer) throw new GitHubCoordinationException();
-                var transition = anchor == current.Value.Oid ? artifact
+                var transition = anchor == head ? artifact
                     : await ReadCheckpointBlobAsync(transitionPointer, token, proof).ConfigureAwait(false);
                 _ = CampaignDispatchArchive.VerifyTransition(predecessor, transition);
                 evidence = CampaignDispatchArchive.Verify(predecessor, artifact);
             }
             else if (document.Archive is not null) throw new GitHubCoordinationException();
         }
+        return new(head, document, artifact, evidence);
+    }
+
+    private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token, ReadProof? transactionProof = null, bool verifyTarget = false, CheckpointAttempt? attempt = null)
+    {
+        var repository = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
+        var current = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
+        if (current.Value is null)
+        {
+            if (current.Failure?.Code == GitHubFailureCode.NotFound) return null;
+            throw new GitHubCoordinationException(transportFailure: current.Failure);
+        }
+        var proof = transactionProof ?? new ReadProof();
+        var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token, proof).ConfigureAwait(false);
+        var observed = await ReadCheckpointContentAsync(repository.Identity, current.Value.Oid, document, token, proof).ConfigureAwait(false);
         if (verifyTarget)
         {
             var target = RequireRemote(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
@@ -285,7 +294,6 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
             throw new GitHubCoordinationException(transportFailure: reread.Failure ?? new(GitHubFailureCode.InvalidResponse));
         if (reread.Value?.Oid != current.Value.Oid)
             throw new GitHubCoordinationException(transportFailure: new(GitHubFailureCode.Conflict));
-        var observed = new RemoteCheckpoint(current.Value.Oid, document, artifact, evidence);
         lastObservedCheckpoint = observed;
         if (invocationOwner is not null && !Owns(document))
         {
