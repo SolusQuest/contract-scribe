@@ -153,7 +153,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
                     || pr.Open && target.Oid == generation.OriginalBaseOid && pr.BaseOid != generation.OriginalBaseOid
                     || pr.Title != generation.Metadata.Title || pr.Body != generation.Metadata.Body)
                     return Fail(new(GitHubCampaignFailureKind.Ownership, Ref: reference, PullRequestNumber: pr.Number));
-                if (authenticateContent && !await GitHubObservedProposalIntegrity.VerifyAsync(client, generation, cancellation).ConfigureAwait(false))
+                if (authenticateContent && !await coordination.VerifyObservedProposalIntegrityAsync(generation, cancellation).ConfigureAwait(false))
                     return Fail(new(GitHubCampaignFailureKind.Ownership, Ref: reference, PullRequestNumber: pr.Number));
                 facts[index] = Project(pr, true, generation);
                 if (!refs.TryGetValue(reference, out var head))

@@ -28,6 +28,30 @@ internal sealed partial class GitHubCoordinationStore
     private void StopPublicationPayloads() => Interlocked.Exchange(ref publicationPayloads, null)?.Dispose();
     private void StopCheckpointPayloads() => Interlocked.Exchange(ref checkpointPayloads, null)?.Dispose();
 
+    internal async ValueTask<bool> VerifyObservedProposalIntegrityAsync(GitHubCampaignGeneration generation, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        var verified = await GitHubObservedProposalIntegrity.VerifyAsync(generation, token,
+            (oid, cancellation) => Read(oid, cancellation, client.GetCommitAsync),
+            (oid, cancellation) => Read<GitHubTree>(oid, cancellation,
+                (tree, ct) => client.GetTreeAsync(tree, ct)),
+            (oid, cancellation) => Read(oid, cancellation, client.GetBlobAsync)).ConfigureAwait(false);
+        // This is only a complete immutable content proof. The observer still
+        // physically rechecks PR ownership/lifecycle, pagination and ref fences.
+        // No partial, failed or cancelled content proof warms a later gate.
+        if (verified) proof.Promote(token);
+        return verified;
+
+        async ValueTask<T?> Read<T>(string oid, CancellationToken cancellation,
+            Func<string, CancellationToken, ValueTask<GitHubApiResult<T>>> fetch) where T : GitHubValue
+        {
+            var value = proof.Pool?.Read<T>(oid, cancellation)
+                ?? GitHubObservedProposalIntegrity.Read(await fetch(oid, cancellation).ConfigureAwait(false));
+            if (value is not null) proof.Stage(value, cancellation);
+            return value;
+        }
+    }
+
     // Checkpoint acceptance repeatedly authenticates retained publication history.
     // Reuse its immutable payloads for one confirmed owner, never its mutable
     // claim/checkpoint bodies or any mutation/readback entitlement. Publication
@@ -146,8 +170,8 @@ internal sealed partial class GitHubCoordinationStore
         };
 
         // Encoded payload plus a conservative per-entry metadata allowance.
-        // Only canonical R3 documents/trees/actors pass admission, so strings,
-        // entry counts and actor projections retain their existing fixed bounds.
+        // R3 canonical documents and fully verified proposal-content objects
+        // retain their transport/tree/actor bounds before positive admission.
         private static long Size(GitHubValue value) => 1024 + (value switch
         {
             GitHubBlob blob => (long)blob.Bytes.Length,
