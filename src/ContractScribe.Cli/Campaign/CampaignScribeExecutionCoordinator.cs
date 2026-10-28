@@ -1,4 +1,5 @@
 using ContractScribe.Core;
+using ContractScribe.GitHub.Coordination;
 
 namespace ContractScribe.Cli;
 
@@ -10,6 +11,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     private readonly CancellationToken settlementToken;
     private readonly int checkpointAcceptanceMilliseconds;
     private readonly Func<bool>? guard;
+    private readonly InvocationUsage? usage;
     private long operationStartedAt;
     private CampaignSemanticCheckpointWindow? semanticWindow;
     private sealed record CheckpointRejection(CampaignCheckpointAcceptanceKind Kind, bool HostDeadline);
@@ -17,13 +19,15 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
     internal CampaignScribeExecutionCoordinator(CampaignProviderInvocationAuthority invocation,
         DocumentationScribeInvocationAllowance allowance, ICampaignCheckpointStore store,
         CancellationToken settlementToken, Func<bool>? guard, long operationStartedAt,
-        DocumentationScribeHostTimeouts? hostTimeouts = null, int checkpointAcceptanceMilliseconds = 30_000)
+        DocumentationScribeHostTimeouts? hostTimeouts = null, int checkpointAcceptanceMilliseconds = 30_000,
+        InvocationUsage? usage = null)
     {
         if (checkpointAcceptanceMilliseconds is < 1 or > DocumentationScribeContract.MaximumConfiguredElapsedMilliseconds)
             throw new ArgumentOutOfRangeException(nameof(checkpointAcceptanceMilliseconds));
         this.checkpointAcceptanceMilliseconds = checkpointAcceptanceMilliseconds;
         this.invocation = invocation; this.store = store; this.settlementToken = settlementToken;
         this.guard = guard; clock = allowance.Clock; this.operationStartedAt = operationStartedAt;
+        this.usage = usage;
         Scope = DocumentationScribeExecutionScope.ForCampaign(invocation, allowance, this, hostTimeouts);
     }
     internal DocumentationScribeExecutionScope Scope { get; }
@@ -66,7 +70,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         // This producer rejects BudgetExhausted only for lifetime exposure admission.
         if (transition.Failure == CampaignTransitionFailure.BudgetExhausted) Scope.ObserveLifetimeAdmissionDenial();
         using var boundaryScope = CampaignProcessBoundaryHooks.EnterReplacementScope(CampaignProcessBoundaryHooks.PhysicalReservationReplacementScope);
-        var accepted = await AcceptProgressAsync(transition, permit.StartedAt).ConfigureAwait(false);
+        var accepted = await AcceptProgressAsync(transition, permit.StartedAt, observeDispatchCancellation: true).ConfigureAwait(false);
         if (accepted) CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.PhysicalReservationAfterReadback);
         return accepted;
     }
@@ -301,7 +305,8 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
 
     private async ValueTask<bool> AcceptProgressAsync(CampaignTransitionResult transition, long boundary,
         CancellationToken cancellationToken = default, CampaignSemanticCheckpointWindow? semanticObservation = null,
-        CancellationToken mutationCancellationToken = default, Func<bool>? mutationHostDeadline = null)
+        CancellationToken mutationCancellationToken = default, Func<bool>? mutationHostDeadline = null,
+        bool observeDispatchCancellation = false)
     {
         if (transition.Kind != CampaignTransitionKind.Applied)
         {
@@ -325,8 +330,39 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         using var cancellation = stopped.Token.Register(() =>
             Interlocked.CompareExchange(ref cancelledByHost, !deadline.IsCancellationRequested && !settlementToken.IsCancellationRequested
                 && (mutationHostDeadline?.Invoke() == true || HostDeadlineCancellation(cancellationToken, deadline.Token)) ? 1 : 0, -1));
+        // Observe only this dispatch acceptance's two directly owned parents.
+        // This is a first local flag observation, not a global causal ordering.
+        var diagnosticStore = observeDispatchCancellation && usage is not null && !cancellationToken.CanBeCanceled
+            && !mutationCancellationToken.CanBeCanceled && semanticObservation is null ? store as GitHubCoordinationStore : null;
+        var before = diagnosticStore?.CheckpointDiagnostic;
+        var firstSource = -1;
+        var armed = 0;
+        var initiallyClear = !deadline.IsCancellationRequested && !settlementToken.IsCancellationRequested;
+        using var sourceObservation = diagnosticStore is not null ? boundedSettlement.Token.Register(() =>
+        {
+            var source = GitHubCheckpointCancellation.Unknown;
+            if (Volatile.Read(ref armed) == 1 && initiallyClear)
+            {
+                var deadlineFirst = deadline.IsCancellationRequested;
+                var settlementFirst = settlementToken.IsCancellationRequested;
+                var deadlineSecond = deadline.IsCancellationRequested;
+                var settlementSecond = settlementToken.IsCancellationRequested;
+                if (deadlineFirst == deadlineSecond && settlementFirst == settlementSecond && deadlineFirst != settlementFirst)
+                    source = deadlineFirst ? GitHubCheckpointCancellation.OperationCheckpointAcceptanceDeadline
+                        : GitHubCheckpointCancellation.OperationSettlementToken;
+            }
+            Interlocked.CompareExchange(ref firstSource, (int)source, -1);
+        }) : default;
+        Volatile.Write(ref armed, 1);
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token,
             mutationCancellationToken).ConfigureAwait(false);
+        if (before is null && accepted.Kind == CampaignCheckpointAcceptanceKind.Cancelled
+            && diagnosticStore?.CheckpointDiagnostic is { Operation: GitHubCheckpointOperation.Write,
+                Stage: GitHubCheckpointStage.CheckpointReadback, Reason: GitHubCheckpointReason.Cancelled,
+                Cancellation: GitHubCheckpointCancellation.OperationToken } failed
+            && failed.AttemptedRevision == transition.Artifact.CheckpointRevision
+            && failed.MatchesOperationCancellation(boundedSettlement.Token) && Volatile.Read(ref firstSource) >= 0)
+            usage?.ObserveCheckpoint(failed with { Cancellation = (GitHubCheckpointCancellation)Volatile.Read(ref firstSource) });
         // An admission already written before execution stopped may still be
         // acknowledged for mandatory settlement. Its original permit cannot
         // execute late; an expired acceptance itself must never advance Writer.

@@ -49,6 +49,25 @@ def encode(value):
 
 
 class InvocationUsageTests(unittest.TestCase):
+    def test_checkpoint_parent_observation_has_narrow_context_and_preserves_old_values(self):
+        for source in U.CHECKPOINT_CANCELLATIONS:
+            observation = dict(operationOrdinal=7, operation="Write", attemptedRevision=17,
+                               stage="CheckpointReadback", reason="Cancelled", transportCode="Cancelled",
+                               httpStatus=None, cancellation=source, refComparison=None)
+            value = fixture("partial")
+            value["checkpointFailure"] = observation
+            raw = encode(envelope(value))
+            parsed = invoke.parse_envelope(raw, b"", 6)
+            self.assertEqual(observation, parsed["invocationUsage"]["checkpointFailure"])
+            self.assertLess(len(raw), C.BOUND_ENVELOPE)
+            if source not in ("OperationCheckpointAcceptanceDeadline", "OperationSettlementToken"):
+                continue
+            for key, invalid in (("operation", "Read"), ("operation", "Renew"),
+                                 ("stage", "FinalRef"), ("attemptedRevision", None), ("reason", "Transport")):
+                self.assertFalse(U.checkpoint_failure(dict(observation, **{key: invalid})))
+            self.assertFalse(U.checkpoint_failure(dict(observation, token="private-marker")))
+            self.assertNotIn("private-marker", "\n".join(U.summary_rows(value)))
+
     def test_final_ref_comparison_is_operation_local_closed_and_bounded(self):
         comparison = dict(expectedCommit="a" * 64, predecessorCommit="b" * 64,
                           observedCommit="b" * 64, relation="Predecessor", delivery="NeedsReadback", acknowledged=True)

@@ -60,7 +60,8 @@ CHECKPOINT_REASONS = frozenset(("Transport", "InvalidData", "RefMismatch", "Docu
                                 "OwnerMismatch", "LeaseUnverifiable", "Cancelled", "Unknown"))
 CHECKPOINT_TRANSPORT = frozenset(("InvalidRequest", "Authentication", "Permission", "NotFound", "Conflict", "Validation",
                                   "RateLimit", "Cancelled", "Timeout", "ResponseLost", "InvalidResponse", "HostFailure"))
-CHECKPOINT_CANCELLATIONS = frozenset(("OperationToken", "RecoveryToken", "Unknown"))
+CHECKPOINT_CANCELLATIONS = frozenset(("OperationToken", "RecoveryToken", "Unknown",
+                                     "OperationCheckpointAcceptanceDeadline", "OperationSettlementToken"))
 
 
 def checkpoint_failure(value):
@@ -83,6 +84,10 @@ def checkpoint_failure(value):
             return False
     status = value["httpStatus"]
     if status is not None and (not integer(status) or not 100 <= status <= 599 or value["transportCode"] is None):
+        return False
+    if value["cancellation"] in ("OperationCheckpointAcceptanceDeadline", "OperationSettlementToken") \
+            and (value["operation"] != "Write" or value["stage"] != "CheckpointReadback" \
+                 or value["attemptedRevision"] is None):
         return False
     return (value["reason"] == "Cancelled") == (value["cancellation"] is not None) \
         and ref_comparison(value["refComparison"]) \

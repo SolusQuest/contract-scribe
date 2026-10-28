@@ -15,7 +15,11 @@ internal enum GitHubCheckpointReason
     Transport, InvalidData, RefMismatch, DocumentMismatch, CheckpointMismatch,
     OwnerMismatch, LeaseUnverifiable, Cancelled, Unknown,
 }
-internal enum GitHubCheckpointCancellation { OperationToken, RecoveryToken, Unknown }
+internal enum GitHubCheckpointCancellation
+{
+    OperationToken, RecoveryToken, Unknown,
+    OperationCheckpointAcceptanceDeadline, OperationSettlementToken,
+}
 internal enum GitHubCheckpointRefRelation { Expected, Predecessor, Other, Unavailable }
 
 // Only this transaction's strict decoded final GET and actual mutation result.
@@ -57,6 +61,13 @@ internal sealed record GitHubCheckpointDiagnostic(long OperationOrdinal, GitHubC
     GitHubFailureCode? TransportCode = null, int? HttpStatus = null,
     GitHubCheckpointCancellation? Cancellation = null, GitHubCheckpointRefComparison? RefComparison = null) : GitHubValue
 {
+    // Command-local equality only. Never a wire member or a printable token.
+    private CancellationToken observedOperationCancellation;
+    internal GitHubCheckpointDiagnostic WithOperationCancellation(CancellationToken token) =>
+        this with { observedOperationCancellation = token };
+    internal bool MatchesOperationCancellation(CancellationToken token) =>
+        token.CanBeCanceled && observedOperationCancellation == token;
+
     internal bool IsValid => OperationOrdinal > 0 && AttemptedRevision is null or >= 0
         && Enum.IsDefined(Operation) && Enum.IsDefined(Stage) && Enum.IsDefined(Reason)
         && (TransportCode is null || Enum.IsDefined(TransportCode.Value))
@@ -64,6 +75,8 @@ internal sealed record GitHubCheckpointDiagnostic(long OperationOrdinal, GitHubC
         && (HttpStatus is null || TransportCode is not null)
         && (Cancellation is null || Enum.IsDefined(Cancellation.Value))
         && (Reason == GitHubCheckpointReason.Cancelled) == (Cancellation is not null)
+        && (Cancellation is not (GitHubCheckpointCancellation.OperationCheckpointAcceptanceDeadline or GitHubCheckpointCancellation.OperationSettlementToken)
+            || Operation == GitHubCheckpointOperation.Write && Stage == GitHubCheckpointStage.CheckpointReadback && AttemptedRevision is not null)
         && (RefComparison is null || Stage == GitHubCheckpointStage.FinalRef && RefComparison.IsValid);
 }
 
@@ -78,11 +91,13 @@ internal sealed partial class GitHubCoordinationStore
 
     private void ObserveCheckpointFailure(CheckpointAttempt? attempt, GitHubCheckpointStage stage,
         GitHubCheckpointReason reason, GitHubFailure? failure = null, GitHubCheckpointCancellation? cancellation = null,
-        GitHubCheckpointRefComparison? refComparison = null)
+        GitHubCheckpointRefComparison? refComparison = null, CancellationToken operationCancellation = default)
     {
         if (attempt is null) return; // Cleanup never creates a command failure observation.
         var observation = new GitHubCheckpointDiagnostic(attempt.Ordinal, attempt.Operation, attempt.Revision,
             stage, reason, failure?.Code, failure?.HttpStatus, cancellation, refComparison);
+        if (cancellation == GitHubCheckpointCancellation.OperationToken && operationCancellation.IsCancellationRequested)
+            observation = observation.WithOperationCancellation(operationCancellation);
         if (observation.IsValid) Interlocked.CompareExchange(ref checkpointDiagnostic, observation, null);
     }
 
@@ -99,6 +114,7 @@ internal sealed partial class GitHubCoordinationStore
                 ? GitHubCheckpointReason.InvalidData : GitHubCheckpointReason.Unknown,
             failure, cancelled ? token.IsCancellationRequested
                 ? recovery ? GitHubCheckpointCancellation.RecoveryToken : GitHubCheckpointCancellation.OperationToken
-                : GitHubCheckpointCancellation.Unknown : null, refComparison);
+                : GitHubCheckpointCancellation.Unknown : null, refComparison,
+            operationCancellation: !recovery ? token : default);
     }
 }
