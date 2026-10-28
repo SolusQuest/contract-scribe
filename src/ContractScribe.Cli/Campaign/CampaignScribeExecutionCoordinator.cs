@@ -357,9 +357,12 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
         var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, boundedSettlement.Token,
             mutationCancellationToken).ConfigureAwait(false);
         if (before is null && accepted.Kind == CampaignCheckpointAcceptanceKind.Cancelled
-            && diagnosticStore?.CheckpointDiagnostic is { Operation: GitHubCheckpointOperation.Write,
+            && diagnosticStore?.CheckpointDiagnostic is
+            {
+                Operation: GitHubCheckpointOperation.Write,
                 Stage: GitHubCheckpointStage.CheckpointReadback, Reason: GitHubCheckpointReason.Cancelled,
-                Cancellation: GitHubCheckpointCancellation.OperationToken } failed
+                Cancellation: GitHubCheckpointCancellation.OperationToken
+            } failed
             && failed.AttemptedRevision == transition.Artifact.CheckpointRevision
             && failed.MatchesOperationCancellation(boundedSettlement.Token) && Volatile.Read(ref firstSource) >= 0)
             usage?.ObserveCheckpoint(failed with { Cancellation = (GitHubCheckpointCancellation)Volatile.Read(ref firstSource) });

@@ -30,112 +30,112 @@ public sealed partial class CampaignStateContractTests
         GitHubCheckpointDiagnostic? originalFailure = null;
         await using (store)
         {
-        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
-        Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(trial.Scenario.Plan), default));
-        var initial = CampaignStateJson.CreateArtifact(trial.Scenario.InitialState);
-        Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(initial.ExactUtf8Json.AsMemory(),
-            initial.CheckpointRevision, initial.Sha256, default)).Kind);
-        var allowance = new DocumentationScribeInvocationAllowance(trial.Coordinator.Scope.Allowance.Limits, clock);
-        var admission = CampaignStateReducer.AdmitProviderInvocation(initial, trial.Scenario.ExecutionAuthority, "style.synthetic",
-            trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Scenario.Plan.WorkItems[0].WorkItemKey,
-            trial.Request, CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
-        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
-        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
-        var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, trial.Scenario.ExecutionAuthority,
-            "style.synthetic", trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Request);
-        using var settlement = new CancellationTokenSource();
-        usage.Bind(allowance);
-        var terminal = GitHubProposalPresentation.Campaign(CliBuildIdentity.Current,
-            new("execution", CampaignOperation.Resume, "campaign.cancelled", accepted.Artifact!.CheckpointRevision));
-        if (source == "frozen") _ = GitHubProposalPresentation.WithUsage(terminal, usage);
-        if (source == "earlier") usage.ObserveCheckpoint(new(1, GitHubCheckpointOperation.Read, null,
-            GitHubCheckpointStage.Gate, GitHubCheckpointReason.Cancelled, Cancellation: GitHubCheckpointCancellation.RecoveryToken));
-        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, settlement.Token, null,
-            clock.GetTimestamp(), checkpointAcceptanceMilliseconds: 1000, usage: usage);
-        Assert.True(authority.TryBeginDispatch(out _));
-        var predecessor = authority.AcceptedCheckpoint.Artifact;
-        var writes = remote.RefMutationAttempts;
-        string? dispatchBlob = null;
-        var hits = 0;
-        handler.BeforeRequestWithCancellation = async (message, token) =>
-        {
-            if (message.Method == HttpMethod.Post && message.RequestUri!.AbsolutePath.EndsWith("/git/blobs", StringComparison.Ordinal))
+            Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+            Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(trial.Scenario.Plan), default));
+            var initial = CampaignStateJson.CreateArtifact(trial.Scenario.InitialState);
+            Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(initial.ExactUtf8Json.AsMemory(),
+                initial.CheckpointRevision, initial.Sha256, default)).Kind);
+            var allowance = new DocumentationScribeInvocationAllowance(trial.Coordinator.Scope.Allowance.Limits, clock);
+            var admission = CampaignStateReducer.AdmitProviderInvocation(initial, trial.Scenario.ExecutionAuthority, "style.synthetic",
+                trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Scenario.Plan.WorkItems[0].WorkItemKey,
+                trial.Request, CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
+            var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
+            Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
+            var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, trial.Scenario.ExecutionAuthority,
+                "style.synthetic", trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Request);
+            using var settlement = new CancellationTokenSource();
+            usage.Bind(allowance);
+            var terminal = GitHubProposalPresentation.Campaign(CliBuildIdentity.Current,
+                new("execution", CampaignOperation.Resume, "campaign.cancelled", accepted.Artifact!.CheckpointRevision));
+            if (source == "frozen") _ = GitHubProposalPresentation.WithUsage(terminal, usage);
+            if (source == "earlier") usage.ObserveCheckpoint(new(1, GitHubCheckpointOperation.Read, null,
+                GitHubCheckpointStage.Gate, GitHubCheckpointReason.Cancelled, Cancellation: GitHubCheckpointCancellation.RecoveryToken));
+            var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, settlement.Token, null,
+                clock.GetTimestamp(), checkpointAcceptanceMilliseconds: 1000, usage: usage);
+            Assert.True(authority.TryBeginDispatch(out _));
+            var predecessor = authority.AcceptedCheckpoint.Artifact;
+            var writes = remote.RefMutationAttempts;
+            string? dispatchBlob = null;
+            var hits = 0;
+            handler.BeforeRequestWithCancellation = async (message, token) =>
             {
-                using var body = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
-                var bytes = Convert.FromBase64String(body.RootElement.GetProperty("content").GetString()!);
-                var parsed = CampaignStateJson.Parse(bytes);
-                if (parsed.Artifact is { } artifact && artifact.CheckpointRevision == predecessor.CheckpointRevision + 1)
-                    dispatchBlob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
-            }
+                if (message.Method == HttpMethod.Post && message.RequestUri!.AbsolutePath.EndsWith("/git/blobs", StringComparison.Ordinal))
+                {
+                    using var body = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
+                    var bytes = Convert.FromBase64String(body.RootElement.GetProperty("content").GetString()!);
+                    var parsed = CampaignStateJson.Parse(bytes);
+                    if (parsed.Artifact is { } artifact && artifact.CheckpointRevision == predecessor.CheckpointRevision + 1)
+                        dispatchBlob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+                }
                 if (hits != 0 || dispatchBlob is null || message.Method != HttpMethod.Get || remote.RefMutationAttempts != writes + 1
-                || !message.RequestUri!.AbsolutePath.EndsWith("/git/blobs/" + dispatchBlob, StringComparison.Ordinal)) return;
-            Assert.Equal(1, ++hits);
-            if (source == "clean") { clock.Advance(10); return; }
-            if (source == "both")
-            {
-                // Both flags are requested before the linked notification;
-                // there is no registration-order winner to report.
-                using var alsoDeadline = settlement.Token.Register(() => clock.Advance(1001));
-                settlement.Cancel();
-            }
-            else if (source == "settlement") settlement.Cancel();
-            else clock.Advance(1001);
-            await Task.Delay(Timeout.Infinite, token);
-        };
-        var exchange = new ScriptedDocumentationScribeModelExchange([
-            ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(trial.Scenario, trial.Request))], usage: new(0, 0, 0, 0))),
+            || !message.RequestUri!.AbsolutePath.EndsWith("/git/blobs/" + dispatchBlob, StringComparison.Ordinal)) return;
+                Assert.Equal(1, ++hits);
+                if (source == "clean") { clock.Advance(10); return; }
+                if (source == "both")
+                {
+                    // Both flags are requested before the linked notification;
+                    // there is no registration-order winner to report.
+                    using var alsoDeadline = settlement.Token.Register(() => clock.Advance(1001));
+                    settlement.Cancel();
+                }
+                else if (source == "settlement") settlement.Cancel();
+                else clock.Advance(1001);
+                await Task.Delay(Timeout.Infinite, token);
+            };
+            var exchange = new ScriptedDocumentationScribeModelExchange([
+                ScriptedDocumentationScribeStep.Return(new([], [new(C3Submission(trial.Scenario, trial.Request))], usage: new(0, 0, 0, 0))),
             C3FinishStep(trial.Request)]);
-        var session = new ScribeSessionTestDriver(trial.Request, trial.Attempt, trial.Prompt,
-            new DocumentationScribeToolRegistryBuilder(trial.Request.ToolPolicyId).Build(), exchange, coordinator.Scope);
-        if (source == "setup") settlement.Cancel();
-        await session.RunAsync();
-        Assert.Equal(source == "setup" ? 0 : 1, hits);
-        handler.BeforeRequestWithCancellation = null;
-        if (source == "clean")
-        {
-            Assert.Equal(2, exchange.Requests.Length);
-            Assert.Equal(2, coordinator.Scope.PhysicalProviderRequestCount);
-            Assert.Null(store.CheckpointDiagnostic);
-            Assert.Null(coordinator.CheckpointFailure);
-            Assert.All(authority.AcceptedCheckpoint.Artifact.State.DispatchObservations,
-                row => Assert.Equal(CampaignDispatchObservationState.Settled, row.State));
-            return;
-        }
-        Assert.Empty(exchange.Requests);
-        Assert.Equal(0, coordinator.Scope.PhysicalProviderRequestCount);
-        Assert.Equal(predecessor.Sha256, authority.AcceptedCheckpoint.Artifact.Sha256);
-        Assert.Equal(CampaignCheckpointAcceptanceKind.Cancelled, coordinator.CheckpointFailure);
-        Assert.False(coordinator.CheckpointCancelledByHostDeadline);
-        var failure = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
-        Assert.Equal(source == "setup" ? GitHubCheckpointStage.Gate : GitHubCheckpointStage.CheckpointReadback, failure.Stage);
-        Assert.Equal(GitHubCheckpointReason.Cancelled, failure.Reason);
-        Assert.Equal(source == "setup" ? null : predecessor.CheckpointRevision + 1, failure.AttemptedRevision);
-        var durable = CampaignStateJson.Parse((await store.ReadAsync(default)).ExactUtf8Json.AsMemory()).Artifact!;
-        Assert.Equal(predecessor.CheckpointRevision + (source == "setup" ? 0 : 1), durable.CheckpointRevision);
-        if (source == "setup") Assert.Empty(durable.State.DispatchObservations);
-        else Assert.Equal(CampaignDispatchObservationState.Reserved, Assert.Single(durable.State.DispatchObservations).State);
-        Assert.NotNull(durable.State.ActiveReservation);
-        Assert.Null(durable.State.TerminalOutcome);
-        Assert.Equal(predecessor.State.LineageCharges.PatchValidationInvocations, durable.State.LineageCharges.PatchValidationInvocations);
-        usage.ObserveCheckpoint(failure);
-        // A later parent cannot revise the local first notification, even
-        // before the first serialized Usage freeze.
-        settlement.Cancel();
-        clock.Advance(300001);
-        Assert.Same(failure, store.CheckpointDiagnostic);
-        using var json = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
-        var reported = json.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
-        if (source == "frozen") Assert.Equal(JsonValueKind.Null, reported.ValueKind);
-        else
-        {
-            Assert.Equal(expected, reported.GetProperty("cancellation").GetString());
-            Assert.Equal(9, reported.EnumerateObject().Count());
-        }
-        usage.ObserveCheckpoint(failure with { Cancellation = GitHubCheckpointCancellation.RecoveryToken });
-        using var later = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
-        Assert.Equal(reported.GetRawText(), later.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure").GetRawText());
-        frozenDiagnostic = reported.GetRawText();
-        originalFailure = failure;
+            var session = new ScribeSessionTestDriver(trial.Request, trial.Attempt, trial.Prompt,
+                new DocumentationScribeToolRegistryBuilder(trial.Request.ToolPolicyId).Build(), exchange, coordinator.Scope);
+            if (source == "setup") settlement.Cancel();
+            await session.RunAsync();
+            Assert.Equal(source == "setup" ? 0 : 1, hits);
+            handler.BeforeRequestWithCancellation = null;
+            if (source == "clean")
+            {
+                Assert.Equal(2, exchange.Requests.Length);
+                Assert.Equal(2, coordinator.Scope.PhysicalProviderRequestCount);
+                Assert.Null(store.CheckpointDiagnostic);
+                Assert.Null(coordinator.CheckpointFailure);
+                Assert.All(authority.AcceptedCheckpoint.Artifact.State.DispatchObservations,
+                    row => Assert.Equal(CampaignDispatchObservationState.Settled, row.State));
+                return;
+            }
+            Assert.Empty(exchange.Requests);
+            Assert.Equal(0, coordinator.Scope.PhysicalProviderRequestCount);
+            Assert.Equal(predecessor.Sha256, authority.AcceptedCheckpoint.Artifact.Sha256);
+            Assert.Equal(CampaignCheckpointAcceptanceKind.Cancelled, coordinator.CheckpointFailure);
+            Assert.False(coordinator.CheckpointCancelledByHostDeadline);
+            var failure = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
+            Assert.Equal(source == "setup" ? GitHubCheckpointStage.Gate : GitHubCheckpointStage.CheckpointReadback, failure.Stage);
+            Assert.Equal(GitHubCheckpointReason.Cancelled, failure.Reason);
+            Assert.Equal(source == "setup" ? null : predecessor.CheckpointRevision + 1, failure.AttemptedRevision);
+            var durable = CampaignStateJson.Parse((await store.ReadAsync(default)).ExactUtf8Json.AsMemory()).Artifact!;
+            Assert.Equal(predecessor.CheckpointRevision + (source == "setup" ? 0 : 1), durable.CheckpointRevision);
+            if (source == "setup") Assert.Empty(durable.State.DispatchObservations);
+            else Assert.Equal(CampaignDispatchObservationState.Reserved, Assert.Single(durable.State.DispatchObservations).State);
+            Assert.NotNull(durable.State.ActiveReservation);
+            Assert.Null(durable.State.TerminalOutcome);
+            Assert.Equal(predecessor.State.LineageCharges.PatchValidationInvocations, durable.State.LineageCharges.PatchValidationInvocations);
+            usage.ObserveCheckpoint(failure);
+            // A later parent cannot revise the local first notification, even
+            // before the first serialized Usage freeze.
+            settlement.Cancel();
+            clock.Advance(300001);
+            Assert.Same(failure, store.CheckpointDiagnostic);
+            using var json = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
+            var reported = json.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
+            if (source == "frozen") Assert.Equal(JsonValueKind.Null, reported.ValueKind);
+            else
+            {
+                Assert.Equal(expected, reported.GetProperty("cancellation").GetString());
+                Assert.Equal(9, reported.EnumerateObject().Count());
+            }
+            usage.ObserveCheckpoint(failure with { Cancellation = GitHubCheckpointCancellation.RecoveryToken });
+            using var later = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
+            Assert.Equal(reported.GetRawText(), later.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure").GetRawText());
+            frozenDiagnostic = reported.GetRawText();
+            originalFailure = failure;
         }
         // Actual store disposal/owner cleanup occurs after the frozen report.
         // Neither that cleanup nor another reporting callback can replace it.
