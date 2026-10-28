@@ -318,6 +318,12 @@ public sealed partial class GitHubProposalCliProcessTests
             AssertResult(await fixture.Run(), 0, "published");
             fixture.GitHub.Lifecycle("closed");
             AdvanceReadme(fixture);
+            var readmePath = Path.Join(fixture.Repository.Root, "README.md");
+            var readme = "A new documentation-only base.\n"u8.ToArray();
+            await File.WriteAllBytesAsync(readmePath, readme);
+            fixture.GovernedFiles["README.md"] = (readme,
+                (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
+                    ? File.GetUnixFileMode(readmePath) : null);
         }
         var bases = new HashSet<string>(StringComparer.Ordinal);
         var batches = new HashSet<string>(StringComparer.Ordinal);
