@@ -199,17 +199,15 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.Input(fixture, trace, exchange, RuntimeOptions(), executionToken: actual.CheckpointToken, timeProvider: clock));
         Assert.Equal(reachesSemantic, exchange.SawSemanticEvidence);
         Assert.Equal(expectedRequests, exchange.RequestCount);
-        // Four fewer GETs per conditional transaction now allow the finish send
-        // even with13s extra authorization delay. No request or time cap changed.
-        // Every HTTP exchange keeps consuming the existing invocation clock.
-        // The real semantic query progresses; later terminal persistence reaches
-        // this fixture's original 120s invocation cap rather than gaining time.
+        // Reusing authenticated immutable predecessors also leaves enough of the
+        // original 120s invocation for terminal persistence. All real exchanges
+        // still consume that clock, including the extra authorization delay.
         Assert.Equal(reachesSemantic, outcome.TrustedProposal is not null);
         if (reachesSemantic)
-            Assert.Equal(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted, outcome.Kind);
+            Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Single(trace.SemanticWrites);
         var observed = trace.SemanticWrites[0];
-        Assert.Equal(duplicateReadback ? 3 : 2, observed.PredecessorCommitReads);
+        Assert.Equal(1, observed.PredecessorCommitReads);
         Assert.True(reachesSemantic ? observed.ElapsedMilliseconds < 30000 : observed.ElapsedMilliseconds >= 30000,
             $"duplicate={duplicateReadback}; requests={observed.Requests}; elapsed={observed.ElapsedMilliseconds}");
         if (!reachesSemantic) Assert.Equal("campaign.timed-out", outcome.Code);

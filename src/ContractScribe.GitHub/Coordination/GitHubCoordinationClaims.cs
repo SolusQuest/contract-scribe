@@ -77,7 +77,7 @@ internal sealed partial class GitHubCoordinationStore
             if (!parsed.IsValid || parsed.Artifact is not { } artifact || artifact.Sha256 != sha
                 || artifact.CheckpointRevision != revision || !bytes.Span.SequenceEqual(artifact.ExactUtf8Json.AsSpan()))
                 return new(CampaignCheckpointWriteKind.Unsafe);
-            var proof = new ReadProof();
+            using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
             stage = GitHubCheckpointStage.PredecessorRead;
             var remote = await ReadCallerCheckpointAsync(mutation, proof, attempt: attempt).ConfigureAwait(false);
             if (remote is null || !Owns(remote.Document))
@@ -494,6 +494,7 @@ internal sealed partial class GitHubCoordinationStore
     {
         checkpointStopped = true;
         StopPublicationPayloads();
+        StopCheckpointPayloads();
         checkpointLifetime.Cancel();
     }
 
@@ -522,6 +523,7 @@ internal sealed partial class GitHubCoordinationStore
             publicationClaimExpires = renewed.Claim!.ExpiresUnixSeconds;
             publicationHead = GitHubCoordinationObjects.Prepare(renewed).CommitOid;
             publicationRenewalFailure = null;
+            StopCheckpointPayloads();
             publicationActive = true;
             renewalComplete = true;
             publicationPayloads = new(this, client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), token);
@@ -618,6 +620,7 @@ internal sealed partial class GitHubCoordinationStore
         await checkpointGate.WaitAsync().ConfigureAwait(false);
         try
         {
+            StopCheckpointPayloads();
             checkpointLifetime.Cancel();
             if (renewal is not null) await renewal.ConfigureAwait(false);
             if (!checkpointStopped && invocationOwner is not null)

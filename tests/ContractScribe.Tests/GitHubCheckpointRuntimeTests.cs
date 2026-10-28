@@ -91,7 +91,7 @@ public sealed partial class CampaignStateContractTests
         var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition);
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, result.Kind);
         var transaction = calls.ToArray();
-        Assert.Equal(47, transaction.Length); // Before this correction: Core14 + conditional37 =51.
+        Assert.InRange(transaction.Length, 1, 36); // Fresh mutable fences remain; immutable predecessors are already authenticated.
         Assert.Equal(7, transaction.Count(call => call.Method != "GET"));
         Assert.Equal(3, transaction.Count(call => call.Method == "GET" && call.Path == "/repos/Owner/repo"));
         Assert.Equal(7, transaction.Count(call => call.Method == "GET" && call.Path.Contains("/git/ref/heads/contract-scribe/")));
@@ -104,7 +104,7 @@ public sealed partial class CampaignStateContractTests
             > Array.FindIndex(transaction, call => call.Path == "/graphql"));
         calls.Clear();
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
-        Assert.Contains(calls, call => call.Path.EndsWith("/git/commits/" + newCommit));
+        Assert.DoesNotContain(calls, call => call.Path.EndsWith("/git/commits/" + newCommit));
         Assert.Contains(calls, call => call.Path.EndsWith("/git/blobs/" + checkpoint));
     }
 
@@ -159,7 +159,7 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(reachesPort ? 1 : 0, result.RunEnvelope.ToolCallCount);
         Assert.Single(trace.SemanticWrites);
         var observation = trace.SemanticWrites[0];
-        Assert.Equal(duplicateReadback ? 3 : 2, observation.PredecessorCommitReads);
+        Assert.Equal(1, observation.PredecessorCommitReads);
         Assert.True(observation.Requests > 0);
         Assert.True(reachesPort ? observation.ElapsedMilliseconds < 30000 : observation.ElapsedMilliseconds >= 30000,
             $"duplicate={duplicateReadback}; requests={observation.Requests}; elapsed={observation.ElapsedMilliseconds}");

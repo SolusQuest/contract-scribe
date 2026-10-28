@@ -887,6 +887,10 @@ internal sealed partial class GitHubCoordinationStore
             var authenticated = AuthenticateDocument(observedCommit!, observedRoot!, observedLeaf!, observedBlob!);
             if (authenticated != prepared.Document) throw new GitHubCoordinationException();
             proof.Documents[observedCommit!.Oid] = authenticated;
+            proof.Stage(observedCommit, cancellationToken);
+            proof.Stage(observedRoot!, cancellationToken);
+            proof.Stage(observedLeaf!, cancellationToken);
+            proof.Stage(observedBlob!, cancellationToken);
         }
         return failure;
     }

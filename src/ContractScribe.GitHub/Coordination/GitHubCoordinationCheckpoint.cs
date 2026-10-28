@@ -56,7 +56,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         internal Dictionary<string, GitHubBlob> Blobs { get; } = new(StringComparer.Ordinal);
         internal HashSet<string> PooledBlobs { get; } = new(StringComparer.Ordinal);
         internal PublicationPayloadPool? Pool { get; } = pool;
-        internal string? CurrentHead { get; } = head;
+        internal string? CurrentHead { get; set; } = head;
         internal string? EffectHead { get; } = effect ? head : null;
         internal Dictionary<(Type Kind, string Oid), GitHubValue> Staged { get; } = [];
         internal long StagedBytes { get; set; }
@@ -281,7 +281,11 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
             if (current.Failure?.Code == GitHubFailureCode.NotFound) return null;
             throw new GitHubCoordinationException(transportFailure: current.Failure);
         }
-        var proof = transactionProof ?? new ReadProof();
+        using var ownedProof = transactionProof is null ? PublicationProof(repository.Identity, current.Value.Oid) : null;
+        var proof = transactionProof ?? ownedProof!;
+        // Current claim bytes are always fetched at the actual observed head.
+        // Only immutable predecessors may come from this owner's bounded pool.
+        proof.CurrentHead = current.Value.Oid;
         var document = await ReadAcceptedDocumentAsync(current.Value.Oid, token, proof).ConfigureAwait(false);
         var observed = await ReadCheckpointContentAsync(repository.Identity, current.Value.Oid, document, token, proof).ConfigureAwait(false);
         if (verifyTarget)
@@ -302,6 +306,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
                     ? GitHubCheckpointReason.OwnerMismatch : GitHubCheckpointReason.LeaseUnverifiable);
             StopCheckpoint();
         }
+        if (!checkpointStopped) proof.Promote(token);
         return observed;
     }
 

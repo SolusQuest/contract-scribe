@@ -208,7 +208,8 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(next.Artifact.CheckpointRevision, readback.CheckpointRevision);
         Assert.True(readback.ExactUtf8Json.AsSpan().SequenceEqual(next.Artifact.ExactUtf8Json.AsSpan()));
         // The predecessor and actual successor are each authenticated once in this
-        // conditional transaction. A later independent read starts a fresh proof.
+        // conditional transaction. A later proof refreshes mutable state while
+        // retaining this owner's authenticated immutable object data.
         Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(priorHead, StringComparison.Ordinal)).Value);
         Assert.All(commitGets.Where(pair => !pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)),
             pair => Assert.Equal(1, pair.Value));
@@ -217,7 +218,8 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)).Value);
         var first = commitGets.ToDictionary();
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
-        Assert.Contains(first, pair => commitGets[pair.Key] > pair.Value);
+        Assert.All(first, pair => Assert.Equal(pair.Value, commitGets[pair.Key]));
+        Assert.Equal(2, observedBlobs);
     }
 
     [Fact]
@@ -255,7 +257,7 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Fact]
-    public async Task Checkpoint_proof_reuses_authenticated_blobs_only_until_the_next_read_gate()
+    public async Task Checkpoint_read_gate_refreshes_current_state_and_checkpoint_but_can_reuse_immutable_predecessors()
     {
         var remote = new CoordinationRemote();
         using var handler = new CheckpointInterceptHandler(remote);
@@ -278,7 +280,12 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.All(blobReads.Values, count => Assert.Equal(1, count));
         var first = blobReads.ToDictionary();
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
-        Assert.All(first, pair => Assert.Equal(pair.Value + 1, blobReads[pair.Key]));
+        Assert.Equal(first.Single(pair => pair.Key.EndsWith(checkpoint.Oid, StringComparison.Ordinal)).Value + 1,
+            blobReads.Single(pair => pair.Key.EndsWith(checkpoint.Oid, StringComparison.Ordinal)).Value);
+        var state = PayloadPath(remote.CoordinationHead!, "state");
+        Assert.Equal(first.Single(pair => pair.Key.EndsWith(state, StringComparison.Ordinal)).Value + 1,
+            blobReads.Single(pair => pair.Key.EndsWith(state, StringComparison.Ordinal)).Value);
+        Assert.Contains(first, pair => blobReads[pair.Key] == pair.Value);
         var mutations = remote.RefMutationAttempts;
         remote.Tamper(ObjectTamper.Blob);
         Assert.Equal(CampaignCheckpointReadKind.Invalid, (await store.ReadAsync(default)).Kind);

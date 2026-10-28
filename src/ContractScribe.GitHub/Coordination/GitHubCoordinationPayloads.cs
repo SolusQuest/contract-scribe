@@ -6,15 +6,32 @@ namespace ContractScribe.GitHub.Coordination;
 internal sealed partial class GitHubCoordinationStore
 {
     private PublicationPayloadPool? publicationPayloads;
+    private PublicationPayloadPool? checkpointPayloads;
 
-    private ReadProof PublicationProof(GitHubRepositoryIdentity repository, string head, bool effect = false)
+    private ReadProof PublicationProof(GitHubRepositoryIdentity repository, string? head, bool effect = false)
     {
         var pool = publicationPayloads;
+        if (pool is null && invocationOwner is not null && !checkpointStopped
+            && !checkpointLifetime.IsCancellationRequested && !client.HasMutationAuthority)
+        {
+            pool = checkpointPayloads;
+            if (pool is null)
+            {
+                var created = new PublicationPayloadPool(this, repository, checkpointLifetime.Token) { CheckpointScope = true };
+                pool = Interlocked.CompareExchange(ref checkpointPayloads, created, null) ?? created;
+                if (!ReferenceEquals(pool, created)) created.Dispose();
+            }
+        }
         return new(pool?.Matches(repository) == true ? pool : null, head, effect);
     }
 
     private void StopPublicationPayloads() => Interlocked.Exchange(ref publicationPayloads, null)?.Dispose();
+    private void StopCheckpointPayloads() => Interlocked.Exchange(ref checkpointPayloads, null)?.Dispose();
 
+    // Checkpoint acceptance repeatedly authenticates retained publication history.
+    // Reuse its immutable payloads for one confirmed owner, never its mutable
+    // claim/checkpoint bodies or any mutation/readback entitlement. Publication
+    // entry clears this pool before creating its separate callback-local pool.
     // The owner binds the exact store/client, whose origin, credential lifetime
     // and read authority cannot be exchanged. Numeric repository identity is
     // checked again for each proof. This pool contains payloads, never rights.
@@ -32,9 +49,13 @@ internal sealed partial class GitHubCoordinationStore
         private long bytes, reservedBytes;
         private int reservedEntries;
         private bool stopped;
+        internal bool CheckpointScope { get; init; }
 
-        private bool Active => !stopped && !execution.IsCancellationRequested && owner.publicationActive && !owner.checkpointStopped
-            && ReferenceEquals(owner.publicationPayloads, this) && owner.client.HasMutationAuthority
+        private bool Active => !stopped && !execution.IsCancellationRequested && !owner.checkpointStopped
+            && (CheckpointScope
+                ? owner.invocationOwner is not null && !owner.publicationActive && !owner.client.HasMutationAuthority
+                    && ReferenceEquals(owner.checkpointPayloads, this) && owner.client.CheckpointAuthority is not null
+                : owner.publicationActive && ReferenceEquals(owner.publicationPayloads, this) && owner.client.HasMutationAuthority)
             && owner.client.AuthenticatedRepository == repository;
 
         internal bool Matches(GitHubRepositoryIdentity current)
