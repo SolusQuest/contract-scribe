@@ -11,6 +11,84 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 public sealed class GitHubCoordinationGitTransportTests
 {
+    [Theory]
+    [InlineData("updated")]
+    [InlineData("stale")]
+    [InlineData("already-desired")]
+    [InlineData("lost-reply")]
+    [InlineData("denied")]
+    public async Task Native_renewal_imports_a_predecessor_written_by_the_platform_publication_path(string outcome)
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(45));
+        var token = deadline.Token;
+        var directory = Directory.CreateTempSubdirectory("contract-scribe-native-parent-test-").FullName;
+        try
+        {
+            var remote = Path.Join(directory, "remote.git");
+            await Git(directory, ["init", "--bare", "--object-format=sha1", remote], token);
+            await Git(remote, ["config", "http.receivepack", "true"], token);
+            var tree = await Git(remote, ["mktree"], token, "");
+            var basis = await Git(remote, ["commit-tree", tree], token, "Synthetic base\n");
+            await Git(remote, ["update-ref", "refs/heads/main", basis], token);
+            await using var server = new NativeServer(directory, token);
+            var authority = GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", "campaign.git.external");
+            await using var renewal = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
+            var document = new GitHubCoordinationDocument(GitHubCoordinationDocument.CurrentFormat,
+                "Owner/repo", "refs/heads/main", basis, "campaign.git.external", GitHubCoordinationDocument.ZeroOid,
+                null, null, null, null, new(new string('a', 64), 1, DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds()));
+            var seed = GitHubCoordinationObjects.Prepare(document);
+            Assert.Equal(GitHubGitAdvance.ActualUpdated, (await renewal.AdvanceAsync(new(seed, []), token)).Outcome);
+
+            // A separate writer represents the platform's strict paired-ref
+            // publication. Its successor is authenticated by that caller, but
+            // has never been observed in the renewal transport's object stores.
+            await using var publication = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
+            Assert.Equal(seed.CommitOid, (await publication.ObserveAsync(token))!.HeadOid);
+            var published = GitHubCoordinationObjects.Prepare(document with
+            {
+                PredecessorOid = seed.CommitOid,
+                Claim = document.Claim! with { ExpiresUnixSeconds = document.Claim.ExpiresUnixSeconds + 1 }
+            });
+            Assert.Equal(GitHubGitAdvance.ActualUpdated, (await publication.AdvanceAsync(new(published, []), token)).Outcome);
+            var renewed = GitHubCoordinationObjects.Prepare(published.Document with
+            {
+                PredecessorOid = published.CommitOid,
+                Claim = published.Document.Claim! with { ExpiresUnixSeconds = published.Document.Claim.ExpiresUnixSeconds + 1 }
+            });
+            if (outcome == "stale")
+            {
+                var winner = GitHubCoordinationObjects.Prepare(published.Document with
+                {
+                    PredecessorOid = published.CommitOid,
+                    Claim = new(new string('b', 64), 2, renewed.Document.Claim!.ExpiresUnixSeconds)
+                });
+                Assert.Equal(GitHubGitAdvance.ActualUpdated, (await publication.AdvanceAsync(new(winner, []), token)).Outcome);
+            }
+            else if (outcome == "already-desired")
+                Assert.Equal(GitHubGitAdvance.ActualUpdated, (await publication.AdvanceAsync(new(renewed, []), token)).Outcome);
+            var received = server.ReceivePackRequests;
+            server.DropNextMutationReply = outcome == "lost-reply";
+            server.DenyReads = outcome == "denied";
+            if (outcome == "denied")
+            {
+                await Assert.ThrowsAsync<GitHubProtocolException>(async () => await renewal.AdvanceAsync(new(renewed, []), token));
+                Assert.Equal(received, server.ReceivePackRequests);
+                Assert.Equal(0, server.NonGitRequests);
+                return;
+            }
+            var result = await renewal.AdvanceAsync(new(renewed, []), token);
+            Assert.Equal(outcome == "updated" ? GitHubGitAdvance.ActualUpdated : GitHubGitAdvance.Observer, result.Outcome);
+            Assert.NotNull(result.Observation);
+            if (outcome == "stale") Assert.NotEqual(renewed.CommitOid, result.Observation.HeadOid);
+            else Assert.Equal(renewed.CommitOid, result.Observation.HeadOid);
+            Assert.InRange(server.ReceivePackRequests, received, received + 1);
+            if (outcome is "updated" or "lost-reply") Assert.Equal(received + 1, server.ReceivePackRequests);
+            Assert.Equal(0, server.NonGitRequests);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     [Fact]
     public async Task Native_data_heads_observe_remote_changes_and_permission_loss_without_inventing_identity()
     {

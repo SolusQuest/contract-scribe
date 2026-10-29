@@ -74,6 +74,43 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Native_publication_renews_after_a_strict_platform_pair_without_losing_its_parent_objects()
+    {
+        await using var fixture = await Fixture.CreateAsync(targetCount: 2);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        await using var bridge = new GitHubNativeLoopbackBridge(fixture.GitHub, fixture.Outside, deadline.Token);
+        long? pairedExpiry = null;
+        var renewed = false;
+        fixture.GitHub.BeforeResponse = _ =>
+        {
+            if (!fixture.GitHub.Refs.Keys.Any(name => name.Contains("/coordination/", StringComparison.Ordinal))) return null;
+            var document = fixture.GitHub.CoordinationDocument();
+            if (document["publication"] is null || document["claim"] is null) return null;
+            var expiry = document["claim"]!["expiresUnixSeconds"]!.GetValue<long>();
+            if (pairedExpiry is null && fixture.GitHub.Coordination()["stage"]!.GetValue<string>() == "proposal-ref-advanced")
+            {
+                pairedExpiry = expiry;
+                // Advance the synthetic server Date through the ordinary 60s
+                // renewal boundary after the API pair has changed the head.
+                // The original live claim and product Host limits remain valid.
+                fixture.GitHub.ServerNow += TimeSpan.FromSeconds(61);
+            }
+            else if (pairedExpiry is { } prior && expiry > prior) renewed = true;
+            return null;
+        };
+        var environment = fixture.Environment();
+        environment["CONTRACTSCRIBE_TEST_GITHUB_GIT_ENDPOINT"] = bridge.Endpoint.AbsoluteUri;
+        var result = await fixture.RunArgs(fixture.Args(), environment);
+        Assert.NotNull(pairedExpiry);
+        Assert.True(renewed);
+        AssertResult(result, 0, "published");
+        Assert.Single(fixture.GitHub.PullRequests);
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
+        Assert.Equal(2, fixture.Checkpoint().State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
+        await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Default_hybrid_construction_runs_the_complete_two_target_CLI_with_separate_API_and_Git_counts()
     {
         await using var fixture = await Fixture.CreateAsync(targetCount: 2);

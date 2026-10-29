@@ -312,6 +312,16 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         if (prepared.Document.PredecessorOid == GitHubCoordinationDocument.ZeroOid)
             Require(await RunAsync(writer, ["fetch", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
                 target + ":refs/observed/base"], null, true, token).ConfigureAwait(false));
+        else if ((await RunAsync(writer, ["cat-file", "-e", prepared.ParentOid + "^{commit}"], null, false, token).ConfigureAwait(false)).Exit != 0)
+        {
+            // Strict platform publication can advance this ref without using
+            // either native object store. Import its observed history before
+            // materializing the next native renewal/checkpoint. This supplies
+            // objects only: the caller's proof/lease gates and the exact push
+            // lease still authorize the write, including if the head moved.
+            _ = await ObserveCoreAsync(token).ConfigureAwait(false);
+            Require(await RunAsync(writer, ["cat-file", "-e", prepared.ParentOid + "^{commit}"], null, false, token).ConfigureAwait(false));
+        }
         foreach (var blob in write.Blobs)
         {
             var oid = Text(Require(await RunAsync(writer, ["hash-object", "-w", "--stdin"], blob.Value.ToArray(), false, token).ConfigureAwait(false)));
