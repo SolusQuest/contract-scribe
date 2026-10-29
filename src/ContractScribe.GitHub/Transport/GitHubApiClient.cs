@@ -12,8 +12,10 @@ using static ContractScribe.GitHub.Transport.GitHubResponseReader;
 
 namespace ContractScribe.GitHub.Transport;
 
-internal sealed class GitHubApiClient : IDisposable
+internal sealed partial class GitHubApiClient : IDisposable
 {
+    private long mutationOrdinal;
+    internal long MutationOrdinal => Interlocked.Read(ref mutationOrdinal);
     internal const string ApiVersion = "2026-03-10";
     internal const string ProductionOrigin = "https://api.github.com/";
     internal const string UpdateRefsDocument = "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
@@ -203,13 +205,7 @@ internal sealed class GitHubApiClient : IDisposable
         RunAsync<GitHubRepository>(() => new("repos/" + readAuthority.RepositoryOwner + "/" + readAuthority.RepositoryName, element =>
         {
             var value = Repository(element);
-            Require(AsciiCaseEqual(value.Identity.Owner, readAuthority.RepositoryOwner)
-                && AsciiCaseEqual(value.Identity.Name, readAuthority.RepositoryName));
-            lock (identityGate)
-            {
-                Require(repository is null || repository == value.Identity);
-                repository = value.Identity;
-            }
+            _ = ObserveRepositoryIdentity(value.Identity);
             return value;
         }), cancellationToken);
 
@@ -226,7 +222,12 @@ internal sealed class GitHubApiClient : IDisposable
         {
             Input(RefName(fullRef));
             var relative = string.Join('/', fullRef[5..].Split('/').Select(Uri.EscapeDataString));
-            return new(RepoPath() + "/git/ref/" + relative, element => Ref(element, fullRef));
+            return new(RepoPath() + "/git/ref/" + relative, element =>
+            {
+                var reference = Ref(element, fullRef);
+                if (fullRef == GitHubPublicationFactory.CreateCoordinationRef(readAuthority)) ObserveCheckpointRefIdentity(reference);
+                return reference;
+            });
         }, cancellationToken, singleAttempt);
 
     internal ValueTask<GitHubApiResult<GitHubBlob>> GetBlobAsync(string oid, CancellationToken cancellationToken = default) =>
@@ -547,7 +548,7 @@ internal sealed class GitHubApiClient : IDisposable
                 message.Headers.ExpectContinue = false;
                 // Publication decisions require revalidated observations, not a
                 // still-fresh cached absence or an older mutable resource.
-                if (prepared.Body is null)
+                if (prepared.Context is null)
                     message.Headers.CacheControl = new CacheControlHeaderValue { NoCache = true };
                 if (message.Content is not null)
                     message.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json") { CharSet = "utf-8" };
@@ -560,6 +561,7 @@ internal sealed class GitHubApiClient : IDisposable
                 try
                 {
                     timeout.Token.ThrowIfCancellationRequested();
+                    if (prepared.Context is not null) Interlocked.Increment(ref mutationOrdinal);
                     dispatched = true;
                     using var response = await invoker.SendAsync(message, timeout.Token).ConfigureAwait(false);
                     lock (identityGate)

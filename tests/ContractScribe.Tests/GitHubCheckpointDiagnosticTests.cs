@@ -117,7 +117,7 @@ public sealed partial class GitHubCoordinationRefTests
         var injected = false;
         handler.AfterResponse = (request, response) =>
         {
-            if (!injected && request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/graphql")
+            if (!injected && IsRefMutation(request))
             {
                 injected = true;
                 if (fault == "lost-ack") throw new HttpRequestException("private-transport-sentinel");
@@ -141,6 +141,13 @@ public sealed partial class GitHubCoordinationRefTests
         else
         {
             Assert.Null(accepted.AcceptedCheckpoint);
+            if (fault == "caller-pre")
+            {
+                // Core rejected the original cancelled token before any port
+                // operation; there is no remote attempt to manufacture.
+                Assert.Null(store.CheckpointDiagnostic);
+                return;
+            }
             var observation = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
             Assert.True(observation.IsValid);
             Assert.Equal(cancellation, observation.Cancellation?.ToString());
@@ -174,10 +181,10 @@ public sealed partial class GitHubCoordinationRefTests
         handler.AfterResponse = (request, response) =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (request.Method == HttpMethod.Post && path == "/graphql") cas = true;
+            if (IsRefMutation(request)) cas = true;
             if (cas && (!injected || fault == "ref") && (fault == "ref"
                 ? path.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal)
-                : path.EndsWith("/git/blobs/" + blob, StringComparison.Ordinal)))
+                : IsCheckpointQuery(request, currentOnly: true)))
             {
                 injected = true;
                 if (fault == "exception") throw new InvalidOperationException("private-error-body-key-sentinel");
@@ -190,7 +197,7 @@ public sealed partial class GitHubCoordinationRefTests
                 // Under B a single predecessor is pending, so the negative
                 // first-closed-failure control must exhaust all three reads.
                 if (fault == "ref") { node["object"]!["sha"] = oldHead; predecessorObservations++; }
-                else node["content"] = Convert.ToBase64String("{}"u8);
+                else node["data"]!["repository"]!["checkpoint"]!["text"] = "{}";
                 response.Content.Dispose();
                 response.Content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
             }

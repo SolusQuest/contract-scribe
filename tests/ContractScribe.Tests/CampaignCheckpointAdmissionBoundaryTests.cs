@@ -59,16 +59,24 @@ public sealed partial class CampaignStateContractTests
             var hits = 0;
             handler.BeforeRequestWithCancellation = async (message, token) =>
             {
-                if (message.Method == HttpMethod.Post && message.RequestUri!.AbsolutePath.EndsWith("/git/blobs", StringComparison.Ordinal))
+                if (GitHubCoordinationRefTests.IsRefMutation(message))
                 {
                     using var body = JsonDocument.Parse(await message.Content!.ReadAsStringAsync(token));
-                    var bytes = Convert.FromBase64String(body.RootElement.GetProperty("content").GetString()!);
-                    var parsed = CampaignStateJson.Parse(bytes);
-                    if (parsed.Artifact is { } artifact && artifact.CheckpointRevision == predecessor.CheckpointRevision + 1)
-                        dispatchBlob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+                    var input = body.RootElement.GetProperty("variables").GetProperty("input");
+                    if (input.TryGetProperty("fileChanges", out var changes))
+                    {
+                        var file = changes.GetProperty("additions").EnumerateArray().SingleOrDefault(item => item.GetProperty("path").GetString() == ".contract-scribe/checkpoint.json");
+                        if (file.ValueKind == JsonValueKind.Object)
+                        {
+                            var bytes = Convert.FromBase64String(file.GetProperty("contents").GetString()!);
+                            var parsed = CampaignStateJson.Parse(bytes);
+                            if (parsed.Artifact is { } artifact && artifact.CheckpointRevision == predecessor.CheckpointRevision + 1)
+                                dispatchBlob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+                        }
+                    }
                 }
-                if (hits != 0 || dispatchBlob is null || message.Method != HttpMethod.Get || remote.RefMutationAttempts != writes + 1
-            || !message.RequestUri!.AbsolutePath.EndsWith("/git/blobs/" + dispatchBlob, StringComparison.Ordinal)) return;
+                if (hits != 0 || dispatchBlob is null || remote.RefMutationAttempts != writes + 1
+                    || !GitHubCoordinationRefTests.IsCheckpointQuery(message, currentOnly: true)) return;
                 Assert.Equal(1, ++hits);
                 if (source == "clean") { clock.Advance(10); return; }
                 if (source == "both")
@@ -106,10 +114,15 @@ public sealed partial class CampaignStateContractTests
             Assert.Equal(predecessor.Sha256, authority.AcceptedCheckpoint.Artifact.Sha256);
             Assert.Equal(CampaignCheckpointAcceptanceKind.Cancelled, coordinator.CheckpointFailure);
             Assert.False(coordinator.CheckpointCancelledByHostDeadline);
-            var failure = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
-            Assert.Equal(source == "setup" ? GitHubCheckpointStage.Gate : GitHubCheckpointStage.CheckpointReadback, failure.Stage);
-            Assert.Equal(GitHubCheckpointReason.Cancelled, failure.Reason);
-            Assert.Equal(source == "setup" ? null : predecessor.CheckpointRevision + 1, failure.AttemptedRevision);
+            var failure = store.CheckpointDiagnostic;
+            if (source == "setup") Assert.Null(failure); // Cancelled in Core before any remote operation.
+            else
+            {
+                Assert.NotNull(failure);
+                Assert.Equal(GitHubCheckpointStage.CheckpointReadback, failure.Stage);
+                Assert.Equal(GitHubCheckpointReason.Cancelled, failure.Reason);
+                Assert.Equal(predecessor.CheckpointRevision + 1, failure.AttemptedRevision);
+            }
             var durable = CampaignStateJson.Parse((await store.ReadAsync(default)).ExactUtf8Json.AsMemory()).Artifact!;
             Assert.Equal(predecessor.CheckpointRevision + (source == "setup" ? 0 : 1), durable.CheckpointRevision);
             if (source == "setup") Assert.Empty(durable.State.DispatchObservations);
@@ -125,13 +138,13 @@ public sealed partial class CampaignStateContractTests
             Assert.Same(failure, store.CheckpointDiagnostic);
             using var json = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
             var reported = json.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
-            if (source == "frozen") Assert.Equal(JsonValueKind.Null, reported.ValueKind);
+            if (source is "frozen" or "setup") Assert.Equal(JsonValueKind.Null, reported.ValueKind);
             else
             {
                 Assert.Equal(expected, reported.GetProperty("cancellation").GetString());
                 Assert.Equal(9, reported.EnumerateObject().Count());
             }
-            usage.ObserveCheckpoint(failure with { Cancellation = GitHubCheckpointCancellation.RecoveryToken });
+            if (failure is not null) usage.ObserveCheckpoint(failure with { Cancellation = GitHubCheckpointCancellation.RecoveryToken });
             using var later = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
             Assert.Equal(reported.GetRawText(), later.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure").GetRawText());
             frozenDiagnostic = reported.GetRawText();
@@ -191,6 +204,7 @@ public sealed partial class CampaignStateContractTests
         var checkpointOid = GitHubCoordinationObjects.ObjectOid("blob", predecessor.ExactUtf8Json.AsSpan());
         var writes = remote.RefMutationAttempts;
         var checkpointReads = 0;
+        var predecessorRefReads = 0;
         var stopped = false;
         using var cancellation = new CancellationTokenSource();
         void Stop()
@@ -200,11 +214,16 @@ public sealed partial class CampaignStateContractTests
             if (caller) cancellation.Cancel();
             else clock.Advance(expiredObservation ? 1200 : 200);
         }
-        handler.BeforeRequest = request =>
+        handler.BeforeRequestWithCancellation = (request, token) =>
         {
-            if (stopAtCheckpointRead != 0 && request.Method == HttpMethod.Get
-                && request.RequestUri!.AbsolutePath.EndsWith("/git/blobs/" + checkpointOid, StringComparison.Ordinal)
-                && ++checkpointReads == stopAtCheckpointRead) Stop();
+            if (stopAtCheckpointRead == 1 && GitHubCoordinationRefTests.IsCheckpointQuery(request, currentOnly: true)
+                && ++checkpointReads == 1) Stop();
+            // The duplicate Core read is gone. Keep the other pre-mutation
+            // stop at the conditional owner's final predecessor-ref fence.
+            if (stopAtCheckpointRead == 2 && request.Method == HttpMethod.Get
+                && request.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)
+                && ++predecessorRefReads == 1) Stop();
+            token.ThrowIfCancellationRequested();
             return Task.CompletedTask;
         };
         handler.AfterResponse = (request, response) =>
@@ -231,7 +250,7 @@ public sealed partial class CampaignStateContractTests
             Assert.Equal(writes + 1, remote.RefMutationAttempts);
             Assert.Equal(predecessor.Sha256, authority.AcceptedCheckpoint.Artifact.Sha256);
             var failure = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
-            Assert.Equal(GitHubCheckpointStage.FinalRef, failure.Stage);
+            Assert.Equal(GitHubCheckpointStage.CheckpointReadback, failure.Stage); // Folded aggregate readback was never dispatched after this stop.
             Assert.Equal(GitHubCheckpointReason.Cancelled, failure.Reason);
             Assert.Equal(GitHubCheckpointCancellation.OperationToken, failure.Cancellation);
             Assert.NotEqual(CampaignCheckpointAcceptanceKind.Conflict, coordinator.CheckpointFailure);

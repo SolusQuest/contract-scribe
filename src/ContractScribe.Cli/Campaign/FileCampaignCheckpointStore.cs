@@ -195,8 +195,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
             ? CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, mutationCancellationToken) : null;
         var mutation = mutationScope?.Token ?? cancellationToken;
         mutation.ThrowIfCancellationRequested();
-        if (!IsSupportedPlatform()
-            || !TryValidateIntended(intendedBytes, intendedRevision, intendedSha256)
+        if (!IsSupportedPlatform())
+            return CampaignCheckpointWriteResult.Rejected(CampaignCheckpointWriteKind.PublicationFailure, CampaignCheckpointReadResult.Unreadable());
+        if (!TryValidateIntended(intendedBytes, intendedRevision, intendedSha256)
             || operation == OperationKind.Replace
                 && (!IsRevision(expectedRevision) || !IsSha256(expectedSha256)))
         {
@@ -271,7 +272,7 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
                     return PublicationFailure();
                 }
                 mutation.ThrowIfCancellationRequested();
-                return new CampaignCheckpointWriteResult(conditional);
+                return CampaignCheckpointWriteResult.Rejected(conditional, current.ToPublicResult());
             }
 
             WriteExact(active.TempHandle, intendedBytes.Span);

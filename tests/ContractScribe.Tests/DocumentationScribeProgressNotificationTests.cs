@@ -18,14 +18,20 @@ public sealed partial class DocumentationScribeRuntimeTests
             SubmitBatch(request, 2, (ids[2], IncrementalProposal(request, ids[2]))), FinishConversation(request));
         var result = await ExecuteIncremental(request, exchange, EmptyRegistry(), host);
         Assert.Equal(3, exchange.Requests.Length);
-        Assert.Equal(3, host.Progress.Count);
-        Assert.Equal(new[] { 2, 3, 3 }, host.Progress.Select(item => item.NextSequence));
-        Assert.All(host.Progress, item => Assert.Equal(1, item.RepairCount));
-        Assert.Single(host.Progress[0].Receipts);
-        Assert.Single(host.Progress[0].Failures);
-        Assert.Equal(2, host.Progress[1].Receipts.Length);
-        Assert.False(host.Progress[1].Stopped);
-        Assert.True(host.Progress[2].Stopped);
+        Assert.Equal(4, host.Progress.Count);
+        var partial = host.Progress[0]; // Same physical acceptance as the first member ACK.
+        Assert.Equal(1, partial.NextSequence);
+        Assert.Equal(0, partial.RepairCount);
+        Assert.Single(partial.Receipts);
+        Assert.Empty(partial.Failures);
+        var completed = host.Progress.Skip(1).ToArray();
+        Assert.Equal(new[] { 2, 3, 3 }, completed.Select(item => item.NextSequence));
+        Assert.All(completed, item => Assert.Equal(1, item.RepairCount));
+        Assert.Single(completed[0].Receipts);
+        Assert.Single(completed[0].Failures);
+        Assert.Equal(2, completed[1].Receipts.Length);
+        Assert.False(completed[1].Stopped);
+        Assert.True(completed[2].Stopped);
         Assert.Equal(2, result.Submissions.Length);
         Assert.All(result.Submissions, item => Assert.Equal(DocumentationScribeAcknowledgementStage.DurablyRecorded, item.Stage));
         var scalar = JsonSerializer.Serialize(host.Progress);
@@ -73,7 +79,9 @@ public sealed partial class DocumentationScribeRuntimeTests
         var result = await execution.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.Equal(DocumentationScribeTerminalKind.Cancelled, result.Stop.Kind);
         Assert.Single(exchange.Requests);
-        Assert.Equal(DocumentationScribeAcknowledgementStage.DurablyRecorded, Assert.Single(result.Submissions).Stage);
+        // The paired Host call has not returned either acknowledgement yet.
+        // Previously accepted siblings are covered by the incremental matrix.
+        Assert.Equal(DocumentationScribeAcknowledgementStage.Received, Assert.Single(result.Submissions).Stage);
         var bytes = DocumentationScribeRunResultWriter.Write(request, result);
         pending.SetResult(new(host.Progress.Single().ProgressSha256));
         Assert.True(bytes.AsSpan().SequenceEqual(DocumentationScribeRunResultWriter.Write(request, result).AsSpan()));
@@ -85,10 +93,15 @@ public sealed partial class DocumentationScribeRuntimeTests
         : IDocumentationScribeSubmissionHost
     {
         internal List<DocumentationScribeProgressNotification> Progress { get; } = [];
-        public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
-            DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken) =>
-            ValueTask.FromResult<DocumentationScribeSubmissionAcknowledgement?>(new(submission.ScribeRequestSha256,
-                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded));
+        public async ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
+            DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification progress,
+            CancellationToken cancellationToken)
+        {
+            var acknowledged = await ObserveProgressAsync(progress, cancellationToken);
+            return new(submission.ScribeRequestSha256, submission.TargetId, submission.ContentSha256,
+                DocumentationScribeAcknowledgementStage.DurablyRecorded)
+            { ProgressSha256 = acknowledged?.ProgressSha256 };
+        }
 
         public ValueTask<DocumentationScribeProgressAcknowledgement?> ObserveProgressAsync(
             DocumentationScribeProgressNotification progress, CancellationToken cancellationToken)

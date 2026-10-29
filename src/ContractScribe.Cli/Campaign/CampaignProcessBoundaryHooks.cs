@@ -48,6 +48,7 @@ internal static class CampaignProcessBoundaryHooks
     internal const string ScribeProgressAfterReadback = "proposal.scribe-progress.after-readback";
     internal const string ScribeMemberReplacementScope = "proposal.scribe-member";
     internal const string ScribeProgressReplacementScope = "proposal.scribe-progress";
+    internal const string ScribeMemberProgressReplacementScope = "proposal.scribe-member-and-progress";
 
     internal const string InitialReplacementScope = "checkpoint.initial";
     internal const string ProposalReservationReplacementScope = "proposal.reservation";
@@ -132,6 +133,7 @@ internal static class CampaignProcessBoundaryHooks
         SemanticAuthorizationReplacementScope,
         ScribeMemberReplacementScope,
         ScribeProgressReplacementScope,
+        ScribeMemberProgressReplacementScope,
         InitialReplacementScope,
         ProposalReservationReplacementScope,
         ProposalResultReplacementScope,
@@ -183,7 +185,14 @@ internal static class CampaignProcessBoundaryHooks
         }
         if (CurrentReplacementScope.Value is { } scope)
         {
-            Reach(scope + "." + phase);
+            if (scope == ScribeMemberProgressReplacementScope)
+            {
+                // Both existing crash boundaries now name the same physical
+                // replacement; keep each original failure injection available.
+                Reach(ScribeMemberReplacementScope + "." + phase);
+                Reach(ScribeProgressReplacementScope + "." + phase);
+            }
+            else Reach(scope + "." + phase);
         }
     }
 

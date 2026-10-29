@@ -280,7 +280,10 @@ public sealed partial class CampaignStateContractTests
     [Fact]
     public async Task Solus_runtime_candidate_callback_cut_waits_for_its_product_host_completion()
     {
-        var trial = await SolusTrialAsync();
+        // Exercise a mandatory physical closure: its remaining terminal
+        // exposure cannot cover the following original continuation allowance.
+        var trial = await SolusTrialAsync(hostTimeouts:
+            DocumentationScribeHostTimeouts.Create(terminalSubmissionMilliseconds: 30_000));
         trial.Store.HoldTerminalCompletion = true;
         var exchange = new ScriptedDocumentationScribeModelExchange([ScriptedDocumentationScribeStep.Return(
             new DocumentationScribeModelResponse([], [new(C3Submission(trial.Scenario, trial.Request))], usage: new(0, 0, 0, 0)))]);
@@ -407,8 +410,11 @@ public sealed partial class CampaignStateContractTests
         bool sharedDeadline, bool cancelled, bool hostCompletion)
     {
         var clock = new SolusDeadlineClock();
+        // The body completes before its short child deadline; only the
+        // mandatory durable closure is held when the original SDK parent cuts.
         var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: sharedDeadline ? 1500 : 500,
-            invocationMilliseconds: 1000);
+            invocationMilliseconds: 1000, hostTimeouts:
+                DocumentationScribeHostTimeouts.Create(terminalSubmissionMilliseconds: 100));
         var scope = trial.Coordinator.Scope;
         var preflight = Assert.IsType<DocumentationScribeHostPermit>(
             await scope.BeginHostAsync(DocumentationScribeHostOperation.Preflight, default));
@@ -563,6 +569,7 @@ public sealed partial class CampaignStateContractTests
         internal bool FailSettlement { get; set; }
         internal bool HoldSettlement { get; set; }
         internal bool FailDispatchReadback { get; set; }
+        internal bool ConcurrentDispatchWinner { get; set; }
         internal bool FailSettlementReadback { get; set; }
         internal bool HoldTerminalCompletion { get; set; }
         private bool failNextRead;
@@ -572,8 +579,8 @@ public sealed partial class CampaignStateContractTests
         internal Action? RetryReadback { get; set; }
         internal CampaignProviderHostPhase? DelayedReadbackPhase { get; set; }
         internal Action? DelayedReadback { get; set; }
-        internal Action? BeforeNextRead { get; set; }
-        internal Action? BeforeRetryAdmissionRead { get; set; }
+        internal Action? BeforeNextComparison { get; set; }
+        internal Action? BeforeRetryAdmissionComparison { get; set; }
         internal Action<CampaignProviderHostPhase>? HostCompletionReadback { get; set; }
         internal bool HoldSemanticReadback { get; set; }
         internal CampaignSemanticCheckpointWindow? SemanticWindowForTest => semanticWindow;
@@ -588,9 +595,6 @@ public sealed partial class CampaignStateContractTests
         public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token)
         {
             Reads++;
-            var before = BeforeNextRead;
-            BeforeNextRead = null;
-            before?.Invoke();
             if (Current.State.ActiveReservation is CampaignProviderReservation delayed
                 && delayed.HostPhase == DelayedReadbackPhase && DelayedReadback is { } delay)
             {
@@ -617,13 +621,25 @@ public sealed partial class CampaignStateContractTests
         public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision, string expectedSha,
             ReadOnlyMemory<byte> bytes, long revision, string sha, CancellationToken token, CancellationToken mutationCancellationToken = default)
         {
+            var before = BeforeNextComparison;
+            BeforeNextComparison = null;
+            before?.Invoke();
             mutationCancellationToken.ThrowIfCancellationRequested();
+            token.ThrowIfCancellationRequested();
             var next = CampaignStateJson.Parse(bytes).Artifact!;
             var completedHost = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } previous
                 && next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Host } successor
                 && previous.HostPhase != successor.HostPhase ? previous.HostPhase : (CampaignProviderHostPhase?)null;
             var dispatch = next.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch };
             var settlement = Current.State.ActiveReservation is CampaignProviderReservation { OperationKind: CampaignProviderOperationKind.Dispatch } && !dispatch;
+            if (dispatch && ConcurrentDispatchWinner)
+            {
+                ConcurrentDispatchWinner = false;
+                var winner = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token);
+                Assert.Equal(CampaignCheckpointWriteKind.Written, winner.Kind);
+                Current = next;
+                Dispatches++;
+            }
             if (HoldTerminalCompletion
                 && Current.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission }
                 && next.State.ActiveReservation is CampaignProviderReservation { HostPhase: not CampaignProviderHostPhase.TerminalSubmission })
@@ -664,11 +680,11 @@ public sealed partial class CampaignStateContractTests
                 var observation = await ReadAsync(token);
                 semanticWindow?.ObserveLocalReadback(this, observation);
                 if (settlement && next.State.ActiveReservation is CampaignProviderReservation
-                    { RetryProgress.PendingRetryAfterMilliseconds: > 0 } && BeforeRetryAdmissionRead is { } preparation)
+                    { RetryProgress.PendingRetryAfterMilliseconds: > 0 } && BeforeRetryAdmissionComparison is { } preparation)
                 {
-                    Assert.Null(BeforeNextRead);
-                    BeforeRetryAdmissionRead = null;
-                    BeforeNextRead = preparation;
+                    Assert.Null(BeforeNextComparison);
+                    BeforeRetryAdmissionComparison = null;
+                    BeforeNextComparison = preparation;
                 }
                 return CampaignCheckpointWriteResult.Written(observation);
             }

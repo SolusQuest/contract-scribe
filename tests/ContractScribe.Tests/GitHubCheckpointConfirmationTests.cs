@@ -26,6 +26,7 @@ public sealed partial class GitHubCoordinationRefTests
         var prior = remote.CoordinationHead!;
         var writes = remote.RefMutationAttempts;
         var calls = new List<string>();
+        var effects = 0;
         var refReads = 0;
         var expectedIndex = -1;
         var callback = false;
@@ -36,6 +37,7 @@ public sealed partial class GitHubCoordinationRefTests
             if (remote.RefMutationAttempts <= writes) return Task.FromResult(response);
             var path = request.RequestUri!.AbsolutePath;
             calls.Add(request.Method + " " + path);
+            if (request.Method != HttpMethod.Get && !IsCheckpointQuery(request)) effects++;
             if (request.Method == HttpMethod.Get && path.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal))
             {
                 if (++refReads <= predecessors)
@@ -77,10 +79,10 @@ public sealed partial class GitHubCoordinationRefTests
         var target = calls.FindIndex(repository + 1, call => call.EndsWith("/git/ref/heads/main", StringComparison.Ordinal));
         var final = calls.FindIndex(target + 1, call => call.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal));
         Assert.True(expectedIndex >= 0 && repository > expectedIndex && target > repository && final > target);
-        Assert.Equal(predecessors + (renew ? 2 : 4), refReads);
-        Assert.Single(calls, call => call.StartsWith("POST ", StringComparison.Ordinal));
-        Assert.Equal(renew ? 1 : 2, calls.Count(call => call == "GET /repos/Owner/repo"));
-        Assert.Equal(renew ? 1 : 2, calls.Count(call => call.EndsWith("/git/ref/heads/main", StringComparison.Ordinal)));
+        Assert.Equal(predecessors + 2, refReads);
+        Assert.Equal(1, effects);
+        Assert.Equal(1, calls.Count(call => call == "GET /repos/Owner/repo"));
+        Assert.Equal(1, calls.Count(call => call.EndsWith("/git/ref/heads/main", StringComparison.Ordinal)));
     }
 
     [Theory]
@@ -119,7 +121,7 @@ public sealed partial class GitHubCoordinationRefTests
             handler.AfterResponse = (request, response) =>
             {
                 if (remote.RefMutationAttempts <= writes) return Task.FromResult(response);
-                if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/graphql" && fault == "lost-ack")
+                if (IsRefMutation(request) && fault == "lost-ack")
                     throw new HttpRequestException("synthetic lost acknowledgement");
                 var path = request.RequestUri!.AbsolutePath;
                 if (request.Method == HttpMethod.Get && path == "/repos/Owner/repo" && reads >= 2)

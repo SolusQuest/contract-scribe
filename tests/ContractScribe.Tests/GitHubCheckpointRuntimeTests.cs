@@ -7,6 +7,65 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Checkpoint_progress_does_not_repeat_admission_but_a_new_dispatch_requires_it(bool dispatch)
+    {
+        var trial = await SolusTrialAsync();
+        var remote = new GitHubCoordinationRefTests.CoordinationRemote();
+        using var handler = new GitHubCoordinationRefTests.CheckpointInterceptHandler(remote);
+        using var client = GitHubCoordinationRefTests.CheckpointClient(remote, trial.Scenario.InitialState.CampaignLineage, handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        Assert.True(await store.BindPlanAsync(CampaignPlanner.CreateRecoveryProjection(trial.Scenario.Plan), default));
+        var initial = CampaignStateJson.CreateArtifact(trial.Scenario.InitialState);
+        Assert.Equal(CampaignCheckpointWriteKind.Written, (await store.CreateIfAbsentAsync(initial.ExactUtf8Json.AsMemory(),
+            initial.CheckpointRevision, initial.Sha256, default)).Kind);
+        var allowance = new DocumentationScribeInvocationAllowance(trial.Coordinator.Scope.Allowance.Limits);
+        var admission = CampaignStateReducer.AdmitProviderInvocation(initial, trial.Scenario.ExecutionAuthority, "style.synthetic",
+            trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Scenario.Plan.WorkItems[0].WorkItemKey,
+            trial.Request, CampaignStateFactory.CreateInvocationTargetAllowance(initial.State, new(100)), allowance);
+        var accepted = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, accepted.Kind);
+        var previousWrites = remote.RefMutationAttempts;
+        var duplicate = await CampaignCheckpointAcceptance.AcceptAsync(store, admission);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, duplicate.Kind);
+        Assert.False(duplicate.AcceptedCheckpoint!.TryIssueInvocation());
+        Assert.Equal(previousWrites, remote.RefMutationAttempts);
+        var authority = CampaignStateReducer.CreateProviderInvocationAuthority(accepted.AcceptedCheckpoint!, trial.Scenario.ExecutionAuthority,
+            "style.synthetic", trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Request);
+        var coordinator = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
+        Assert.True(authority.TryBeginDispatch(out _));
+        var observations = 0;
+        var writes = remote.RefMutationAttempts;
+        handler.AfterResponse = (request, response) =>
+        {
+            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath == "/repos/Owner/repo/pulls")
+            {
+                observations++;
+                response.Dispose();
+                response = new(System.Net.HttpStatusCode.Forbidden) { Content = new StringContent("{}") };
+            }
+            return Task.FromResult(response);
+        };
+        if (dispatch)
+        {
+            Assert.Null(await coordinator.Scope.ReserveProviderAsync(new(Sha256("fresh dispatch"), 1, 1, 4096), default));
+            Assert.Equal(writes, remote.RefMutationAttempts);
+            Assert.Equal(1, observations);
+            Assert.Equal(0, allowance.ProviderRequestCount);
+        }
+        else
+        {
+            var progress = CampaignStateReducer.AdvanceHostOperation(authority,
+                DocumentationScribeHostOperation.TerminalSubmission, 0, 90000, completing: false);
+            Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, (await CampaignCheckpointAcceptance.AcceptAsync(store, progress)).Kind);
+            Assert.Equal(writes + 1, remote.RefMutationAttempts);
+            Assert.Equal(0, observations);
+        }
+    }
+
     [Fact]
     public async Task B_delayed_checkpoint_grants_only_the_actual_original_Core_invocation()
     {
@@ -79,10 +138,12 @@ public sealed partial class CampaignStateContractTests
             "style.synthetic", trial.Scenario.StyleProjection, trial.Scenario.Input, trial.Scenario.Plan, trial.Request);
         _ = new CampaignScribeExecutionCoordinator(authority, allowance, store, default, null, allowance.Clock.GetTimestamp());
         Assert.True(authority.TryBeginDispatch(out _));
-        var calls = new List<(string Method, string Path)>();
+        var calls = new List<(string Method, string Path, bool Query, bool Effect)>();
         handler.BeforeRequest = message =>
         {
-            calls.Add((message.Method.Method, message.RequestUri!.AbsolutePath));
+            calls.Add((message.Method.Method, message.RequestUri!.AbsolutePath,
+                GitHubCoordinationRefTests.IsCheckpointQuery(message, currentOnly: true),
+                message.Method != HttpMethod.Get && !GitHubCoordinationRefTests.IsCheckpointQuery(message)));
             return Task.CompletedTask;
         };
         var transition = CampaignStateReducer.AdvanceHostOperation(authority,
@@ -91,21 +152,22 @@ public sealed partial class CampaignStateContractTests
         var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition);
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, result.Kind);
         var transaction = calls.ToArray();
-        Assert.InRange(transaction.Length, 1, 36); // Fresh mutable fences remain; immutable predecessors are already authenticated.
-        Assert.Equal(7, transaction.Count(call => call.Method != "GET"));
-        Assert.Equal(3, transaction.Count(call => call.Method == "GET" && call.Path == "/repos/Owner/repo"));
-        Assert.Equal(7, transaction.Count(call => call.Method == "GET" && call.Path.Contains("/git/ref/heads/contract-scribe/")));
-        Assert.Single(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/ref/heads/main"));
+        Assert.InRange(transaction.Length, 1, 5); // Fresh mutable fences remain; immutable predecessors are already authenticated.
+        Assert.Equal(1, transaction.Count(call => call.Effect)); // The authenticated unchanged plan is not uploaded again.
+        Assert.DoesNotContain(transaction, call => call.Method == "GET" && call.Path == "/repos/Owner/repo");
+        Assert.Equal(2, transaction.Count(call => call.Query)); // Fresh predecessor and actual successor packets each include repository, target, metadata and canonical bytes.
+        Assert.Equal(2, transaction.Count(call => call.Method == "GET" && call.Path.Contains("/git/ref/heads/contract-scribe/")));
+        Assert.DoesNotContain(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/ref/heads/main"));
         var newCommit = remote.CoordinationHead!;
-        Assert.Single(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/commits/" + newCommit));
+        Assert.DoesNotContain(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/commits/" + newCommit));
         var checkpoint = GitHubCoordinationObjects.ObjectOid("blob", transition.Artifact.ExactUtf8Json.AsSpan());
-        Assert.Equal(2, transaction.Count(call => call.Method == "GET" && call.Path.EndsWith("/git/blobs/" + checkpoint)));
-        Assert.True(Array.FindLastIndex(transaction, call => call.Path.EndsWith("/git/blobs/" + checkpoint))
-            > Array.FindIndex(transaction, call => call.Path == "/graphql"));
+        Assert.DoesNotContain(transaction, call => call.Method == "GET" && call.Path.EndsWith("/git/blobs/" + checkpoint));
+        Assert.True(Array.FindLastIndex(transaction, call => call.Query)
+            > Array.FindLastIndex(transaction, call => call.Effect));
         calls.Clear();
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
         Assert.DoesNotContain(calls, call => call.Path.EndsWith("/git/commits/" + newCommit));
-        Assert.Contains(calls, call => call.Path.EndsWith("/git/blobs/" + checkpoint));
+        Assert.Single(calls, call => call.Query);
     }
 
     [Theory]
@@ -181,26 +243,18 @@ internal sealed class RuntimeCheckpointTrace(ICampaignCheckpointStore inner, boo
     internal List<(int Requests, long ElapsedMilliseconds, int PredecessorCommitReads)> SemanticWrites { get; } = [];
     private bool measuring;
     private int requests;
-    private long readStarted;
-    private readonly Dictionary<string, int> commits = new(StringComparer.Ordinal);
+    private int predecessorReads;
+    private bool mutationSeen;
     internal void Observe(HttpRequestMessage request)
     {
         if (!measuring) return;
         requests++;
-        if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/git/commits/", StringComparison.Ordinal))
-        {
-            var path = request.RequestUri.AbsolutePath;
-            commits[path] = commits.GetValueOrDefault(path) + 1;
-        }
+        if (GitHubCoordinationRefTests.IsRefMutation(request)) mutationSeen = true;
+        // A canonical query physically carries the commit, tree and state in
+        // one request. Count the predecessor phase, not a retired REST route.
+        if (!mutationSeen && GitHubCoordinationRefTests.IsCheckpointQuery(request, currentOnly: true)) predecessorReads++;
     }
-    public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token)
-    {
-        readStarted = clock.GetTimestamp();
-        requests = 0;
-        commits.Clear();
-        measuring = true;
-        return inner.ReadAsync(token);
-    }
+    public ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken token) => inner.ReadAsync(token);
     public ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(ReadOnlyMemory<byte> bytes, long revision, string sha,
         CancellationToken token) => inner.CreateIfAbsentAsync(bytes, revision, sha, token);
     public async ValueTask<CampaignCheckpointWriteResult> ReplaceIfCurrentAsync(long expectedRevision, string expectedSha,
@@ -211,7 +265,10 @@ internal sealed class RuntimeCheckpointTrace(ICampaignCheckpointStore inner, boo
         // Only admission to SemanticTool, not its completion, reconstructs
         // the removed caller-side full proof in the counterfactual row.
         measuring = next.State.ActiveReservation is CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.SemanticTool };
-        var started = readStarted;
+        requests = 0;
+        predecessorReads = 0;
+        mutationSeen = false;
+        var started = clock.GetTimestamp();
         try
         {
             var result = await inner.ReplaceIfCurrentAsync(expectedRevision, expectedSha, bytes, revision, sha, token, mutationCancellationToken);
@@ -219,8 +276,8 @@ internal sealed class RuntimeCheckpointTrace(ICampaignCheckpointStore inner, boo
             {
                 if (duplicate) result = CampaignCheckpointWriteResult.Written(await inner.ReadAsync(token));
                 advance(delay);
-                // First distinct commit read belongs to the predecessor.
-                SemanticWrites.Add((requests, clock.GetTimestamp() - started, commits.First().Value));
+                // The actual pre-mutation canonical query is the predecessor proof.
+                SemanticWrites.Add((requests, clock.GetTimestamp() - started, predecessorReads));
             }
             return result;
         }

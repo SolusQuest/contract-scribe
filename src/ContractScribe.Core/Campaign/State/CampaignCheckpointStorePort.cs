@@ -102,6 +102,7 @@ public readonly record struct CampaignCheckpointWriteResult
             throw new ArgumentException("A successful write requires observed readback.", nameof(kind));
         Kind = kind;
         Readback = null;
+        Comparison = null;
     }
 
     private CampaignCheckpointWriteResult(CampaignCheckpointReadResult readback)
@@ -109,17 +110,27 @@ public readonly record struct CampaignCheckpointWriteResult
         ArgumentNullException.ThrowIfNull(readback);
         Kind = CampaignCheckpointWriteKind.Written;
         Readback = readback;
+        Comparison = null;
     }
+
+    private CampaignCheckpointWriteResult(CampaignCheckpointWriteKind kind, CampaignCheckpointReadResult comparison)
+        : this(kind) => Comparison = comparison ?? throw new ArgumentNullException(nameof(comparison));
 
     public CampaignCheckpointWriteKind Kind { get; }
     public CampaignCheckpointReadResult? Readback { get; }
+    public CampaignCheckpointReadResult? Comparison { get; }
     public static CampaignCheckpointWriteResult Written(CampaignCheckpointReadResult observedReadback) => new(observedReadback);
+    public static CampaignCheckpointWriteResult Rejected(CampaignCheckpointWriteKind kind, CampaignCheckpointReadResult observedComparison) =>
+        new(kind, observedComparison);
 }
 
 public interface ICampaignCheckpointStore
 {
     ValueTask<CampaignCheckpointReadResult> ReadAsync(CancellationToken cancellationToken);
 
+    // Conditional operations own their current-state comparison under the
+    // lease/CAS and may be called without a preceding ReadAsync. Written must
+    // carry actual independent readback, never intended bytes or an ACK echo.
     ValueTask<CampaignCheckpointWriteResult> CreateIfAbsentAsync(
         ReadOnlyMemory<byte> exactUtf8Json,
         long checkpointRevision,
@@ -392,21 +403,16 @@ public static class CampaignCheckpointAcceptance
         var mutationToken = mutation?.Token ?? cancellationToken;
         try
         {
-            var current = await store.ReadAsync(mutationToken).ConfigureAwait(false);
-            var currentMatch = Match(current, intended);
-            if (currentMatch == MatchKind.Invalid)
+            // An unchanged transition has no conditional mutation to perform.
+            // It can observe existing bytes, never regain a writer grant.
+            if (expectedPredecessor is not null && expectedPredecessor.CheckpointRevision == intended.CheckpointRevision
+                && expectedPredecessor.Sha256 == intended.Sha256)
             {
-                return ReadFailure(current);
-            }
-
-            if (currentMatch == MatchKind.Exact)
-            {
-                if (!acceptExactConcurrentWinner)
-                {
-                    return new CampaignCheckpointAcceptanceResult(
-                        CampaignCheckpointAcceptanceKind.Conflict,
-                        null);
-                }
+                var current = await store.ReadAsync(mutationToken).ConfigureAwait(false);
+                var match = Match(current, intended);
+                if (match == MatchKind.Invalid) return ReadFailure(current);
+                if (match != MatchKind.Exact || !acceptExactConcurrentWinner)
+                    return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Conflict, null);
                 return await VerifyReadbackAsync(
                     store,
                     intended,
@@ -418,11 +424,6 @@ public static class CampaignCheckpointAcceptance
             mutationToken.ThrowIfCancellationRequested();
             if (expectedPredecessor is null)
             {
-                if (current.Kind != CampaignCheckpointReadKind.NotFound)
-                {
-                    return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Conflict, null);
-                }
-
                 write = await store.CreateIfAbsentAsync(
                     intended.ExactUtf8Json.AsMemory(),
                     intended.CheckpointRevision,
@@ -431,11 +432,9 @@ public static class CampaignCheckpointAcceptance
             }
             else
             {
-                if (Match(current, expectedPredecessor) != MatchKind.Exact)
-                {
-                    return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Conflict, null);
-                }
-
+                // The conditional owner compares revision + digest under its
+                // actual lease/CAS. A separate Core pre-read cannot strengthen
+                // that comparison and used to duplicate every remote gate.
                 write = await store.ReplaceIfCurrentAsync(
                     expectedPredecessor.CheckpointRevision,
                     expectedPredecessor.Sha256,
@@ -448,21 +447,33 @@ public static class CampaignCheckpointAcceptance
 
             if (write.Kind != CampaignCheckpointWriteKind.Written)
             {
-                if (write.Kind is CampaignCheckpointWriteKind.AlreadyPresent
-                    or CampaignCheckpointWriteKind.PredecessorMissing
-                    or CampaignCheckpointWriteKind.CurrentMismatch)
+                // Inspect failures, not normal successful writes, to retain the
+                // exact unreadable/unsupported/unsafe/current-state diagnosis.
+                var conflict = write.Kind is CampaignCheckpointWriteKind.AlreadyPresent
+                    or CampaignCheckpointWriteKind.PredecessorMissing or CampaignCheckpointWriteKind.CurrentMismatch;
+                // A failed successor readback must retain its original write
+                // cause. Only an actual failed comparison (or a CAS conflict)
+                // supplies current-state diagnostics; do not overwrite a later
+                // publication failure with another failed read.
+                if (write.Comparison is null && !conflict)
+                    return new CampaignCheckpointAcceptanceResult(MapWriteFailure(write.Kind), null);
+                var current = write.Comparison ?? await store.ReadAsync(cancellationToken).ConfigureAwait(false);
+                var match = Match(current, intended);
+                if (match == MatchKind.Invalid) return ReadFailure(current);
+                if (conflict)
                 {
-                    var concurrent = await store.ReadAsync(cancellationToken).ConfigureAwait(false);
                     if (acceptExactConcurrentWinner
-                        && Match(concurrent, intended) == MatchKind.Exact)
+                        && match == MatchKind.Exact)
                     {
-                        return new CampaignCheckpointAcceptanceResult(
-                            CampaignCheckpointAcceptanceKind.Accepted,
-                            new CampaignAcceptedCheckpoint(
-                                intended,
-                                CampaignAcceptedCheckpointAuthorityKind.Observer));
+                        return await VerifyReadbackAsync(store, intended, grantsDispatch: false, cancellationToken).ConfigureAwait(false);
                     }
                 }
+
+                if (match != MatchKind.Exact && (expectedPredecessor is null
+                        ? current.Kind != CampaignCheckpointReadKind.NotFound
+                        : Match(current, expectedPredecessor) != MatchKind.Exact)
+                    || match == MatchKind.Exact && !acceptExactConcurrentWinner)
+                    return new CampaignCheckpointAcceptanceResult(CampaignCheckpointAcceptanceKind.Conflict, null);
 
                 return new CampaignCheckpointAcceptanceResult(MapWriteFailure(write.Kind), null);
             }

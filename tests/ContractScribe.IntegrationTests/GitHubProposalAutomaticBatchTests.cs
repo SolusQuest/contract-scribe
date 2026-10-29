@@ -335,18 +335,31 @@ public sealed partial class GitHubProposalCliProcessTests
             var historicalHeads = fixture.GitHub.PullRequests
                 .Select(pr => pr["head"]!["sha"]!.GetValue<string>()).ToArray();
             var requestStart = fixture.GitHub.Requests.Count;
+            var planUploads = 0;
+            fixture.GitHub.BeforeBody = (request, body) =>
+            {
+                if (request.Method != "POST" || !request.Path.EndsWith("/git/blobs", StringComparison.Ordinal)) return;
+                using var envelope = JsonDocument.Parse(body);
+                var content = Convert.FromBase64String(envelope.RootElement.GetProperty("content").GetString()!);
+                if (content.Length == 0 || content[0] != (byte)'{') return;
+                using var value = JsonDocument.Parse(content);
+                if (value.RootElement.TryGetProperty("AuditDocumentSha256", out _)) planUploads++;
+            };
             var posts = fixture.GitHub.PrAttempts;
             var received = fixture.Provider.RequestCount;
             Assert.True(bases.Add(fixture.GitHub.Refs["refs/heads/main"]));
             var published = await fixture.Run();
             AssertResult(published, 0, "published");
+            fixture.GitHub.BeforeBody = null;
+            Assert.InRange(planUploads, 0, 1);
             var invocationRequests = fixture.GitHub.Requests.Skip(requestStart).ToArray();
             var distinctPayloads = invocationRequests.Where(request => request.Method == "GET"
                 && (request.Path.Contains("/git/commits/", StringComparison.Ordinal)
                     || request.Path.Contains("/git/trees/", StringComparison.Ordinal)
                     || request.Path.Contains("/git/blobs/", StringComparison.Ordinal)))
                 .Select(request => request.Path).Distinct(StringComparer.Ordinal).Count();
-            Console.WriteLine($"remaining={remaining}; HTTP={invocationRequests.Length}; distinctGitPayloads={distinctPayloads}; "
+            Console.WriteLine($"remaining={remaining}; HTTP={invocationRequests.Length}; GET={invocationRequests.Count(request => request.Method == "GET")}; "
+                + $"readonlyPOST={invocationRequests.Count(request => request.Method == "POST" && request.Mutation == 0)}; effects={invocationRequests.Count(request => request.Mutation > 0)}; distinctGitPayloads={distinctPayloads}; "
                 + string.Join(';', invocationRequests.GroupBy(request => request.Path.Contains("/git/", StringComparison.Ordinal)
                     ? request.Path.Split("/git/", StringSplitOptions.None)[1].Split('/')[0]
                     : request.Kind)
@@ -360,9 +373,10 @@ public sealed partial class GitHubProposalCliProcessTests
                     && request.Path.EndsWith("/git/commits/" + historicalHead, StringComparison.Ordinal));
                 Assert.InRange(reads, 1, 8);
             }
-            // This fixed workload must leave room inside an ordinary hosted
-            // 5,000-request window for caller setup and lease observations.
-            Assert.InRange(invocationRequests.Length, 1, 4500);
+            // Ratchet the measured remaining-six regression independently of
+            // the larger five-target history fixture. This is an intermediate
+            // bound, not evidence that the <=100 optimization goal is met.
+            Assert.InRange(invocationRequests.Length, 1, preparatoryClosure ? 2600 : 4500);
             var checkpoint = fixture.Checkpoint();
             Assert.True(batches.Add(checkpoint.State.Batch.Identity));
             Assert.Equal(remaining, checkpoint.State.Batch.CompleteTargets.Length);

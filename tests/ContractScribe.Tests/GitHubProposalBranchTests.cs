@@ -3,6 +3,7 @@ using System.Net;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using ContractScribe.Core;
 using ContractScribe.GitHub.Coordination;
 using ContractScribe.GitHub.GitData;
@@ -995,6 +996,7 @@ public sealed class GitHubProposalBranchTests
         internal readonly Dictionary<string, byte[]> Blobs = new(StringComparer.Ordinal);
         internal readonly Dictionary<string, ImmutableArray<GitHubTreeEntry>> Trees = new(StringComparer.Ordinal);
         internal readonly Dictionary<string, GitHubCommit> Commits = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string Payload, string Signature)> checkpointSignatures = new(StringComparer.Ordinal);
         internal readonly Dictionary<string, string> Refs = new(StringComparer.Ordinal);
         internal readonly List<(string Method, string Path)> Requests = [];
         private readonly object gate = new();
@@ -1019,7 +1021,8 @@ public sealed class GitHubProposalBranchTests
         internal int RecursiveTreeReads;
         internal Dictionary<string, int> TreePosts { get; } = [];
         internal string? LateFailure;
-        private string? lateCommit;
+        private string? lateCommit, verificationTree;
+        private bool commitReadbackConfirmed;
         private int lateReads;
         internal string? ProposalBeforeCas;
         internal CancellationTokenSource? CancelSource;
@@ -1149,8 +1152,8 @@ public sealed class GitHubProposalBranchTests
                 }
             }
             if (wait is not null) { await wait.WaitAsync(TimeSpan.FromSeconds(10), token); return early!; }
-            if (method == "GET" && LateFailure == "timeout" && lateReads == 1
-                && path.EndsWith("/git/commits/" + lateCommit, StringComparison.Ordinal))
+            if (method == "GET" && LateFailure == "timeout" && commitReadbackConfirmed
+                && path.EndsWith("/git/trees/" + verificationTree, StringComparison.Ordinal))
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
             lock (gate)
             {
@@ -1162,6 +1165,16 @@ public sealed class GitHubProposalBranchTests
                 Assert.Equal("POST", method);
                 using var doc = JsonDocument.Parse(text!);
                 var body = doc.RootElement;
+                if (path == "/graphql" && body.GetProperty("query").GetString()!.TrimStart().StartsWith("query", StringComparison.Ordinal))
+                {
+                    Assert.True(request.Headers.CacheControl?.NoCache);
+                    return CanonicalDocument(body.GetProperty("variables"));
+                }
+                if (path == "/graphql" && body.GetProperty("query").GetString()!.Contains("createCommitOnBranch", StringComparison.Ordinal))
+                {
+                    Writes++;
+                    return AtomicCheckpoint(body.GetProperty("variables").GetProperty("input"));
+                }
                 Writes++;
                 string kind;
                 object response;
@@ -1193,7 +1206,12 @@ public sealed class GitHubProposalBranchTests
                     value = value with { ExpectedOid = ObjectOid("commit", CommitBytes(value)) };
                     AddCommit(value); response = CommitResponse(Commits[value.ExpectedOid]); kind = "commit";
                     if (value.Message.StartsWith("ContractScribe proposal", StringComparison.Ordinal)
-                        && LateFailure is "content" or "content-target" or "timeout") { lateCommit = value.ExpectedOid; lateReads = 2; }
+                        && LateFailure is "content" or "content-target" or "timeout")
+                    {
+                        lateCommit = value.ExpectedOid;
+                        verificationTree = value.TreeOid;
+                        commitReadbackConfirmed = false;
+                    }
                 }
                 else
                 {
@@ -1295,13 +1313,31 @@ public sealed class GitHubProposalBranchTests
             if (path.Contains("/git/blobs/", StringComparison.Ordinal) && Blobs.TryGetValue(oid, out var bytes))
                 return Json(HttpStatusCode.OK, new { sha = oid, encoding = "base64", size = bytes.Length, content = Convert.ToBase64String(bytes) });
             if (path.Contains("/git/trees/", StringComparison.Ordinal) && Trees.ContainsKey(oid))
+            {
+                // The commit's independent readback is complete. Fault the
+                // next actual full-content verification, not a redundant
+                // second GET of the already confirmed commit.
+                if (commitReadbackConfirmed && oid == verificationTree)
+                {
+                    verificationTree = null;
+                    if (LateFailure == "content-target") Refs["refs/heads/main"] = Oid('9');
+                    else if (LateFailure == "content")
+                    {
+                        var invalid = JsonSerializer.SerializeToNode(TreeResponse(oid, recursive))!;
+                        invalid["tree"] = new JsonArray();
+                        return Json(HttpStatusCode.OK, invalid);
+                    }
+                }
                 return ShallowTreesMissing && !recursive ? Missing() : Json(HttpStatusCode.OK, TreeResponse(oid, recursive));
+            }
             if (path.Contains("/git/trees/", StringComparison.Ordinal) && recursive)
                 return Json(HttpStatusCode.UnprocessableEntity,
                     new { message = "Invalid object requested. SHA must identify a commit or a tree." });
             if (path.Contains("/git/commits/", StringComparison.Ordinal) && Commits.TryGetValue(oid, out var commit))
             {
-                if (oid == lateCommit && --lateReads == 0)
+                if (oid == lateCommit && LateFailure is "content" or "content-target" or "timeout")
+                    commitReadbackConfirmed = true;
+                if (oid == lateCommit && LateFailure == "ref" && --lateReads == 0)
                 {
                     lateCommit = null;
                     if (LateFailure == "content-target") Refs["refs/heads/main"] = Oid('9');
@@ -1311,6 +1347,151 @@ public sealed class GitHubProposalBranchTests
             }
             return Missing();
         }
+        private HttpResponseMessage AtomicCheckpoint(JsonElement input)
+        {
+            Assert.Equal("REF_node", input.GetProperty("branch").GetProperty("id").GetString());
+            var reference = Refs.Keys.Single(name => name.StartsWith("refs/heads/contract-scribe/coordination/", StringComparison.Ordinal));
+            var before = input.GetProperty("expectedHeadOid").GetString()!;
+            if (Refs[reference] != before)
+                return Json(HttpStatusCode.OK, new { data = (object?)null, errors = new[] { new { type = "CONFLICT" } } });
+            var root = Trees[Commits[before].TreeOid];
+            var leaf = Trees[root.Single().Oid].ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+            foreach (var file in input.GetProperty("fileChanges").GetProperty("additions").EnumerateArray())
+            {
+                var path = file.GetProperty("path").GetString()!;
+                Assert.StartsWith(".contract-scribe/", path);
+                leaf[path[17..]] = new(path[17..], GitHubTreeMode.File,
+                    AddBlob(Convert.FromBase64String(file.GetProperty("contents").GetString()!)), null);
+            }
+            var leafOid = AddTree(leaf.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal).ToImmutableArray());
+            var tree = AddTree([new(".contract-scribe", GitHubTreeMode.Directory, leafOid, null)]);
+            var message = input.GetProperty("message").GetProperty("headline").GetString() + "\n\n"
+                + input.GetProperty("message").GetProperty("body").GetString();
+            var date = DateTimeOffset.Parse("2026-01-01T00:00:00Z", System.Globalization.CultureInfo.InvariantCulture);
+            var seconds = date.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture);
+            var prefix = "tree " + tree + "\nparent " + before
+                + "\nauthor github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + seconds
+                + " +0000\ncommitter GitHub <noreply@github.com> " + seconds + " +0000\n";
+            const string signature = "-----BEGIN PGP SIGNATURE-----\nsynthetic-branch-fixture\n-----END PGP SIGNATURE-----\n";
+            var payload = prefix + "\n" + message;
+            var raw = prefix + "gpgsig " + signature.TrimEnd('\n').Replace("\n", "\n ", StringComparison.Ordinal) + "\n\n" + message;
+            var oid = ObjectOid("commit", Encoding.UTF8.GetBytes(raw));
+            Commits[oid] = new(oid, tree, [before], message,
+                new("github-actions[bot]", "41898282+github-actions[bot]@users.noreply.github.com", date),
+                new("GitHub", "noreply@github.com", date));
+            checkpointSignatures[oid] = (payload, signature);
+            Refs[reference] = oid;
+            return Json(HttpStatusCode.OK, new { data = new { createCommitOnBranch = new { clientMutationId = input.GetProperty("clientMutationId").GetString() } } });
+        }
+
+        private HttpResponseMessage CanonicalDocument(JsonElement variables)
+        {
+            var historical = variables.TryGetProperty("anchor", out var anchorNode);
+            var name = historical ? anchorNode.GetString()! : variables.GetProperty("coord").GetString()!;
+            var head = historical ? name : Refs.GetValueOrDefault(name);
+            var repository = new JsonObject
+            {
+                ["id"] = "REPO_node",
+                ["fullDatabaseId"] = RepositoryId.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                ["name"] = "repo",
+                ["owner"] = new JsonObject { ["login"] = "Owner" },
+            };
+            if (historical)
+            {
+                repository["document"] = CommitNode(head);
+                repository["coord"] = Reference(variables.GetProperty("coord").GetString()!, content: false);
+            }
+            else
+            {
+                repository["coord"] = Reference(name, content: true);
+                repository["base"] = Reference(variables.GetProperty("target").GetString()!, content: false);
+            }
+            foreach (var (alias, path) in new[] { ("state", "coordination-state-v1.json"), ("checkpoint", "checkpoint.json"),
+                ("plan", "plan.json"), ("archive", "archive-predecessor.json"), ("event", "publication-event.json") })
+            {
+                if (historical && alias != "state") continue;
+                Assert.Equal(name + ":.contract-scribe/" + path, variables.GetProperty(alias).GetString());
+                repository[alias] = File(path);
+            }
+            return Json(HttpStatusCode.OK, new JsonObject { ["data"] = new JsonObject { ["repository"] = repository } });
+
+            JsonObject? Reference(string reference, bool content)
+            {
+                if (!Refs.TryGetValue(reference, out var oid)) return null;
+                return new JsonObject
+                {
+                    ["id"] = "REF_node",
+                    ["prefix"] = "refs/heads/",
+                    ["name"] = reference[11..],
+                    ["target"] = content ? CommitNode(oid) : new JsonObject { ["__typename"] = "Commit", ["oid"] = oid },
+                };
+            }
+            JsonObject? CommitNode(string? oid)
+            {
+                if (oid is null || !Commits.TryGetValue(oid, out var commit)) return null;
+                var author = JsonSerializer.SerializeToNode(ActorResponse(commit.Author))!;
+                var signed = checkpointSignatures.TryGetValue(commit.Oid, out var signature);
+                author["user"] = signed ? new JsonObject
+                {
+                    ["__typename"] = "User",
+                    ["id"] = "MDM6Qm90NDE4OTgyODI=",
+                    ["databaseId"] = 41898282,
+                    ["login"] = "github-actions[bot]",
+                } : null;
+                return new JsonObject
+                {
+                    ["__typename"] = "Commit",
+                    ["oid"] = commit.Oid,
+                    ["message"] = commit.Message,
+                    ["author"] = author,
+                    ["committer"] = JsonSerializer.SerializeToNode(ActorResponse(commit.Committer)),
+                    ["parents"] = new JsonObject
+                    {
+                        ["totalCount"] = commit.Parents.Length,
+                        ["pageInfo"] = new JsonObject { ["hasNextPage"] = commit.Parents.Length > 2 },
+                        ["nodes"] = new JsonArray(commit.Parents.Take(2).Select(parent => (JsonNode)new JsonObject { ["oid"] = parent }).ToArray()),
+                    },
+                    ["signature"] = signed ? new JsonObject
+                    {
+                        ["__typename"] = "GpgSignature",
+                        ["isValid"] = true,
+                        ["state"] = "VALID",
+                        ["wasSignedByGitHub"] = true,
+                        ["payload"] = signature.Payload,
+                        ["signature"] = signature.Signature,
+                    } : null,
+                    ["tree"] = Tree(commit.TreeOid, true),
+                };
+            }
+            JsonObject? File(string path)
+            {
+                if (head is null || !Commits.TryGetValue(head, out var commit)) return null;
+                var directory = Trees[commit.TreeOid].SingleOrDefault(entry => entry.Path == ".contract-scribe" && entry.Mode == GitHubTreeMode.Directory);
+                var state = directory is null ? null : Trees[directory.Oid].SingleOrDefault(entry => entry.Path == path);
+                if (state is null || !Blobs.TryGetValue(state.Oid, out var bytes)) return null;
+                return new JsonObject
+                {
+                    ["__typename"] = "Blob",
+                    ["oid"] = state.Oid,
+                    ["byteSize"] = bytes.Length,
+                    ["isBinary"] = false,
+                    ["isTruncated"] = false,
+                    ["text"] = Encoding.UTF8.GetString(bytes),
+                };
+            }
+            JsonObject Tree(string oid, bool children)
+            {
+                var entries = new JsonArray();
+                foreach (var entry in Trees[oid])
+                {
+                    var value = new JsonObject { ["name"] = entry.Path, ["mode"] = Convert.ToInt32(entry.Mode == GitHubTreeMode.Directory ? "040000" : Mode(entry.Mode), 8), ["oid"] = entry.Oid };
+                    if (children) value["object"] = entry.Mode == GitHubTreeMode.Directory ? Tree(entry.Oid, false) : new JsonObject { ["__typename"] = "Blob" };
+                    entries.Add(value);
+                }
+                return new JsonObject { ["__typename"] = "Tree", ["oid"] = oid, ["entries"] = entries };
+            }
+        }
+
         private object TreeResponse(string oid, bool recursive = false) => new
         {
             sha = oid,

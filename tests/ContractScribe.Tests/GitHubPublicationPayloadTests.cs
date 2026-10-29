@@ -10,6 +10,95 @@ namespace ContractScribe.Tests;
 public sealed partial class GitHubCoordinationRefTests
 {
     [Theory]
+    [InlineData("history-403")]
+    [InlineData("history-404")]
+    [InlineData("current-403")]
+    [InlineData("owner-change")]
+    [InlineData("wrong-repository")]
+    [InlineData("failed-proof")]
+    [InlineData("cancel")]
+    [InlineData("disposed-credential")]
+    public async Task Checkpoint_to_publication_handoff_retains_only_same_owner_positive_raw_payloads(string fault)
+    {
+        var remote = new CoordinationRemote();
+        using var handler = new CheckpointInterceptHandler(remote);
+        using var client = CheckpointClient(remote, handler: handler);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        SeedPublicationCheckpoint(remote);
+        // Establish retained publication history, then let the checkpoint
+        // phase authenticate it into its own positive raw-payload pool.
+        await PayloadPublication(store, client, async () =>
+            Assert.NotNull((await store.ClaimAsync((await store.ReadCurrentAsync()).Read!)).State));
+        Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
+        var checkpointPool = typeof(GitHubCoordinationStore).GetField("checkpointPayloads", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store);
+        Assert.NotNull(checkpointPool);
+        var oldHead = remote.CoordinationHead!;
+        using var caller = new CancellationTokenSource();
+        var blockedHistory = 0;
+        handler.AfterResponse = async (request, response) =>
+        {
+            if (ReadsCanonicalDocument(request, oldHead))
+            {
+                blockedHistory++;
+                response.Dispose();
+                return new HttpResponseMessage(fault == "history-404" ? HttpStatusCode.NotFound : HttpStatusCode.Forbidden);
+            }
+            if (IsCheckpointQuery(request, currentOnly: true))
+            {
+                if (fault == "current-403") { response.Dispose(); return new(HttpStatusCode.Forbidden); }
+                if (fault is "wrong-repository" or "failed-proof")
+                {
+                    var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+                    if (fault == "wrong-repository") body["data"]!["repository"]!["fullDatabaseId"] = "43";
+                    else body["data"]!["repository"]!["state"] = null;
+                    response.Content.Dispose();
+                    response.Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+                }
+            }
+            return response;
+        };
+        if (fault == "owner-change") remote.AppendDocument(document => document with
+        { Claim = document.Claim! with { Owner = new string('e', 64), Epoch = document.Claim.Epoch + 1 } });
+        if (fault == "cancel") caller.Cancel();
+        if (fault == "disposed-credential") client.Dispose();
+        var mutations = remote.RefMutationAttempts;
+        var callback = false;
+        try
+        {
+            var exception = await Record.ExceptionAsync(() => store.WithPublicationAsync(async () =>
+            {
+                callback = true;
+                client.BindPublication(GitHubPublicationTestBatch.BindCheckpoint(Authority(), PublicationCheckpointFixture("campaign-1")));
+                try
+                {
+                    var publicationPool = typeof(GitHubCoordinationStore).GetField("publicationPayloads", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store);
+                    Assert.NotNull(publicationPool);
+                    var claim = await store.ClaimAsync((await store.ReadCurrentAsync()).Read!);
+                    Assert.NotNull(claim.State);
+                    Assert.Null(claim.PullRequestEntitlement);
+                    Assert.Equal(0, blockedHistory);
+                    // Another client/credential lifetime starts cold even in
+                    // this callback. The old owner cannot supply its bytes.
+                    using var otherHandler = new CheckpointInterceptHandler(remote) { AfterResponse = handler.AfterResponse };
+                    using var otherClient = CheckpointClient(remote, handler: otherHandler);
+                    await using var other = GitHubCoordinationStore.Create(otherClient);
+                    otherClient.BindPublication(GitHubPublicationTestBatch.BindCheckpoint(Authority(), PublicationCheckpointFixture("campaign-1")));
+                    try { Assert.Null((await other.ReadCurrentAsync()).State); }
+                    finally { otherClient.UnbindPublication(); }
+                    Assert.True(blockedHistory > 0);
+                    return true;
+                }
+                finally { client.UnbindPublication(); }
+            }, caller.Token));
+            if (fault.StartsWith("history-", StringComparison.Ordinal)) { Assert.Null(exception); Assert.True(callback); }
+            else { Assert.NotNull(exception); Assert.False(callback); Assert.Equal(mutations, remote.RefMutationAttempts); }
+            Assert.Null(typeof(GitHubCoordinationStore).GetField("publicationPayloads", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(store));
+        }
+        finally { handler.AfterResponse = null; }
+    }
+
+    [Theory]
     [InlineData("commit", 403)]
     [InlineData("root", 404)]
     [InlineData("leaf", 403)]
@@ -28,11 +117,14 @@ public sealed partial class GitHubCoordinationRefTests
             var claim = await store.ClaimAsync((await store.ReadCurrentAsync()).Read!);
             Assert.NotNull(claim.State);
             Assert.NotNull((await store.ReadCurrentAsync()).State);
-            var path = PayloadPath(remote.CoordinationHead!, role);
+            var historicalHead = remote.CoordinationHead!;
+            var path = PayloadPath(historicalHead, role);
+            Assert.NotNull((await store.AdvanceAsync(claim.State!, GitHubCoordinationStageUpdate.ContentCreated(Oid('4')))).State);
             var fetched = 0;
             handler.AfterResponse = (request, response) =>
             {
-                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal))
+                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal)
+                    || role == "commit" && ReadsCanonicalDocument(request, historicalHead))
                 {
                     fetched++;
                     response.Dispose();
@@ -70,7 +162,8 @@ public sealed partial class GitHubCoordinationRefTests
             var fetched = 0;
             handler.AfterResponse = (request, response) =>
             {
-                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal))
+                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal)
+                    || IsCheckpointQuery(request, currentOnly: true))
                 {
                     fetched++;
                     response.Dispose();
@@ -103,27 +196,36 @@ public sealed partial class GitHubCoordinationRefTests
         SeedPublicationCheckpoint(remote);
         await PayloadPublication(store, client, async () =>
         {
-            Assert.NotNull((await store.ClaimAsync((await store.ReadCurrentAsync()).Read!)).State);
+            var claim = (await store.ClaimAsync((await store.ReadCurrentAsync()).Read!)).State;
+            Assert.NotNull(claim);
             Assert.NotNull((await store.ReadCurrentAsync()).State);
-            var head = remote.CoordinationHead!;
-            var prepared = GitHubCoordinationObjects.Prepare(FixtureDocuments[head]);
-            var path = PayloadPath(head, role);
             var fetched = 0;
-            handler.AfterResponse = (request, response) =>
+            var written = false;
+            var mutations = remote.RefMutationAttempts;
+            handler.AfterResponse = async (request, response) =>
             {
-                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal))
+                if (IsRefMutation(request)) written = true;
+                if (written && IsCheckpointQuery(request, currentOnly: true))
                 {
                     fetched++;
-                    response.Dispose();
-                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+                    var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+                    var repository = body["data"]!["repository"]!;
+                    var commit = repository["coord"]!["target"]!;
+                    if (role == "commit") repository["coord"]!["target"] = null;
+                    else if (role == "root") commit["tree"] = null;
+                    else if (role == "leaf") commit["tree"]!["entries"]![0]!["object"] = null;
+                    else repository[role] = null;
+                    response.Content.Dispose();
+                    response.Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
                 }
-                return Task.FromResult(response);
+                return response;
             };
             try
             {
-                var target = (await client.GetRefAsync(client.ReadAuthority.TargetRef)).Value!;
-                var result = await InvokePayloadReadback(store, client, target, prepared);
+                var result = await store.AdvanceAsync(claim!, GitHubCoordinationStageUpdate.ContentCreated(Oid('4')));
                 Assert.Null(result.State);
+                Assert.Null(result.ProposalRefEntitlement);
+                Assert.Equal(mutations + 1, remote.RefMutationAttempts);
                 Assert.True(fetched > 0);
             }
             finally { handler.AfterResponse = null; }
@@ -143,7 +245,8 @@ public sealed partial class GitHubCoordinationRefTests
         var fetched = 0;
         handler.AfterResponse = (request, response) =>
         {
-            if (path.Length > 0 && request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal))
+            if (path.Length > 0 && (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal)
+                || ReadsCanonicalDocument(request, path.Split('/')[^1]) || IsCheckpointQuery(request, currentOnly: true)))
             {
                 fetched++;
                 response.Dispose();
@@ -195,7 +298,8 @@ public sealed partial class GitHubCoordinationRefTests
             var fetched = 0;
             handler.AfterResponse = (request, response) =>
             {
-                if (request.RequestUri!.AbsolutePath.EndsWith("/git/commits/" + head, StringComparison.Ordinal))
+                if (request.RequestUri!.AbsolutePath.EndsWith("/git/commits/" + head, StringComparison.Ordinal)
+                    || ReadsCanonicalDocument(request, head) || IsCheckpointQuery(request, currentOnly: true))
                 {
                     fetched++;
                     response.Dispose();
@@ -226,14 +330,17 @@ public sealed partial class GitHubCoordinationRefTests
         await PayloadPublication(store, client, async () =>
         {
             ReplacePayloadLimits(store, client, entries, bytes);
-            Assert.NotNull((await store.ClaimAsync((await store.ReadCurrentAsync()).Read!)).State);
+            var claim = (await store.ClaimAsync((await store.ReadCurrentAsync()).Read!)).State;
+            Assert.NotNull(claim);
             Assert.NotNull((await store.ReadCurrentAsync()).State);
             Assert.Equal(0, PayloadEntries(store));
             var path = PayloadPath(remote.CoordinationHead!, "commit");
+            Assert.NotNull((await store.AdvanceAsync(claim!, GitHubCoordinationStageUpdate.ContentCreated(Oid('4')))).State);
             var fetched = 0;
             handler.BeforeRequest = request =>
             {
-                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal)) fetched++;
+                if (request.RequestUri!.AbsolutePath.EndsWith(path, StringComparison.Ordinal)
+                    || ReadsCanonicalDocument(request, path.Split('/')[^1])) fetched++;
                 return Task.CompletedTask;
             };
             Assert.NotNull((await store.ReadCurrentAsync()).State);
@@ -288,7 +395,8 @@ public sealed partial class GitHubCoordinationRefTests
                 var fetched = 0;
                 handler.BeforeRequest = request =>
                 {
-                    if (request.RequestUri!.AbsolutePath.EndsWith("/git/commits/" + invalid, StringComparison.Ordinal)) fetched++;
+                    if (request.RequestUri!.AbsolutePath.EndsWith("/git/commits/" + invalid, StringComparison.Ordinal)
+                        || ReadsCanonicalDocument(request, invalid) || IsCheckpointQuery(request, currentOnly: true)) fetched++;
                     return Task.CompletedTask;
                 };
                 Assert.Null((await store.ReadCurrentAsync()).State);
@@ -314,7 +422,8 @@ public sealed partial class GitHubCoordinationRefTests
             var fetched = 0;
             handler.BeforeRequest = request =>
             {
-                if (request.RequestUri!.AbsolutePath.EndsWith("/git/commits/" + remote.CoordinationHead, StringComparison.Ordinal)) fetched++;
+                if (request.RequestUri!.AbsolutePath.EndsWith("/git/commits/" + remote.CoordinationHead, StringComparison.Ordinal)
+                    || ReadsCanonicalDocument(request, remote.CoordinationHead!) || IsCheckpointQuery(request, currentOnly: true)) fetched++;
                 return Task.CompletedTask;
             };
             Assert.NotNull((await store.ReadCurrentAsync()).Read);
@@ -393,6 +502,9 @@ public sealed partial class GitHubCoordinationRefTests
         await store.WithPublicationAsync(async () =>
         {
             client.BindPublication(GitHubPublicationTestBatch.BindCheckpoint(Authority(), PublicationCheckpointFixture("campaign-1")));
+            // These existing tests isolate a cold callback-local pool. The
+            // owner-phase handoff and its negative cases are exercised above.
+            ReplacePayloadLimits(store, client, 1024, 67108864);
             try { await body(); return true; }
             finally { client.UnbindPublication(); }
         }, token);

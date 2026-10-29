@@ -53,7 +53,7 @@ public sealed partial class GitHubCoordinationRefTests
                     response.Dispose();
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden));
                 }
-                if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/graphql")
+                if (IsRefMutation(request))
                 {
                     applied = true;
                     if (fault == "lost-ack") throw new HttpRequestException("private-lost-ack-marker");
@@ -150,7 +150,7 @@ public sealed partial class GitHubCoordinationRefTests
             handler.AfterResponse = (request, response) =>
             {
                 var path = request.RequestUri!.AbsolutePath;
-                if (request.Method == HttpMethod.Post && path == "/graphql")
+                if (IsRefMutation(request))
                 {
                     expected = remote.CoordinationHead;
                     if (lostAck) throw new HttpRequestException("private-lost-ack-marker");
@@ -225,7 +225,7 @@ public sealed partial class GitHubCoordinationRefTests
         var observed = fault == "predecessor" ? prior : Oid('f');
         handler.AfterResponse = (request, response) =>
         {
-            if (request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/graphql") expected = remote.CoordinationHead;
+            if (IsRefMutation(request)) expected = remote.CoordinationHead;
             if (expected is not null && request.Method == HttpMethod.Get
                 && request.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal))
             {

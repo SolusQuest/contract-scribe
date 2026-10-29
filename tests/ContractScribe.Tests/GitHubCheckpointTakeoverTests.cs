@@ -114,7 +114,7 @@ public sealed partial class GitHubCoordinationRefTests
         handler.AfterResponse = (request, response) =>
         {
             if (remote.RefMutationAttempts <= writes) return Task.FromResult(response);
-            if (fault == "lost-ack" && request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/graphql")
+            if (fault == "lost-ack" && IsRefMutation(request))
                 throw new HttpRequestException("synthetic lost acknowledgement");
             if (request.Method != HttpMethod.Get || !request.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal))
                 return Task.FromResult(response);

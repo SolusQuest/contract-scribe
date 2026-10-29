@@ -28,25 +28,34 @@ public sealed partial class CampaignStateContractTests
         var readbacks = 0;
         handler.BeforeRequest = request =>
         {
-            if (cancellation.IsCancellationRequested && request.Method == HttpMethod.Get
-                && request.RequestUri!.AbsolutePath.Contains("/git/blobs/", StringComparison.Ordinal)) readbacks++;
+            if (cancellation.IsCancellationRequested && GitHubCoordinationRefTests.IsCheckpointQuery(request, currentOnly: true)) readbacks++;
             return Task.CompletedTask;
         };
-        remote.CancelAfterMutation = GitHubCoordinationRefTests.LostMutation.Blob;
+        remote.CancelAfterMutation = GitHubCoordinationRefTests.LostMutation.Ref;
         remote.CancelSource = cancellation;
         remote.LostBlobReadback = readback;
         if (readback != GitHubCoordinationRefTests.LostReadback.Exact)
-            remote.LoseResponse = GitHubCoordinationRefTests.LostMutation.Blob;
+            remote.LoseResponse = GitHubCoordinationRefTests.LostMutation.Ref;
         async Task Write() => Assert.Equal(CampaignCheckpointWriteKind.PublicationFailure,
             (await store.CreateIfAbsentAsync(artifact.ExactUtf8Json.AsMemory(), artifact.CheckpointRevision,
                 artifact.Sha256, cancellation.Token)).Kind);
-        if (readback == GitHubCoordinationRefTests.LostReadback.Exact)
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(Write);
-        else await Write();
+        // The one atomic effect may have applied. Its folded Core readback
+        // keeps the original caller bound, so a cancelled caller receives no
+        // Writer even when a later independent read could authenticate it.
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(Write);
         Assert.True(cancellation.IsCancellationRequested);
-        Assert.Equal(writes, remote.RefMutationAttempts);
-        Assert.Equal(objects + 1, remote.ObjectMutationAttempts);
-        Assert.True(readbacks > 0);
+        Assert.Equal(writes + 1, remote.RefMutationAttempts);
+        Assert.Equal(objects, remote.ObjectMutationAttempts);
+        Assert.Equal(0, readbacks);
+        var first = Assert.IsType<ContractScribe.GitHub.Coordination.GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
+        var later = await store.ReadAsync(default);
+        if (readback == GitHubCoordinationRefTests.LostReadback.Exact)
+        {
+            Assert.Equal(CampaignCheckpointReadKind.Found, later.Kind);
+            Assert.Equal(artifact.Sha256, later.Sha256);
+        }
+        else Assert.NotEqual(CampaignCheckpointReadKind.Found, later.Kind);
+        Assert.Same(first, store.CheckpointDiagnostic);
     }
 
     [Theory]

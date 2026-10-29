@@ -321,11 +321,13 @@ public sealed partial class DocumentationScribeRuntimeTests
 
         internal int Calls { get; private set; }
         public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
-            DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
+            DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification progress,
+            CancellationToken cancellationToken)
         {
             Calls++; onReceipt?.Invoke();
             return ValueTask.FromResult<DocumentationScribeSubmissionAcknowledgement?>(new(foreign ? new string('f', 64) : submission.ScribeRequestSha256,
-                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded));
+                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded)
+            { ProgressSha256 = progress.ProgressSha256 });
         }
     }
 }

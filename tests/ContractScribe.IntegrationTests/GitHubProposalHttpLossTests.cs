@@ -55,7 +55,7 @@ internal static class GitHubProposalHttpLossScenario
         GitHubProposalCliProcessTests.AssertResult(await fixture.Run(), 0, "published");
         var mutations = fixture.GitHub.Mutations;
         Assert.InRange(mutations, 20, 500);
-        Assert.Equal(new[] { "blobs", "cas", "commits", "pulls", "trees" },
+        Assert.Equal(new[] { "blobs", "cas", "checkpoint-commit", "commits", "pulls", "trees" },
             fixture.GitHub.Requests.Where(request => request.Mutation > 0)
                 .Select(request => request.Kind).Distinct().OrderBy(kind => kind, StringComparer.Ordinal));
         for (var index = lane + 1; index <= mutations; index += 3)
@@ -74,7 +74,7 @@ internal static class GitHubProposalHttpLossScenario
             else Assert.True(failed.ExitCode is 0 or 3 or 5,
                 $"mutation={index}, after={after}, stdout={failed.Stdout}, stderr={failed.Stderr}");
             var boundary = Assert.Single(fixture.GitHub.Requests, r => r.Mutation == index);
-            Assert.Contains(boundary.Kind, new[] { "blobs", "cas", "commits", "pulls", "trees" });
+            Assert.Contains(boundary.Kind, new[] { "blobs", "cas", "checkpoint-commit", "commits", "pulls", "trees" });
             fixture.GitHub.LoseAt = null;
             // A lost invocation does not release another process's lease. Advance only
             // the fake server's clock; no production timeout or ownership check is bypassed.

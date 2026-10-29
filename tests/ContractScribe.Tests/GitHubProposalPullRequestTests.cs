@@ -14,6 +14,68 @@ namespace ContractScribe.Tests;
 [Collection("GitHub transport hook")]
 public sealed class GitHubProposalPullRequestTests
 {
+    [Theory]
+    [InlineData("clean")]
+    [InlineData("reuse")]
+    [InlineData("foreign-store")]
+    [InlineData("forged")]
+    [InlineData("effect")]
+    [InlineData("unknown-effect")]
+    [InlineData("cancel")]
+    [InlineData("parent-cancel")]
+    [InlineData("target-moved")]
+    [InlineData("head-moved")]
+    public async Task Same_gate_absence_uses_one_fresh_guard_but_keeps_its_closing_physical_fence(string change)
+    {
+        using var h = await Harness.Create();
+        using var parent = new CancellationTokenSource();
+        var guarded = await h.Coordination.ReadClaimAsync(h.State, parent.Token);
+        var guard = Assert.IsAssignableFrom<IGitHubCoordinationGuardCapability>(guarded.Guard);
+        var store = h.Store;
+        if (change == "forged") guard = new UnownedGuard(guard.State);
+        if (change == "foreign-store") store = GitHubProposalPullRequestStore.Create(h.Client, GitHubCoordinationStore.Create(h.Client), Publisher);
+        if (change is "effect" or "unknown-effect")
+        {
+            if (change == "unknown-effect") h.Remote.Coordination.LoseResponse = LostMutation.Blob;
+            var bytes = "bounded synthetic orphan"u8.ToArray();
+            var mutation = await h.Client.CreateBlobAsync(GitHubCoordinationObjects.ObjectOid("blob", bytes), bytes);
+            Assert.Equal(change == "effect" ? GitHubDelivery.NeedsReadback : GitHubDelivery.Ambiguous, mutation.Delivery);
+        }
+        using var cancellation = new CancellationTokenSource();
+        if (change == "cancel") cancellation.Cancel();
+        if (change == "parent-cancel") parent.Cancel();
+        if (change == "target-moved") h.Remote.Coordination.TargetHead = Oid('9');
+        if (change == "head-moved") h.Remote.Coordination.SeedChain(PublishedChain(h.Authority));
+        var before = h.Remote.Requests.Count;
+        if (change == "cancel")
+        {
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.PreflightAsync(guard, cancellation.Token).AsTask());
+            Assert.Equal(before, h.Remote.Requests.Count);
+            Assert.Equal(GitHubProposalOutcome.Conflict, (await store.PreflightAsync(guard)).Outcome);
+            Assert.Equal(before, h.Remote.Requests.Count);
+        }
+        else
+        {
+            var result = await store.PreflightAsync(guard);
+            Assert.Equal(change is "clean" or "reuse" ? GitHubProposalOutcome.Absent : GitHubProposalOutcome.Conflict, result.Outcome);
+            if (change is "effect" or "unknown-effect" or "forged" or "foreign-store" or "parent-cancel") Assert.Equal(before, h.Remote.Requests.Count);
+            else
+            {
+                Assert.Contains(h.Remote.Requests.Skip(before), request => request == "GET /repos/Owner/repo/pulls");
+                Assert.Contains(h.Remote.Requests.Skip(before), request => request.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal));
+            }
+            if (change == "reuse")
+            {
+                var completed = h.Remote.Requests.Count;
+                Assert.Equal(GitHubProposalOutcome.Conflict, (await store.PreflightAsync(guard)).Outcome);
+                Assert.Equal(completed, h.Remote.Requests.Count);
+            }
+        }
+        Assert.Equal(0, h.Remote.Posts);
+    }
+
+    private sealed record UnownedGuard(IGitHubCoordinationStateCapability State) : IGitHubCoordinationGuardCapability;
+
     private static string Oid(char c) => new(c, 40);
     private static readonly GitHubActor Publisher = new(99, "BOT_99", "github-actions[bot]", GitHubActorKind.Bot);
 
@@ -223,7 +285,9 @@ public sealed class GitHubProposalPullRequestTests
         using var restart = await Harness.Create(h.Remote, h.Authority, seed: false);
         Assert.Equal(GitHubProposalOutcome.OpenDraft, (await restart.Store.RecoverAsync(restart.State, restart.Head)).Outcome);
         Assert.Equal(1, h.Remote.Posts);
-        Assert.All(h.Remote.Requests.Where(x => !x.StartsWith("GET ", StringComparison.Ordinal)), x => Assert.Equal("POST /repos/Owner/repo/pulls", x));
+        Assert.All(h.Remote.Requests.Where(x => !x.StartsWith("GET ", StringComparison.Ordinal) && x != "POST /graphql"), x => Assert.Equal("POST /repos/Owner/repo/pulls", x));
+        Assert.Equal(0, h.Remote.Coordination.ObjectMutationAttempts);
+        Assert.Equal(0, h.Remote.Coordination.RefMutationAttempts);
     }
 
     [Theory]
@@ -455,7 +519,7 @@ public sealed class GitHubProposalPullRequestTests
         Assert.Single(initial.Remote.Prs);
         Assert.Equal(1, initial.Remote.Posts);
         Assert.Equal(writes, initial.Remote.Coordination.ObjectMutationAttempts + initial.Remote.Coordination.RefMutationAttempts);
-        Assert.All(initial.Remote.Requests.Skip(requests), request => Assert.StartsWith("GET ", request));
+        Assert.All(initial.Remote.Requests.Skip(requests), request => Assert.True(request.StartsWith("GET ", StringComparison.Ordinal) || request == "POST /graphql"));
         if (coordination is "advance" or "stable")
         {
             Assert.Equal(GitHubDelivery.Read, result.Delivery);

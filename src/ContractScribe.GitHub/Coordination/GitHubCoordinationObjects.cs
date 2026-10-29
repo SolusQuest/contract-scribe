@@ -118,6 +118,18 @@ internal static class GitHubCoordinationObjects
         GitHubTree leaf,
         GitHubBlob blob)
     {
+        AuthenticateLayout(expected, root, leaf, blob);
+        Require(commit.Oid == expected.CommitOid
+            && commit.TreeOid == expected.RootTreeOid
+            && commit.Parents.Length == 1
+            && commit.Parents[0] == expected.ParentOid
+            && commit.HasOwnedMessage(expected.Message)
+            && Actor(commit.Author)
+            && Actor(commit.Committer));
+    }
+
+    internal static void AuthenticateLayout(GitHubPreparedCoordination expected, GitHubTree root, GitHubTree leaf, GitHubBlob blob)
+    {
         Require(blob.Oid == expected.BlobOid
             && blob.Bytes.AsSpan().SequenceEqual(expected.StateBytes.AsSpan()));
         var expectedEntries = LeafEntries(expected);
@@ -131,13 +143,6 @@ internal static class GitHubCoordinationObjects
             && rootEntry.Mode == GitHubTreeMode.Directory
             && rootEntry.Oid == expected.LeafTreeOid
             && rootEntry.Size is null);
-        Require(commit.Oid == expected.CommitOid
-            && commit.TreeOid == expected.RootTreeOid
-            && commit.Parents.Length == 1
-            && commit.Parents[0] == expected.ParentOid
-            && commit.HasOwnedMessage(expected.Message)
-            && Actor(commit.Author)
-            && Actor(commit.Committer));
     }
 
     internal static GitHubCreateCommit CommitRequest(GitHubPreparedCoordination prepared) => new(

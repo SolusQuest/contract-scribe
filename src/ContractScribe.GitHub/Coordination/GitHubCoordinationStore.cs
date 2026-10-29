@@ -144,22 +144,24 @@ internal sealed partial class GitHubCoordinationStore
     private const int MaximumSameOperationTransitions = 7;
     internal const int MaximumHistoryStates = 1024;
     private readonly GitHubApiClient client;
+    private readonly GitHubActor checkpointPrincipal;
     private ValidatedGitHubPublicationAuthority authority => client.Authority;
     private readonly string coordinationRef;
     private readonly Dictionary<string, GitHubEventPointer?> publicationPrevious = new(StringComparer.Ordinal);
 
-    private GitHubCoordinationStore(GitHubApiClient client)
+    private GitHubCoordinationStore(GitHubApiClient client, GitHubActor checkpointPrincipal)
     {
         this.client = client;
+        this.checkpointPrincipal = checkpointPrincipal;
         checkpointExpiryRegistration = checkpointExpiry.Token.UnsafeRegister(static state =>
             ((GitHubCoordinationStore)state!).StopCheckpoint(), this);
         coordinationRef = GitHubPublicationFactory.CreateCoordinationRef(client.ReadAuthority);
     }
 
-    internal static GitHubCoordinationStore Create(GitHubApiClient client)
+    internal static GitHubCoordinationStore Create(GitHubApiClient client, GitHubActor? checkpointPrincipal = null)
     {
         ArgumentNullException.ThrowIfNull(client);
-        return new(client);
+        return new(client, checkpointPrincipal ?? PullRequests.GitHubPublicationPrincipal.ActionsBot);
     }
 
     internal async ValueTask<GitHubCoordinationResult> ReadCurrentAsync(
@@ -168,6 +170,11 @@ internal sealed partial class GitHubCoordinationStore
         if (!client.HasMutationAuthority) return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
         try
         {
+            if (client.CheckpointAuthority is not null)
+            {
+                if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } failure) return failure;
+                return await ReadPublicationSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            }
             var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
             if (repository.Value is null) return Failed(repository);
             if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
@@ -215,6 +222,45 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.Transport,
                 new(GitHubFailureCode.HostFailure));
         }
+    }
+
+    private async ValueTask<GitHubCoordinationResult> ReadPublicationSnapshotAsync(CancellationToken token)
+    {
+        try
+        {
+            var snapshot = RequireRemote(await client.ReadCheckpointSnapshotAsync(token).ConfigureAwait(false));
+            if (snapshot.Target is not { } target) return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
+            if (snapshot.Reference is not { } current)
+                return authority.Transition != GitHubPublicationTransitionKind.Initial
+                    ? DomainFailure(GitHubCoordinationFailureKind.MissingPredecessor)
+                    : target.Oid != authority.ExpectedBaseCommitOid
+                        ? DomainFailure(GitHubCoordinationFailureKind.TargetMoved)
+                        : new(GitHubCoordinationOutcome.ExpectedAbsence,
+                            read: new ReadCapability(this, snapshot.Repository, target, null));
+            using var proof = PublicationProof(snapshot.Repository, current.Oid);
+            var observed = await ReadSnapshotCheckpointAsync(snapshot, proof, token, verifyTarget: false).ConfigureAwait(false);
+            if (observed.ClosingRef.Value != current)
+                return observed.ClosingRef.Value is null ? Failed(observed.ClosingRef)
+                    : DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            var state = await ReadStateAsync(snapshot.Repository, target, current.Oid, token, proof: proof).ConfigureAwait(false);
+            if (state.Failure is not null) return state;
+            // This R3 observation grants no checkpoint lease. Its caller must
+            // classify a foreign owner as the original conflict before owner
+            // cancellation can mask it as a caller stop.
+            token.ThrowIfCancellationRequested();
+            var capability = state.State as StateCapability;
+            if (!checkpointStopped && capability is not null) proof.Promote(token);
+            return new(GitHubCoordinationOutcome.Current,
+                read: new ReadCapability(this, snapshot.Repository, target, capability,
+                    capability is null ? current.Oid : null), state: capability);
+        }
+        catch (GitHubCoordinationException exception)
+        {
+            return exception.Failure is { } failure ? new(GitHubCoordinationOutcome.Failed, failure: failure)
+                : DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch, exception.TransportFailure);
+        }
+        catch (OperationCanceledException)
+        { return DomainFailure(GitHubCoordinationFailureKind.Transport, client.CancellationFailure); }
     }
 
     internal ValueTask<GitHubCoordinationResult> ReadObservedStateAsync(
@@ -268,10 +314,8 @@ internal sealed partial class GitHubCoordinationStore
                 var expectedPredecessor = observedCurrent?.HeadOid ?? owned.CheckpointHead ?? ZeroOid;
                 var expectedState = GitHubCoordinationCodec.CreateClaim(authority, expectedPredecessor);
                 var expectedClaim = Prepare(expectedState, expectedState);
-                if (currentRef.Value.Oid != expectedClaim.CommitOid)
-                    return DomainFailure(GitHubCoordinationFailureKind.Conflict);
-                var moved = await ReadPreparedAsync(owned.Repository, owned.Target,
-                    expectedClaim, cancellationToken).ConfigureAwait(false);
+                var moved = await ReadPublicationCandidateAsync(owned.Repository, owned.Target,
+                    currentRef.Value.Oid, expectedClaim, null, cancellationToken).ConfigureAwait(false);
                 if (moved.State is null) return moved;
                 var movedState = (StateCapability)moved.State;
                 observedCurrent = movedState;
@@ -302,6 +346,15 @@ internal sealed partial class GitHubCoordinationStore
             if (!ValidAuthorityRoot(claim, observedCurrent?.State))
                 return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
             var prepared = Prepare(claim, claim);
+            if (UsesAtomicPublication(prepared))
+            {
+                var admittedAtomic = await UpdateAndReadAsync(owned.Repository, owned.Target, prepared,
+                    predecessor, null, cancellationToken).ConfigureAwait(false);
+                if (admittedAtomic.State is not StateCapability admittedClaim) return admittedAtomic;
+                var completed = await CompleteClaimReplayAsync(admittedClaim, cancellationToken).ConfigureAwait(false);
+                return completed.State?.HeadOid == admittedClaim.HeadOid
+                    ? new(GitHubCoordinationOutcome.Admitted, state: completed.State) : completed;
+            }
             var orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
             if (orphan.Value is not null)
             {
@@ -421,6 +474,21 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
         if (!MatchesAuthority(owned.State))
             return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
+        if (client.CheckpointAuthority is not null)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return DomainFailure(GitHubCoordinationFailureKind.Transport, client.CancellationFailure);
+            if (renewClaim && await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } failure) return failure;
+            var currentSnapshot = await ReadPublicationSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            if (currentSnapshot.State is not StateCapability currentState) return currentSnapshot;
+            if (currentState.Repository != owned.Repository) return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+            if (currentState.Target.Oid != owned.State.TargetCommitOid) return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
+            if (currentState.HeadOid != owned.HeadOid || !documents.TryGetValue(currentState.HeadOid, out var currentDocument)
+                || !Owns(currentDocument)) return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            if (!SameState(owned, currentState)) return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+            return new(GitHubCoordinationOutcome.Guarded, state: currentState,
+                guard: new GuardCapability(this, currentState, cancellationToken));
+        }
         var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
         if (repository.Value is null) return Failed(repository);
         if (renewClaim && await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
@@ -444,7 +512,7 @@ internal sealed partial class GitHubCoordinationStore
         if (!SameState(owned, rereadState))
             return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
         return new(GitHubCoordinationOutcome.Guarded, state: rereadState,
-            guard: new GuardCapability(this, rereadState));
+            guard: new GuardCapability(this, rereadState, cancellationToken));
     }
 
     internal bool UsesClient(GitHubApiClient candidate) => ReferenceEquals(client, candidate);
@@ -548,6 +616,26 @@ internal sealed partial class GitHubCoordinationStore
             ? owned.State
             : null;
 
+    // Carry this gate's actual observation into its immediate absence check.
+    // The final recheck after PR enumeration remains physical. This one-use
+    // input stops being usable after any attempted effect on the same client.
+    internal IGitHubCoordinationReadCapability? ConsumeGuardRead(IGitHubCoordinationGuardCapability guard,
+        CancellationToken token)
+    {
+        if (token.IsCancellationRequested && guard is GuardCapability cancelled && ReferenceEquals(cancelled.Owner, this))
+            _ = cancelled.TryConsumeRead();
+        token.ThrowIfCancellationRequested();
+        if (guard is not GuardCapability owned || !ReferenceEquals(owned.Owner, this)
+            || owned.IssuanceToken.IsCancellationRequested
+            || owned.MutationOrdinal != client.MutationOrdinal || owned.RefNodeId != client.CheckpointRefNodeId
+            || !MatchesAuthority(((StateCapability)owned.State).State)
+            || client.CheckpointAuthority is not null && (checkpointStopped || checkpointLifetime.IsCancellationRequested
+                || !documents.TryGetValue(((StateCapability)owned.State).PhysicalHeadOid, out var document) || !Owns(document))
+            || !owned.TryConsumeRead()) return null;
+        var state = (StateCapability)owned.State;
+        return new ReadCapability(this, state.Repository, state.Target, state);
+    }
+
     internal IGitHubCoordinationStateCapability? AdmissionSource(
         IGitHubCoordinationStateCapability state) =>
         state is StateCapability owned && ReferenceEquals(owned.Owner, this)
@@ -565,6 +653,17 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.InvalidInput);
         if (!MatchesAuthority(owned.State))
             return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
+        if (client.CheckpointAuthority is not null)
+        {
+            if (cancellationToken.IsCancellationRequested)
+                return DomainFailure(GitHubCoordinationFailureKind.Transport, client.CancellationFailure);
+            if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } failure) return failure;
+            var snapshot = await ReadPublicationSnapshotAsync(cancellationToken).ConfigureAwait(false);
+            if (snapshot.State is not StateCapability observed) return snapshot;
+            if (observed.Repository != owned.Repository) return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+            if (observed.HeadOid != owned.HeadOid) return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+            return SameState(owned, observed) ? snapshot : DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+        }
         var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
         if (repository.Value is null) return Failed(repository);
         if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
@@ -657,6 +756,7 @@ internal sealed partial class GitHubCoordinationStore
                 ValidateSuccessor(current.State, intended);
             var preparedIntended = Prepare(intended, current.Creation?.State ?? current.State);
             var prepared = next == intended ? preparedIntended : Prepare(next, current.Creation?.State ?? current.State);
+            var atomic = UsesAtomicPublication(prepared);
             var observed = await ObserveAdvanceRefAsync(repository.Value.Identity, target.Value,
                 refRead.Value, current.HeadOid, prepared, preparedIntended,
                 cancellationToken).ConfigureAwait(false);
@@ -666,35 +766,38 @@ internal sealed partial class GitHubCoordinationStore
                 return await CompleteAdvanceReplayAsync((StateCapability)observed.State,
                     checkTarget, cancellationToken).ConfigureAwait(false);
             }
-            var orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
-            if (orphan.Value is null
-                && orphan.Failure?.Code == GitHubFailureCode.NotFound
-                && next != intended)
-                orphan = await client.GetCommitAsync(preparedIntended.CommitOid, cancellationToken)
-                    .ConfigureAwait(false);
-            if (orphan.Value is not null)
+            if (!atomic)
             {
-                var recoveredRef = await client.GetRefAsync(coordinationRef, cancellationToken)
-                    .ConfigureAwait(false);
-                if (recoveredRef.Value is null)
-                    return recoveredRef.Failure?.Code == GitHubFailureCode.NotFound
-                        ? DomainFailure(GitHubCoordinationFailureKind.Unresolved)
-                        : Failed(recoveredRef);
-                observed = await ObserveAdvanceRefAsync(repository.Value.Identity, target.Value,
-                    recoveredRef.Value, current.HeadOid, prepared, preparedIntended,
-                    cancellationToken).ConfigureAwait(false);
-                if (observed is not null)
+                var orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
+                if (orphan.Value is null
+                    && orphan.Failure?.Code == GitHubFailureCode.NotFound
+                    && next != intended)
+                    orphan = await client.GetCommitAsync(preparedIntended.CommitOid, cancellationToken)
+                        .ConfigureAwait(false);
+                if (orphan.Value is not null)
                 {
-                    if (observed.State is null) return observed;
-                    return await CompleteAdvanceReplayAsync((StateCapability)observed.State,
-                        checkTarget, cancellationToken).ConfigureAwait(false);
+                    var recoveredRef = await client.GetRefAsync(coordinationRef, cancellationToken)
+                        .ConfigureAwait(false);
+                    if (recoveredRef.Value is null)
+                        return recoveredRef.Failure?.Code == GitHubFailureCode.NotFound
+                            ? DomainFailure(GitHubCoordinationFailureKind.Unresolved)
+                            : Failed(recoveredRef);
+                    observed = await ObserveAdvanceRefAsync(repository.Value.Identity, target.Value,
+                        recoveredRef.Value, current.HeadOid, prepared, preparedIntended,
+                        cancellationToken).ConfigureAwait(false);
+                    if (observed is not null)
+                    {
+                        if (observed.State is null) return observed;
+                        return await CompleteAdvanceReplayAsync((StateCapability)observed.State,
+                            checkTarget, cancellationToken).ConfigureAwait(false);
+                    }
+                    return DomainFailure(GitHubCoordinationFailureKind.Unresolved);
                 }
-                return DomainFailure(GitHubCoordinationFailureKind.Unresolved);
+                if (orphan.Failure?.Code != GitHubFailureCode.NotFound)
+                    return Failed(orphan);
+                var objects = await CreateObjectsAsync(prepared, cancellationToken).ConfigureAwait(false);
+                if (objects is not null) return objects;
             }
-            if (orphan.Failure?.Code != GitHubFailureCode.NotFound)
-                return Failed(orphan);
-            var objects = await CreateObjectsAsync(prepared, cancellationToken).ConfigureAwait(false);
-            if (objects is not null) return objects;
 
             var finalRef = await client.GetRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
             if (finalRef.Value is null) return Failed(finalRef);
@@ -719,30 +822,33 @@ internal sealed partial class GitHubCoordinationStore
                 next = Apply(intended, effective, current.HeadOid);
                 ValidateSuccessor(current.State, next);
                 prepared = Prepare(next, current.Creation?.State ?? current.State);
-                orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
-                if (orphan.Value is not null)
+                if (!atomic)
                 {
-                    var recoveredRef = await client.GetRefAsync(coordinationRef, cancellationToken)
-                        .ConfigureAwait(false);
-                    if (recoveredRef.Value is null)
-                        return recoveredRef.Failure?.Code == GitHubFailureCode.NotFound
-                            ? DomainFailure(GitHubCoordinationFailureKind.Unresolved)
-                            : Failed(recoveredRef);
-                    observed = await ObserveAdvanceRefAsync(repository.Value.Identity,
-                        finalTarget.Value, recoveredRef.Value, current.HeadOid,
-                        prepared, preparedIntended, cancellationToken).ConfigureAwait(false);
-                    if (observed is not null)
+                    var orphan = await client.GetCommitAsync(prepared.CommitOid, cancellationToken).ConfigureAwait(false);
+                    if (orphan.Value is not null)
                     {
-                        if (observed.State is null) return observed;
-                        return await CompleteAdvanceReplayAsync((StateCapability)observed.State,
-                            checkTarget, cancellationToken).ConfigureAwait(false);
+                        var recoveredRef = await client.GetRefAsync(coordinationRef, cancellationToken)
+                            .ConfigureAwait(false);
+                        if (recoveredRef.Value is null)
+                            return recoveredRef.Failure?.Code == GitHubFailureCode.NotFound
+                                ? DomainFailure(GitHubCoordinationFailureKind.Unresolved)
+                                : Failed(recoveredRef);
+                        observed = await ObserveAdvanceRefAsync(repository.Value.Identity,
+                            finalTarget.Value, recoveredRef.Value, current.HeadOid,
+                            prepared, preparedIntended, cancellationToken).ConfigureAwait(false);
+                        if (observed is not null)
+                        {
+                            if (observed.State is null) return observed;
+                            return await CompleteAdvanceReplayAsync((StateCapability)observed.State,
+                                checkTarget, cancellationToken).ConfigureAwait(false);
+                        }
+                        return DomainFailure(GitHubCoordinationFailureKind.Unresolved);
                     }
-                    return DomainFailure(GitHubCoordinationFailureKind.Unresolved);
+                    if (orphan.Failure?.Code != GitHubFailureCode.NotFound)
+                        return Failed(orphan);
+                    var objects = await CreateObjectsAsync(prepared, cancellationToken).ConfigureAwait(false);
+                    if (objects is not null) return objects;
                 }
-                if (orphan.Failure?.Code != GitHubFailureCode.NotFound)
-                    return Failed(orphan);
-                objects = await CreateObjectsAsync(prepared, cancellationToken).ConfigureAwait(false);
-                if (objects is not null) return objects;
             }
             if (mutationGuard is not null && await mutationGuard(cancellationToken).ConfigureAwait(false) is { } guardFailure)
                 return new(GitHubCoordinationOutcome.Failed, failure: guardFailure);
@@ -818,11 +924,28 @@ internal sealed partial class GitHubCoordinationStore
         CancellationToken cancellationToken)
     {
         if (observed.Oid == predecessorOid) return null;
-        var candidate = PreparedAt(observed.Oid, prepared, preparedIntended);
-        return candidate is null
-            ? DomainFailure(GitHubCoordinationFailureKind.Conflict)
-            : await ReadPreparedAsync(repository, target, candidate, cancellationToken)
-                .ConfigureAwait(false);
+        return await ReadPublicationCandidateAsync(repository, target, observed.Oid,
+            prepared, preparedIntended, cancellationToken).ConfigureAwait(false);
+    }
+
+    private bool UsesAtomicPublication(GitHubPreparedCoordination prepared) =>
+        publicationActive && client.CheckpointAuthority is not null && prepared.Document.PredecessorOid != ZeroOid;
+
+    private async ValueTask<GitHubCoordinationResult> ReadPublicationCandidateAsync(
+        GitHubRepositoryIdentity repository, GitHubRef target, string head,
+        GitHubPreparedCoordination prepared, GitHubPreparedCoordination? alternate, CancellationToken token)
+    {
+        var candidate = PreparedAt(head, prepared, alternate);
+        if (candidate is not null) return await ReadPreparedAsync(repository, target, candidate, token).ConfigureAwait(false);
+        if (!UsesAtomicPublication(prepared)) return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        // A replay proves state only. Cold authentication verifies the signed
+        // physical OID and complete retained event graph; no ACK or send right
+        // can be recovered from its nonce or from matching canonical bytes.
+        var observed = await ReadStateAsync(repository, target, head, token).ConfigureAwait(false);
+        return observed.State is StateCapability state
+            && (state.PhysicalCanonicalBytes.AsSpan().SequenceEqual(prepared.StateBytes.AsSpan())
+                || alternate is not null && state.PhysicalCanonicalBytes.AsSpan().SequenceEqual(alternate.StateBytes.AsSpan()))
+            ? observed : DomainFailure(GitHubCoordinationFailureKind.Conflict);
     }
 
     private static GitHubPreparedCoordination? PreparedAt(
@@ -933,6 +1056,8 @@ internal sealed partial class GitHubCoordinationStore
         if (client.CheckpointAuthority is not null
             && (!documents.TryGetValue(beforeOid, out var predecessorDocument) || !Owns(predecessorDocument)))
             return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        if (UsesAtomicPublication(prepared))
+            return await UpdateAtomicPublicationAsync(repository, target, prepared, beforeOid, cancellationToken).ConfigureAwait(false);
         var update = await UpdateCoordinationRefAsync(new(coordinationRef, beforeOid,
             prepared.CommitOid, beforeOid == ZeroOid), cancellationToken).ConfigureAwait(false);
         var exactConflict = update.Delivery == GitHubDelivery.NotDispatched
@@ -980,6 +1105,52 @@ internal sealed partial class GitHubCoordinationStore
                 && update.Delivery == GitHubDelivery.NeedsReadback && candidate.CommitOid == prepared.CommitOid
                 && prepared.State.Stage == GitHubCoordinationStage.PullRequestCreateStarted
                 ? new PullRequestEntitlement(this, (StateCapability)state.State) : null);
+    }
+
+    private async ValueTask<GitHubCoordinationResult> UpdateAtomicPublicationAsync(
+        GitHubRepositoryIdentity repository, GitHubRef target, GitHubPreparedCoordination prepared,
+        string beforeOid, CancellationToken token)
+    {
+        if (!publicationActive || prepared.Event is null || prepared.Document.PredecessorOid != beforeOid
+            || !documents.TryGetValue(beforeOid, out var predecessor) || !Owns(predecessor)
+            || prepared.Document.Claim != predecessor.Claim)
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        // Retain the last physical owner/ref and target fence before the one
+        // conditional effect. The mutation ACK has no commit OID or authority.
+        var current = await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false);
+        if (current.Value is null) return Failed(current);
+        if (current.Value.Oid != beforeOid || current.Value.NodeId != client.CheckpointRefNodeId)
+            return DomainFailure(GitHubCoordinationFailureKind.Conflict);
+        var finalTarget = await client.GetRefAsync(authority.TargetRef, token).ConfigureAwait(false);
+        if (finalTarget.Value is null) return Failed(finalTarget);
+        if (finalTarget.Value != target) return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
+        RequirePendingCheckpointLease(predecessor, token, null);
+        using var proof = PublicationProof(repository, beforeOid);
+        var write = new GitHubCheckpointWrite(prepared, [Blob(prepared.Event.Encode())]);
+        lastWrittenCheckpointReadback = null;
+        client.BindCheckpointWrite(write);
+        try
+        {
+            var result = await WriteAtomicDocumentAsync(write, true, predecessor, token, token, null, proof,
+                finalTarget.Value).ConfigureAwait(false);
+            if (result.Outcome != GitHubCoordinationOutcome.Current) return result;
+            token.ThrowIfCancellationRequested();
+            if (lastWrittenCheckpointReadback is not { } observed || observed.Document != prepared.Document)
+                return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
+            publicationHead = observed.Head;
+            var read = await ReadStateAsync(repository, finalTarget.Value, observed.Head, token, proof: proof).ConfigureAwait(false);
+            if (read.State is not StateCapability state) return read;
+            // Only this call's acknowledged winning nonce can issue one right.
+            // Unknown/lost ACK remains authenticated observation with no right.
+            var acknowledged = result.PublicationMutation is
+            { Value: not null, Failure: null, Delivery: GitHubDelivery.NeedsReadback };
+            return new(GitHubCoordinationOutcome.Advanced, state: state,
+                proposalRefEntitlement: acknowledged && state.Stage == GitHubCoordinationStage.ContentCreated
+                    ? new ProposalRefEntitlement(this, state) : null,
+                pullRequestEntitlement: acknowledged && state.Stage == GitHubCoordinationStage.PullRequestCreateStarted
+                    ? new PullRequestEntitlement(this, state) : null);
+        }
+        finally { client.BindCheckpointWrite(null); }
     }
 
     private async ValueTask<GitHubCoordinationResult> ReadPreparedAsync(
@@ -1125,7 +1296,8 @@ internal sealed partial class GitHubCoordinationStore
             {
                 if (eventDocument.Checkpoint is not { } checkpoint || eventDocument.Plan?.BatchIdentity != state.BatchIdentity)
                     return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
-                var accepted = await ReadCheckpointBlobAsync(checkpoint, cancellationToken, proof).ConfigureAwait(false);
+                var accepted = await ReadCheckpointBlobAsync(checkpoint, cancellationToken, proof,
+                    historical: anchor != proof?.CurrentHead && anchor != proof?.EffectHead).ConfigureAwait(false);
                 if (!FrozenCheckpointMatches(state, accepted)) return DomainFailure(GitHubCoordinationFailureKind.ObjectMismatch);
             }
             GitHubEventPointer? previous = null;
@@ -1574,8 +1746,19 @@ internal sealed partial class GitHubCoordinationStore
     {
         private readonly GitHubCoordinationStore owner;
         private readonly StateCapability state;
-        internal GuardCapability(GitHubCoordinationStore owner, StateCapability state)
-        { this.owner = owner; this.state = state; }
+        internal GuardCapability(GitHubCoordinationStore owner, StateCapability state, CancellationToken issuanceToken)
+        {
+            this.owner = owner;
+            this.state = state;
+            MutationOrdinal = owner.client.MutationOrdinal;
+            RefNodeId = owner.client.CheckpointRefNodeId;
+            IssuanceToken = issuanceToken;
+        }
+        internal long MutationOrdinal { get; }
+        internal string? RefNodeId { get; }
+        internal CancellationToken IssuanceToken { get; }
+        private int readConsumed;
+        internal bool TryConsumeRead() => Interlocked.CompareExchange(ref readConsumed, 1, 0) == 0;
         internal GitHubCoordinationStore Owner => owner;
         public IGitHubCoordinationStateCapability State => state;
         public override string ToString() => nameof(GuardCapability);

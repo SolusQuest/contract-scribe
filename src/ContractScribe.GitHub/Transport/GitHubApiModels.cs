@@ -41,6 +41,8 @@ internal sealed record GitHubRefContext(GitHubRepositoryIdentity Repository, str
     string Ref, string BeforeOid, string AfterOid, string ClientMutationId) : GitHubMutationContext(Repository, OperationCommitment);
 internal sealed record GitHubPublicationRefsContext(GitHubRepositoryIdentity Repository, string OperationCommitment,
     GitHubUpdateRef Coordination, GitHubUpdateRef Proposal, string ClientMutationId) : GitHubMutationContext(Repository, OperationCommitment);
+internal sealed record GitHubCheckpointCommitContext(GitHubRepositoryIdentity Repository, string OperationCommitment,
+    string Ref, string RefNodeId, string BeforeOid, string TreeOid, string Message, string ClientMutationId) : GitHubMutationContext(Repository, OperationCommitment);
 internal sealed record GitHubPullRequestContext(GitHubRepositoryIdentity Repository, string OperationCommitment,
     string CreationCommitment, string HeadRef, string HeadOid, string BaseRef, string ExpectedBaseOid,
     string TitleSha256, string BodySha256) : GitHubMutationContext(Repository, OperationCommitment)
@@ -66,9 +68,12 @@ internal sealed record GitHubBlob(string Oid, ImmutableArray<byte> Bytes) : GitH
 internal sealed record GitHubTreeEntry(string Path, GitHubTreeMode Mode, string Oid, long? Size) : GitHubValue;
 internal sealed record GitHubTree(string Oid, ImmutableArray<GitHubTreeEntry> Entries) : GitHubValue;
 internal sealed record GitHubCommitActor(string Name, string Email, DateTimeOffset Date) : GitHubValue;
+internal sealed record GitHubCheckpointSignature(GitHubRepositoryIdentity Repository, string RefNodeId,
+    GitHubCheckpointAuthor Author) : GitHubValue;
 internal sealed record GitHubCommit(string Oid, string TreeOid, ImmutableArray<string> Parents,
     string Message, GitHubCommitActor Author, GitHubCommitActor Committer) : GitHubValue
 {
+    internal GitHubCheckpointSignature? CheckpointSignature { get; init; }
     // Owners separately require the expected raw OID and all other commit fields.
     // Accept the observed REST projection of their fixed LF-terminated message without changing raw bytes.
     internal bool HasOwnedMessage(string expected) => Message == expected

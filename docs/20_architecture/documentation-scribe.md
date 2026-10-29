@@ -2,6 +2,8 @@
 
 > **Status:** M7-S5 connects the shared fixed-manifest Runtime to durable campaign progress and cumulative M2 validation. Each accepted member and completed Runtime progress notification passes through the existing conditional checkpoint port before continuation. Fresh actions revalidate saved generated content and evidence without regenerating accepted members or charging historical provider work. Physical accounting and original shared deadlines remain authoritative. Historical M3–M6 and CR1 evidence stays bound to its original revision.
 
+A member and its exact current scalar progress share one complete conditional acceptance. The Host returns both the member receipt and matching progress SHA only after actual Written/readback; an identical final notification needs no second save. Uncovered rejection/finish projections still receive their own progress confirmation. Partial batches preserve earlier durable siblings, while unconfirmed paired callbacks remain Received and late responses cannot resume the Runtime. This changes persistence placement without granting another invocation or physical send.
+
 ## Goal
 
 The Documentation Scribe turns a deterministic audit target, bounded repository evidence, and a style profile into a structured XML-documentation proposal. It is the product's model-assisted writing capability, but it is not a general coding agent.

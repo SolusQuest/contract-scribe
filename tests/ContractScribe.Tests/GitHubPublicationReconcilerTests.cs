@@ -1205,14 +1205,14 @@ public sealed partial class GitHubPublicationReconcilerTests
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request, CancellationToken token)
         {
             lock (Git.SyncRoot) Attempts.Add((request.Method.Method, request.RequestUri!.AbsolutePath));
-            if (request.Method == HttpMethod.Get) BeforeRead?.Invoke(request.RequestUri!.AbsolutePath);
-            if (request.Method == HttpMethod.Get && BeforeReadAsync is { } beforeRead)
+            var mutation = request.Method == HttpMethod.Post && !GitHubCoordinationRefTests.IsCheckpointQuery(request);
+            if (!mutation) BeforeRead?.Invoke(request.RequestUri!.AbsolutePath);
+            if (!mutation && BeforeReadAsync is { } beforeRead)
                 await beforeRead(request.RequestUri!.AbsolutePath);
             if (DelayPrReads && Posts > 0 && request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/pulls", StringComparison.Ordinal))
                 await Task.Delay(Timeout.InfiniteTimeSpan, token);
-            if (request.Method == HttpMethod.Get && RejectRead?.Invoke(request.RequestUri!.AbsolutePath) is { } rejected)
+            if (!mutation && RejectRead?.Invoke(request.RequestUri!.AbsolutePath) is { } rejected)
                 return Json(rejected, new { message = "synthetic read rejection" });
-            var mutation = request.Method == HttpMethod.Post;
             var index = mutation ? Interlocked.Increment(ref Mutations) : 0;
             var body = mutation ? await request.Content!.ReadAsStringAsync(token) : null;
             if (mutation && request.RequestUri!.AbsolutePath == "/repos/Owner/repo/pulls") Interlocked.Increment(ref PrAttempts);
@@ -1220,11 +1220,11 @@ public sealed partial class GitHubPublicationReconcilerTests
             if (mutation && request.RequestUri!.AbsolutePath == "/graphql" && BeforeCas is not null) await BeforeCas(token);
             if (mutation && RejectMutation?.Invoke(request.RequestUri!.AbsolutePath) is { } rejection)
                 return Json(rejection, new { message = "synthetic mutation rejection" });
-            if (index == LoseAt && !LoseAfter) throw new IOException("synthetic pre-application loss");
+            if (mutation && index == LoseAt && !LoseAfter) throw new IOException("synthetic pre-application loss");
             var response = await ReplyCore(request, token);
             if (!mutation) AfterRead?.Invoke(request.RequestUri!.AbsolutePath);
             if (mutation) AfterMutation?.Invoke(index, body);
-            if (index == LoseAt && LoseAfter) throw new IOException("synthetic response loss");
+            if (mutation && index == LoseAt && LoseAfter) throw new IOException("synthetic response loss");
             return response;
         }
         private async Task<HttpResponseMessage> ReplyCore(HttpRequestMessage request, CancellationToken token)

@@ -21,7 +21,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
         Assert.Equal("snapshot.second", accepted.Artifact.State.Snapshot.OpaqueSnapshotBinding);
         Assert.Equal(scenario.Artifact.Sha256, accepted.Artifact.State.Predecessor!.FinalCheckpointSha256);
         Assert.Equal(1, store.ReplaceCalls);
-        Assert.Equal(2, store.ReadCalls);
+        Assert.Equal(1, store.ReadCalls); // Conditional owner supplies the actual readback.
         AssertArtifact(accepted.Artifact, store.Artifact!);
     }
 
@@ -64,7 +64,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
         AssertArtifact(scenario.Artifact, result.AcceptedCheckpoint!.Artifact);
         AssertArtifact(scenario.Artifact, store.Artifact!);
         Assert.Equal(1, store.ReplaceCalls);
-        Assert.Equal(2, store.ReadCalls);
+        Assert.Equal(1, store.ReadCalls); // Conditional owner supplies the actual readback.
     }
 
     [Fact]
@@ -86,7 +86,7 @@ public sealed class ChangedBaseCampaignReconcilerTests
         Assert.Equal("snapshot.second", result.AcceptedCheckpoint.Artifact.State.Snapshot.OpaqueSnapshotBinding);
         AssertArtifact(store.Artifact!, result.AcceptedCheckpoint.Artifact);
         Assert.Equal(1, store.ReplaceCalls);
-        Assert.Equal(2, store.ReadCalls);
+        Assert.Equal(1, store.ReadCalls); // Conditional owner supplies the actual readback.
     }
 
     [Fact]

@@ -45,9 +45,15 @@ public sealed class GitHubArchitectureTests
         Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string), typeof(GitHubTransportTimeouts) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
-        Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync", "EnterSemanticRecovery",
+        Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CommitCheckpointAsync", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync", "EnterSemanticRecovery",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
-            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "MatchesRefAcknowledgement", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "MatchesRefAcknowledgement", "ReadCheckpointBundleAsync", "ReadCheckpointDocumentAsync", "ReadCheckpointSnapshotAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+        var atomic = client.GetMethod("CommitCheckpointAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(new[] { typeof(GitHubAtomicCheckpointCommit), typeof(CancellationToken) },
+            atomic.GetParameters().Select(parameter => parameter.ParameterType));
+        var bundle = client.GetMethod("ReadCheckpointBundleAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(new[] { typeof(GitHubAtomicCheckpointCommit), typeof(CancellationToken) },
+            bundle.GetParameters().Select(parameter => parameter.ParameterType));
         var acknowledgement = client.GetMethod("MatchesRefAcknowledgement", BindingFlags.NonPublic | BindingFlags.Instance)!;
         Assert.Equal(typeof(bool), acknowledgement.ReturnType);
         Assert.Equal(new[] { typeof(GitHubApiResult<GitHubAcknowledgement>), typeof(GitHubUpdateRef) },
@@ -57,7 +63,7 @@ public sealed class GitHubArchitectureTests
         Assert.Equal(new[] { typeof(CampaignSemanticCheckpointWindow) }, semanticRecovery.GetParameters().Select(parameter => parameter.ParameterType));
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
         var properties = client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
-        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "CancellationFailure", "CheckpointAuthority", "HasMutationAuthority", "ObjectOperation", "ReadAuthority", "ServerTime" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "CancellationFailure", "CheckpointAuthority", "CheckpointRefNodeId", "HasMutationAuthority", "MutationOrdinal", "ObjectOperation", "ReadAuthority", "ServerTime" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
         var authority = Assert.Single(properties, p => p.Name == "Authority");
         Assert.Equal("Authority", authority.Name);
         Assert.Equal(typeof(ValidatedGitHubPublicationAuthority), authority.PropertyType);
@@ -104,8 +110,8 @@ public sealed class GitHubArchitectureTests
         Assert.All(typeof(GitHubCoordinationStore).GetConstructors(
             BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance),
             constructor => Assert.True(constructor.IsPrivate));
-        Assert.Equal(typeof(GitHubApiClient), Assert.Single(typeof(GitHubCoordinationStore)
-            .GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static)!.GetParameters()).ParameterType);
+        Assert.Equal(new[] { typeof(GitHubApiClient), typeof(GitHubActor) }, typeof(GitHubCoordinationStore)
+            .GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static)!.GetParameters().Select(parameter => parameter.ParameterType));
 
         foreach (var capability in new[]
         {

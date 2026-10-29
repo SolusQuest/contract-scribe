@@ -6,6 +6,59 @@ namespace ContractScribe.Tests;
 
 public sealed partial class GitHubCoordinationRefTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Owned_publication_events_use_one_atomic_effect_and_independent_signed_state(bool loseAcknowledgement)
+    {
+        var remote = new CoordinationRemote();
+        using var client = CheckpointClient(remote);
+        await using var store = GitHubCoordinationStore.Create(client);
+        Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
+        var checkpoint = SeedPublicationCheckpoint(remote);
+        await store.WithPublicationAsync(async () =>
+        {
+            client.BindPublication(GitHubPublicationTestBatch.BindCheckpoint(Authority(), PublicationCheckpointFixture("campaign-1")));
+            try
+            {
+                var objects = remote.ObjectMutationAttempts;
+                var refs = remote.RefMutationAttempts;
+                var claim = await store.ClaimAsync((await store.ReadCurrentAsync()).Read!);
+                Assert.NotNull(claim.State);
+                Assert.Equal(objects, remote.ObjectMutationAttempts);
+                Assert.Equal(refs + 1, remote.RefMutationAttempts);
+                if (loseAcknowledgement) remote.LoseResponse = LostMutation.Ref;
+                var content = await store.AdvanceAsync(claim.State!, GitHubCoordinationStageUpdate.ContentCreated(Oid('4')));
+                Assert.Equal(GitHubCoordinationOutcome.Advanced, content.Outcome);
+                Assert.NotNull(content.State);
+                Assert.Equal(!loseAcknowledgement, content.ProposalRefEntitlement is not null);
+                Assert.Equal(objects, remote.ObjectMutationAttempts);
+                Assert.Equal(refs + 2, remote.RefMutationAttempts);
+                var actual = FixtureDocuments[content.State!.HeadOid];
+                Assert.Equal(GitHubCoordinationDocument.CurrentCommit, actual.Publication!.Anchor);
+                Assert.Equal(checkpoint, actual.Checkpoint);
+                Assert.NotEqual(GitHubCoordinationObjects.Prepare(actual).CommitOid, content.State.HeadOid);
+                using var otherClient = CheckpointClient(remote);
+                await using var other = GitHubCoordinationStore.Create(otherClient);
+                otherClient.BindPublication(GitHubPublicationTestBatch.BindCheckpoint(Authority(), PublicationCheckpointFixture("campaign-1")));
+                try
+                {
+                    var cold = await other.ReadCurrentAsync();
+                    Assert.Equal(content.State.HeadOid, cold.State!.HeadOid);
+                    Assert.Null(cold.ProposalRefEntitlement);
+                    Assert.Null(cold.PullRequestEntitlement);
+                }
+                finally { otherClient.UnbindPublication(); }
+                var replay = await store.AdvanceAsync(claim.State, GitHubCoordinationStageUpdate.ContentCreated(Oid('4')));
+                Assert.Equal(content.State.HeadOid, replay.State!.HeadOid);
+                Assert.Null(replay.ProposalRefEntitlement);
+                Assert.Equal(refs + 2, remote.RefMutationAttempts);
+                return true;
+            }
+            finally { client.UnbindPublication(); }
+        }, default);
+    }
+
     [Fact]
     public async Task Stale_publication_intent_cannot_reopen_provider_work_in_the_frozen_batch()
     {
@@ -190,7 +243,7 @@ public sealed partial class GitHubCoordinationRefTests
                 Assert.Equal(publication, FixtureDocuments[replay.State.HeadOid].Publication);
                 Assert.Equal(checkpoint, FixtureDocuments[replay.State.HeadOid].Checkpoint);
                 Assert.NotNull((await store.ReadCurrentAsync()).State);
-                remote.RemoveCommit(remote.State(originalHead));
+                remote.RemoveCommit(originalHead);
                 // This callback already authenticated the exact immutable payload.
                 // Its accessibility is deliberately not reobserved by the pool.
                 Assert.NotNull((await store.ReadCurrentAsync()).State);
