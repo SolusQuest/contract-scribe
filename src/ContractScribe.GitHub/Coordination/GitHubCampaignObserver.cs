@@ -172,7 +172,7 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 var pr = details[index];
                 var reference = "refs/heads/" + pr.Head.Ref;
                 generationByRef.TryGetValue(reference, out var generation);
-                if (generation is null || pr.Author != GitHubPublicationPrincipal.ActionsBot
+                if (generation is null || !GitHubPublicationPrincipal.SameActor(pr.Author, GitHubPublicationPrincipal.ActionsBot)
                     || pr.Head.Repository != repository || pr.BaseRepository != repository
                     || "refs/heads/" + pr.BaseRef != authority.TargetRef
                     || pr.MaintainerCanModify != false || pr.Merged is null

@@ -1,12 +1,55 @@
 using System.Globalization;
 using System.Net;
 using System.Text.Json.Nodes;
+using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.Tests;
 
 public sealed partial class GitHubApiClientTests
 {
+    [Theory]
+    [InlineData("graphql", true)]
+    [InlineData("rest", true)]
+    [InlineData("different-id", false)]
+    [InlineData("different-node", false)]
+    [InlineData("user-kind", false)]
+    [InlineData("organization-kind", false)]
+    [InlineData("other-login", false)]
+    [InlineData("missing-author", false)]
+    public async Task Campaign_actor_keeps_raw_login_and_only_matches_the_known_bot_identity(string variant, bool matches)
+    {
+        using var harness = await Harness.Create();
+        var actor = new JsonObject
+        {
+            ["__typename"] = "Bot",
+            ["databaseId"] = 41898282,
+            ["id"] = "MDM6Qm90NDE4OTgyODI=",
+            ["login"] = "github-actions"
+        };
+        if (variant == "rest") actor["login"] = "github-actions[bot]";
+        if (variant == "different-id") actor["databaseId"] = 41898283;
+        if (variant == "different-node") actor["id"] = "BOT_other";
+        if (variant == "user-kind") actor["__typename"] = "User";
+        if (variant == "organization-kind") actor["__typename"] = "Organization";
+        if (variant == "other-login") actor["login"] = "another-bot";
+        harness.Handler.Reply = (_, _) =>
+        {
+            var page = SnapshotPage(1);
+            var connection = page["data"]!["repository"]!["pullRequests"]!;
+            connection["totalCount"] = 1;
+            connection["pageInfo"]!["hasNextPage"] = false;
+            connection["nodes"]![0]!["author"] = variant == "missing-author" ? null : actor.DeepClone();
+            return Task.FromResult(Json(page));
+        };
+        var result = await harness.Client.ReadCampaignSnapshotAsync(false, CancellationToken.None);
+        var actual = Assert.Single(Assert.IsType<GitHubCampaignSnapshot>(result.Value).PullRequests.Items).Author;
+        Assert.Equal(matches, GitHubPublicationPrincipal.SameActor(actual, GitHubPublicationPrincipal.ActionsBot));
+        Assert.Equal(matches, GitHubPublicationPrincipal.SameActor(GitHubPublicationPrincipal.ActionsBot, actual));
+        if (actual is not null) Assert.Equal(actor["login"]!.GetValue<string>(), actual.Login);
+        Assert.Single(harness.Handler.Requests); // No identity lookup is added.
+    }
+
     [Theory]
     [InlineData("none")]
     [InlineData("partial-errors")]

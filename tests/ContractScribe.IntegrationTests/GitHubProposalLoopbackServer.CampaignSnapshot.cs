@@ -90,13 +90,21 @@ internal sealed partial class GitHubProposalLoopbackServer
         ["owner"] = ProjectActor(value["owner"])
     };
 
-    private static JsonObject? ProjectActor(JsonNode? value) => value is null ? null : new()
+    private static JsonObject? ProjectActor(JsonNode? value)
     {
-        ["__typename"] = value["type"]!.DeepClone(),
-        ["login"] = value["login"]!.DeepClone(),
-        ["id"] = value["node_id"]!.DeepClone(),
-        ["databaseId"] = value["id"]!.DeepClone()
-    };
+        if (value is null) return null;
+        var login = value["login"]!.GetValue<string>();
+        // Actual GraphQL Bot logins omit the REST display suffix.
+        if (value["type"]!.GetValue<string>() == "Bot" && login.EndsWith("[bot]", StringComparison.Ordinal))
+            login = login[..^5];
+        return new()
+        {
+            ["__typename"] = value["type"]!.DeepClone(),
+            ["login"] = login,
+            ["id"] = value["node_id"]!.DeepClone(),
+            ["databaseId"] = value["id"]!.DeepClone()
+        };
+    }
 
     private static JsonObject Project(JsonObject value) => new()
     {

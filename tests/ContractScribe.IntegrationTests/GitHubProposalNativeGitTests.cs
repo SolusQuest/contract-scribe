@@ -107,6 +107,15 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         Assert.Equal(2, fixture.Checkpoint().State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
+        // A new CLI process has no publication proof/cache from its producer.
+        // Its GraphQL author spelling must still identify the same real bot.
+        var consumer = await fixture.RunArgs(fixture.Args(), environment);
+        AssertResult(consumer, 0, "awaiting-review");
+        using var observed = JsonDocument.Parse(consumer.Stdout);
+        Assert.Equal(0, observed.RootElement.GetProperty("invocationUsage").GetProperty("calls")
+            .GetProperty("physicalProviderDispatches").GetInt32());
+        Assert.Single(fixture.GitHub.PullRequests);
+        Assert.Equal(1, fixture.GitHub.PrAttempts);
         await fixture.AssertSourceUnchanged();
     }
 

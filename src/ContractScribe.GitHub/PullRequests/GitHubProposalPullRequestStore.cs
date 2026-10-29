@@ -343,7 +343,7 @@ internal sealed class GitHubProposalPullRequestStore
     {
         headMismatch = false;
         var source = coordination.CreationSource(state)!;
-        if (pr.Author != publisher || pr.Head.Repository != state.Repository || pr.BaseRepository != state.Repository
+        if (!GitHubPublicationPrincipal.SameActor(pr.Author, publisher) || pr.Head.Repository != state.Repository || pr.BaseRepository != state.Repository
             || "refs/heads/" + pr.Head.Ref != expected.Ref
             || "refs/heads/" + pr.BaseRef != state.TargetRef || pr.Title != metadata.Title || pr.Body != metadata.Body
             || pr.MaintainerCanModify != false || pr.Merged is null
@@ -437,7 +437,7 @@ internal sealed class GitHubProposalPullRequestStore
         list.Id == detail.Id && list.NodeId == detail.NodeId && list.Number == detail.Number
         && list.Open == detail.Open && list.Draft == detail.Draft && list.MergedAt == detail.MergedAt
         && list.ClosedAt == detail.ClosedAt && list.CreatedAt == detail.CreatedAt
-        && list.Title == detail.Title && list.Body == detail.Body && list.Author == detail.Author
+        && list.Title == detail.Title && list.Body == detail.Body && GitHubPublicationPrincipal.SameActor(list.Author, detail.Author)
         && list.Head == detail.Head && list.BaseRepository == detail.BaseRepository
         && list.BaseRef == detail.BaseRef && list.BaseOid == detail.BaseOid
         && (list.Merged is null || list.Merged == detail.Merged)
