@@ -170,7 +170,7 @@ public sealed class GitHubCoordinationGitTransportTests
         internal NativeServer(string directory, CancellationToken token)
         {
             this.directory = directory; this.token = token;
-            var reserve = new TcpListener(IPAddress.Loopback, 0); reserve.Start();
+            using var reserve = new TcpListener(IPAddress.Loopback, 0); reserve.Start();
             var port = ((IPEndPoint)reserve.LocalEndpoint).Port; reserve.Stop();
             listener.Prefixes.Add("http://127.0.0.1:" + port + "/"); listener.Start();
             Endpoint = new("http://127.0.0.1:" + port + "/remote.git");

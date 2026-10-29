@@ -3192,7 +3192,7 @@ public sealed partial class GitHubCoordinationRefTests
                         ? CoordinationHead is null ? null : Reference(variables.GetProperty("coord").GetString()!, CoordinationHead, content: false)
                         : head is null ? null : Reference(coordination, head, content: true),
                 };
-                if (historical) repository["document"] = head is null ? null : Reference(coordination, head, content: true)["target"]!.DeepClone();
+                if (historical) repository["document"] = Reference(coordination, head!, content: true)["target"]!.DeepClone();
                 foreach (var (alias, path) in new[] { ("state", "coordination-state-v1.json"), ("checkpoint", "checkpoint.json"),
                     ("plan", "plan.json"), ("archive", "archive-predecessor.json"), ("event", "publication-event.json") })
                 {

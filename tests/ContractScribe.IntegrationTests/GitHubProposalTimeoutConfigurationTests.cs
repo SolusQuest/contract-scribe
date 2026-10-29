@@ -105,7 +105,7 @@ public sealed partial class GitHubProposalCliProcessTests
             var current = CampaignStateJson.Parse(fixture.GitHub.Blobs[oid]).Artifact!;
             var progress = current.State.ScribeProgress;
             if (current.State.ActiveReservation is not CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission }
-                || progress?.Members.Count(member => member.ContentSha256 is not null) != 5
+                || progress is null || progress.Members.Count(member => member.ContentSha256 is not null) != 5
                 || progress.LastProgressSha256 is null) return null;
             // Both logical receipts share this replacement. Exercise its raw
             // content read and its distinct final-ref closure before either ACK.
