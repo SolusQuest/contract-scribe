@@ -13,25 +13,15 @@ public sealed partial class GitHubProposalCliProcessTests
         await using var fixture = await Fixture.CreateAsync();
         var fencePrepared = false;
         var injected = false;
-        fixture.GitHub.After = request =>
+        fixture.GitHub.BeforeBody = (request, body) =>
         {
-            if (request.Method != "POST" || request.Kind != "commits") return;
-            // Observe the actual prospective immutable fence objects, before its
-            // durable CAS. This selects the producer without a request ordinal.
-            foreach (var commit in fixture.GitHub.Commits)
-            {
-                var root = fixture.GitHub.Trees[commit.Value["tree"]!["sha"]!.GetValue<string>()];
-                if (!root.Any(entry => entry.Path == ".contract-scribe")) continue;
-                var document = fixture.GitHub.DocumentAt(commit.Key);
-                if (document["publication"] is not { } publication) continue;
-                using var evidence = JsonDocument.Parse(fixture.GitHub.Blobs[publication["oid"]!.GetValue<string>()]);
-                if (evidence.RootElement.GetProperty("state").GetProperty("stage").GetString() == "pull-request-create-started")
-                    fencePrepared = true;
-            }
-        };
-        fixture.GitHub.Before = request =>
-        {
-            if (injected || !fencePrepared || request.Method != "GET" || request.Kind != "pulls") return;
+            if (injected || request.Kind != "checkpoint-commit") return;
+            var publication = GitHubProposalLoopbackServer.WrittenCanonicalFile(request, "publication-event.json");
+            if (publication?["state"]?["stage"]?.GetValue<string>() != "pull-request-create-started") return;
+            // This exact conditional commit is now the physical fence effect;
+            // no prospective REST commit exists before it. Reject its actual
+            // dispatch, preserve the original status, and require zero PR POST.
+            fencePrepared = true;
             Assert.Equal("proposal-ref-advanced", fixture.GitHub.Coordination()["stage"]!.GetValue<string>());
             fixture.GitHub.RejectPath = request.Path;
             fixture.GitHub.RejectionStatus = status;

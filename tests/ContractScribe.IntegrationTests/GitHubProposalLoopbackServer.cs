@@ -11,10 +11,25 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 // A bounded wire-level GitHub model. It has no reference to adapter internals, campaign
 // capabilities, H1, or R6 results. Object identities use Git's public object format.
-internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
+internal sealed partial class GitHubProposalLoopbackServer : IAsyncDisposable
 {
     internal sealed record Entry(string Path, string Mode, string Oid);
-    internal sealed record Request(string Method, string Path, string Kind, int Mutation);
+    internal sealed record Request(string Method, string Path, string Kind, int Mutation)
+    {
+        internal JsonObject? Body { get; init; }
+        internal bool CurrentCheckpointQuery => Kind == "checkpoint-read" && Body?["variables"]?["anchor"] is null;
+    }
+
+    internal static byte[]? WrittenCanonicalBytes(Request request, string name)
+    {
+        if (request.Kind != "checkpoint-commit") return null;
+        var additions = request.Body!["variables"]!["input"]!["fileChanges"]!["additions"]!.AsArray();
+        var file = additions.SingleOrDefault(item => item!["path"]!.GetValue<string>() == ".contract-scribe/" + name);
+        return file is null ? null : Convert.FromBase64String(file["contents"]!.GetValue<string>());
+    }
+
+    internal static JsonObject? WrittenCanonicalFile(Request request, string name) =>
+        WrittenCanonicalBytes(request, name) is { } bytes ? JsonNode.Parse(bytes)!.AsObject() : null;
     private readonly HttpListener listener = new();
     private readonly CancellationTokenSource stop = new();
     private readonly ConcurrentBag<Task> handlers = [];
@@ -128,7 +143,8 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             Assert.True(method is "GET" or "POST", "Unexpected mutation verb");
             var query = method == "POST" && path == "/graphql"
                 && JsonNode.Parse(body)!["query"]!.GetValue<string>().TrimStart().StartsWith("query", StringComparison.Ordinal);
-            var kind = query ? "checkpoint-read" : path == "/graphql"
+            var campaignQuery = query && JsonNode.Parse(body)!["query"]!.GetValue<string>() == CampaignSnapshotQuery;
+            var kind = campaignQuery ? "campaign-snapshot" : query ? "checkpoint-read" : path == "/graphql"
                 ? JsonNode.Parse(body)!["query"]!.GetValue<string>().Contains("createCommitOnBranch", StringComparison.Ordinal) ? "checkpoint-commit" : "cas"
                 : path.Split('/')[^1];
             Task? wait = null;
@@ -138,7 +154,8 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             {
                 if (Requests.Count >= MaximumRequests)
                     Assert.Fail($"Request guard: {method} {path}; mutations={Mutations}; PR attempts={PrAttempts}; ledger={CoordinationDocument().ToJsonString()}");
-                request = new(method, path, kind, method == "POST" && !query ? ++Mutations : 0);
+                request = new(method, path, kind, method == "POST" && !query ? ++Mutations : 0)
+                { Body = method == "POST" && path == "/graphql" ? JsonNode.Parse(body)!.AsObject() : null };
                 Requests.Add(request);
                 if (method == "POST" && path == "/repos/Owner/repo/pulls") PrAttempts++;
                 BeforeBody?.Invoke(request, body);
@@ -233,6 +250,8 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         }
         if (path == "/graphql")
         {
+            if (body["query"]!.GetValue<string>() == CampaignSnapshotQuery)
+                return (200, CampaignSnapshot(body["variables"]!.AsObject()));
             if (body["query"]!.GetValue<string>().TrimStart().StartsWith("query", StringComparison.Ordinal))
                 return (200, CheckpointSnapshot(body["variables"]!.AsObject()));
             if (body["query"]!.GetValue<string>().Contains("createCommitOnBranch", StringComparison.Ordinal))

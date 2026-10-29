@@ -20,6 +20,8 @@ internal sealed partial class GitHubCoordinationStore
         {
             if (client.CheckpointAuthority is not { } authority || invocationOwner is not null)
                 return CampaignCheckpointReadKind.Unsafe;
+            if (nativeCoordination is not null || client.NativeCoordinationFactory is not null)
+                _ = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
             var remote = await ReadRemoteCheckpointAsync(token, attempt: attempt).ConfigureAwait(false);
             var target = await client.GetRefAsync(authority.ReadAuthority.TargetRef, token).ConfigureAwait(false);
             if (target.Value?.Oid != authority.ExpectedBaseOid) return CampaignCheckpointReadKind.Unsafe;
@@ -230,6 +232,13 @@ internal sealed partial class GitHubCoordinationStore
         var stage = GitHubCheckpointStage.CreateObjects;
         try
         {
+            if (nativeCoordination is not null && publication is null
+                && takeoverPredecessor is null)
+            {
+                stage = GitHubCheckpointStage.RefMutation;
+                return await WriteNativeCheckpointAsync(write, requireLiveClaim, livePredecessor,
+                    token, observationToken, attempt, proof).ConfigureAwait(false);
+            }
             if (publication is null && document.PredecessorOid != ZeroOid && takeoverPredecessor is null)
             {
                 var atomic = await WriteAtomicDocumentAsync(write, requireLiveClaim, livePredecessor, token, observationToken, attempt, proof)
@@ -503,6 +512,15 @@ internal sealed partial class GitHubCoordinationStore
             RethrowCheckpointCancellation(failed, token);
             return failed;
         }
+        // Do not freeze a recoverable unknown ACK as a terminal failure. If
+        // this transaction fails, however, retain its original rejected-input
+        // cause before a later failed observation can mask it.
+        void PreserveRejectedMutationFailure()
+        {
+            if (result.Failure is { Code: GitHubFailureCode.Validation } rejected)
+                ObserveCheckpointFailure(attempt, GitHubCheckpointStage.RefMutation,
+                    GitHubCheckpointReason.Transport, rejected);
+        }
         using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
         // This aggregate includes Core's checkpoint acceptance, which used to
         // be a separate caller-bounded read after ref confirmation. Keep that
@@ -548,6 +566,7 @@ internal sealed partial class GitHubCoordinationStore
                         expected = observed;
                     else if (current.Head != document.PredecessorOid)
                     {
+                        PreserveRejectedMutationFailure();
                         ObserveCheckpointFailure(attempt, GitHubCheckpointStage.FinalRef, GitHubCheckpointReason.RefMismatch);
                         return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.Conflict,
                             result.Failure, result.Delivery, result.Context, result.RequiredPermissions));
@@ -569,7 +588,8 @@ internal sealed partial class GitHubCoordinationStore
                 active.ThrowIfCancellationRequested();
                 if (closed.Value is null || closed.Failure is not null)
                 {
-                    ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.Transport,
+                    PreserveRejectedMutationFailure();
+                    ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch,
                         closed.Failure ?? new(GitHubFailureCode.InvalidResponse), refComparison: comparison);
                     return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.Unresolved,
                         result.Failure, result.Delivery, result.Context, result.RequiredPermissions, RecoveryFailure(closed.Failure, recovery)));
@@ -600,8 +620,9 @@ internal sealed partial class GitHubCoordinationStore
                         failedRefRead = closed.Failure is not null;
                         comparison = GitHubCheckpointRefComparison.Create(expected.Current.Head, document.PredecessorOid, closed.Value?.Oid, result);
                         active.ThrowIfCancellationRequested();
-                        if (closed.Value?.Oid != expected.Current.Head || closed.Value.NodeId != refNode)
+                        if (closed.Value is not { } finalReference || finalReference.Oid != expected.Current.Head || finalReference.NodeId != refNode)
                         {
+                            PreserveRejectedMutationFailure();
                             ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, closed.Failure, refComparison: comparison);
                             return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.Conflict,
                                 result.Failure, result.Delivery, result.Context, result.RequiredPermissions, RecoveryFailure(closed.Failure, recovery)));
@@ -622,6 +643,7 @@ internal sealed partial class GitHubCoordinationStore
                     && result.Value is not null && result.Failure is null && result.Delivery == GitHubDelivery.NeedsReadback;
                 if (!pending || sample >= 2)
                 {
+                    PreserveRejectedMutationFailure();
                     ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, result.Failure, refComparison: comparison);
                     return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.Conflict,
                         result.Failure, result.Delivery, result.Context, result.RequiredPermissions));
@@ -634,6 +656,7 @@ internal sealed partial class GitHubCoordinationStore
                 var delay = sample == 0 ? 250 : 750;
                 if (TimeSpan.FromSeconds(3) - Stopwatch.GetElapsedTime(pendingAt.Value) <= TimeSpan.FromMilliseconds(delay))
                 {
+                    PreserveRejectedMutationFailure();
                     ObserveCheckpointFailure(attempt, stage, GitHubCheckpointReason.RefMismatch, refComparison: comparison);
                     return RetainCheckpointFailure(DomainFailure(GitHubCoordinationFailureKind.Conflict,
                         result.Failure, result.Delivery, result.Context, result.RequiredPermissions));
@@ -651,15 +674,18 @@ internal sealed partial class GitHubCoordinationStore
             var original = observationToken ?? token;
             var operationCancelled = original.IsCancellationRequested && !checkpointLifetime.IsCancellationRequested && !recovery.IsCancellationRequested;
             if (exception is OperationCanceledException && !failedRefRead) comparison = null;
+            PreserveRejectedMutationFailure();
             ObserveCheckpointException(attempt, stage, exception, operationCancelled ? original : active,
                 recovery: !operationCancelled, refComparison: stage == GitHubCheckpointStage.FinalRef ? comparison : null);
             if (original.IsCancellationRequested && (exception is OperationCanceledException
                 || (exception as GitHubCoordinationException)?.TransportFailure?.Code is GitHubFailureCode.Cancelled or GitHubFailureCode.Timeout))
             {
-                // This mutation was dispatched and remains unconfirmed. Do not
-                // let publication treat it as a pre-dispatch caller cancellation
-                // eligible for a later release write.
-                StopCheckpoint();
+                // Unconfirmed renewal/publication authority permanently stops.
+                // An ordinary checkpoint-write cancellation keeps only the old
+                // confirmed owner for independently revalidated claim shortening;
+                // it never confirms this checkpoint or grants more work.
+                if (attempt?.Operation != GitHubCheckpointOperation.Write || publicationActive)
+                    StopCheckpoint();
                 throw new OperationCanceledException(original);
             }
             var failed = CheckpointExceptionFailure(exception).Failure!;
@@ -822,7 +848,7 @@ internal sealed partial class GitHubCoordinationStore
         }
         try
         {
-            var head = RequireRemote(await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false)).Oid;
+            var head = RequireRemote(await ReadDataRefAsync(coordinationRef, token).ConfigureAwait(false)).Oid;
             if (head != publicationHead)
             {
                 ObserveCheckpointFailure(attempt, GitHubCheckpointStage.FinalRef, GitHubCheckpointReason.RefMismatch);
@@ -885,6 +911,7 @@ internal sealed partial class GitHubCoordinationStore
             checkpointExpiry.Dispose();
             checkpointGate.Release();
             checkpointLifetime.Dispose();
+            if (nativeCoordination is not null) await nativeCoordination.DisposeAsync().ConfigureAwait(false);
         }
     }
 

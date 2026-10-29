@@ -43,21 +43,34 @@ internal sealed class GitHubCampaignObserver : IDisposable
         var facts = new List<GitHubCampaignPullRequest>();
         var exhausted = false;
         var pages = 0;
+        GitHubCampaignSnapshot? platform = null;
         using var deadline = CancellationTokenSource.CreateLinkedTokenSource(token);
         deadline.CancelAfter(TimeSpan.FromSeconds(90));
         var cancellation = deadline.Token;
         try
         {
-            var repoRead = await client.GetRepositoryAsync(cancellation).ConfigureAwait(false);
-            if (repoRead.Value is null) return Transport(repoRead.Failure);
-            repository = repoRead.Value.Identity;
-            var targetRead = await client.GetRefAsync(authority.TargetRef, cancellation).ConfigureAwait(false);
-            target = targetRead.Value;
-            if (target is null) return RefFailure(targetRead.Failure, authority.TargetRef);
-            var ledgerRead = await client.GetRefAsync(coordinationRef, cancellation).ConfigureAwait(false);
-            ledgerRef = ledgerRead.Value;
-            if (ledgerRef is null && ledgerRead.Failure?.Code != GitHubFailureCode.NotFound)
-                return Transport(ledgerRead.Failure, coordinationRef);
+            if (client.NativeCoordinationFactory is not null)
+            {
+                var snapshot = await client.ReadCampaignSnapshotAsync(true, cancellation).ConfigureAwait(false);
+                if (snapshot.Value is null) return Transport(snapshot.Failure);
+                platform = snapshot.Value;
+                repository = platform.Repository.Identity;
+                target = platform.Target;
+                ledgerRef = platform.Coordination;
+            }
+            else
+            {
+                var repoRead = await client.GetRepositoryAsync(cancellation).ConfigureAwait(false);
+                if (repoRead.Value is null) return Transport(repoRead.Failure);
+                repository = repoRead.Value.Identity;
+                var targetRead = await client.GetRefAsync(authority.TargetRef, cancellation).ConfigureAwait(false);
+                target = targetRead.Value;
+                if (target is null) return RefFailure(targetRead.Failure, authority.TargetRef);
+                var ledgerRead = await client.GetRefAsync(coordinationRef, cancellation).ConfigureAwait(false);
+                ledgerRef = ledgerRead.Value;
+                if (ledgerRef is null && ledgerRead.Failure?.Code != GitHubFailureCode.NotFound)
+                    return Transport(ledgerRead.Failure, coordinationRef);
+            }
             ledgerKind = ledgerRef is null ? GitHubCampaignLedgerKind.Missing : GitHubCampaignLedgerKind.Current;
             IGitHubCoordinationStateCapability? state = null;
             var generations = new List<GitHubCampaignGeneration>();
@@ -91,8 +104,14 @@ internal sealed class GitHubCampaignObserver : IDisposable
                     }
                 }
             }
-            var collection = await client.ListPullRequestsAsync(cancellation).ConfigureAwait(false);
-            if (collection.Value is not { Exhausted: true } set) return Transport(collection.Failure);
+            GitHubPullRequestSet set;
+            if (platform is not null) set = platform.PullRequests;
+            else
+            {
+                var collection = await client.ListPullRequestsAsync(cancellation).ConfigureAwait(false);
+                if (collection.Value is not { Exhausted: true } listed) return Transport(collection.Failure);
+                set = listed;
+            }
             exhausted = true;
             pages = set.Pages;
             var knownNumbers = generations.Where(item => item.Number is not null).Select(item => item.Number!.Value).ToHashSet();
@@ -102,6 +121,15 @@ internal sealed class GitHubCampaignObserver : IDisposable
             var details = new List<GitHubPullRequest>();
             foreach (var row in relevant)
             {
+                if (platform is not null)
+                {
+                    // Full fields came from this actual gate's query, not an
+                    // earlier collection or an inferred ownership capability.
+                    if (row.Author is null) return Transport(new(GitHubFailureCode.InvalidResponse), number: row.Number);
+                    facts.Add(Project(row, false));
+                    details.Add(row);
+                    continue;
+                }
                 var detail = await client.GetPullRequestAsync(row.Number, cancellation).ConfigureAwait(false);
                 if (detail.Value is null)
                 {
@@ -176,13 +204,16 @@ internal sealed class GitHubCampaignObserver : IDisposable
             }
 
             // Close the observed read window. This is not a transactional snapshot or a claim.
-            var finalTarget = await client.GetRefAsync(authority.TargetRef, cancellation).ConfigureAwait(false);
-            if (finalTarget.Value is null) return RefFailure(finalTarget.Failure, authority.TargetRef);
-            if (finalTarget.Value != target) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: authority.TargetRef));
-            var finalLedger = await client.GetRefAsync(coordinationRef, cancellation).ConfigureAwait(false);
-            if (finalLedger.Value is null && finalLedger.Failure?.Code != GitHubFailureCode.NotFound)
-                return Transport(finalLedger.Failure, coordinationRef);
-            if (finalLedger.Value != ledgerRef) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: coordinationRef));
+            if (platform is null)
+            {
+                var finalTarget = await client.GetRefAsync(authority.TargetRef, cancellation).ConfigureAwait(false);
+                if (finalTarget.Value is null) return RefFailure(finalTarget.Failure, authority.TargetRef);
+                if (finalTarget.Value != target) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: authority.TargetRef));
+                var finalLedger = await client.GetRefAsync(coordinationRef, cancellation).ConfigureAwait(false);
+                if (finalLedger.Value is null && finalLedger.Failure?.Code != GitHubFailureCode.NotFound)
+                    return Transport(finalLedger.Failure, coordinationRef);
+                if (finalLedger.Value != ledgerRef) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: coordinationRef));
+            }
             if (currentRef is not null && proposalRef is null)
             {
                 var read = await client.GetRefAsync(currentRef, cancellation).ConfigureAwait(false);
@@ -205,7 +236,18 @@ internal sealed class GitHubCampaignObserver : IDisposable
                 if (read.Value is not null) return Fail(new(GitHubCampaignFailureKind.RefChanged, Ref: reference));
                 if (read.Failure?.Code != GitHubFailureCode.NotFound) return Transport(read.Failure, reference);
             }
-            foreach (var pr in details)
+            if (platform is not null)
+            {
+                // A distinct actual query closes the window after all content
+                // and proposal-ref checks. The opening response is not readback.
+                var closing = await client.ReadCampaignSnapshotAsync(false, cancellation).ConfigureAwait(false);
+                if (closing.Value is not { } actual) return Transport(closing.Failure);
+                if (actual.Repository != platform.Repository || actual.Target != target || actual.Coordination != ledgerRef)
+                    return Fail(new(GitHubCampaignFailureKind.RefChanged));
+                if (!actual.PullRequests.Items.SequenceEqual(platform.PullRequests.Items))
+                    return Fail(new(GitHubCampaignFailureKind.StaleLedger));
+            }
+            else foreach (var pr in details)
             {
                 var read = await client.GetPullRequestAsync(pr.Number, cancellation).ConfigureAwait(false);
                 if (read.Value is null) return Transport(read.Failure, number: pr.Number);

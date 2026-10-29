@@ -1043,6 +1043,42 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
         }
     }
 
+    // The Git adapter borrows only this dedicated, retained private directory.
+    // Reuse the checkpoint owner's complete identity/ACL/volume/path checks.
+    internal static GitStorageDirectory RetainGitStorageDirectory(string directory, string repositoryRoot)
+    {
+        if (!IsSupportedPlatform()) throw new PlatformNotSupportedException("Private Git storage is unsupported.");
+        return GitStorageDirectory.Retain(directory, repositoryRoot);
+    }
+
+    internal static GitStorageDirectory CreateGitStorageDirectory(string repositoryRoot, string temporaryParent)
+    {
+        if (!IsSupportedPlatform()) throw new PlatformNotSupportedException("Private Git storage is unsupported.");
+        using var repository = OpenDirectoryChain(repositoryRoot, requirePrivateFinal: false);
+        using var parent = OpenDirectoryChain(temporaryParent, requirePrivateFinal: false);
+        var sameDevice = DarwinFileSystem.IsSupported || parent.BackingLocation.Device == repository.BackingLocation.Device;
+        if (sameDevice && IsSameOrDescendant(repository.BackingLocation.Path, parent.BackingLocation.Path))
+            throw InvalidFault();
+        RevalidateDirectoryBinding(repository);
+        RevalidateDirectoryBinding(parent);
+        var name = "contract-scribe-git-" + Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(16));
+        if (MakeDirectoryAt(FileDescriptor(parent.DirectoryHandle), name, OwnerDirectoryMode) != 0)
+            throw UnreadableFault();
+        RevalidateDirectoryBinding(parent);
+        return RetainGitStorageDirectory(Path.Join(parent.SelectedPath, name), repositoryRoot);
+    }
+
+    internal sealed class GitStorageDirectory : IDisposable
+    {
+        private DirectoryContext? context;
+        internal string Path => (context ?? throw new ObjectDisposedException(nameof(GitStorageDirectory))).SelectedPath;
+        private GitStorageDirectory(DirectoryContext context) => this.context = context;
+        internal static GitStorageDirectory Retain(string directory, string repositoryRoot) =>
+            new(new FileCampaignCheckpointStore(System.IO.Path.Join(directory, ".git-storage-binding"), repositoryRoot).OpenContext());
+        internal void Validate() => RevalidateContext(context ?? throw new ObjectDisposedException(nameof(GitStorageDirectory)));
+        public void Dispose() => Interlocked.Exchange(ref context, null)?.Dispose();
+    }
+
     private static DirectoryContext OpenDirectoryChain(string path, bool requirePrivateFinal)
     {
         var fullPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(path));
@@ -1987,6 +2023,9 @@ internal sealed class FileCampaignCheckpointStore : ICampaignSemanticCheckpointS
 
     [DllImport("libc", EntryPoint = "open", SetLastError = true)]
     private static extern int LinuxOpen(string path, int flags, uint mode);
+
+    [DllImport("libc", EntryPoint = "mkdirat", SetLastError = true)]
+    private static extern int MakeDirectoryAt(int directory, string path, uint mode);
 
     private static int Open(string path, int flags, uint mode)
     {

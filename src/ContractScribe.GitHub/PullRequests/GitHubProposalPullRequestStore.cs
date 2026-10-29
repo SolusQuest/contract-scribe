@@ -111,7 +111,7 @@ internal sealed class GitHubProposalPullRequestStore
         if (collection.Failure is { } failed) return CoordinationFailureOf(failed);
         if (collection.Items.Any(pr => pr.Open || "refs/heads/" + pr.Head.Ref == reference))
             return new(GitHubCoordinationFailureKind.Conflict);
-        var proposal = await owner.client.GetRefAsync(reference, token).ConfigureAwait(false);
+        var proposal = await coordination.ReadDataRefAsync(reference, token).ConfigureAwait(false);
         if (proposal.Value is null && proposal.Failure?.Code != GitHubFailureCode.NotFound)
             return new(GitHubCoordinationFailureKind.Transport, proposal.Failure, proposal.Delivery, proposal.Context, proposal.RequiredPermissions);
         if (state.Stage == GitHubCoordinationStage.ContentCreated
@@ -304,7 +304,7 @@ internal sealed class GitHubProposalPullRequestStore
         if (final.State.HeadOid != state.HeadOid || final.State.Repository != state.Repository) return Conflict();
         proposal = await VerifyProposalAsync(state, expected, verified, cancellationToken).ConfigureAwait(false);
         if (proposal is not null) return proposal;
-        var finalTarget = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
+        var finalTarget = await coordination.ReadDataRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (finalTarget.Value is null) return Failed(finalTarget);
         if (candidate.Open && finalTarget.Value.Oid != state.TargetCommitOid
             && classified.Outcome != GitHubProposalOutcome.StaleDraft) return new(GitHubProposalOutcome.Conflict,
@@ -402,7 +402,7 @@ internal sealed class GitHubProposalPullRequestStore
     private async ValueTask<GitHubProposalResult?> VerifyProposalAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubInspectedProposal? verified, CancellationToken cancellationToken)
     {
-        var reference = await client.GetRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
+        var reference = await coordination.ReadDataRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
         if (reference.Value is null) return Failed(reference);
         if (reference.Value.Oid != expected.CommitOid)
             return await ClassifyHeadMismatchAsync(state, expected, reference.Value.Oid, verified, cancellationToken).ConfigureAwait(false);
@@ -416,7 +416,7 @@ internal sealed class GitHubProposalPullRequestStore
         if (commit.Value.TreeOid != expected.TreeOid) return Conflict();
         var tree = await coordination.ReadVerifiedProposalTreeAsync(expected.TreeOid, cancellationToken).ConfigureAwait(false);
         if (tree.Value is null) return Failed(tree);
-        var target = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
+        var target = await coordination.ReadDataRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (target.Value is null) return Failed(target);
         // A merged PR may legitimately advance the target. Eligibility is checked after classification.
         return null;

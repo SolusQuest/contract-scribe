@@ -64,6 +64,8 @@ internal sealed record GitHubApiResult<T>(T? Value, GitHubFailure? Failure, GitH
 
 internal sealed record GitHubObjectIdentity(string Oid) : GitHubValue;
 internal sealed record GitHubRef(string Name, string NodeId, string Oid) : GitHubValue;
+// Git data continuity, deliberately without a platform Ref node identity.
+internal sealed record GitHubDataRef(string Name, string Oid) : GitHubValue;
 internal sealed record GitHubBlob(string Oid, ImmutableArray<byte> Bytes) : GitHubValue;
 internal sealed record GitHubTreeEntry(string Path, GitHubTreeMode Mode, string Oid, long? Size) : GitHubValue;
 internal sealed record GitHubTree(string Oid, ImmutableArray<GitHubTreeEntry> Entries) : GitHubValue;

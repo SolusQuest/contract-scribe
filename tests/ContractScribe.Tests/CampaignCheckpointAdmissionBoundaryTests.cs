@@ -118,10 +118,10 @@ public sealed partial class CampaignStateContractTests
             if (source == "setup") Assert.Null(failure); // Cancelled in Core before any remote operation.
             else
             {
-                Assert.NotNull(failure);
-                Assert.Equal(GitHubCheckpointStage.CheckpointReadback, failure.Stage);
-                Assert.Equal(GitHubCheckpointReason.Cancelled, failure.Reason);
-                Assert.Equal(predecessor.CheckpointRevision + 1, failure.AttemptedRevision);
+                var diagnostic = Assert.IsType<GitHubCheckpointDiagnostic>(failure);
+                Assert.Equal(GitHubCheckpointStage.CheckpointReadback, diagnostic.Stage);
+                Assert.Equal(GitHubCheckpointReason.Cancelled, diagnostic.Reason);
+                Assert.Equal(predecessor.CheckpointRevision + 1, diagnostic.AttemptedRevision);
             }
             var durable = CampaignStateJson.Parse((await store.ReadAsync(default)).ExactUtf8Json.AsMemory()).Artifact!;
             Assert.Equal(predecessor.CheckpointRevision + (source == "setup" ? 0 : 1), durable.CheckpointRevision);

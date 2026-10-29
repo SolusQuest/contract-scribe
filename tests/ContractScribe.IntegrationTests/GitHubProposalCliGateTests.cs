@@ -33,15 +33,14 @@ public sealed partial class GitHubProposalCliProcessTests
             var checkpointWritten = false;
             fixture.GitHub.After = request =>
             {
-                if (request.Method == "POST" && request.Path == "/graphql") checkpointWritten = true;
+                if (request.Kind == "checkpoint-commit") checkpointWritten = true;
             };
             fixture.GitHub.BeforeResponse = request =>
             {
                 if (held.Task.IsCompleted) return null;
                 var selected = phase == "write"
-                    ? request.Method == "POST" && request.Path.EndsWith("/git/blobs", StringComparison.Ordinal)
-                    : request.Method == "GET" && request.Path == "/repos/Owner/repo"
-                        && (phase == "read" || checkpointWritten);
+                    ? request.Kind == "checkpoint-commit"
+                    : request.CurrentCheckpointQuery && (phase == "read" ? !checkpointWritten : checkpointWritten);
                 if (!selected) return null;
                 held.TrySetResult();
                 return responseRelease.Task;

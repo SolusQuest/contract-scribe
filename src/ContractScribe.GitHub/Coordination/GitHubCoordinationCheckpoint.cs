@@ -84,12 +84,24 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
             return authenticated;
         }
         var effect = proof?.EffectHead == head;
-        var cachedCommit = !effect ? proof?.Pool?.Read<GitHubCommit>(head, token) : null;
-        var cachedRoot = cachedCommit is not null ? proof?.Pool?.Read<GitHubTree>(cachedCommit.TreeOid, token) : null;
+        var pool = proof?.Pool;
+        var cachedCommit = !effect ? pool?.Read<GitHubCommit>(head, token) : null;
+        var cachedRoot = cachedCommit is not null ? pool!.Read<GitHubTree>(cachedCommit.TreeOid, token) : null;
         var cachedLeaf = cachedRoot?.Entries is { Length: 1 } cachedEntries
-            ? proof?.Pool?.Read<GitHubTree>(cachedEntries[0].Oid, token) : null;
+            ? pool!.Read<GitHubTree>(cachedEntries[0].Oid, token) : null;
         var cachedState = cachedLeaf?.Entries.SingleOrDefault(entry => entry.Path == GitHubCoordinationObjects.StatePath);
-        if (!effect && (cachedState is null || proof?.Pool?.Read<GitHubBlob>(cachedState.Oid, token) is null))
+        var cachedComplete = cachedState is not null && proof?.Pool?.Read<GitHubBlob>(cachedState.Oid, token) is not null;
+        if (nativeCoordination is not null && (effect || proof?.CurrentHead == head || !cachedComplete)
+            && await nativeCoordination.HasObservedAsync(head, token).ConfigureAwait(false))
+        {
+            var native = await nativeCoordination.ReadObservedAsync(head, token).ConfigureAwait(false);
+            if (native.Commit is not null)
+                return StageNativeObservation(native, proof, token);
+            // Only an actual cold/effect read needs a native child. Complete
+            // immutable history still uses the original bounded positive pool.
+            // Signed principal associations remain the real API reader's role.
+        }
+        if (!effect && !cachedComplete)
         {
             var observed = RequireRemote(await client.ReadCheckpointDocumentAsync(head, token).ConfigureAwait(false));
             if (observed.Commit is not { } actualCommit || actualCommit.Oid != head
@@ -316,6 +328,26 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
     private async ValueTask<RemoteCheckpoint?> ReadRemoteCheckpointAsync(CancellationToken token, ReadProof? transactionProof = null,
         bool verifyTarget = false, CheckpointAttempt? attempt = null, bool promote = true)
     {
+        if (nativeCoordination is null && client.NativeCoordinationFactory is { } nativeFactory)
+            nativeCoordination = await nativeFactory(token).ConfigureAwait(false);
+        if (nativeCoordination is not null && !publicationActive && client.AuthenticatedRepository is { } repository)
+        {
+            var native = await nativeCoordination.ObserveAsync(token).ConfigureAwait(false);
+            if (native is null) return null;
+            if (native.Commit is not null)
+            {
+                using var nativeProof = transactionProof is null ? PublicationProof(repository, native.HeadOid) : null;
+                var nativeTransactionProof = transactionProof ?? nativeProof!;
+                var current = await AcceptNativeCheckpointAsync(native, repository, nativeTransactionProof, token, verifyTarget).ConfigureAwait(false);
+                // This closing role proves Git head continuity, not an API Ref
+                // node identity. The platform-sensitive paths remain unchanged.
+                if (await nativeCoordination.ReadHeadAsync(false, token).ConfigureAwait(false) != native.HeadOid)
+                    throw new GitHubCoordinationException(transportFailure: new(GitHubFailureCode.Conflict));
+                CompleteCheckpointObservation(current, attempt);
+                if (!checkpointStopped && promote) nativeTransactionProof.Promote(token);
+                return current;
+            }
+        }
         var snapshot = RequireRemote(await client.ReadCheckpointSnapshotAsync(token).ConfigureAwait(false));
         if (snapshot.Reference is not { } reference) return null;
         using var ownedProof = transactionProof is null ? PublicationProof(snapshot.Repository, reference.Oid) : null;

@@ -12,6 +12,10 @@ Each required option appears exactly once, in any order. Both `--name value` and
 
 ## Stable campaign configuration
 
+The default GitHub adapter uses native Git for campaign Git data, with REST/GraphQL for actual platform facts, strict paired ref publication and PR operations. On the required Ubuntu runner Git must be available at the fixed executable path `/usr/bin/git`. Qualified native macOS development uses the same fixed path and the existing physical temporary-storage requirements; this adds no Windows or other runner support promise. Missing executables, unsupported storage and unknown native outcomes fail closed.
+
+The CLI creates and holds a dedicated private temporary root outside the target tree through finalization and transport disposal. It reuses the checkpoint owner's identity, ownership, exact-mode, ACL, volume and path-binding checks. The adapter owns its private bare stores and child processes only while that root remains held. There is no consumer option for the root or a runtime HTTP/Git backend choice. Child Git uses the fixed repository HTTPS origin, isolated configuration/environment and no hooks/helpers/redirects. The existing GitHub credential is supplied through the owned child's environment, never command arguments or repository config; native diagnostics do not expose it. Native data transfer does not replace required actual HTTPS Date, permission, platform identity or PR checks.
+
 Every trigger supplies the same bounded, non-secret configuration:
 
 ```json

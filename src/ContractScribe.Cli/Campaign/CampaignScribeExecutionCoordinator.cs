@@ -407,7 +407,7 @@ internal sealed class CampaignScribeExecutionCoordinator : IDocumentationScribeE
             } failed
             && failed.AttemptedRevision == transition.Artifact.CheckpointRevision
             && failed.MatchesOperationCancellation(boundedSettlement.Token) && Volatile.Read(ref firstSource) >= 0)
-            usage?.ObserveCheckpoint(failed with { Cancellation = (GitHubCheckpointCancellation)Volatile.Read(ref firstSource) });
+            usage!.ObserveCheckpoint(failed with { Cancellation = (GitHubCheckpointCancellation)Volatile.Read(ref firstSource) });
         // An admission already written before execution stopped may still be
         // acknowledged for mandatory settlement. Its original permit cannot
         // execute late; an expired acceptance itself must never advance Writer.

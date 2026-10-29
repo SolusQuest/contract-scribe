@@ -32,8 +32,12 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(sends, usage.GetProperty("calls").GetProperty("logicalProviderCalls").GetInt32());
         Assert.Equal(0, usage.GetProperty("calls").GetProperty("retryDispatches").GetInt32());
         Assert.Equal(tools, usage.GetProperty("calls").GetProperty("toolCalls").GetInt32());
-        Assert.Equal(revision, checkpoint.CheckpointRevision);
-        Assert.Equal(revision, usage.GetProperty("checkpointRevision").GetInt64());
+        // Keep the original Theory row/identity as the pre-composition workload
+        // reference. A successful batch now combines its last member/progress
+        // projection instead of persisting one duplicate final scalar save.
+        var currentRevision = failed ? revision : revision - 1;
+        Assert.Equal(currentRevision, checkpoint.CheckpointRevision);
+        Assert.Equal(currentRevision, usage.GetProperty("checkpointRevision").GetInt64());
         Assert.Equal("complete", usage.GetProperty("completeness").GetString());
         Assert.Equal(JsonValueKind.Null, usage.GetProperty("checkpointFailure").ValueKind);
         Assert.Equal(12, state.WorkItems.Length); Assert.Equal(12, state.TargetProgress.Length);

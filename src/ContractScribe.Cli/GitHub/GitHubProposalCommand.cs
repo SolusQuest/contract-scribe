@@ -60,9 +60,14 @@ internal static class GitHubProposalCommand
             var github = request.Configuration.GitHub;
             var authority = GitHubPublicationFactory.CreateCampaignReadAuthority(github.RepositoryOwner, github.RepositoryName,
                 github.TargetRef, request.Configuration.CampaignLineage);
+            using var gitStorage = GitHubPrivateStorageOwner.Create(preflight.RepositoryRoot, cancellationToken);
             GitHubProposalProcessHooks.Reach("token-read");
             GitHubApiClient client;
-            try { client = GitHubApiClient.CreateReadOnly(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!, preflight.Configuration.Document.Timeouts.GitHub); }
+            try
+            {
+                client = GitHubApiClient.CreateReadOnly(authority, accessor("CONTRACTSCRIBE_GITHUB_TOKEN")!,
+                preflight.Configuration.Document.Timeouts.GitHub, gitStorage.Storage);
+            }
             catch (Exception exception) when (exception is ArgumentException or GitHubProtocolException)
             { return GitHubProposalPresentation.Local(identity, operation, "permission"); }
             using var clientLifetime = client;

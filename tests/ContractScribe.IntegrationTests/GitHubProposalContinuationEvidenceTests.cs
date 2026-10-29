@@ -119,15 +119,16 @@ public sealed partial class GitHubProposalCliProcessTests
         await SetAutomaticQuota(fixture, 5);
         var acknowledgement = Path.Join(fixture.Outside, "five-members.ack");
         var environment = fixture.Environment();
-        foreach (var pair in CampaignCliProcessTests.HookEnvironment(CampaignProcessBoundaryHooks.ScribeProgressAfterReadback,
+        foreach (var pair in CampaignCliProcessTests.HookEnvironment(CampaignProcessBoundaryHooks.ScribeMemberAfterReadback,
             acknowledgement, Path.Join(fixture.Outside, "never-release-five"))) environment[pair.Key] = pair.Value;
+        environment["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_OCCURRENCE"] = "5";
         CampaignCheckpointArtifact saved;
         using (var running = CampaignCliProcessTests.Start(fixture.Args(), environment))
         {
             try
             {
                 await CampaignCliProcessTests.WaitForFileAsync(acknowledgement, running,
-                    CampaignProcessBoundaryHooks.ScribeProgressAfterReadback, TimeSpan.FromMinutes(3));
+                    CampaignProcessBoundaryHooks.ScribeMemberAfterReadback, TimeSpan.FromMinutes(3));
                 saved = fixture.Checkpoint();
                 Assert.Equal(5, saved.State.ScribeProgress!.Members.Count(member => member.ContentSha256 is not null));
                 Assert.Equal(5, saved.State.WorkItems.Count(work => work.Status == CampaignWorkStatus.ProposalComplete));

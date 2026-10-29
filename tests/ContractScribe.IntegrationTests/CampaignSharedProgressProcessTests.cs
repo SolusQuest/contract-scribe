@@ -104,7 +104,8 @@ public sealed partial class CampaignCliProcessTests
                 new Dictionary<string, string?>
                 {
                     ["DOTNET_STARTUP_HOOKS"] = StartupHookPath,
-                    ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_NAME"] = CampaignProcessBoundaryHooks.ScribeProgressAfterReadback,
+                    ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_NAME"] = CampaignProcessBoundaryHooks.ScribeMemberAfterReadback,
+                    ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_OCCURRENCE"] = "3",
                     ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_ACK"] = acknowledgement,
                 });
             try

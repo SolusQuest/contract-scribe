@@ -8,6 +8,7 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text.Json;
 using ContractScribe.Core;
+using ContractScribe.GitHub.NativeGit;
 using static ContractScribe.GitHub.Transport.GitHubResponseReader;
 
 namespace ContractScribe.GitHub.Transport;
@@ -16,6 +17,7 @@ internal sealed partial class GitHubApiClient : IDisposable
 {
     private long mutationOrdinal;
     internal long MutationOrdinal => Interlocked.Read(ref mutationOrdinal);
+    internal readonly Func<CancellationToken, ValueTask<GitHubCoordinationGitTransport>>? NativeCoordinationFactory;
     internal const string ApiVersion = "2026-03-10";
     internal const string ProductionOrigin = "https://api.github.com/";
     internal const string UpdateRefsDocument = "mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}";
@@ -85,7 +87,7 @@ internal sealed partial class GitHubApiClient : IDisposable
 
     private GitHubApiClient(ValidatedGitHubCampaignReadAuthority readAuthority,
         ValidatedGitHubPublicationAuthority? authority, string credential,
-        Uri origin, HttpMessageHandler handler, int timeoutMilliseconds)
+        Uri origin, HttpMessageHandler handler, int timeoutMilliseconds, Uri? gitOrigin, GitHubPrivateStorage? storage)
     {
         mutationAuthority = authority;
         this.readAuthority = readAuthority;
@@ -93,34 +95,53 @@ internal sealed partial class GitHubApiClient : IDisposable
         this.origin = origin;
         requestTimeoutMilliseconds = timeoutMilliseconds;
         invoker = new(handler, disposeHandler: true);
+        if (storage is not null)
+            NativeCoordinationFactory = token =>
+            {
+                ObjectDisposedException.ThrowIf(disposed != 0, this);
+                storage.RequireCurrent();
+                return gitOrigin is not null
+                    ? GitHubCoordinationGitTransport.CreateLoopbackAsync(readAuthority, storage.Directory, gitOrigin, token,
+                        () => finalizationDeadline, () => Interlocked.Increment(ref mutationOrdinal), storage)
+                    : GitHubCoordinationGitTransport.CreateAsync(readAuthority, storage, this.credential!, token,
+                        () => finalizationDeadline, () => Interlocked.Increment(ref mutationOrdinal));
+            };
     }
 
     internal static GitHubApiClient Create(ValidatedGitHubPublicationAuthority authority, string credential,
-        GitHubTransportTimeouts? timeouts = null)
+        GitHubTransportTimeouts? timeouts = null, GitHubPrivateStorage? storage = null)
     {
         Require(authority is not null && RepositoryPart(authority.RepositoryOwner)
             && RepositoryPart(authority.RepositoryName), GitHubFailureCode.InvalidRequest);
-        return CreateCore(GitHubPublicationFactory.CreateCampaignReadAuthority(authority!), authority, credential, timeouts);
+        return CreateCore(GitHubPublicationFactory.CreateCampaignReadAuthority(authority!), authority, credential, timeouts, storage);
     }
 
     internal static GitHubApiClient CreateReadOnly(ValidatedGitHubCampaignReadAuthority authority, string credential,
-        GitHubTransportTimeouts? timeouts = null)
+        GitHubTransportTimeouts? timeouts = null, GitHubPrivateStorage? storage = null)
     {
         Require(authority is not null && RepositoryPart(authority.RepositoryOwner)
             && RepositoryPart(authority.RepositoryName), GitHubFailureCode.InvalidRequest);
-        return CreateCore(authority!, null, credential, timeouts);
+        return CreateCore(authority!, null, credential, timeouts, storage);
     }
 
     private static GitHubApiClient CreateCore(ValidatedGitHubCampaignReadAuthority readAuthority,
-        ValidatedGitHubPublicationAuthority? authority, string credential, GitHubTransportTimeouts? timeouts)
+        ValidatedGitHubPublicationAuthority? authority, string credential, GitHubTransportTimeouts? timeouts, GitHubPrivateStorage? storage)
     {
         Require(credential is { Length: > 0 and <= 8192 }
             && credential.All(c => char.IsAsciiLetterOrDigit(c) || c is '-' or '.' or '_' or '~' or '+' or '/' or '='),
             GitHubFailureCode.InvalidRequest);
         var test = GitHubTransportTestHook.Take(credential);
+        var gitOrigin = GitHubTransportTestHook.GitOrigin(credential);
+        Require(gitOrigin is null || storage is not null, GitHubFailureCode.InvalidRequest);
+        // Real construction always requires the trusted CLI-owned private root.
+        // Existing HTTP-only scripted protocol fakes are test substitutes only.
+        Require(test is not null || storage is not null, GitHubFailureCode.InvalidRequest);
+        if (test is not null && gitOrigin is null) storage = null;
         timeouts ??= GitHubTransportTimeouts.Default;
-        return new(readAuthority, authority, credential, test?.Endpoint ?? new Uri(ProductionOrigin),
-            test?.Handler ?? CreateProductionHandler(timeouts), test?.TimeoutMilliseconds ?? timeouts.RequestMilliseconds);
+        var client = new GitHubApiClient(readAuthority, authority, credential, test?.Endpoint ?? new Uri(ProductionOrigin),
+            test?.Handler ?? CreateProductionHandler(timeouts), test?.TimeoutMilliseconds ?? timeouts.RequestMilliseconds,
+            gitOrigin, storage);
+        return client;
     }
 
     internal ValidatedGitHubCheckpointAuthority? CheckpointAuthority => checkpointAuthority;
@@ -134,10 +155,10 @@ internal sealed partial class GitHubApiClient : IDisposable
     }
 
     internal static GitHubApiClient CreateCheckpoint(ValidatedGitHubCheckpointAuthority authority, string credential,
-        GitHubTransportTimeouts? timeouts = null)
+        GitHubTransportTimeouts? timeouts = null, GitHubPrivateStorage? storage = null)
     {
         ArgumentNullException.ThrowIfNull(authority);
-        var client = CreateCore(authority.ReadAuthority, null, credential, timeouts);
+        var client = CreateCore(authority.ReadAuthority, null, credential, timeouts, storage);
         client.checkpointAuthority = authority;
         return client;
     }
@@ -602,6 +623,8 @@ internal sealed partial class GitHubApiClient : IDisposable
                         var pagination = GitHubResponseHeaders.Pagination(response.Headers, origin, Identity(), prepared.Page, prepared.AdvertisedLast);
                         value = (T)(object)(page with { Next = pagination.Next, Last = pagination.Last, Bytes = bytes.Length });
                     }
+                    if (value is CampaignPage campaignPage)
+                        value = (T)(object)(campaignPage with { Bytes = bytes.Length });
                     return new(value, null, prepared.Context is null ? GitHubDelivery.Read : GitHubDelivery.NeedsReadback,
                         prepared.Context, permissions);
                 }

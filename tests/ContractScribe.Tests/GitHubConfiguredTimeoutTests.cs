@@ -76,7 +76,8 @@ public sealed class GitHubConfiguredTimeoutTests
         Assert.Empty(clock.DueTimes);
         var token = host.Begin(default);
         Assert.Equal(TimeSpan.FromSeconds(12), Assert.Single(clock.DueTimes));
-        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("configured", '5'), "synthetic");
+        using var transport = GitHubPublicationFinalizationTests.RegisterClockTransport();
+        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("configured", '5'), GitHubTransportTestHook.Placeholder);
         client.BindFinalizationDeadline(host.DeadlineToken, () => host.TimedOut);
         using var recovery = client.CreateRecoveryScope(TimeSpan.FromSeconds(90));
         clock.Expire();

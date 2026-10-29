@@ -42,12 +42,36 @@ internal static class GitHubTransportTestHook
         }
     }
 
+    private static void RegisterGitOrigin(Uri endpoint)
+    {
+        if (endpoint.Scheme != "http" || endpoint.Host != "127.0.0.1" || endpoint.IsDefaultPort
+            || endpoint.UserInfo.Length != 0 || endpoint.Query.Length != 0 || endpoint.Fragment.Length != 0)
+            throw new GitHubProtocolException(GitHubFailureCode.InvalidRequest);
+        lock (Gate)
+        {
+            if (current is null || current.Taken || current.GitOrigin is not null)
+                throw new GitHubProtocolException(GitHubFailureCode.InvalidRequest);
+            current.GitOrigin = endpoint;
+        }
+    }
+
+    internal static Uri? GitOrigin(string credential)
+    {
+        lock (Gate)
+        {
+            if (current?.GitOrigin is null) return null;
+            if (!current.Taken || credential != Placeholder) throw new GitHubProtocolException(GitHubFailureCode.InvalidRequest);
+            return current.GitOrigin;
+        }
+    }
+
     private sealed class Registration(Uri endpoint, HttpMessageHandler? handler, int? timeoutMilliseconds) : IDisposable
     {
         internal Uri Endpoint { get; } = endpoint;
         internal HttpMessageHandler? Handler { get; } = handler;
         internal int? TimeoutMilliseconds { get; } = timeoutMilliseconds;
         internal bool Taken { get; set; }
+        internal Uri? GitOrigin { get; set; }
 
         public void Dispose()
         {

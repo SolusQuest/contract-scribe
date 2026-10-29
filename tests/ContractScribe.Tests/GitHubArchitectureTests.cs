@@ -3,6 +3,7 @@ using System.Runtime.CompilerServices;
 using System.Xml.Linq;
 using ContractScribe.Core;
 using ContractScribe.GitHub.Coordination;
+using ContractScribe.GitHub.NativeGit;
 using ContractScribe.GitHub.PullRequests;
 using ContractScribe.GitHub.Transport;
 
@@ -42,12 +43,13 @@ public sealed class GitHubArchitectureTests
         var client = typeof(GitHubApiClient);
         Assert.All(client.GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance), ctor => Assert.True(ctor.IsPrivate));
         var factory = client.GetMethod("Create", BindingFlags.NonPublic | BindingFlags.Static)!;
-        Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string), typeof(GitHubTransportTimeouts) }, factory.GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.Equal(new[] { typeof(ValidatedGitHubPublicationAuthority), typeof(string), typeof(GitHubTransportTimeouts), typeof(GitHubPrivateStorage) },
+            factory.GetParameters().Select(parameter => parameter.ParameterType));
         var operations = client.GetMethods(BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly)
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
         Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CommitCheckpointAsync", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync", "EnterSemanticRecovery",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
-            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "MatchesRefAcknowledgement", "ReadCheckpointBundleAsync", "ReadCheckpointDocumentAsync", "ReadCheckpointSnapshotAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "MatchesRefAcknowledgement", "ReadCampaignSnapshotAsync", "ReadCheckpointBundleAsync", "ReadCheckpointDocumentAsync", "ReadCheckpointSnapshotAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
         var atomic = client.GetMethod("CommitCheckpointAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
         Assert.Equal(new[] { typeof(GitHubAtomicCheckpointCommit), typeof(CancellationToken) },
             atomic.GetParameters().Select(parameter => parameter.ParameterType));
@@ -61,6 +63,9 @@ public sealed class GitHubArchitectureTests
         var semanticRecovery = client.GetMethod("EnterSemanticRecovery", BindingFlags.NonPublic | BindingFlags.Instance)!;
         Assert.Equal(typeof(IDisposable), semanticRecovery.ReturnType);
         Assert.Equal(new[] { typeof(CampaignSemanticCheckpointWindow) }, semanticRecovery.GetParameters().Select(parameter => parameter.ParameterType));
+        var snapshot = client.GetMethod("ReadCampaignSnapshotAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(new[] { typeof(bool), typeof(CancellationToken) }, snapshot.GetParameters().Select(parameter => parameter.ParameterType));
+        Assert.Equal(typeof(ValueTask<GitHubApiResult<GitHubCampaignSnapshot>>), snapshot.ReturnType);
         Assert.DoesNotContain(client.GetInterfaces(), type => type.Namespace == typeof(ValidatedGitHubPublicationAuthority).Namespace);
         var properties = client.GetProperties(BindingFlags.NonPublic | BindingFlags.Instance);
         Assert.Equal(new[] { "AuthenticatedRepository", "Authority", "CancellationFailure", "CheckpointAuthority", "CheckpointRefNodeId", "HasMutationAuthority", "MutationOrdinal", "ObjectOperation", "ReadAuthority", "ServerTime" }, properties.Select(p => p.Name).Order(StringComparer.Ordinal));
@@ -235,6 +240,25 @@ public sealed class GitHubArchitectureTests
         var docs = File.ReadAllText(Path.Join(Root(), "docs/20_architecture/project-structure.md"));
         Assert.Contains("`GitHub -> Core`", docs, StringComparison.Ordinal);
         Assert.Contains("`Cli -> GitHub`", docs, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Native_git_io_has_one_closed_adapter_and_does_not_expand_the_HTTP_client_surface()
+    {
+        var type = typeof(GitHubCoordinationGitTransport);
+        Assert.True(type.IsSealed && !type.IsPublic);
+        Assert.All(type.GetConstructors(BindingFlags.Instance | BindingFlags.NonPublic), constructor => Assert.True(constructor.IsPrivate));
+        Assert.DoesNotContain(type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic),
+            method => method.IsAssembly && method.Name == "RunAsync");
+        var directory = Path.Join(Root(), "src/ContractScribe.GitHub/NativeGit");
+        var path = Assert.Single(Directory.GetFiles(directory, "*.cs"));
+        Assert.Equal("GitHubCoordinationGitTransport.cs", Path.GetFileName(path));
+        var source = File.ReadAllText(path);
+        Assert.Contains("new ProcessStartInfo(\"/usr/bin/git\")", source, StringComparison.Ordinal);
+        Assert.Contains("start.Environment.Clear()", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("Environment.GetEnvironmentVariable", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("UseShellExecute = true", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("GitHubTransportTestHook.Register(", source, StringComparison.Ordinal);
     }
 
     private static string Root()

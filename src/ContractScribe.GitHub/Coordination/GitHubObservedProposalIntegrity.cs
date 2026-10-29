@@ -15,7 +15,7 @@ internal static class GitHubObservedProposalIntegrity
     {
         var original = await readCommit(generation.OriginalBaseOid, token).ConfigureAwait(false);
         var published = await readCommit(generation.HeadOid, token).ConfigureAwait(false);
-        if (original?.Oid != generation.OriginalBaseOid || published?.Oid != generation.HeadOid
+        if (original is null || published is null || original.Oid != generation.OriginalBaseOid || published.Oid != generation.HeadOid
             || published.TreeOid != generation.TreeOid) return false;
         var basis = await ReadTreeAsync(original.TreeOid, token, readTree).ConfigureAwait(false);
         var proposal = await ReadTreeAsync(published.TreeOid, token, readTree).ConfigureAwait(false);

@@ -199,8 +199,8 @@ internal sealed class GitHubProposalStore
         var bytes = PayloadBytes(payload);
 
         var guarded = (await Guard(state, cancellationToken, readOnly)).State!;
-        var baseCommit = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, cancellationToken));
-        var basis = await ReadBasis(baseCommit.TreeOid, cancellationToken);
+        var baseTree = Value(await coordination.ReadBaseTreeAsync(cancellationToken));
+        var basis = await ReadBasis(baseTree.Oid, cancellationToken);
 
         var before = Zero;
         var blobOids = bytes.ToDictionary(pair => pair.Key, pair => ObjectOid("blob", pair.Value.AsSpan()), StringComparer.Ordinal);
@@ -249,6 +249,8 @@ internal sealed class GitHubProposalStore
         async ValueTask GuardOrphanUpload(CancellationToken token)
         {
             var opening = await Guard(state, token);
+            if (coordination.UsesNativeData)
+                Require(Value(await client.GetRepositoryAsync(token)).Identity == plan.Repository);
             var current = opening.State!;
             Require(current.Repository == plan.Repository && current.Stage == GitHubCoordinationStage.Claimed
                 && current.ContentCommitOid is null && current.ProposalCommitOid is null);
@@ -367,8 +369,8 @@ internal sealed class GitHubProposalStore
             && (guarded.ContentCommitOid is null || guarded.ContentCommitOid == plan.Commit.ExpectedOid)
             && (guarded.ProposalCommitOid is null || guarded.ProposalCommitOid == plan.Commit.ExpectedOid)
             && (guarded.ProposalTreeOid is null || guarded.ProposalTreeOid == plan.Commit.TreeOid));
-        var basis = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, token));
-        Require(basis.TreeOid == plan.BaseTreeOid);
+        var basis = Value(await coordination.ReadBaseTreeAsync(token));
+        Require(basis.Oid == plan.BaseTreeOid);
         var oid = await ReadRef(token);
         if (plan.ReadOnly) return oid;
         if (oid != plan.BeforeOid && !(allowSuccessor && oid == plan.Commit.ExpectedOid))
@@ -382,7 +384,7 @@ internal sealed class GitHubProposalStore
 
     private async ValueTask<string> ReadRef(CancellationToken token)
     {
-        var head = await client.GetRefAsync(proposalRef, token);
+        var head = await coordination.ReadDataRefAsync(proposalRef, token);
         if (head.Value is not null) return head.Value.Oid;
         if (head.Failure?.Code != GitHubFailureCode.NotFound) Throw(head);
         return Zero;
