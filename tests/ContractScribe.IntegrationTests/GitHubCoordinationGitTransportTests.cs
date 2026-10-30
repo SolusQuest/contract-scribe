@@ -231,12 +231,38 @@ public sealed partial class GitHubCoordinationGitTransportTests
         return (await output).TrimEnd('\n');
     }
 
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_server_shutdown_joins_pending_accepts_before_and_after_a_response(bool afterResponse)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var directory = Directory.CreateTempSubdirectory("contract-scribe-native-shutdown-").FullName;
+        try
+        {
+            using var handler = new HttpClientHandler { UseProxy = false };
+            using var client = new HttpClient(handler);
+            for (var attempt = 0; attempt < 32; attempt++)
+            {
+                await using var server = new NativeServer(directory, deadline.Token) { DenyReads = true };
+                if (afterResponse)
+                {
+                    using var response = await client.GetAsync(new Uri(server.Endpoint.AbsoluteUri + "/info/refs"), deadline.Token);
+                    Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                    Assert.Equal(1, server.RequestCount);
+                }
+            }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     internal sealed class NativeServer : IAsyncDisposable
     {
         private readonly HttpListener listener = new();
         private readonly Task loop;
         private readonly string directory;
         private readonly CancellationToken token;
+        private int stopping;
         internal Uri Endpoint { get; }
         internal bool DropNextMutationReply { get; set; }
         internal bool DenyReads { get; set; }
@@ -262,7 +288,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
         {
             try
             {
-                while (listener.IsListening)
+                while (Volatile.Read(ref stopping) == 0)
                 {
                     var context = await listener.GetContextAsync().WaitAsync(token);
                     var request = context.Request;
@@ -327,10 +353,17 @@ public sealed partial class GitHubCoordinationGitTransportTests
                     context.Response.Close();
                 }
             }
-            catch (Exception error) when (!listener.IsListening && error is HttpListenerException or ObjectDisposedException) { }
+            catch (Exception error) when (Volatile.Read(ref stopping) != 0
+                && error is HttpListenerException or ObjectDisposedException)
+            { }
         }
 
         public async ValueTask DisposeAsync()
-        { listener.Close(); await loop; }
+        {
+            // Close can wake a pending accept before HttpListener publishes its
+            // stopped state. Our own lifetime must precede that callback.
+            if (Interlocked.Exchange(ref stopping, 1) == 0) listener.Close();
+            await loop;
+        }
     }
 }
