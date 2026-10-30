@@ -355,7 +355,11 @@ public sealed partial class GitHubCoordinationGitTransportTests
             }
             catch (Exception error) when (Volatile.Read(ref stopping) != 0
                 && error is HttpListenerException or ObjectDisposedException)
-            { }
+            {
+                // A pending accept interrupted by our own Close is normal
+                // completion. Other exceptions still fault the awaited loop.
+                return;
+            }
         }
 
         public async ValueTask DisposeAsync()
