@@ -409,8 +409,10 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
     private async ValueTask FetchCommitOnlyAsync(string store, string requested, string expected, string localRef, CancellationToken token)
     {
         var before = await ObjectInventoryAsync(store, token).ConfigureAwait(false);
+        // This ref records observed data, including older/unrelated bases. Its
+        // local update grants no remote mutation or Writer entitlement.
         Require(await RunAsync(store, ["fetch", "--depth=1", "--filter=tree:0", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
-            requested + ":" + localRef], null, true, token).ConfigureAwait(false));
+            "+" + requested + ":" + localRef], null, true, token).ConfigureAwait(false));
         var after = await ObjectInventoryAsync(store, token).ConfigureAwait(false);
         // Git can include the canonical empty tree even with tree:0. It has no
         // source data; no other tree, blob or source ancestor is accepted.

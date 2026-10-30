@@ -24,6 +24,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
             string? parent = null;
             var targetTree = "";
             var unrelated = new List<string>();
+            var sourceCommits = new List<(string Commit, string Tree)>();
             for (var i = 0; i < 2; i++)
             {
                 RandomNumberGenerator.Fill(bytes);
@@ -33,6 +34,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
                 var tree = await Git(remote, ["mktree"], token, "100644 blob " + blob + "\tlarge.bin\n");
                 targetTree = tree;
                 parent = await Git(remote, parent is null ? ["commit-tree", tree] : ["commit-tree", tree, "-p", parent], token, "Source revision\n");
+                sourceCommits.Add((parent, tree));
             }
             await Git(remote, ["update-ref", "refs/heads/main", parent!], token);
             await using var server = new NativeServer(directory, token);
@@ -51,6 +53,10 @@ public sealed partial class GitHubCoordinationGitTransportTests
             Assert.Equal(GitHubGitAdvance.ActualUpdated, (await writer.AdvanceAsync(new(successor, []), token)).Outcome);
             await using var cold = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
             Assert.Equal(successor.CommitOid, (await cold.ObserveAsync(token))!.HeadOid);
+            Assert.Equal(targetTree, await cold.AcquireObservedBaseTreeAsync(parent!, token));
+            // Reusing a local observed ref must also permit older or unrelated
+            // metadata. This is data acquisition, never a remote CAS update.
+            Assert.Equal(sourceCommits[0].Tree, await cold.AcquireObservedBaseTreeAsync(sourceCommits[0].Commit, token));
             Assert.Equal(targetTree, await cold.AcquireObservedBaseTreeAsync(parent!, token));
             // Read a real historical coordination state after cold shallow acquisition.
             var commands = cold.RemoteCommands;
