@@ -346,8 +346,14 @@ public sealed record DocumentationScribeRepositoryReadExcerptResult(
     DocumentationScribeInstructionRouteFact? Route,
     ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence) : IDocumentationScribeToolResult
 {
+    // Local diagnostic metadata only. The typed failure and model payload stay unchanged.
+    internal DocumentationScribeToolFailureReason RequestFailureReason { get; init; } =
+        DocumentationScribeToolFailureReason.InvalidRequest;
+
     DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory =>
-        DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
+        FailureCode == DocumentationScribeRepositoryToolFailureCodes.InvalidRequest
+            ? RequestFailureReason
+            : DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
 
     public override string ToString() =>
         $"{nameof(DocumentationScribeRepositoryReadExcerptResult)} {{ Outcome = {Outcome.Id}, FailureCode = {FailureCode ?? "none"}, HasContent = {Excerpt is not null} }}";

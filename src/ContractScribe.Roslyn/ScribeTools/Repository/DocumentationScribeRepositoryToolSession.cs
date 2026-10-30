@@ -100,7 +100,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
             {
                 if (toolRequest is null)
                 {
-                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+                    throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                        DocumentationScribeToolFailureReason.InvalidRequestShape);
                 }
 
                 var call = BeginCall(DocumentationScribeRepositoryToolOperationIds.ReadExcerpt, cancellationToken);
@@ -123,7 +124,11 @@ internal sealed class DocumentationScribeRepositoryToolSession
             }
             catch (Exception exception) when (TryFailure(exception, out var outcome, out var code))
             {
-                return new(outcome, code, null, null, []);
+                return new(outcome, code, null, null, [])
+                {
+                    RequestFailureReason = exception is ToolFailure failure
+                        ? failure.RequestFailureReason : DocumentationScribeToolFailureReason.InvalidRequest,
+                };
             }
         }
     }
@@ -397,7 +402,9 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
     private BoundScope GetScope(string scopeId, DocumentationScribeRepositoryToolOperations operation)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(scopeId);
+        if (string.IsNullOrWhiteSpace(scopeId))
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestShape);
         if (!loadedContext.ValidateRequestBinding(request).IsValid || !loadedContext.IsCurrent)
         {
             throw Failure(DocumentationScribeRepositoryToolFailureCodes.Stale);
@@ -444,7 +451,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
         if (candidate is null)
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestPath);
         }
 
         var path = NormalizeRepositoryPath(candidate, allowEmpty: false);
@@ -1041,7 +1049,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
         if (start < 0 || end < start || end > file.Text.Length
             || SplitsSurrogate(file.Text, start) || SplitsSurrogate(file.Text, end))
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestExcerptBounds);
         }
 
         var content = file.Text[start..end];
@@ -1095,7 +1104,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
             claimIds);
         if (!DocumentationScribeValidation.TryCreateDynamicEvidenceReference(request, input, out _))
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestEvidence);
         }
 
         return input;
@@ -1433,7 +1443,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
         if (startLine is null || endLine is null || startLine <= 0 || endLine < startLine)
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestRange);
         }
 
         var starts = new List<int> { 0 };
@@ -1456,7 +1467,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
 
         if (startLine > starts.Count || endLine > starts.Count)
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestEndOfFile);
         }
 
         var start = starts[startLine.Value - 1];
@@ -1528,7 +1540,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 return string.Empty;
             }
 
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestPath);
         }
 
         try
@@ -1537,7 +1550,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
         }
         catch (ArgumentException)
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestPath);
         }
 
         if (path.Contains('\\')
@@ -1548,7 +1562,8 @@ internal sealed class DocumentationScribeRepositoryToolSession
             || path.EndsWith("/", StringComparison.Ordinal)
             || path.Split('/').Any(segment => segment.Length == 0 || segment is "." or ".."))
         {
-            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest);
+            throw Failure(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest,
+                DocumentationScribeToolFailureReason.InvalidRequestPath);
         }
 
         return path;
@@ -1647,7 +1662,9 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private static string Sha256(byte[] bytes) =>
         Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
 
-    private static ToolFailure Failure(string code) => new(code);
+    private static ToolFailure Failure(string code,
+        DocumentationScribeToolFailureReason requestFailureReason = DocumentationScribeToolFailureReason.InvalidRequest) =>
+        new(code, requestFailureReason);
 
     private static ToolFailure MapReadFailure(
         DocumentationScribeContextReadException exception,
@@ -1744,9 +1761,10 @@ internal sealed class DocumentationScribeRepositoryToolSession
         return false;
     }
 
-    private sealed class ToolFailure(string code) : Exception(code)
+    private sealed class ToolFailure(string code, DocumentationScribeToolFailureReason requestFailureReason) : Exception(code)
     {
         internal string Code { get; } = code;
+        internal DocumentationScribeToolFailureReason RequestFailureReason { get; } = requestFailureReason;
     }
 
     private sealed record BoundScope(

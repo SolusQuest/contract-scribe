@@ -8,7 +8,7 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubProposalCliProcessTests
 {
     [ContractScribe.TestSupport.NativeFileSystemTheory]
-    [InlineData("tool-diagnostic-range", "campaign.tool-failure.read-excerpt.invalid-request", 2, 7, 20)]
+    [InlineData("tool-diagnostic-range", "campaign.tool-failure.read-excerpt.invalid-request-eof", 2, 7, 20)]
     [InlineData("tool-diagnostic-cursor", "campaign.tool-failure.search-text.invalid-cursor", 2, 7, 20)]
     [InlineData("tool-diagnostic-semantic", "campaign.tool-failure.get-target-evidence.invalid-request", 1, 1, 6)]
     [InlineData("tool-diagnostic-positive", null, 4, 11, 41)]

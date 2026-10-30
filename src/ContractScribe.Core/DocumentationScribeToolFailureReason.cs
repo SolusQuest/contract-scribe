@@ -16,6 +16,12 @@ public enum DocumentationScribeToolFailureReason
     ResultCanonical,
     Evidence,
     ReleaseRejected,
+    InvalidRequestShape,
+    InvalidRequestPath,
+    InvalidRequestRange,
+    InvalidRequestEndOfFile,
+    InvalidRequestExcerptBounds,
+    InvalidRequestEvidence,
 }
 
 /// <summary>Creates inert fixed-vocabulary failure references; it grants no tool authority.</summary>
@@ -35,6 +41,12 @@ public static class DocumentationScribeToolFailureDiagnostics
         {
             DocumentationScribeToolFailureReason.ArgumentSchema => "argument-schema",
             DocumentationScribeToolFailureReason.InvalidRequest => "invalid-request",
+            DocumentationScribeToolFailureReason.InvalidRequestShape => "invalid-request-shape",
+            DocumentationScribeToolFailureReason.InvalidRequestPath => "invalid-request-path",
+            DocumentationScribeToolFailureReason.InvalidRequestRange => "invalid-request-range",
+            DocumentationScribeToolFailureReason.InvalidRequestEndOfFile => "invalid-request-eof",
+            DocumentationScribeToolFailureReason.InvalidRequestExcerptBounds => "invalid-request-excerpt-bounds",
+            DocumentationScribeToolFailureReason.InvalidRequestEvidence => "invalid-request-evidence",
             DocumentationScribeToolFailureReason.InvalidCursor => "invalid-cursor",
             DocumentationScribeToolFailureReason.ScopeDenied => "scope-denied",
             DocumentationScribeToolFailureReason.Stale => "stale",
@@ -69,6 +81,8 @@ public static class DocumentationScribeToolFailureDiagnostics
         return parts.Length == 3 && parts[0] == "tool-failure"
             && parts[1] is "read-excerpt" or "list-files" or "search-text" or "get-target-evidence" or "unknown"
             && parts[2] is "argument-schema" or "invalid-request" or "invalid-cursor" or "scope-denied"
+                or "invalid-request-shape" or "invalid-request-path" or "invalid-request-range"
+                or "invalid-request-eof" or "invalid-request-excerpt-bounds" or "invalid-request-evidence"
                 or "stale" or "unsafe-object" or "invalid-encoding" or "invalid-result" or "result-encoding"
                 or "result-canonical" or "evidence" or "release-rejected"
             ? "campaign." + reference : null;
