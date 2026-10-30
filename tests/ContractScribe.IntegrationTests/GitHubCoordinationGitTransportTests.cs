@@ -9,7 +9,7 @@ using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
-public sealed class GitHubCoordinationGitTransportTests
+public sealed partial class GitHubCoordinationGitTransportTests
 {
     [Theory]
     [InlineData("updated")]
@@ -171,7 +171,7 @@ public sealed class GitHubCoordinationGitTransportTests
             await using var second = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
             var before = await second.ObserveAsync(token);
             Assert.True(seed.StateBytes.AsSpan().SequenceEqual(before!.Blobs[GitHubCoordinationObjects.StatePath].Bytes.AsSpan()));
-            Assert.Equal(tree, await second.ReadObservedCommitTreeAsync(basis, token));
+            Assert.Equal(tree, await second.AcquireObservedBaseTreeAsync(basis, token));
             var intended = GitHubCoordinationObjects.Prepare(document with
             {
                 PredecessorOid = seed.CommitOid,
@@ -244,6 +244,7 @@ public sealed class GitHubCoordinationGitTransportTests
         internal int RequestCount { get; private set; }
         internal int MutationCompletions { get; private set; }
         internal int NonGitRequests { get; private set; }
+        internal bool AllowFilter { get; set; } = true;
 
         internal NativeServer(string directory, CancellationToken token)
         {
@@ -284,7 +285,10 @@ public sealed class GitHubCoordinationGitTransportTests
                         ("CONTENT_LENGTH", request.ContentLength64.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         ("REMOTE_ADDR", "127.0.0.1") }) start.Environment[key] = value;
                     if (request.Headers["Git-Protocol"] is { } protocol) start.Environment["HTTP_GIT_PROTOCOL"] = protocol;
-                    start.ArgumentList.Add("-c"); start.ArgumentList.Add("core.hooksPath=/dev/null"); start.ArgumentList.Add("http-backend");
+                    start.ArgumentList.Add("-c"); start.ArgumentList.Add("core.hooksPath=/dev/null");
+                    start.ArgumentList.Add("-c"); start.ArgumentList.Add("uploadpack.allowFilter=" + (AllowFilter ? "true" : "false"));
+                    start.ArgumentList.Add("-c"); start.ArgumentList.Add("uploadpack.allowReachableSHA1InWant=true");
+                    start.ArgumentList.Add("http-backend");
                     using var process = Process.Start(start)!;
                     using var output = new MemoryStream();
                     var copied = process.StandardOutput.BaseStream.CopyToAsync(output, token);

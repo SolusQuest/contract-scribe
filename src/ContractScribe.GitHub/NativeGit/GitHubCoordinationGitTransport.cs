@@ -143,7 +143,7 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
     private async ValueTask<GitHubGitCheckpointObservation?> ObserveCoreAsync(CancellationToken token)
     {
         // Exact named ref only. Its independent store never sees pending objects.
-        var fetched = await RunAsync(observer, ["fetch", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
+        var fetched = await RunAsync(observer, ["fetch", "--depth=1", "--no-filter", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
             "+" + reference + ":refs/observed/current"], null, true, token).ConfigureAwait(false);
         if (fetched.Exit != 0)
         {
@@ -157,9 +157,10 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         var head = Text(Require(await RunAsync(observer, ["rev-parse", "refs/observed/current"], null, false, token).ConfigureAwait(false)));
         if (!IsOid(head)) throw new GitHubProtocolException();
         var observation = await ReadObservedCoreAsync(head, token).ConfigureAwait(false);
-        // Import only already-observed remote history into the write store.
-        Require(await RunAsync(writer, ["fetch", "--no-tags", "--no-write-fetch-head", observer,
-            "refs/observed/current:refs/observed/current"], null, false, token).ConfigureAwait(false));
+        // Import only the independently observed coordination commit/tree, not
+        // the unrelated source ancestry behind the first coordination parent.
+        Require(await RunAsync(writer, ["fetch", "--depth=1", "--no-filter", "--update-shallow", "--no-tags", "--no-write-fetch-head", observer,
+            "+refs/observed/current:refs/observed/current"], null, false, token).ConfigureAwait(false));
         return observation;
     }
 
@@ -191,25 +192,41 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
     {
         if (!IsOid(oid)) throw new GitHubProtocolException();
         await gate.WaitAsync(token).ConfigureAwait(false);
+        try { return await ReadObservedCommitTreeCoreAsync(oid, token).ConfigureAwait(false); }
+        finally { gate.Release(); }
+    }
+
+    internal async ValueTask<string> AcquireObservedBaseTreeAsync(string oid, CancellationToken token)
+    {
+        if (!IsOid(oid)) throw new GitHubProtocolException();
+        await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
-            var bytes = Require(await RunAsync(observer, ["cat-file", "--batch"], Encoding.ASCII.GetBytes(oid + "\n"), false, token).ConfigureAwait(false));
-            var newline = Array.IndexOf(bytes, (byte)'\n');
-            if (newline < 0) throw new GitHubProtocolException();
-            var header = Encoding.ASCII.GetString(bytes, 0, newline);
-            if (header == oid + " missing" && bytes.Length == newline + 1) return null;
-            var fields = header.Split(' ');
-            if (fields is not [var actual, "commit", var size] || actual != oid
-                || !int.TryParse(size, NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count < 46
-                || bytes.Length != newline + count + 2 || bytes[^1] != '\n') throw new GitHubProtocolException();
-            var content = bytes.AsSpan(newline + 1, count);
-            if (GitHubCoordinationObjects.ObjectOid("commit", content) != oid
-                || !content[..5].SequenceEqual("tree "u8) || content[45] != '\n') throw new GitHubProtocolException();
-            var tree = Encoding.ASCII.GetString(content.Slice(5, 40));
-            if (!IsOid(tree)) throw new GitHubProtocolException();
-            return tree;
+            var existing = await ReadObservedCommitTreeCoreAsync(oid, token).ConfigureAwait(false);
+            if (existing is not null) return existing;
+            await FetchCommitOnlyAsync(observer, oid, oid, "refs/observed/source-parent", token).ConfigureAwait(false);
+            return await ReadObservedCommitTreeCoreAsync(oid, token).ConfigureAwait(false) ?? throw new GitHubProtocolException();
         }
         finally { gate.Release(); }
+    }
+
+    private async ValueTask<string?> ReadObservedCommitTreeCoreAsync(string oid, CancellationToken token)
+    {
+        var bytes = Require(await RunAsync(observer, ["cat-file", "--batch"], Encoding.ASCII.GetBytes(oid + "\n"), false, token).ConfigureAwait(false));
+        var newline = Array.IndexOf(bytes, (byte)'\n');
+        if (newline < 0) throw new GitHubProtocolException();
+        var header = Encoding.ASCII.GetString(bytes, 0, newline);
+        if (header == oid + " missing" && bytes.Length == newline + 1) return null;
+        var fields = header.Split(' ');
+        if (fields is not [var actual, "commit", var size] || actual != oid
+            || !int.TryParse(size, NumberStyles.None, CultureInfo.InvariantCulture, out var count) || count < 46
+            || bytes.Length != newline + count + 2 || bytes[^1] != '\n') throw new GitHubProtocolException();
+        var content = bytes.AsSpan(newline + 1, count);
+        if (GitHubCoordinationObjects.ObjectOid("commit", content) != oid
+            || !content[..5].SequenceEqual("tree "u8) || content[45] != '\n') throw new GitHubProtocolException();
+        var tree = Encoding.ASCII.GetString(content.Slice(5, 40));
+        if (!IsOid(tree)) throw new GitHubProtocolException();
+        return tree;
     }
 
     // Already-fetched immutable history only: no implicit remote request and no
@@ -225,13 +242,22 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         finally { gate.Release(); }
     }
 
-    internal async ValueTask<bool> HasObservedAsync(string head, CancellationToken token)
+    // Explicit bounded history acquisition at the caller's authentication step.
+    // A shallow boundary never supplies proof that an ancestor is absent.
+    internal async ValueTask<bool> AcquireObservedHistoryAsync(string head, CancellationToken token)
     {
         await gate.WaitAsync(token).ConfigureAwait(false);
         try
         {
             if (!IsOid(head)) throw new GitHubProtocolException();
-            return (await RunAsync(observer, ["cat-file", "-e", head + "^{commit}"], null, false, token).ConfigureAwait(false)).Exit == 0;
+            if ((await RunAsync(observer, ["cat-file", "-e", head + "^{commit}"], null, false, token).ConfigureAwait(false)).Exit == 0)
+                return true;
+            Require(await RunAsync(observer, ["fetch", "--depth=1", "--no-filter", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
+                "+" + head + ":refs/observed/history"], null, true, token).ConfigureAwait(false));
+            if (Text(Require(await RunAsync(observer, ["rev-parse", "refs/observed/history"], null, false, token).ConfigureAwait(false))) != head)
+                throw new GitHubProtocolException();
+            Require(await RunAsync(observer, ["cat-file", "-e", head + "^{commit}"], null, false, token).ConfigureAwait(false));
+            return true;
         }
         finally { gate.Release(); }
     }
@@ -310,8 +336,9 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         // The caller still owns fresh identity, lease, parent and send gates.
         // The initial base may be absent from this store when claiming a new ref.
         if (prepared.Document.PredecessorOid == GitHubCoordinationDocument.ZeroOid)
-            Require(await RunAsync(writer, ["fetch", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
-                target + ":refs/observed/base"], null, true, token).ConfigureAwait(false));
+        {
+            await FetchCommitOnlyAsync(writer, target, prepared.ParentOid, "refs/observed/base", token).ConfigureAwait(false);
+        }
         else if ((await RunAsync(writer, ["cat-file", "-e", prepared.ParentOid + "^{commit}"], null, false, token).ConfigureAwait(false)).Exit != 0)
         {
             // Strict platform publication can advance this ref without using
@@ -320,6 +347,10 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
             // objects only: the caller's proof/lease gates and the exact push
             // lease still authorize the write, including if the head moved.
             _ = await ObserveCoreAsync(token).ConfigureAwait(false);
+            // A moved head's depth-one observation need not contain this exact
+            // predecessor. Acquire its commit explicitly, without its history.
+            if ((await RunAsync(writer, ["cat-file", "-e", prepared.ParentOid + "^{commit}"], null, false, token).ConfigureAwait(false)).Exit != 0)
+                await FetchCommitOnlyAsync(writer, prepared.ParentOid, prepared.ParentOid, "refs/observed/predecessor", token).ConfigureAwait(false);
             Require(await RunAsync(writer, ["cat-file", "-e", prepared.ParentOid + "^{commit}"], null, false, token).ConfigureAwait(false));
         }
         foreach (var blob in write.Blobs)
@@ -375,7 +406,31 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         return new(oid, entries.ToImmutable());
     }
 
-    private sealed record CommandResult(int Exit, byte[] Output);
+    private async ValueTask FetchCommitOnlyAsync(string store, string requested, string expected, string localRef, CancellationToken token)
+    {
+        var before = await ObjectInventoryAsync(store, token).ConfigureAwait(false);
+        Require(await RunAsync(store, ["fetch", "--depth=1", "--filter=tree:0", "--no-tags", "--no-write-fetch-head", remote.AbsoluteUri,
+            requested + ":" + localRef], null, true, token).ConfigureAwait(false));
+        var after = await ObjectInventoryAsync(store, token).ConfigureAwait(false);
+        // Git can include the canonical empty tree even with tree:0. It has no
+        // source data; no other tree, blob or source ancestor is accepted.
+        const string emptyTree = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+        if (after.Except(before).Any(row => row != expected + " commit" && row != emptyTree + " tree")
+            || Text(Require(await RunAsync(store, ["rev-parse", localRef], null, false, token).ConfigureAwait(false))) != expected)
+            throw new GitHubProtocolException();
+        _ = await ReadObjectAsync(store, "commit", expected, token).ConfigureAwait(false);
+        if (after.Contains(emptyTree + " tree") && (await ReadObjectAsync(store, "tree", emptyTree, token).ConfigureAwait(false)).Length != 0)
+            throw new GitHubProtocolException();
+    }
+
+    private async ValueTask<HashSet<string>> ObjectInventoryAsync(string store, CancellationToken token)
+    {
+        var raw = Require(await RunAsync(store, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname) %(objecttype)"],
+            null, false, token).ConfigureAwait(false));
+        return Encoding.ASCII.GetString(raw).Split('\n', StringSplitOptions.RemoveEmptyEntries).ToHashSet(StringComparer.Ordinal);
+    }
+
+    private sealed record CommandResult(int Exit, byte[] Output, bool FilterRejected);
 
     private async ValueTask<CommandResult> RunAsync(string? store, string[] arguments, byte[]? input,
         bool network, CancellationToken token)
@@ -414,6 +469,7 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
             ("GIT_COMMITTER_DATE", "@" + GitHubCoordinationObjects.ActorUnixSeconds.ToString(CultureInfo.InvariantCulture) + " +0000") })
             start.Environment[key] = value;
         start.Environment["GIT_CEILING_DIRECTORIES"] = directory;
+        start.Environment["LC_ALL"] = "C";
         if (network && authentication is not null)
         {
             start.Environment["GIT_CONFIG_COUNT"] = "1";
@@ -453,9 +509,11 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
             }
             await exited.ConfigureAwait(false);
             var output = await stdout.ConfigureAwait(false);
-            _ = await stderr.ConfigureAwait(false); // Never return raw transport/credential diagnostics.
+            var error = await stderr.ConfigureAwait(false);
+            // Retain one closed fact, never raw transport/credential diagnostics.
+            var filterRejected = Encoding.UTF8.GetString(error).Contains("filtering not recognized by server", StringComparison.Ordinal);
             CheckStoreBound();
-            return new(process.ExitCode, output);
+            return new(process.ExitCode, output, filterRejected);
         }
         catch (OperationCanceledException) when (caller.IsCancellationRequested)
         { throw new OperationCanceledException(caller); }
@@ -478,7 +536,7 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         return bytes.ToArray();
     }
 
-    private byte[] Require(CommandResult result) => result.Exit == 0 ? result.Output : throw new GitHubProtocolException();
+    private byte[] Require(CommandResult result) => result.Exit == 0 && !result.FilterRejected ? result.Output : throw new GitHubProtocolException();
 
     private void CheckDocument(GitHubCoordinationDocument document)
     {

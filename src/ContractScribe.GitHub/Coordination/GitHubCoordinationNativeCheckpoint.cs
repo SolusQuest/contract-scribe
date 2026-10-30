@@ -32,7 +32,7 @@ internal sealed partial class GitHubCoordinationStore
     {
         var oid = authority.ExpectedBaseCommitOid;
         if (nativeCoordination is not null
-            && await nativeCoordination.ReadObservedCommitTreeAsync(oid, token).ConfigureAwait(false) is { } tree)
+            && await nativeCoordination.AcquireObservedBaseTreeAsync(oid, token).ConfigureAwait(false) is { } tree)
             return new(new(tree), null, GitHubDelivery.Read);
         var read = await client.GetCommitAsync(oid, token).ConfigureAwait(false);
         return new(read.Value is { } value ? new(value.TreeOid) : null, read.Failure, read.Delivery, read.Context, read.RequiredPermissions);

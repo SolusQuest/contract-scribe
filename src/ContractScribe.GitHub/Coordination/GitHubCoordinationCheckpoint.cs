@@ -92,7 +92,7 @@ internal sealed partial class GitHubCoordinationStore : ICampaignSemanticCheckpo
         var cachedState = cachedLeaf?.Entries.SingleOrDefault(entry => entry.Path == GitHubCoordinationObjects.StatePath);
         var cachedComplete = cachedState is not null && proof?.Pool?.Read<GitHubBlob>(cachedState.Oid, token) is not null;
         if (nativeCoordination is not null && (effect || proof?.CurrentHead == head || !cachedComplete)
-            && await nativeCoordination.HasObservedAsync(head, token).ConfigureAwait(false))
+            && await nativeCoordination.AcquireObservedHistoryAsync(head, token).ConfigureAwait(false))
         {
             var native = await nativeCoordination.ReadObservedAsync(head, token).ConfigureAwait(false);
             if (native.Commit is not null)
