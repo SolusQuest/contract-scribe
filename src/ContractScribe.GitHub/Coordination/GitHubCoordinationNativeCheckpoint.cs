@@ -14,7 +14,7 @@ internal sealed partial class GitHubCoordinationStore
     {
         string tree;
         if (nativeCoordination is not null)
-            tree = await nativeCoordination.AcquireObservedBaseTreeAsync(commitOid, token).ConfigureAwait(false);
+            tree = RequireRemote(await ReadNativeSourceTreeIdentityAsync(commitOid, token).ConfigureAwait(false)).Oid;
         else
         {
             var commit = GitHubObservedProposalIntegrity.Read(await client.GetCommitAsync(commitOid, token).ConfigureAwait(false));
@@ -46,9 +46,8 @@ internal sealed partial class GitHubCoordinationStore
     internal async ValueTask<GitHubApiResult<GitHubObjectIdentity>> ReadBaseTreeAsync(CancellationToken token)
     {
         var oid = authority.ExpectedBaseCommitOid;
-        if (nativeCoordination is not null
-            && await nativeCoordination.AcquireObservedBaseTreeAsync(oid, token).ConfigureAwait(false) is { } tree)
-            return new(new(tree), null, GitHubDelivery.Read);
+        if (nativeCoordination is not null)
+            return await ReadNativeSourceTreeIdentityAsync(oid, token).ConfigureAwait(false);
         var read = await client.GetCommitAsync(oid, token).ConfigureAwait(false);
         return new(read.Value is { } value ? new(value.TreeOid) : null, read.Failure, read.Delivery, read.Context, read.RequiredPermissions);
     }

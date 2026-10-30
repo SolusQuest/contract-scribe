@@ -266,6 +266,9 @@ public sealed partial class GitHubCoordinationGitTransportTests
         internal Uri Endpoint { get; }
         internal bool DropNextMutationReply { get; set; }
         internal bool DenyReads { get; set; }
+        internal string? DeniedObjectOid { get; set; }
+        internal int DeniedObjectRequests { get; private set; }
+        internal int? MutationsAtObjectDenial { get; private set; }
         internal int ReceivePackRequests { get; private set; }
         internal int RequestCount { get; private set; }
         internal int Advertisements { get; private set; }
@@ -305,6 +308,13 @@ public sealed partial class GitHubCoordinationGitTransportTests
                         : null;
                     if (gzip is not null) GzipRequests++;
                     await (gzip is null ? request.InputStream : gzip).CopyToAsync(body, token);
+                    if (DeniedObjectOid is { } denied && request.Url.AbsolutePath.EndsWith("/git-upload-pack", StringComparison.Ordinal)
+                        && Encoding.ASCII.GetString(body.ToArray()).Contains("want " + denied, StringComparison.Ordinal))
+                    {
+                        DeniedObjectRequests++;
+                        MutationsAtObjectDenial ??= ReceivePackRequests;
+                        context.Response.StatusCode = 403; context.Response.Close(); continue;
+                    }
                     var mutation = request.Url.AbsolutePath.EndsWith("/git-receive-pack", StringComparison.Ordinal);
                     if (mutation) ReceivePackRequests++;
                     var start = new ProcessStartInfo("/usr/bin/git")

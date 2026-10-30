@@ -21,6 +21,10 @@ internal sealed class GitHubNativeLoopbackBridge : IAsyncDisposable
     internal Uri Endpoint => server.Endpoint;
     internal int GitHttpRequests => server.RequestCount;
     internal int GitRemoteCommands => server.Advertisements;
+    internal string? DeniedObjectOid { set => server.DeniedObjectOid = value; }
+    internal int DeniedObjectRequests => server.DeniedObjectRequests;
+    internal int GitMutations => server.ReceivePackRequests;
+    internal int? GitMutationsAtObjectDenial => server.MutationsAtObjectDenial;
 
     internal GitHubNativeLoopbackBridge(GitHubProposalLoopbackServer api, string parent, CancellationToken token)
     {
@@ -86,7 +90,7 @@ internal sealed class GitHubNativeLoopbackBridge : IAsyncDisposable
         Assert.Equal(oid, Text(Run(["hash-object", "-w", "-t", kind, "--stdin"], bytes)));
     }
 
-    private void ImportNativeEffects()
+    internal void ImportNativeEffects()
     {
         // API reads do not trigger redundant Git processes. Only an actual
         // completed receive-pack can add objects or change native remote refs.

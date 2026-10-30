@@ -39,7 +39,7 @@ internal sealed partial class GitHubCoordinationStore
         using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
         var verified = await GitHubObservedProposalIntegrity.VerifyAsync(generation, token,
             async (oid, cancellation) => nativeCoordination is not null
-                ? await nativeCoordination.AcquireObservedBaseTreeAsync(oid, cancellation).ConfigureAwait(false)
+                ? RequireRemote(await ReadNativeSourceTreeIdentityAsync(oid, cancellation).ConfigureAwait(false)).Oid
                 : (await Read(oid, cancellation, client.GetCommitAsync).ConfigureAwait(false))?.TreeOid,
             (oid, cancellation) => Read(oid, cancellation, ReadSourceTreeAsync),
             (oid, cancellation) => Read(oid, cancellation, ReadSourceBlobAsync)).ConfigureAwait(false);
@@ -123,11 +123,31 @@ internal sealed partial class GitHubCoordinationStore
 
     private async ValueTask<GitHubApiResult<GitHubTree>> ReadSourceTreeAsync(string oid, CancellationToken token) =>
         nativeCoordination is null ? await client.GetTreeAsync(oid, token).ConfigureAwait(false)
-            : new(await nativeCoordination.ReadSourceTreeAsync(oid, token).ConfigureAwait(false), null, GitHubDelivery.Read);
+            : await ReadNativeSourceAsync(() => nativeCoordination.ReadSourceTreeAsync(oid, token), token).ConfigureAwait(false);
 
     private async ValueTask<GitHubApiResult<GitHubBlob>> ReadSourceBlobAsync(string oid, CancellationToken token) =>
         nativeCoordination is null ? await client.GetBlobAsync(oid, token).ConfigureAwait(false)
-            : new(await nativeCoordination.ReadSourceBlobAsync(oid, token).ConfigureAwait(false), null, GitHubDelivery.Read);
+            : await ReadNativeSourceAsync(() => nativeCoordination.ReadSourceBlobAsync(oid, token), token).ConfigureAwait(false);
+
+    private ValueTask<GitHubApiResult<GitHubObjectIdentity>> ReadNativeSourceTreeIdentityAsync(string oid, CancellationToken token) =>
+        ReadNativeSourceAsync<GitHubObjectIdentity>(async () =>
+            new(await nativeCoordination!.AcquireObservedBaseTreeAsync(oid, token).ConfigureAwait(false)), token);
+
+    // Match the API reader boundary: failed acquisition is transport evidence,
+    // never a validated checkout/content mismatch. This performs no retry or
+    // fallback, and semantic integrity checks still run only on successful data.
+    private async ValueTask<GitHubApiResult<T>> ReadNativeSourceAsync<T>(Func<ValueTask<T>> read, CancellationToken token)
+        where T : GitHubValue
+    {
+        try { return new(await read().ConfigureAwait(false), null, GitHubDelivery.Read); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (GitHubProtocolException exception) { return GitHubApiResult<T>.Failed(exception.Code, dispatched: true); }
+        catch (OperationCanceledException) { return GitHubApiResult<T>.Failed(client.CancellationFailure.Code, dispatched: true); }
+        catch (Exception exception) when (exception is DecoderFallbackException or FormatException or OverflowException)
+        { return GitHubApiResult<T>.Failed(GitHubFailureCode.InvalidResponse, dispatched: true); }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        { return GitHubApiResult<T>.Failed(GitHubFailureCode.HostFailure, dispatched: true); }
+    }
 
     // R4/R5 may consume only raw objects admitted by a complete content proof.
     // Cold single-object observations are not promoted here. Principal metadata
