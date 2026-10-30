@@ -93,7 +93,8 @@ internal sealed partial class GitHubCoordinationStore
             if (gate.Repository != repository)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
             // The non-idempotent send fence retains real platform identities.
-            if (gate.Coordination?.Oid != beforeOid || gate.Coordination.NodeId != client.CheckpointRefNodeId || gate.Target != target)
+            if (gate.Coordination is not { } reference || reference.Oid != beforeOid
+                || reference.NodeId != client.CheckpointRefNodeId || gate.Target != target)
                 return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         }
         if (await nativeCoordination!.ReadHeadAsync(true, token).ConfigureAwait(false) != target.Oid)
