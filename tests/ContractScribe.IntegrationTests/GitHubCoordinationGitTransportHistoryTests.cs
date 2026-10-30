@@ -9,6 +9,38 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubCoordinationGitTransportTests
 {
     [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Real_git_compressed_shallow_RPC_requests_reach_the_strict_backend_unchanged()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
+        var token = deadline.Token;
+        var directory = Directory.CreateTempSubdirectory("contract-scribe-native-gzip-").FullName;
+        try
+        {
+            var remote = Path.Join(directory, "remote.git");
+            await Git(directory, ["init", "--bare", "--object-format=sha1", remote], token);
+            await Git(remote, ["config", "http.receivepack", "true"], token);
+            var tree = await Git(remote, ["mktree"], token, "");
+            var basis = await Git(remote, ["commit-tree", tree], token, "Source\n");
+            await Git(remote, ["update-ref", "refs/heads/main", basis], token);
+            await using var server = new NativeServer(directory, token);
+            var authority = GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", "campaign.git.gzip");
+            await using var writer = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
+            var document = new GitHubCoordinationDocument(GitHubCoordinationDocument.CurrentFormat,
+                "Owner/repo", "refs/heads/main", basis, "campaign.git.gzip", GitHubCoordinationDocument.ZeroOid,
+                null, null, null, null, new(new string('a', 64), 1, DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds()));
+            for (var i = 0; i < 40 && server.GzipRequests == 0; i++)
+            {
+                var prepared = GitHubCoordinationObjects.Prepare(document);
+                Assert.Equal(GitHubGitAdvance.ActualUpdated, (await writer.AdvanceAsync(new(prepared, []), token)).Outcome);
+                document = document with { PredecessorOid = prepared.CommitOid, Claim = document.Claim! with { ExpiresUnixSeconds = document.Claim.ExpiresUnixSeconds + 1 } };
+            }
+            Assert.True(server.GzipRequests > 0);
+            Assert.Equal(0, server.NonGitRequests);
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Large_unrelated_history_and_current_blobs_do_not_enter_coordination_stores()
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));

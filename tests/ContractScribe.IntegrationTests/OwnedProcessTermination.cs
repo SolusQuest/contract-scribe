@@ -13,6 +13,8 @@ internal sealed record OwnedProcessTestHooks
 {
     public Action<Process>? ProcessStarted { get; init; }
 
+    public Func<Process, CancellationToken, Task>? ReleaseStandardInputAfterObservation { get; init; }
+
     public Func<Process, long>? ReadStartIdentity { get; init; }
 
     public Func<OwnedProcessIdentity, OwnedProcessExitState?>? ExitStateOverride { get; init; }
@@ -51,6 +53,7 @@ internal static class OwnedProcessRunner
             UseShellExecute = false,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
+            RedirectStandardInput = testHooks?.ReleaseStandardInputAfterObservation is not null,
             CreateNoWindow = true,
         };
         foreach (var argument in arguments)
@@ -104,7 +107,8 @@ internal static class OwnedProcessRunner
                 timeout,
                 terminationTimeout,
                 cancellationToken,
-                retainDescendantAfterSuccessfulExit).ConfigureAwait(false);
+                retainDescendantAfterSuccessfulExit,
+                testHooks?.ReleaseStandardInputAfterObservation).ConfigureAwait(false);
         }
     }
 
@@ -116,7 +120,8 @@ internal static class OwnedProcessRunner
         TimeSpan timeout,
         TimeSpan terminationTimeout,
         CancellationToken cancellationToken,
-        Func<Process, bool>? retainDescendantAfterSuccessfulExit)
+        Func<Process, bool>? retainDescendantAfterSuccessfulExit,
+        Func<Process, CancellationToken, Task>? releaseStandardInput)
     {
         using var timeoutCancellation = new CancellationTokenSource(timeout);
         using var waitCancellation = CancellationTokenSource.CreateLinkedTokenSource(
@@ -128,6 +133,24 @@ internal static class OwnedProcessRunner
         var stderrFailure = ObserveReaderFailureAsync(stderr, readerMonitoring.Token);
         try
         {
+            if (releaseStandardInput is not null)
+            {
+                try
+                {
+                    await releaseStandardInput(process, waitCancellation.Token)
+                        .WaitAsync(waitCancellation.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (waitCancellation.IsCancellationRequested)
+                { /* The original cancelled exit path below owns termination and drain. */ }
+                catch (Exception releaseFailure)
+                {
+                    var cleanup = await TryTerminateObservedAsync(observer, process, terminationTimeout).ConfigureAwait(false);
+                    var drain = await DrainAsync(stdout, stderr, terminationTimeout).ConfigureAwait(false);
+                    throw new IOException("Owned process gate release failed; the owned tree was terminated. " + drain.FormatTails(),
+                        CombineFailures(releaseFailure, cleanup, drain.Failures));
+                }
+                finally { process.StandardInput.Close(); }
+            }
             var completed = await Task.WhenAny(exit, stdoutFailure, stderrFailure).ConfigureAwait(false);
 
             if (completed != exit)

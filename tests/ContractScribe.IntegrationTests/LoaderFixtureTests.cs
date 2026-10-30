@@ -7,7 +7,7 @@ using ContractScribe.TestSupport;
 
 namespace ContractScribe.Roslyn.IntegrationTests;
 
-public sealed class LoaderFixtureTests
+public sealed partial class LoaderFixtureTests
 {
     [Theory]
     [InlineData(false)]

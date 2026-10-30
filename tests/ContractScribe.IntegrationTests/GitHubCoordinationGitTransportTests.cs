@@ -245,6 +245,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
         internal int MutationCompletions { get; private set; }
         internal int NonGitRequests { get; private set; }
         internal bool AllowFilter { get; set; } = true;
+        internal int GzipRequests { get; private set; }
 
         internal NativeServer(string directory, CancellationToken token)
         {
@@ -268,6 +269,14 @@ public sealed partial class GitHubCoordinationGitTransportTests
                     if (!request.Url!.AbsolutePath.StartsWith("/remote.git/", StringComparison.Ordinal))
                     { NonGitRequests++; context.Response.StatusCode = 404; context.Response.Close(); continue; }
                     if (DenyReads) { context.Response.StatusCode = 403; context.Response.Close(); continue; }
+                    // Git compresses larger RPC requests (including accumulated
+                    // shallow boundaries). CGI receives decoded bytes/length.
+                    using var body = new MemoryStream();
+                    using var gzip = request.Headers["Content-Encoding"] == "gzip"
+                        ? new System.IO.Compression.GZipStream(request.InputStream, System.IO.Compression.CompressionMode.Decompress, leaveOpen: true)
+                        : null;
+                    if (gzip is not null) GzipRequests++;
+                    await (gzip is null ? request.InputStream : gzip).CopyToAsync(body, token);
                     var mutation = request.Url.AbsolutePath.EndsWith("/git-receive-pack", StringComparison.Ordinal);
                     if (mutation) ReceivePackRequests++;
                     var start = new ProcessStartInfo("/usr/bin/git")
@@ -282,7 +291,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
                         ("GIT_CONFIG_NOSYSTEM", "1"), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_SYSTEM", "/dev/null"),
                         ("PATH_INFO", request.Url.AbsolutePath), ("QUERY_STRING", request.Url.Query.TrimStart('?')),
                         ("REQUEST_METHOD", request.HttpMethod), ("CONTENT_TYPE", request.ContentType ?? ""),
-                        ("CONTENT_LENGTH", request.ContentLength64.ToString(System.Globalization.CultureInfo.InvariantCulture)),
+                        ("CONTENT_LENGTH", body.Length.ToString(System.Globalization.CultureInfo.InvariantCulture)),
                         ("REMOTE_ADDR", "127.0.0.1") }) start.Environment[key] = value;
                     if (request.Headers["Git-Protocol"] is { } protocol) start.Environment["HTTP_GIT_PROTOCOL"] = protocol;
                     start.ArgumentList.Add("-c"); start.ArgumentList.Add("core.hooksPath=/dev/null");
@@ -293,10 +302,11 @@ public sealed partial class GitHubCoordinationGitTransportTests
                     using var output = new MemoryStream();
                     var copied = process.StandardOutput.BaseStream.CopyToAsync(output, token);
                     var error = process.StandardError.ReadToEndAsync(token);
-                    await request.InputStream.CopyToAsync(process.StandardInput.BaseStream, token); process.StandardInput.Close();
+                    body.Position = 0;
+                    await body.CopyToAsync(process.StandardInput.BaseStream, token); process.StandardInput.Close();
                     try { await process.WaitForExitAsync(token); }
                     finally { if (!process.HasExited) { process.Kill(entireProcessTree: true); await process.WaitForExitAsync(); } }
-                    await copied; _ = await error; Assert.Equal(0, process.ExitCode);
+                    await copied; Assert.True(process.ExitCode == 0, await error);
                     if (mutation) MutationCompletions++;
                     if (mutation && DropNextMutationReply)
                     { DropNextMutationReply = false; context.Response.Abort(); continue; }
