@@ -9,6 +9,82 @@ namespace ContractScribe.Tests;
 public sealed partial class GitHubApiClientTests
 {
     [Theory]
+    [InlineData("none")]
+    [InlineData("partial-errors")]
+    [InlineData("missing-proposal")]
+    [InlineData("bad-proposal-node")]
+    [InlineData("repository-drift")]
+    public async Task Publication_pair_readback_uses_actual_remote_refs_and_rejects_partial_results(string fault)
+    {
+        using var harness = await Harness.Create();
+        harness.Handler.Reply = async (request, token) =>
+        {
+            await CaptureBody(request, token);
+            request.Options.TryGetValue(BodyKey, out var body);
+            var query = JsonNode.Parse(body!)!;
+            Assert.Equal(GitHubApiClient.PublicationRefsDocument, query["query"]!.GetValue<string>());
+            var page = SnapshotPage(1);
+            var repository = page["data"]!["repository"]!;
+            var reference = repository["base"]!.DeepClone();
+            reference["name"] = query["variables"]!["proposal"]!.GetValue<string>()[11..];
+            repository["proposal"] = reference;
+            reference = repository["base"]!.DeepClone();
+            reference["name"] = query["variables"]!["coord"]!.GetValue<string>()[11..];
+            repository["coord"] = reference;
+            if (fault == "partial-errors") page["errors"] = new JsonArray(new JsonObject { ["message"] = "synthetic partial failure" });
+            if (fault == "missing-proposal") repository["proposal"] = null;
+            if (fault == "bad-proposal-node") repository["proposal"]!["id"] = "";
+            if (fault == "repository-drift") repository["fullDatabaseId"] = "43";
+            return Json(page);
+        };
+        var result = await harness.Client.ReadPublicationRefsAsync(CancellationToken.None);
+        if (fault == "missing-proposal")
+        {
+            Assert.NotNull(result.Value!.Coordination);
+            Assert.Null(result.Value.Proposal);
+        }
+        else if (fault != "none") Assert.Null(result.Value);
+        else
+        {
+            Assert.Equal(Oid('1'), result.Value!.Coordination!.Oid);
+            Assert.Equal(Oid('1'), result.Value.Proposal!.Oid);
+            Assert.Equal(GitHubDelivery.Read, result.Delivery);
+        }
+        Assert.Single(harness.Handler.Requests);
+    }
+
+    [Theory]
+    [InlineData("none")]
+    [InlineData("partial-errors")]
+    [InlineData("missing-target")]
+    [InlineData("bad-target-node")]
+    [InlineData("repository-drift")]
+    public async Task Publication_gate_reads_actual_identity_and_refs_without_inventing_permissions(string fault)
+    {
+        using var harness = await Harness.Create();
+        harness.Handler.Reply = (_, _) =>
+        {
+            var page = SnapshotPage(1);
+            var repository = page["data"]!["repository"]!;
+            if (fault == "partial-errors") page["errors"] = new JsonArray(new JsonObject { ["message"] = "synthetic partial failure" });
+            if (fault == "missing-target") repository["base"] = null;
+            if (fault == "bad-target-node") repository["base"]!["id"] = "";
+            if (fault == "repository-drift") repository["fullDatabaseId"] = "43";
+            return Task.FromResult(Json(page));
+        };
+        var result = await harness.Client.ReadPublicationGateAsync(CancellationToken.None);
+        if (fault != "none") Assert.Null(result.Value);
+        else
+        {
+            Assert.Equal(42, result.Value!.Repository.Id);
+            Assert.Equal(Oid('1'), result.Value.Target.Oid);
+            Assert.Null(result.Value.Coordination);
+            Assert.Equal(GitHubDelivery.Read, result.Delivery);
+        }
+        Assert.Single(harness.Handler.Requests);
+    }
+
+    [Theory]
     [InlineData("graphql", true)]
     [InlineData("rest", true)]
     [InlineData("different-id", false)]

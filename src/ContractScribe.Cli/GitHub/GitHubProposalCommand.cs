@@ -143,7 +143,7 @@ internal static class GitHubProposalCommand
                         {
                             if (!request.Revalidate() || !preflight.Configuration.Revalidate())
                                 return GitHubProposalPresentation.Local(identity, operation, "local-invalid", accepted?.Artifact?.CheckpointRevision);
-                            var inputFailure = await GitHubCheckoutBinding.ValidateAsync(client, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false);
+                            var inputFailure = await GitHubCheckoutBinding.ValidateAsync(client, checkpoint, claimed.TargetOid!, preflight, bundle, token).ConfigureAwait(false);
                             return inputFailure is null ? null : GitHubProposalPresentation.Preflight(identity, operation,
                                 "stale", inputFailure, accepted?.Artifact?.CheckpointRevision);
                         }

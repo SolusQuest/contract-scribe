@@ -9,9 +9,100 @@ internal sealed record GitHubCampaignRepositoryFacts(GitHubRepositoryIdentity Id
     bool Private, bool Archived, bool Disabled, string? ViewerPermission) : GitHubValue;
 internal sealed record GitHubCampaignSnapshot(GitHubCampaignRepositoryFacts Repository, GitHubRef Target,
     GitHubRef? Coordination, GitHubPullRequestSet PullRequests, GitHubRepository? PermissionSample) : GitHubValue;
+internal sealed record GitHubPublicationGate(GitHubRepositoryIdentity Repository, GitHubRef Target,
+    GitHubRef? Coordination) : GitHubValue;
+
+internal sealed record GitHubPublicationRefs(GitHubRef? Coordination, GitHubRef? Proposal) : GitHubValue;
 
 internal sealed partial class GitHubApiClient
 {
+    internal const string PublicationRefsDocument = """
+        query PublicationRefs($owner:String!,$name:String!,$coord:String!,$proposal:String!){
+          repository(owner:$owner,name:$name,followRenames:false){
+            id fullDatabaseId name owner{__typename login ... on Node{id} ... on User{databaseId} ... on Organization{databaseId}}
+            coord:ref(qualifiedName:$coord){id prefix name target{__typename oid}}
+            proposal:ref(qualifiedName:$proposal){id prefix name target{__typename oid}}
+          }
+        }
+        """;
+
+    // A separate actual read after the strict API pair, including unknown delivery.
+    // Neither acknowledgement nor locally prepared objects supply these OIDs.
+    internal ValueTask<GitHubApiResult<GitHubPublicationRefs>> ReadPublicationRefsAsync(CancellationToken token) =>
+        RunAsync<GitHubPublicationRefs>(() =>
+        {
+            Input(HasMutationAuthority);
+            var coordinationRef = GitHubPublicationFactory.CreateCoordinationRef(Authority);
+            var proposalRef = GitHubPublicationFactory.CreateProposalRef(Authority);
+            return new("graphql", value =>
+            {
+                Exact(value, "data");
+                var data = Property(value, "data");
+                Exact(data, "repository");
+                var repository = Property(data, "repository");
+                _ = ObserveRepositoryIdentity(CampaignRepository(repository));
+                var coordination = BundleRef(Property(repository, "coord"), coordinationRef);
+                var proposal = BundleRef(Property(repository, "proposal"), proposalRef);
+                if (coordination is not null)
+                {
+                    _ = Node(Property(repository, "coord"), "id");
+                    ObserveCheckpointRefIdentity(coordination);
+                }
+                if (proposal is not null) _ = Node(Property(repository, "proposal"), "id");
+                return new(coordination, proposal);
+            }, Encode(writer =>
+            {
+                writer.WriteString("query", PublicationRefsDocument);
+                writer.WriteStartObject("variables");
+                writer.WriteString("owner", readAuthority.RepositoryOwner);
+                writer.WriteString("name", readAuthority.RepositoryName);
+                writer.WriteString("coord", coordinationRef);
+                writer.WriteString("proposal", proposalRef);
+                writer.WriteEndObject();
+            }), Status: 200);
+        }, token);
+
+    internal const string PublicationGateDocument = """
+        query PublicationGate($owner:String!,$name:String!,$target:String!,$coord:String!){
+          repository(owner:$owner,name:$name,followRenames:false){
+            id fullDatabaseId name owner{__typename login ... on Node{id} ... on User{databaseId} ... on Organization{databaseId}}
+            base:ref(qualifiedName:$target){id prefix name target{__typename oid}}
+            coord:ref(qualifiedName:$coord){id prefix name target{__typename oid}}
+          }
+        }
+        """;
+
+    // Identity/Date/ref facts for a single publication gate. This deliberately
+    // supplies no permission vector and never replaces admission's REST sample.
+    internal ValueTask<GitHubApiResult<GitHubPublicationGate>> ReadPublicationGateAsync(CancellationToken token) =>
+        RunAsync<GitHubPublicationGate>(() => new("graphql", value =>
+        {
+            Exact(value, "data");
+            var data = Property(value, "data");
+            Exact(data, "repository");
+            var repository = Property(data, "repository");
+            var identity = ObserveRepositoryIdentity(CampaignRepository(repository));
+            var target = BundleRef(Property(repository, "base"), readAuthority.TargetRef)
+                ?? throw new GitHubProtocolException();
+            _ = Node(Property(repository, "base"), "id");
+            var coordination = BundleRef(Property(repository, "coord"), GitHubPublicationFactory.CreateCoordinationRef(readAuthority));
+            if (coordination is not null)
+            {
+                _ = Node(Property(repository, "coord"), "id");
+                ObserveCheckpointRefIdentity(coordination);
+            }
+            return new(identity, target, coordination);
+        }, Encode(writer =>
+        {
+            writer.WriteString("query", PublicationGateDocument);
+            writer.WriteStartObject("variables");
+            writer.WriteString("owner", readAuthority.RepositoryOwner);
+            writer.WriteString("name", readAuthority.RepositoryName);
+            writer.WriteString("target", readAuthority.TargetRef);
+            writer.WriteString("coord", GitHubPublicationFactory.CreateCoordinationRef(readAuthority));
+            writer.WriteEndObject();
+        }), Status: 200), token);
+
     internal const string CampaignSnapshotDocument = """
         query CampaignPlatform($owner:String!,$name:String!,$target:String!,$coord:String!,$after:String){
           repository(owner:$owner,name:$name,followRenames:false){

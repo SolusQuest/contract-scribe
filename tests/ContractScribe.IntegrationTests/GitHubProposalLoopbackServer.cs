@@ -144,7 +144,9 @@ internal sealed partial class GitHubProposalLoopbackServer : IAsyncDisposable
             var query = method == "POST" && path == "/graphql"
                 && JsonNode.Parse(body)!["query"]!.GetValue<string>().TrimStart().StartsWith("query", StringComparison.Ordinal);
             var campaignQuery = query && JsonNode.Parse(body)!["query"]!.GetValue<string>() == CampaignSnapshotQuery;
-            var kind = campaignQuery ? "campaign-snapshot" : query ? "checkpoint-read" : path == "/graphql"
+            var publicationRefs = query && JsonNode.Parse(body)!["query"]!.GetValue<string>() == PublicationRefsQuery;
+            var publicationGate = query && JsonNode.Parse(body)!["query"]!.GetValue<string>() == PublicationGateQuery;
+            var kind = publicationRefs ? "publication-refs" : publicationGate ? "publication-gate" : campaignQuery ? "campaign-snapshot" : query ? "checkpoint-read" : path == "/graphql"
                 ? JsonNode.Parse(body)!["query"]!.GetValue<string>().Contains("createCommitOnBranch", StringComparison.Ordinal) ? "checkpoint-commit" : "cas"
                 : path.Split('/')[^1];
             Task? wait = null;
@@ -250,6 +252,10 @@ internal sealed partial class GitHubProposalLoopbackServer : IAsyncDisposable
         }
         if (path == "/graphql")
         {
+            if (body["query"]!.GetValue<string>() == PublicationRefsQuery)
+                return (200, PublicationRefs(body["variables"]!.AsObject()));
+            if (body["query"]!.GetValue<string>() == PublicationGateQuery)
+                return (200, CampaignSnapshot(body["variables"]!.AsObject(), gateOnly: true));
             if (body["query"]!.GetValue<string>() == CampaignSnapshotQuery)
                 return (200, CampaignSnapshot(body["variables"]!.AsObject()));
             if (body["query"]!.GetValue<string>().TrimStart().StartsWith("query", StringComparison.Ordinal))

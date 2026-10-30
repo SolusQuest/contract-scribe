@@ -96,15 +96,30 @@ internal sealed partial class GitHubCoordinationStore
                 new(proposalRef, beforeProposalOid, contentOid, beforeProposalOid == ZeroOid), token).ConfigureAwait(false);
             if (update.Delivery == GitHubDelivery.NotDispatched) return Failed(update);
             using var recovery = client.CreateRecoveryScope(RecoveryTimeout);
-            var head = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
-            var proposal = await client.GetRefAsync(proposalRef, recovery.Token).ConfigureAwait(false);
-            if (head.Value is null || proposal.Value is null)
+            GitHubRef? head, proposal;
+            GitHubFailure? readFailure;
+            if (nativeCoordination is not null)
+            {
+                var observed = await client.ReadPublicationRefsAsync(recovery.Token).ConfigureAwait(false);
+                head = observed.Value?.Coordination;
+                proposal = observed.Value?.Proposal;
+                readFailure = observed.Failure;
+            }
+            else
+            {
+                var headResult = await client.GetRefAsync(coordinationRef, recovery.Token).ConfigureAwait(false);
+                var proposalResult = await client.GetRefAsync(proposalRef, recovery.Token).ConfigureAwait(false);
+                head = headResult.Value;
+                proposal = proposalResult.Value;
+                readFailure = head is null ? headResult.Failure : proposalResult.Failure;
+            }
+            if (head is null || proposal is null)
                 return DomainFailure(GitHubCoordinationFailureKind.Transport, update.Failure, update.Delivery,
-                    update.Context, update.RequiredPermissions, head.Value is null ? head.Failure : proposal.Failure);
-            if (head.Value.Oid != prepared.CommitOid || proposal.Value.Oid != contentOid)
-                return DomainFailure(head.Value.Oid == prepared.CommitOid ? GitHubCoordinationFailureKind.ObjectMismatch
+                    update.Context, update.RequiredPermissions, readFailure);
+            if (head.Oid != prepared.CommitOid || proposal.Oid != contentOid)
+                return DomainFailure(head.Oid == prepared.CommitOid ? GitHubCoordinationFailureKind.ObjectMismatch
                     : GitHubCoordinationFailureKind.Conflict, update.Failure, update.Delivery, update.Context, update.RequiredPermissions);
-            if (publicationActive) publicationHead = head.Value.Oid;
+            if (publicationActive) publicationHead = head.Oid;
             var read = await ReadPreparedAsync(current.Repository, current.Target, prepared, recovery.Token).ConfigureAwait(false);
             if (read.State is not StateCapability accepted) return read;
             var acknowledged = update.Value is not null && update.Failure is null && update.Delivery == GitHubDelivery.NeedsReadback;

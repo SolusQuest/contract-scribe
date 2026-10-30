@@ -242,6 +242,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
         internal bool DenyReads { get; set; }
         internal int ReceivePackRequests { get; private set; }
         internal int RequestCount { get; private set; }
+        internal int Advertisements { get; private set; }
         internal int MutationCompletions { get; private set; }
         internal int NonGitRequests { get; private set; }
         internal bool AllowFilter { get; set; } = true;
@@ -266,6 +267,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
                     var context = await listener.GetContextAsync().WaitAsync(token);
                     var request = context.Request;
                     RequestCount++;
+                    if (request.HttpMethod == "GET" && request.Url!.AbsolutePath.EndsWith("/info/refs", StringComparison.Ordinal)) Advertisements++;
                     if (!request.Url!.AbsolutePath.StartsWith("/remote.git/", StringComparison.Ordinal))
                     { NonGitRequests++; context.Response.StatusCode = 404; context.Response.Close(); continue; }
                     if (DenyReads) { context.Response.StatusCode = 403; context.Response.Close(); continue; }

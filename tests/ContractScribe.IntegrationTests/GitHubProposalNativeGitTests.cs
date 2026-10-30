@@ -130,6 +130,10 @@ public sealed partial class GitHubProposalCliProcessTests
         var result = await fixture.RunArgs(fixture.Args(), environment);
         payloadOutput.WriteLine("Complete default two-target CLI: direct REST/GraphQL attempts={0}; separate native Git HTTP requests={1}.",
             fixture.GitHub.Requests.Count, bridge.GitHttpRequests);
+        payloadOutput.WriteLine("Native remote commands observed at advertisement={0}; REST reads={1}; GraphQL reads={2}; mutations={3}.",
+            bridge.GitRemoteCommands, fixture.GitHub.Requests.Count(request => request.Method == "GET"),
+            fixture.GitHub.Requests.Count(request => request.Method == "POST" && request.Mutation == 0),
+            fixture.GitHub.Requests.Count(request => request.Mutation > 0));
         // Closed synthetic request metadata only, never headers, packs or model
         // bodies. The local audit can account for every actual API attempt.
         payloadOutput.WriteLine("api-attempts=" + JsonSerializer.Serialize(fixture.GitHub.Requests.Select((request, index) =>
@@ -139,9 +143,81 @@ public sealed partial class GitHubProposalCliProcessTests
             fixture.GitHub.Requests.Count(request => request.Kind == "campaign-snapshot"),
             fixture.GitHub.Requests.Count(request => request.Kind == "campaign-snapshot" && request.Body?["variables"]?["after"] is not null));
         AssertResult(result, 0, "published");
+        AssertNativeProposalBytes(fixture);
         Assert.Single(fixture.GitHub.PullRequests);
         Assert.Equal(1, fixture.GitHub.PrAttempts);
         Assert.Equal(2, fixture.Checkpoint().State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
         await fixture.AssertSourceUnchanged();
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Native_two_target_publication_with_retained_history_and_cold_observer_preserves_actual_effects()
+    {
+        await using var fixture = await Fixture.CreateAsync(targetCount: 2);
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(6));
+        await using var bridge = new GitHubNativeLoopbackBridge(fixture.GitHub, fixture.Outside, deadline.Token);
+        var environment = fixture.Environment();
+        environment["CONTRACTSCRIBE_TEST_GITHUB_GIT_ENDPOINT"] = bridge.Endpoint.AbsoluteUri;
+        AssertResult(await fixture.RunArgs(fixture.Args(), environment), 0, "published");
+        bridge.ApplyExternalApiChange(() =>
+        {
+            fixture.GitHub.Lifecycle("closed");
+            AdvanceReadme(fixture);
+        });
+        var readmePath = Path.Join(fixture.Repository.Root, "README.md");
+        var readme = "A new documentation-only base.\n"u8.ToArray();
+        await File.WriteAllBytesAsync(readmePath, readme);
+        fixture.GovernedFiles["README.md"] = (readme, OperatingSystem.IsWindows() ? null : File.GetUnixFileMode(readmePath));
+        var retainedCommits = fixture.GitHub.Commits.Count;
+        var before = fixture.GitHub.Requests.Count;
+        var http = bridge.GitHttpRequests;
+        var commands = bridge.GitRemoteCommands;
+        var result = await fixture.RunArgs(fixture.Args(), environment);
+        var attempts = fixture.GitHub.Requests.Skip(before).ToArray();
+        payloadOutput.WriteLine("Retained history: commits={0}; PRs=1; direct API attempts={1}; Git commands={2}; Git HTTP={3}.",
+            retainedCommits, attempts.Length, bridge.GitRemoteCommands - commands, bridge.GitHttpRequests - http);
+        payloadOutput.WriteLine("api-attempts=" + JsonSerializer.Serialize(attempts.Select((request, index) =>
+            new { index, request.Method, request.Path, request.Kind, request.Mutation })));
+        AssertResult(result, 0, "published");
+        Assert.Equal(2, fixture.GitHub.PullRequests.Count);
+        AssertNativeProposalBytes(fixture);
+        Assert.Equal(2, fixture.GitHub.PrAttempts);
+        Assert.Equal(2, fixture.Checkpoint().State.WorkItems.Count(item => item.Status == CampaignWorkStatus.Accepted));
+        var calls = fixture.Provider.RequestCount;
+        before = fixture.GitHub.Requests.Count;
+        http = bridge.GitHttpRequests;
+        commands = bridge.GitRemoteCommands;
+        AssertResult(await fixture.RunArgs(fixture.Args(), environment), 0, "awaiting-review");
+        payloadOutput.WriteLine("Cold observer: direct API attempts={0}; Git commands={1}; Git HTTP={2}.",
+            fixture.GitHub.Requests.Count - before, bridge.GitRemoteCommands - commands, bridge.GitHttpRequests - http);
+        Assert.Equal(calls, fixture.Provider.RequestCount);
+        Assert.Equal(2, fixture.GitHub.PrAttempts);
+        await fixture.AssertSourceUnchanged();
+    }
+
+    private static void AssertNativeProposalBytes(Fixture fixture)
+    {
+        var pr = fixture.GitHub.PullRequests[^1];
+        Assert.True(pr["draft"]!.GetValue<bool>());
+        var files = new Dictionary<string, byte[]>(StringComparer.Ordinal);
+        void Walk(string tree, string prefix)
+        {
+            foreach (var entry in fixture.GitHub.Trees[tree])
+                if (entry.Mode == "040000") Walk(entry.Oid, prefix + entry.Path + "/");
+                else files.Add(prefix + entry.Path, fixture.GitHub.Blobs[entry.Oid]);
+        }
+        Walk(fixture.GitHub.Commits[pr["head"]!["sha"]!.GetValue<string>()]["tree"]!["sha"]!.GetValue<string>(), "");
+        Assert.Equal(fixture.GovernedFiles.Keys.Order(), files.Keys.Order());
+        foreach (var file in fixture.GovernedFiles)
+        {
+            if (file.Key != "App/App.cs") { Assert.Equal(file.Value.Bytes, files[file.Key]); continue; }
+            var before = System.Text.Encoding.UTF8.GetString(file.Value.Bytes);
+            var after = System.Text.Encoding.UTF8.GetString(files[file.Key]);
+            Assert.Equal(2, System.Text.RegularExpressions.Regex.Matches(after, "<summary>").Count
+                - System.Text.RegularExpressions.Regex.Matches(before, "<summary>").Count);
+            static string NonDocumentation(string text) => System.Text.RegularExpressions.Regex.Replace(text,
+                @"(?m)^[ \t]*///[^\r\n]*(?:\r?\n|$)", "");
+            Assert.Equal(NonDocumentation(before), NonDocumentation(after));
+        }
     }
 }

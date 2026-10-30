@@ -20,6 +20,7 @@ internal sealed class GitHubNativeLoopbackBridge : IAsyncDisposable
     private readonly GitHubCoordinationGitTransportTests.NativeServer server;
     internal Uri Endpoint => server.Endpoint;
     internal int GitHttpRequests => server.RequestCount;
+    internal int GitRemoteCommands => server.Advertisements;
 
     internal GitHubNativeLoopbackBridge(GitHubProposalLoopbackServer api, string parent, CancellationToken token)
     {
@@ -34,6 +35,9 @@ internal sealed class GitHubNativeLoopbackBridge : IAsyncDisposable
         api.Before = _ => ImportNativeEffects();
         api.After = _ => ExportApiEffects();
     }
+
+    internal void ApplyExternalApiChange(Action change)
+    { ImportNativeEffects(); change(); ExportApiEffects(); }
 
     private void ExportApiEffects()
     {

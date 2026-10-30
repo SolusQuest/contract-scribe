@@ -721,21 +721,45 @@ internal sealed partial class GitHubCoordinationStore
                 return DomainFailure(GitHubCoordinationFailureKind.DifferentOperation);
             if (!AllowsStage(current.State, update.Stage))
                 return DomainFailure(GitHubCoordinationFailureKind.StageConflict);
-            var repository = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
-            if (repository.Value is null) return Failed(repository);
+            GitHubPublicationGate? opening = null;
+            var openingMutation = client.MutationOrdinal;
+            GitHubRepositoryIdentity repository;
+            if (nativeCoordination is not null)
+            {
+                var sample = await client.ReadPublicationGateAsync(cancellationToken).ConfigureAwait(false);
+                if (sample.Value is null) return Failed(sample);
+                opening = sample.Value;
+                repository = opening.Repository;
+            }
+            else
+            {
+                var sample = await client.GetRepositoryAsync(cancellationToken).ConfigureAwait(false);
+                if (sample.Value is null) return Failed(sample);
+                repository = sample.Value.Identity;
+            }
             if (await RenewPublicationClaimAsync(cancellationToken).ConfigureAwait(false) is { } renewalFailure)
                 return renewalFailure;
-            if (repository.Value.Identity != current.Repository)
+            if (opening is not null && client.MutationOrdinal != openingMutation)
+            {
+                var renewed = await client.ReadPublicationGateAsync(cancellationToken).ConfigureAwait(false);
+                if (renewed.Value is null) return Failed(renewed);
+                opening = renewed.Value;
+                repository = opening.Repository;
+            }
+            if (repository != current.Repository)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
-            var refRead = await ReadDataRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
+            var refRead = opening is null ? await ReadDataRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false)
+                : opening.Coordination is { } opened ? new GitHubApiResult<GitHubDataRef>(new(opened.Name, opened.Oid), null, GitHubDelivery.Read)
+                    : GitHubApiResult<GitHubDataRef>.Failed(GitHubFailureCode.NotFound, dispatched: true);
             if (refRead.Value is null) return Failed(refRead);
-            var authenticated = await ReadStateAsync(repository.Value.Identity, current.Target,
+            var authenticated = await ReadStateAsync(repository, current.Target,
                 current.HeadOid, cancellationToken).ConfigureAwait(false);
             if (authenticated.State is null) return authenticated;
             if (!SameState(current, (StateCapability)authenticated.State))
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
 
-            var target = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
+            var target = opening is null ? await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false)
+                : new GitHubApiResult<GitHubRef>(opening.Target, null, GitHubDelivery.Read);
             if (target.Value is null) return Failed(target);
             if (requireExpectedTarget && target.Value.Oid != current.State.TargetCommitOid)
                 return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
@@ -764,7 +788,7 @@ internal sealed partial class GitHubCoordinationStore
             var preparedIntended = Prepare(intended, current.Creation?.State ?? current.State);
             var prepared = next == intended ? preparedIntended : Prepare(next, current.Creation?.State ?? current.State);
             var atomic = UsesAtomicPublication(prepared);
-            var observed = await ObserveAdvanceRefAsync(repository.Value.Identity, target.Value,
+            var observed = await ObserveAdvanceRefAsync(repository, target.Value,
                 refRead.Value.Oid, current.HeadOid, prepared, preparedIntended,
                 cancellationToken).ConfigureAwait(false);
             if (observed is not null)
@@ -791,7 +815,7 @@ internal sealed partial class GitHubCoordinationStore
                             return recoveredRef.Failure?.Code == GitHubFailureCode.NotFound
                                 ? DomainFailure(GitHubCoordinationFailureKind.Unresolved)
                                 : Failed(recoveredRef);
-                        observed = await ObserveAdvanceRefAsync(repository.Value.Identity, target.Value,
+                        observed = await ObserveAdvanceRefAsync(repository, target.Value,
                             recoveredRef.Value.Oid, current.HeadOid, prepared, preparedIntended,
                             cancellationToken).ConfigureAwait(false);
                         if (observed is not null)
@@ -809,9 +833,19 @@ internal sealed partial class GitHubCoordinationStore
                 if (objects is not null) return objects;
             }
 
-            var finalRef = await ReadDataRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false);
+            GitHubPublicationGate? closing = null;
+            if (nativeCoordination is not null)
+            {
+                var sample = await client.ReadPublicationGateAsync(cancellationToken).ConfigureAwait(false);
+                if (sample.Value is null) return Failed(sample);
+                closing = sample.Value;
+                if (closing.Repository != repository) return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
+            }
+            var finalRef = closing is null ? await ReadDataRefAsync(coordinationRef, cancellationToken).ConfigureAwait(false)
+                : closing.Coordination is { } closed ? new GitHubApiResult<GitHubDataRef>(new(closed.Name, closed.Oid), null, GitHubDelivery.Read)
+                    : GitHubApiResult<GitHubDataRef>.Failed(GitHubFailureCode.NotFound, dispatched: true);
             if (finalRef.Value is null) return Failed(finalRef);
-            observed = await ObserveAdvanceRefAsync(repository.Value.Identity, target.Value,
+            observed = await ObserveAdvanceRefAsync(repository, target.Value,
                 finalRef.Value.Oid, current.HeadOid, prepared, preparedIntended,
                 cancellationToken).ConfigureAwait(false);
             if (observed is not null)
@@ -820,7 +854,8 @@ internal sealed partial class GitHubCoordinationStore
                 return await CompleteAdvanceReplayAsync((StateCapability)observed.State,
                     checkTarget, cancellationToken).ConfigureAwait(false);
             }
-            var finalTarget = await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false);
+            var finalTarget = closing is null ? await client.GetRefAsync(authority.TargetRef, cancellationToken).ConfigureAwait(false)
+                : new GitHubApiResult<GitHubRef>(closing.Target, null, GitHubDelivery.Read);
             if (finalTarget.Value is null) return Failed(finalTarget);
             if (requireExpectedTarget && finalTarget.Value.Oid != current.State.TargetCommitOid)
                 return DomainFailure(GitHubCoordinationFailureKind.TargetMoved);
@@ -845,7 +880,7 @@ internal sealed partial class GitHubCoordinationStore
                                 return recoveredRef.Failure?.Code == GitHubFailureCode.NotFound
                                     ? DomainFailure(GitHubCoordinationFailureKind.Unresolved)
                                     : Failed(recoveredRef);
-                            observed = await ObserveAdvanceRefAsync(repository.Value.Identity,
+                            observed = await ObserveAdvanceRefAsync(repository,
                                 finalTarget.Value, recoveredRef.Value.Oid, current.HeadOid,
                                 prepared, preparedIntended, cancellationToken).ConfigureAwait(false);
                             if (observed is not null)
@@ -865,7 +900,7 @@ internal sealed partial class GitHubCoordinationStore
             }
             if (mutationGuard is not null && await mutationGuard(cancellationToken).ConfigureAwait(false) is { } guardFailure)
                 return new(GitHubCoordinationOutcome.Failed, failure: guardFailure);
-            var result = await UpdateAndReadAsync(repository.Value.Identity, finalTarget.Value,
+            var result = await UpdateAndReadAsync(repository, finalTarget.Value,
                 prepared, current.HeadOid, preparedIntended, cancellationToken).ConfigureAwait(false);
             if (result.State is null) return result;
             var completed = await CompleteAdvanceReplayAsync((StateCapability)result.State,

@@ -210,6 +210,47 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         finally { gate.Release(); }
     }
 
+    // Known immutable source objects only. No prospective absence, mutation
+    // readback, principal metadata or unpublished writer bytes enter this path.
+    internal async ValueTask<GitHubTree> ReadSourceTreeAsync(string oid, CancellationToken token)
+    {
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await AcquireSourceObjectAsync("tree", oid, token).ConfigureAwait(false);
+            return await ReadTreeAsync(oid, token, source: true).ConfigureAwait(false);
+        }
+        finally { gate.Release(); }
+    }
+
+    internal async ValueTask<GitHubBlob> ReadSourceBlobAsync(string oid, CancellationToken token)
+    {
+        await gate.WaitAsync(token).ConfigureAwait(false);
+        try
+        {
+            await AcquireSourceObjectAsync("blob", oid, token).ConfigureAwait(false);
+            return new(oid, (await ReadObjectAsync(observer, "blob", oid, token).ConfigureAwait(false)).ToImmutableArray());
+        }
+        finally { gate.Release(); }
+    }
+
+    private async ValueTask AcquireSourceObjectAsync(string kind, string oid, CancellationToken token)
+    {
+        if (!IsOid(oid)) throw new GitHubProtocolException();
+        var before = await ObjectInventoryAsync(observer, token).ConfigureAwait(false);
+        if (before.Contains(oid + " " + kind)) return;
+        // Explicit wants survive tree:0; all descendant trees/blobs are omitted.
+        // Skip negotiation: an observed treeless commit is not evidence that
+        // its trees/blobs are present. This is one filtered exact-object fetch,
+        // never a retry, a full-history fallback or a lazy promisor read.
+        Require(await RunAsync(observer, ["fetch", "--refetch", "--filter=tree:0", "--no-tags", "--no-write-fetch-head",
+            remote.AbsoluteUri, oid], null, true, token).ConfigureAwait(false));
+        var after = await ObjectInventoryAsync(observer, token).ConfigureAwait(false);
+        if (!after.Contains(oid + " " + kind) || after.Except(before).Any(row => row != oid + " " + kind))
+            throw new GitHubProtocolException();
+        _ = await ReadObjectAsync(observer, kind, oid, token).ConfigureAwait(false);
+    }
+
     private async ValueTask<string?> ReadObservedCommitTreeCoreAsync(string oid, CancellationToken token)
     {
         var bytes = Require(await RunAsync(observer, ["cat-file", "--batch"], Encoding.ASCII.GetBytes(oid + "\n"), false, token).ConfigureAwait(false));
@@ -381,24 +422,29 @@ internal sealed class GitHubCoordinationGitTransport : IAsyncDisposable
         return bytes;
     }
 
-    private async ValueTask<GitHubTree> ReadTreeAsync(string oid, CancellationToken token)
+    private async ValueTask<GitHubTree> ReadTreeAsync(string oid, CancellationToken token, bool source = false)
     {
         var bytes = await ReadObjectAsync(observer, "tree", oid, token).ConfigureAwait(false);
         var entries = ImmutableArray.CreateBuilder<GitHubTreeEntry>();
+        var maximumEntries = source ? GitHubResponseReader.MaximumTreeEntries : 5;
         var offset = 0;
         while (offset < bytes.Length)
         {
             var space = Array.IndexOf(bytes, (byte)' ', offset);
             var zero = Array.IndexOf(bytes, (byte)0, space + 1);
-            if (space < offset || zero <= space || zero + 21 > bytes.Length || entries.Count >= 5)
+            if (space < offset || zero <= space || zero + 21 > bytes.Length || entries.Count >= maximumEntries)
                 throw new GitHubProtocolException();
             var mode = Encoding.ASCII.GetString(bytes, offset, space - offset);
-            var path = Encoding.UTF8.GetString(bytes, space + 1, zero - space - 1);
+            var path = new UTF8Encoding(false, true).GetString(bytes, space + 1, zero - space - 1);
+            if (!GitHubResponseReader.TreeName(path)) throw new GitHubProtocolException();
             var entryOid = Convert.ToHexStringLower(bytes.AsSpan(zero + 1, 20));
             entries.Add(new(path, mode switch
             {
                 "40000" => GitHubTreeMode.Directory,
                 "100644" => GitHubTreeMode.File,
+                "100755" when source => GitHubTreeMode.Executable,
+                "120000" when source => GitHubTreeMode.SymbolicLink,
+                "160000" when source => GitHubTreeMode.Submodule,
                 _ => throw new GitHubProtocolException()
             }, entryOid, null));
             offset = zero + 21;

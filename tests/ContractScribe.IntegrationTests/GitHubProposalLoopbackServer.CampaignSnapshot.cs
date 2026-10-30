@@ -6,6 +6,26 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 internal sealed partial class GitHubProposalLoopbackServer
 {
+    private const string PublicationRefsQuery = """
+        query PublicationRefs($owner:String!,$name:String!,$coord:String!,$proposal:String!){
+          repository(owner:$owner,name:$name,followRenames:false){
+            id fullDatabaseId name owner{__typename login ... on Node{id} ... on User{databaseId} ... on Organization{databaseId}}
+            coord:ref(qualifiedName:$coord){id prefix name target{__typename oid}}
+            proposal:ref(qualifiedName:$proposal){id prefix name target{__typename oid}}
+          }
+        }
+        """;
+
+    private const string PublicationGateQuery = """
+        query PublicationGate($owner:String!,$name:String!,$target:String!,$coord:String!){
+          repository(owner:$owner,name:$name,followRenames:false){
+            id fullDatabaseId name owner{__typename login ... on Node{id} ... on User{databaseId} ... on Organization{databaseId}}
+            base:ref(qualifiedName:$target){id prefix name target{__typename oid}}
+            coord:ref(qualifiedName:$coord){id prefix name target{__typename oid}}
+          }
+        }
+        """;
+
     // Independently fixed wire contract, not a permissive generic GraphQL handler.
     private const string CampaignSnapshotQuery = """
         query CampaignPlatform($owner:String!,$name:String!,$target:String!,$coord:String!,$after:String){
@@ -33,12 +53,26 @@ internal sealed partial class GitHubProposalLoopbackServer
         }
         """;
 
-    private JsonObject CampaignSnapshot(JsonObject variables)
+    private JsonObject PublicationRefs(JsonObject variables)
     {
-        Assert.Equal(new[] { "after", "coord", "name", "owner", "target" }, variables.Select(item => item.Key).Order(StringComparer.Ordinal));
+        Assert.Equal(new[] { "coord", "name", "owner", "proposal" }, variables.Select(item => item.Key).Order(StringComparer.Ordinal));
+        var adapted = (JsonObject)variables.DeepClone();
+        adapted.Remove("proposal");
+        adapted["target"] = variables["proposal"]!.DeepClone();
+        // Reuse field projection with the actual requested ref; no simulated CAS result.
+        var result = CampaignSnapshot(adapted, gateOnly: true, proposalReadback: true);
+        var repository = result["data"]!["repository"]!;
+        repository["proposal"] = repository["base"]?.DeepClone();
+        repository.AsObject().Remove("base");
+        return result;
+    }
+
+    private JsonObject CampaignSnapshot(JsonObject variables, bool gateOnly = false, bool proposalReadback = false)
+    {
+        Assert.Equal(gateOnly ? new[] { "coord", "name", "owner", "target" } : new[] { "after", "coord", "name", "owner", "target" }, variables.Select(item => item.Key).Order(StringComparer.Ordinal));
         Assert.Equal("Owner", variables["owner"]!.GetValue<string>());
         Assert.Equal("repo", variables["name"]!.GetValue<string>());
-        Assert.Equal("refs/heads/main", variables["target"]!.GetValue<string>());
+        if (!proposalReadback) Assert.Equal("refs/heads/main", variables["target"]!.GetValue<string>());
         var cursor = variables["after"]?.GetValue<string>();
         var offset = 0;
         if (cursor is not null)

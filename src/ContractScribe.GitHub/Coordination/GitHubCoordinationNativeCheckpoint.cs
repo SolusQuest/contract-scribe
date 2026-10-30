@@ -10,6 +10,21 @@ internal sealed partial class GitHubCoordinationStore
     private GitHubRef? nativePublicationTargetIdentity;
     internal bool UsesNativeData => nativeCoordination is not null;
 
+    internal async ValueTask<Dictionary<string, GitHubTreeEntry>?> ReadSourceFilesAsync(string commitOid, CancellationToken token)
+    {
+        string tree;
+        if (nativeCoordination is not null)
+            tree = await nativeCoordination.AcquireObservedBaseTreeAsync(commitOid, token).ConfigureAwait(false);
+        else
+        {
+            var commit = GitHubObservedProposalIntegrity.Read(await client.GetCommitAsync(commitOid, token).ConfigureAwait(false));
+            if (commit is null || commit.Oid != commitOid) return null;
+            tree = commit.TreeOid;
+        }
+        return await GitHubObservedProposalIntegrity.ReadTreeAsync(tree, token, async (oid, ct) =>
+            GitHubObservedProposalIntegrity.Read(await ReadSourceTreeAsync(oid, ct).ConfigureAwait(false))).ConfigureAwait(false);
+    }
+
     internal async ValueTask<GitHubApiResult<GitHubDataRef>> ReadDataRefAsync(string name, CancellationToken token)
     {
         if (nativeCoordination is null)
@@ -74,12 +89,11 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         if (prepared.State.Stage == GitHubCoordinationStage.PullRequestCreateStarted)
         {
-            if (RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false)).Identity != repository)
+            var gate = RequireRemote(await client.ReadPublicationGateAsync(token).ConfigureAwait(false));
+            if (gate.Repository != repository)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
             // The non-idempotent send fence retains real platform identities.
-            var reference = RequireRemote(await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false));
-            var currentTarget = RequireRemote(await client.GetRefAsync(authority.TargetRef, token).ConfigureAwait(false));
-            if (reference.Oid != beforeOid || reference.NodeId != client.CheckpointRefNodeId || currentTarget != target)
+            if (gate.Coordination?.Oid != beforeOid || gate.Coordination.NodeId != client.CheckpointRefNodeId || gate.Target != target)
                 return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         }
         if (await nativeCoordination!.ReadHeadAsync(true, token).ConfigureAwait(false) != target.Oid)

@@ -9,6 +9,55 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 public sealed partial class GitHubCoordinationGitTransportTests
 {
     [ContractScribe.TestSupport.NativeFileSystemFact]
+    public async Task Exact_source_objects_are_fetched_without_descendants_and_reused_only_as_immutable_bytes()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
+        var token = deadline.Token;
+        var directory = Directory.CreateTempSubdirectory("contract-scribe-native-source-").FullName;
+        try
+        {
+            var remote = Path.Join(directory, "remote.git");
+            await Git(directory, ["init", "--bare", "--object-format=sha1", remote], token);
+            var blob = await Git(remote, ["hash-object", "-w", "--stdin"], token, "Selected source\n");
+            var other = await Git(remote, ["hash-object", "-w", "--stdin"], token, "Unrelated source\n");
+            var tree = await Git(remote, ["mktree"], token, "100644 blob " + blob + "\tApp.cs\n100644 blob " + other + "\tOther.cs\n");
+            var basis = await Git(remote, ["commit-tree", tree], token, "Source\n");
+            await Git(remote, ["update-ref", "refs/heads/main", basis], token);
+            await using var server = new NativeServer(directory, token);
+            var authority = GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", "campaign.git.source");
+            await using var reader = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
+            Assert.Equal(tree, await reader.AcquireObservedBaseTreeAsync(basis, token));
+            Assert.Equal(2, (await reader.ReadSourceTreeAsync(tree, token)).Entries.Length);
+            Assert.Equal("Selected source\n", System.Text.Encoding.UTF8.GetString((await reader.ReadSourceBlobAsync(blob, token)).Bytes.AsSpan()));
+            var commands = reader.RemoteCommands;
+            Assert.Equal(tree, (await reader.ReadSourceTreeAsync(tree, token)).Oid);
+            Assert.Equal(blob, (await reader.ReadSourceBlobAsync(blob, token)).Oid);
+            Assert.Equal(commands, reader.RemoteCommands);
+            foreach (var store in Directory.EnumerateDirectories(directory, "*.git", SearchOption.AllDirectories)
+                .Where(path => Path.GetFileName(path) is "writer.git" or "observer.git"))
+            {
+                var objects = await Git(store, ["cat-file", "--batch-all-objects", "--batch-check=%(objectname)"], token);
+                Assert.DoesNotContain(other, objects.Split('\n'));
+                if (Path.GetFileName(store) == "writer.git") Assert.DoesNotContain(blob, objects.Split('\n'));
+            }
+            Assert.Equal(0, server.ReceivePackRequests);
+            var document = new GitHubCoordinationDocument(GitHubCoordinationDocument.CurrentFormat,
+                "Owner/repo", "refs/heads/main", basis, "campaign.git.source", GitHubCoordinationDocument.ZeroOid,
+                null, null, null, null, new(new string('a', 64), 1, DateTimeOffset.UtcNow.AddMinutes(5).ToUnixTimeSeconds()));
+            var pending = GitHubCoordinationObjects.Prepare(document);
+            await reader.MaterializeAsync(new(pending, []), token);
+            server.DenyReads = true;
+            await Assert.ThrowsAsync<GitHubProtocolException>(async () => await reader.ReadSourceTreeAsync(pending.RootTreeOid, token));
+            server.DenyReads = false;
+            // Unsupported filters must not silently widen a later cold read.
+            await using var unsupported = await GitHubCoordinationGitTransport.CreateLoopbackAsync(authority, directory, server.Endpoint, token);
+            server.AllowFilter = false;
+            await Assert.ThrowsAsync<GitHubProtocolException>(async () => await unsupported.ReadSourceTreeAsync(tree, token));
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
+    [ContractScribe.TestSupport.NativeFileSystemFact]
     public async Task Real_git_compressed_shallow_RPC_requests_reach_the_strict_backend_unchanged()
     {
         using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(3));
@@ -104,6 +153,7 @@ public sealed partial class GitHubCoordinationGitTransportTests
                 Claim = successor.Document.Claim! with { ExpiresUnixSeconds = successor.Document.Claim.ExpiresUnixSeconds + 1 }
             });
             Assert.Equal(GitHubGitAdvance.ActualUpdated, (await writer.AdvanceAsync(new(renewed, []), token)).Outcome);
+            Assert.Equal(targetTree, (await cold.ReadSourceTreeAsync(targetTree, token)).Oid);
             foreach (var store in Directory.EnumerateDirectories(directory, "*.git", SearchOption.AllDirectories)
                 .Where(path => Path.GetFileName(path) is "writer.git" or "observer.git"))
             {
