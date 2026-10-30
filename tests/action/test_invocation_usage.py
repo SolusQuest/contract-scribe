@@ -184,7 +184,7 @@ class InvocationUsageTests(unittest.TestCase):
 
     def test_physical_diagnostics_cross_outputs_and_summary_with_closed_vocabulary_only(self):
         protocol = (HERE.parent.parent / "docs/20_architecture/validation/m3-provider-evaluation-protocol.md").read_text()
-        allowlist = protocol.split("The complete first-disposition allowlist, in production evaluation order, is:")[1].split(
+        allowlist = protocol.split("The complete first-disposition allowlist is:")[1].split(
             "`codec.response.exceeds-limit` covers")[0]
         self.assertEqual(set(U.CODECS), set(re.findall(r"`(codec\.[a-z0-9.-]+)`", allowlist)))
         value = fixture("partial")
@@ -203,6 +203,20 @@ class InvocationUsageTests(unittest.TestCase):
                 failureCode="model.failure.unsupported", failureOrigin="model.failure-origin.response-codec",
                 httpStatusCode=None, codecDisposition="codec.finish-reason." + finish)
             self.assertTrue(U.valid(classified))
+        for disposition in ("codec.arguments.not-string", "codec.arguments.duplicate-property"):
+            with self.subTest(disposition=disposition), tempfile.TemporaryDirectory() as temp:
+                classified = json.loads(json.dumps(value))
+                classified["providerDiagnostics"]["observations"][0].update(
+                    failureCode="model.failure.malformed-response", failureOrigin="model.failure-origin.response-codec",
+                    httpStatusCode=None, codecDisposition=disposition)
+                self.assertTrue(U.valid(classified))
+                raw = encode(envelope(classified))
+                output = str(Path(temp) / "out.txt")
+                with patch.dict(os.environ, {"GITHUB_OUTPUT": output}):
+                    parsed = invoke.parse_envelope(raw, b"", 0)
+                    invoke.emit_outputs(parsed, raw, 0)
+                self.assertEqual(classified, json.loads(driver.read_outputs(output)["usage-json"]))
+                self.assertIn(disposition, "\n".join(U.summary_rows(classified)))
         invalid = [lambda r: r.update(httpStatusCode=True),
                    lambda r: r.update(failureOrigin=None),
                    lambda r: r.update(failureCode="private-provider-body-marker"),

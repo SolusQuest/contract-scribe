@@ -24,7 +24,8 @@ CODECS = tuple("codec." + suffix for suffix in (
     "message.refusal.invalid", "tool-calls.invalid", "tool-call.index.invalid", "tool-call.envelope.invalid",
     "tool-call.alias.invalid", "arguments.invalid", "terminal.mixed", "usage.invalid",
     "finish-reason.length", "finish-reason.stop", "finish-reason.unsupported", "finish-reason.inconsistent", "terminal.arguments-exceeds-limit",
-    "continuation.missing", "tool-calls.exceeds-limit", "tool-call.arguments-exceeds-limit"))
+    "continuation.missing", "tool-calls.exceeds-limit", "tool-call.arguments-exceeds-limit",
+    "arguments.not-string", "arguments.duplicate-property"))
 PROVIDER_ROW = ("physicalDispatchOrdinal", "attemptId", "attemptNumber", "providerRequestNumber",
                 "failureCode", "failureOrigin", "httpStatusCode", "codecDisposition")
 

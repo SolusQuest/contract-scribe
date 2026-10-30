@@ -73,9 +73,24 @@ public sealed partial class CampaignStateContractTests
         Assert.Equal(10, history[0].Usage!.InputTokens);
         Assert.Equal(5, history[0].Usage!.OutputTokens);
         Assert.Equal(DocumentationScribeDispatchDisposition.TerminalFailure, history[1].Disposition);
-        Assert.Null(history[1].Usage);
-        Assert.True(history[1].Charges!.InputTokens.ConservativeUnobserved > 0);
-        Assert.True(history[1].Charges!.OutputTokens.ConservativeUnobserved > 0);
+        if (scenario == "continuation")
+        {
+            Assert.Equal(10, history[1].Usage!.InputTokens);
+            Assert.Equal(4, history[1].Usage!.CachedInputTokens);
+            Assert.Equal(6, history[1].Usage!.UncachedInputTokens);
+            Assert.Equal(5, history[1].Usage!.OutputTokens);
+            Assert.Null(history[1].Usage!.ReasoningTokens);
+            Assert.Equal(10, history[1].Charges!.InputTokens.TotalCharged);
+            Assert.Equal(5, history[1].Charges!.OutputTokens.TotalCharged);
+            Assert.Equal(0, history[1].Charges!.InputTokens.ConservativeUnobserved);
+            Assert.Equal(0, history[1].Charges!.OutputTokens.ConservativeUnobserved);
+        }
+        else
+        {
+            Assert.Null(history[1].Usage);
+            Assert.True(history[1].Charges!.InputTokens.ConservativeUnobserved > 0);
+            Assert.True(history[1].Charges!.OutputTokens.ConservativeUnobserved > 0);
+        }
         Assert.Empty(result.Submissions);
         await trial.CompleteAsync(result);
         Assert.Null(trial.Store.Current.State.ActiveReservation);
