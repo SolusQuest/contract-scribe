@@ -133,11 +133,12 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("shared-repair")]
     [InlineData("shared-mixed-repair")]
     [InlineData("shared-malformed-repair")]
+    [InlineData("shared-malformed-repair-with-usage")]
     public async Task Invalid_logical_lines_repair_or_stop_through_publication_and_Action(string scenario)
     {
         await using var fixture = await FiveTargetFixture(scenario);
         var result = await fixture.Run();
-        var failed = scenario == "shared-malformed-repair";
+        var failed = scenario is "shared-malformed-repair" or "shared-malformed-repair-with-usage";
         AssertResult(result, failed ? 5 : 0, failed ? "host-failure" : "published");
         var progress = fixture.Checkpoint().State.ScribeProgress!;
         Assert.Equal(1, progress.RepairCount);
@@ -175,7 +176,21 @@ public sealed partial class GitHubProposalCliProcessTests
         {
             Assert.All(progress.Members, member => { Assert.Null(member.ContentSha256); Assert.Null(member.Skip); });
             Assert.Equal(5, usage.GetProperty("work").GetProperty("failedTargets").GetInt32());
+            var retainedUsage = scenario == "shared-malformed-repair-with-usage";
+            // This fixture never reports reasoning tokens; retaining the other
+            // independently observed counters must not fabricate that field.
             Assert.Equal("partial", usage.GetProperty("completeness").GetString());
+            if (retainedUsage)
+            {
+                foreach (var name in new[] { "input", "cachedInput", "uncachedInput", "output" })
+                {
+                    Assert.Equal(0, usage.GetProperty("tokens").GetProperty(name).GetProperty("missingDispatches").GetInt32());
+                    var charge = usage.GetProperty("accounting").GetProperty(name);
+                    Assert.Equal(0, charge.GetProperty("conservativeUnobserved").GetInt64());
+                    Assert.Equal(charge.GetProperty("observed").GetInt64(), charge.GetProperty("totalCharged").GetInt64());
+                }
+                Assert.True(usage.GetProperty("tokens").GetProperty("reasoning").GetProperty("missingDispatches").GetInt32() > 0);
+            }
             Assert.Equal("codec.arguments.invalid", usage.GetProperty("providerDiagnostics").GetProperty("observations").EnumerateArray().Last().GetProperty("codecDisposition").GetString());
             Assert.Null(fixture.Checkpoint().State.CandidateObservation);
             Assert.Equal(0, fixture.Checkpoint().State.LineageCharges.PatchValidationInvocations);

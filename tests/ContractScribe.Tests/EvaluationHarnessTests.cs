@@ -799,7 +799,7 @@ public sealed class EvaluationHarnessTests
     public void ReportWriterAcceptsTheCompleteClosedCodecVocabularyWithoutRawFields()
     {
         var values = Enum.GetValues<OpenAiCompatibleResponseCodecDisposition>();
-        Assert.Equal(28, values.Length);
+        Assert.Equal(30, values.Length);
         var identifiers = values
             .Select(value => new OpenAiCompatibleResponseDiagnostic(1, value).CodecDisposition)
             .ToArray();
@@ -811,7 +811,7 @@ public sealed class EvaluationHarnessTests
             "validation",
             "m3-provider-evaluation-protocol.md"));
         var allowlist = protocol.Split(
-            "The complete first-disposition allowlist, in production evaluation order, is:",
+            "The complete first-disposition allowlist is:",
             StringSplitOptions.None)[1].Split(
                 "`codec.response.exceeds-limit` covers",
                 StringSplitOptions.None)[0];

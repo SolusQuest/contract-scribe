@@ -181,7 +181,8 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
                     exception.Code,
                     origin: DocumentationScribeModelFailureOrigin.ResponseCodec,
                     continuationObservation:
-                        dispatchedReplayObservation | exception.ContinuationObservation);
+                        dispatchedReplayObservation | exception.ContinuationObservation,
+                    usage: exception.ObservedUsage, cache: exception.ObservedCache);
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -462,12 +463,14 @@ public sealed class OpenAiCompatibleHttpModelExchange : IDocumentationScribeMode
         DocumentationScribeModelFailureOrigin? origin = null,
         int? httpStatusCode = null,
         DocumentationScribeContinuationObservation continuationObservation =
-            DocumentationScribeContinuationObservation.None) => new(
+            DocumentationScribeContinuationObservation.None,
+        DocumentationScribeModelUsage? usage = null,
+        DocumentationScribeCacheObservation? cache = null) => new(
             ImmutableArray<DocumentationScribeModelToolCall>.Empty,
             ImmutableArray<DocumentationScribeModelTerminalSubmission>.Empty,
             new DocumentationScribeModelFailure(code, retryAfterMilliseconds, origin, httpStatusCode),
-            usage: null,
-            cache: null,
+            usage,
+            cache,
             cost: null,
             assistantContinuation: null,
             continuationObservation);
