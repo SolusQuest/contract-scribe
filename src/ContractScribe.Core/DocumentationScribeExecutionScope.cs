@@ -83,6 +83,12 @@ public sealed class DocumentationScribeHostPermit
     internal bool IsHostDeadlineCancellation(CancellationToken token) => DeadlineOwner == DocumentationScribeDeadlineOwner.HostOperation
         && Volatile.Read(ref cancellation) is { } observed && token == observed.Linked && observed.Deadline.IsCancellationRequested
         && !observed.Execution.IsCancellationRequested && !observed.Caller.IsCancellationRequested;
+    internal bool CanDeferCompletion => RemainingMilliseconds > 0 && !scope.Failed && !scope.Allowance.HasCheckedStop
+        && Volatile.Read(ref cancellation) is { } observed && !observed.Linked.IsCancellationRequested
+        && !observed.Deadline.IsCancellationRequested && !observed.Execution.IsCancellationRequested
+        && !observed.Caller.IsCancellationRequested;
+    internal (CancellationToken Execution, CancellationToken Caller)? CompletionParents =>
+        Volatile.Read(ref cancellation) is { } observed ? (observed.Execution, observed.Caller) : null;
     internal bool TryComplete() => Interlocked.CompareExchange(ref completed, 1, 0) == 0;
     public override string ToString() => nameof(DocumentationScribeHostPermit);
 }
@@ -93,6 +99,8 @@ public sealed class DocumentationScribeExecutionScope
     private readonly IDocumentationScribeExecutionOperations? operations;
     private DocumentationScribeHostPermit? host;
     internal DocumentationScribeDeadlineOwner? CurrentHostDeadlineOwner => host?.DeadlineOwner;
+    internal bool CanDeferHostCompletion => host?.CanDeferCompletion == true;
+    internal (CancellationToken Execution, CancellationToken Caller)? HostCompletionParents => host?.CompletionParents;
     internal bool IsHostDeadlineCancellation(CancellationToken token) => host?.IsHostDeadlineCancellation(token) == true;
     private DocumentationScribeInvocationProviderPermit? provider;
     private int failed;

@@ -447,7 +447,8 @@ public sealed partial class GitHubProposalCliProcessTests
             {
                 var path = Path.Join(Repository.Root, pair.Key);
                 Assert.Equal(pair.Value.Bytes, await File.ReadAllBytesAsync(path));
-                if (OperatingSystem.IsLinux()) Assert.Equal(pair.Value.Mode, File.GetUnixFileMode(path));
+                if (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
+                    Assert.Equal(pair.Value.Mode, File.GetUnixFileMode(path));
             }
         }
         public async ValueTask DisposeAsync()

@@ -17,25 +17,21 @@ public sealed partial class GitHubProposalCliProcessTests
         var armed = false;
         var injected = false;
         var reads = 0;
+        GitHubProposalLoopbackServer.Request? pendingMutation = null;
         fixture.GitHub.BeforeBody = (request, body) =>
         {
-            if (expected is not null || request.Method != "POST" || request.Path != "/graphql") return;
-            var updates = JsonNode.Parse(body)!["variables"]!["input"]!["refUpdates"]!.AsArray();
-            if (updates.Count != 1) return;
-            var update = updates[0]!;
-            var before = update["beforeOid"]!.GetValue<string>();
-            if (before == new string('0', 40)) return;
-            var after = update["afterOid"]!.GetValue<string>();
+            if (pendingMutation is not null || request.Kind != "checkpoint-commit") return;
+            var before = request.Body!["variables"]!["input"]!["expectedHeadOid"]!.GetValue<string>();
             var prior = fixture.GitHub.DocumentAt(before);
-            var next = fixture.GitHub.DocumentAt(after);
+            var next = GitHubProposalLoopbackServer.WrittenCanonicalFile(request, "coordination-state-v1.json")!;
             if (prior["checkpoint"] is null || next["publication"] is not null) return;
             var checkpoint = fixture.Checkpoint();
             var sameCheckpoint = JsonNode.DeepEquals(prior["checkpoint"], next["checkpoint"]);
             if (renew ? !sameCheckpoint || checkpoint.State.CandidateObservation is null || checkpoint.State.ScribeProgress?.Session?.Ended != true
                 : sameCheckpoint || checkpoint.State.WorkItems.All(work => work.TrustedProposal is null)) return;
-            reference = update["name"]!.GetValue<string>();
+            reference = fixture.GitHub.Refs.Keys.Single(name => name.Contains("/coordination/", StringComparison.Ordinal));
             predecessor = before;
-            expected = after;
+            pendingMutation = request;
         };
         fixture.GitHub.Before = request =>
         {
@@ -46,8 +42,13 @@ public sealed partial class GitHubProposalCliProcessTests
         };
         fixture.GitHub.After = request =>
         {
+            if (request == pendingMutation && !injected)
+            {
+                // The signed OID comes from the actual wire database effect.
+                expected = fixture.GitHub.Refs[reference!];
+                armed = true;
+            }
             if (expected is null) return;
-            if (request.Method == "POST" && request.Path == "/graphql" && !injected) armed = true;
             if (!armed || request.Method != "GET" || request.Path != "/repos/Owner/repo/git/ref/" + reference![5..]) return;
             reads++;
             if (!injected)
@@ -86,26 +87,21 @@ public sealed partial class GitHubProposalCliProcessTests
         string? expected = null;
         fixture.GitHub.BeforeBody = (request, body) =>
         {
-            if (failureIndex >= 0 || request.Method != "POST" || request.Path != "/graphql") return;
-            var updates = JsonNode.Parse(body)!["variables"]!["input"]!["refUpdates"]!.AsArray();
-            if (updates.Count != 1) return;
-            var update = updates[0]!;
-            var before = update["beforeOid"]!.GetValue<string>();
-            if (before == new string('0', 40)) return;
-            var after = update["afterOid"]!.GetValue<string>();
+            if (failureIndex >= 0 || request.Kind != "checkpoint-commit") return;
+            var before = request.Body!["variables"]!["input"]!["expectedHeadOid"]!.GetValue<string>();
             var prior = fixture.GitHub.DocumentAt(before);
-            var next = fixture.GitHub.DocumentAt(after);
+            var next = GitHubProposalLoopbackServer.WrittenCanonicalFile(request, "coordination-state-v1.json")!;
             if (prior["checkpoint"] is null || next["publication"] is not null
                 || !JsonNode.DeepEquals(prior["checkpoint"], next["checkpoint"])) return;
             var checkpoint = fixture.Checkpoint();
             if (checkpoint.State.CandidateObservation is null || checkpoint.State.ScribeProgress?.Session?.Ended != true) return;
-            expected = after;
             pending = true;
         };
         fixture.GitHub.After = request =>
         {
-            if (!pending || request.Method != "POST" || request.Path != "/graphql") return;
+            if (!pending || request.Kind != "checkpoint-commit") return;
             pending = false;
+            expected = fixture.GitHub.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal)).Value;
             failureIndex = fixture.GitHub.Requests.Count;
             fixture.GitHub.RejectPath = "/git/ref/heads/contract-scribe/coordination/";
             fixture.GitHub.RejectionStatus = status;
@@ -114,7 +110,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.NotEqual(0, result.ExitCode);
         Assert.NotNull(expected);
         Assert.True(failureIndex > 0);
-        Assert.DoesNotContain(fixture.GitHub.Requests.Skip(failureIndex), request => request.Method == "POST");
+        Assert.DoesNotContain(fixture.GitHub.Requests.Skip(failureIndex), request => request.Mutation > 0);
         Assert.Empty(fixture.GitHub.PullRequests);
         Assert.Equal(0, fixture.GitHub.PrAttempts);
         var checkpoint = fixture.Checkpoint();
@@ -150,7 +146,8 @@ public sealed partial class GitHubProposalCliProcessTests
         long? durableRevision = null;
         fixture.GitHub.After = request =>
         {
-            if (injected || request.Method != "POST" || request.Path != "/graphql"
+            if (injected || request.Kind != "checkpoint-commit"
+                || !fixture.GitHub.Refs.Keys.Any(key => key.Contains("/coordination/", StringComparison.Ordinal))
                 || fixture.GitHub.CoordinationDocument()["checkpoint"] is null) return;
             var state = fixture.Checkpoint();
             if (!state.State.WorkItems.Any(work => work.TrustedProposal is not null)) return;

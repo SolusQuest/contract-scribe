@@ -2731,6 +2731,7 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 Environment.GetEnvironmentVariable("NUGET_PACKAGES") ?? string.Empty)),
             ("fixtureAssemblySha256", Encoding.UTF8.GetBytes(
                 toolchain.FixtureAssemblySha256)),
+            ("toolchainProbeSha256", Encoding.UTF8.GetBytes(toolchain.ToolchainProbeSha256)),
         };
         foreach (var package in toolchain.Packages)
         {
@@ -2776,19 +2777,16 @@ internal sealed class LoaderFixture : IAsyncDisposable
     {
         var dotnetHost = ResolveDotnetHost();
         var repositoryRoot = FindRepositoryRoot();
-        var version = await OwnedProcessRunner.RunAsync(
-            dotnetHost,
-            repositoryRoot,
-            ["--version"],
+        var configuration = AppContext.BaseDirectory.Contains(
+            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
+            StringComparison.OrdinalIgnoreCase) ? "Release" : "Debug";
+        var probe = Path.Combine(repositoryRoot, "tests", "ContractScribe.LoaderProbe", "bin", configuration,
+            "net10.0", "ContractScribe.LoaderProbe.dll");
+        var snapshot = await ToolchainSnapshotProbe.RunAsync(dotnetHost, repositoryRoot, probe,
             TimeSpan.FromSeconds(30)).ConfigureAwait(false);
-        var sdkVersion = version.StandardOutput.Trim();
-        var installedSdks = await OwnedProcessRunner.RunAsync(
-            dotnetHost,
-            repositoryRoot,
-            ["--list-sdks"],
-            TimeSpan.FromSeconds(30)).ConfigureAwait(false);
+        var sdkVersion = snapshot.SdkVersion;
         var sdkPrefix = $"{sdkVersion} [";
-        var selectedSdk = installedSdks.StandardOutput
+        var selectedSdk = snapshot.InstalledSdks
             .Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries)
             .Select(line => line.Trim())
             .SingleOrDefault(line =>
@@ -2808,11 +2806,6 @@ internal sealed class LoaderFixture : IAsyncDisposable
         }
         var msbuildVersion = FileVersionInfo.GetVersionInfo(msbuildPath).FileVersion
             ?? string.Empty;
-        var configuration = AppContext.BaseDirectory.Contains(
-            $"{Path.DirectorySeparatorChar}Release{Path.DirectorySeparatorChar}",
-            StringComparison.OrdinalIgnoreCase)
-            ? "Release"
-            : "Debug";
         var inputRoot = Path.Combine(
             Path.GetTempPath(),
             "contract-scribe-issue80-inputs",
@@ -2856,7 +2849,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
                 packages,
                 generatorPath,
                 HashFile(generatorPath),
-                HashFile(typeof(LoaderFixture).Assembly.Location));
+                HashFile(typeof(LoaderFixture).Assembly.Location),
+                HashFile(probe));
         }
         catch (Exception primary)
         {
@@ -3306,7 +3300,8 @@ internal sealed class LoaderFixture : IAsyncDisposable
         IReadOnlyList<FixtureInputFile> Packages,
         string GeneratorPath,
         string GeneratorSha256,
-        string FixtureAssemblySha256);
+        string FixtureAssemblySha256,
+        string ToolchainProbeSha256);
 
     private sealed record FixtureInputFile(
         string LogicalName,

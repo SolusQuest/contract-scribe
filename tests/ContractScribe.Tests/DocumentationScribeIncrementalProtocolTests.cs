@@ -293,11 +293,13 @@ public sealed partial class DocumentationScribeRuntimeTests
 
         internal int Calls { get; private set; }
         public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
-            DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
+            DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification progress,
+            CancellationToken cancellationToken)
         {
             if (++Calls == 2) throw new IOException("synthetic-unknown-receipt-outcome");
             return ValueTask.FromResult<DocumentationScribeSubmissionAcknowledgement?>(new(submission.ScribeRequestSha256,
-                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded));
+                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded)
+            { ProgressSha256 = progress.ProgressSha256 });
         }
     }
 
@@ -312,10 +314,12 @@ public sealed partial class DocumentationScribeRuntimeTests
         internal TaskCompletionSource<DocumentationScribeSubmissionAcknowledgement?> Pending { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private DocumentationScribeSubmissionAcknowledgement? lateAcknowledgement;
         public ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
-            DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
+            DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification progress,
+            CancellationToken cancellationToken)
         {
             var acknowledgement = new DocumentationScribeSubmissionAcknowledgement(submission.ScribeRequestSha256,
-                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded);
+                submission.TargetId, submission.ContentSha256, DocumentationScribeAcknowledgementStage.DurablyRecorded)
+            { ProgressSha256 = progress.ProgressSha256 };
             if (++Calls == 1) return ValueTask.FromResult<DocumentationScribeSubmissionAcknowledgement?>(acknowledgement);
             lateAcknowledgement = acknowledgement;
             Entered.TrySetResult();

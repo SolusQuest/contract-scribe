@@ -24,7 +24,7 @@ public sealed partial class CampaignStateContractTests
         var preparationReads = 0;
         var chargedBefore = trial.Store.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed;
         byte[]? predecessor = null;
-        trial.Store.BeforeRetryAdmissionRead = () =>
+        trial.Store.BeforeRetryAdmissionComparison = () =>
         {
             preparationReads++;
             Assert.Equal(1, trial.Store.Dispatches);

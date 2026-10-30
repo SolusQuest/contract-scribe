@@ -46,10 +46,10 @@ public sealed partial class GitHubProposalCliProcessTests
             }
             // The current coordination ref must already name this exact checkpoint.
             // Immutable object authentication before CAS cannot trigger the delay.
-            if (request.Method != "GET"
-                || !request.Path.EndsWith("/git/blobs/" + checkpointOid, StringComparison.Ordinal)
-                || !delayedRevisions.Add(artifact.CheckpointRevision)) return null;
-            return Task.Delay(TimeSpan.FromSeconds(15), fixture.GitHub.Stopping);
+            if (!request.CurrentCheckpointQuery || !delayedRevisions.Add(artifact.CheckpointRevision)) return null;
+            // Six physical writes now acknowledge admission and five composed
+            // member/progress facts. Keep the original >90s real-time proof.
+            return Task.Delay(TimeSpan.FromSeconds(18), fixture.GitHub.Stopping);
         };
 
         var result = await fixture.Run();
@@ -62,7 +62,7 @@ public sealed partial class GitHubProposalCliProcessTests
         AssertResult(result, 0, "published");
         Assert.NotNull(terminalStart);
         Assert.NotNull(terminalEnd);
-        Assert.Equal(7, delayedRevisions.Count); // admission, five members, one progress acknowledgement
+        Assert.Equal(6, delayedRevisions.Count); // admission plus five member/progress physical acknowledgements
         Assert.InRange(observedMilliseconds, 100000, 300000);
         var checkpoint = fixture.Checkpoint();
         Assert.True(checkpoint.State.ScribeProgress!.Session!.Ended);
@@ -87,27 +87,33 @@ public sealed partial class GitHubProposalCliProcessTests
         string? interruptedCheckpointOid = null;
         var failureIndex = 0;
         var cleanupCas = 0;
+        var fifthPhysicalQuery = false;
         fixture.GitHub.BeforeResponse = request =>
         {
             if (interruptedRevision is not null)
             {
-                if (request.Method == "POST" && request.Path == "/graphql")
+                if (request.Mutation > 0)
                 {
                     cleanupCas++;
                     Assert.Equal(interruptedCheckpointOid, fixture.GitHub.CoordinationDocument()["checkpoint"]!["oid"]!.GetValue<string>());
                 }
                 return null;
             }
-            if (request.Method != "GET"
-                || !fixture.GitHub.Refs.Keys.Any(key => key.Contains("/coordination/", StringComparison.Ordinal))) return null;
+            if (!fixture.GitHub.Refs.Keys.Any(key => key.Contains("/coordination/", StringComparison.Ordinal))) return null;
             var document = fixture.GitHub.CoordinationDocument();
-            if (document["checkpoint"]?["oid"]?.GetValue<string>() is not { } oid
-                || !request.Path.EndsWith("/git/blobs/" + oid, StringComparison.Ordinal)) return null;
+            if (document["checkpoint"]?["oid"]?.GetValue<string>() is not { } oid) return null;
             var current = CampaignStateJson.Parse(fixture.GitHub.Blobs[oid]).Artifact!;
             var progress = current.State.ScribeProgress;
             if (current.State.ActiveReservation is not CampaignProviderReservation { HostPhase: CampaignProviderHostPhase.TerminalSubmission }
-                || progress?.Members.Count(member => member.ContentSha256 is not null) != 5
-                || (progress.LastProgressSha256 is not null) != progressReadback) return null;
+                || progress is null || progress.Members.Count(member => member.ContentSha256 is not null) != 5
+                || progress.LastProgressSha256 is null) return null;
+            // Both logical receipts share this replacement. Exercise its raw
+            // content read and its distinct final-ref closure before either ACK.
+            if (request.CurrentCheckpointQuery) fifthPhysicalQuery = true;
+            var selected = progressReadback
+                ? fifthPhysicalQuery && request.Method == "GET" && request.Path.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)
+                : request.CurrentCheckpointQuery;
+            if (!selected) return null;
             interruptedRevision = current.CheckpointRevision;
             interruptedCheckpointOid = oid;
             failureIndex = fixture.GitHub.Requests.Count;

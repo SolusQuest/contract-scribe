@@ -11,10 +11,25 @@ namespace ContractScribe.Roslyn.IntegrationTests;
 
 // A bounded wire-level GitHub model. It has no reference to adapter internals, campaign
 // capabilities, H1, or R6 results. Object identities use Git's public object format.
-internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
+internal sealed partial class GitHubProposalLoopbackServer : IAsyncDisposable
 {
     internal sealed record Entry(string Path, string Mode, string Oid);
-    internal sealed record Request(string Method, string Path, string Kind, int Mutation);
+    internal sealed record Request(string Method, string Path, string Kind, int Mutation)
+    {
+        internal JsonObject? Body { get; init; }
+        internal bool CurrentCheckpointQuery => Kind == "checkpoint-read" && Body?["variables"]?["anchor"] is null;
+    }
+
+    internal static byte[]? WrittenCanonicalBytes(Request request, string name)
+    {
+        if (request.Kind != "checkpoint-commit") return null;
+        var additions = request.Body!["variables"]!["input"]!["fileChanges"]!["additions"]!.AsArray();
+        var file = additions.SingleOrDefault(item => item!["path"]!.GetValue<string>() == ".contract-scribe/" + name);
+        return file is null ? null : Convert.FromBase64String(file["contents"]!.GetValue<string>());
+    }
+
+    internal static JsonObject? WrittenCanonicalFile(Request request, string name) =>
+        WrittenCanonicalBytes(request, name) is { } bytes ? JsonNode.Parse(bytes)!.AsObject() : null;
     private readonly HttpListener listener = new();
     private readonly CancellationTokenSource stop = new();
     private readonly ConcurrentBag<Task> handlers = [];
@@ -126,7 +141,12 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             var path = Uri.UnescapeDataString(context.Request.Url!.AbsolutePath);
             var method = context.Request.HttpMethod;
             Assert.True(method is "GET" or "POST", "Unexpected mutation verb");
-            var kind = path == "/graphql" ? "cas" : path.Split('/')[^1];
+            var query = method == "POST" && path == "/graphql"
+                && JsonNode.Parse(body)!["query"]!.GetValue<string>().TrimStart().StartsWith("query", StringComparison.Ordinal);
+            var campaignQuery = query && JsonNode.Parse(body)!["query"]!.GetValue<string>() == CampaignSnapshotQuery;
+            var kind = campaignQuery ? "campaign-snapshot" : query ? "checkpoint-read" : path == "/graphql"
+                ? JsonNode.Parse(body)!["query"]!.GetValue<string>().Contains("createCommitOnBranch", StringComparison.Ordinal) ? "checkpoint-commit" : "cas"
+                : path.Split('/')[^1];
             Task? wait = null;
             (int Status, object Body) response;
             Request request;
@@ -134,12 +154,13 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
             {
                 if (Requests.Count >= MaximumRequests)
                     Assert.Fail($"Request guard: {method} {path}; mutations={Mutations}; PR attempts={PrAttempts}; ledger={CoordinationDocument().ToJsonString()}");
-                request = new(method, path, kind, method == "POST" ? ++Mutations : 0);
+                request = new(method, path, kind, method == "POST" && !query ? ++Mutations : 0)
+                { Body = method == "POST" && path == "/graphql" ? JsonNode.Parse(body)!.AsObject() : null };
                 Requests.Add(request);
                 if (method == "POST" && path == "/repos/Owner/repo/pulls") PrAttempts++;
                 BeforeBody?.Invoke(request, body);
                 Before?.Invoke(request);
-                if (method == "POST" && request.Mutation == LoseAt && !LoseAfter)
+                if (request.Mutation > 0 && request.Mutation == LoseAt && !LoseAfter)
                 {
                     context.Response.Abort(); return;
                 }
@@ -149,7 +170,7 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
                     ? (RejectionStatus, new { message = "synthetic rejection" })
                     : Dispatch(method, path, body);
                 After?.Invoke(request);
-                if (method == "POST" && request.Mutation == LoseAt && LoseAfter)
+                if (request.Mutation > 0 && request.Mutation == LoseAt && LoseAfter)
                 {
                     context.Response.Abort(); return;
                 }
@@ -229,6 +250,12 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         }
         if (path == "/graphql")
         {
+            if (body["query"]!.GetValue<string>() == CampaignSnapshotQuery)
+                return (200, CampaignSnapshot(body["variables"]!.AsObject()));
+            if (body["query"]!.GetValue<string>().TrimStart().StartsWith("query", StringComparison.Ordinal))
+                return (200, CheckpointSnapshot(body["variables"]!.AsObject()));
+            if (body["query"]!.GetValue<string>().Contains("createCommitOnBranch", StringComparison.Ordinal))
+                return AtomicCheckpoint(body["variables"]!["input"]!.AsObject());
             Assert.Equal("mutation($input:UpdateRefsInput!){updateRefs(input:$input){clientMutationId}}", body["query"]!.GetValue<string>());
             var input = body["variables"]!["input"]!;
             Assert.Equal("REPO_node", input["repositoryId"]!.GetValue<string>());
@@ -288,6 +315,148 @@ internal sealed class GitHubProposalLoopbackServer : IAsyncDisposable
         })!.AsObject();
         PullRequests.Add(pr);
         return (201, pr);
+    }
+
+    // Public GraphQL field shapes over the same wire database as REST. Query
+    // HTTP POSTs do not increment the mutation ordinal or trigger response-loss
+    // injection for non-idempotent effects.
+    private (int, object) AtomicCheckpoint(JsonObject input)
+    {
+        Assert.Equal("REF_node", input["branch"]!["id"]!.GetValue<string>());
+        var before = input["expectedHeadOid"]!.GetValue<string>();
+        var reference = Refs.Keys.Single(name => name.StartsWith("refs/heads/contract-scribe/coordination/", StringComparison.Ordinal));
+        if (Refs[reference] != before)
+            return (200, new { data = (object?)null, errors = new[] { new { message = "conflict", type = "CONFLICT" } } });
+        var root = Trees[Commits[before]["tree"]!["sha"]!.GetValue<string>()];
+        var leaf = Trees[root.Single().Oid].ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+        foreach (var file in input["fileChanges"]!["additions"]!.AsArray())
+        {
+            var path = file!["path"]!.GetValue<string>();
+            Assert.StartsWith(".contract-scribe/", path);
+            Assert.DoesNotContain('/', path[17..]);
+            leaf[path[17..]] = new(path[17..], "100644", AddBlob(Convert.FromBase64String(file["contents"]!.GetValue<string>())));
+        }
+        var tree = AddTree([new(".contract-scribe", "040000", AddTree(leaf.Values.ToArray()))]);
+        var message = input["message"]!["headline"]!.GetValue<string>() + "\n\n" + input["message"]!["body"]!.GetValue<string>();
+        var seconds = ServerNow.ToUnixTimeSeconds().ToString(CultureInfo.InvariantCulture);
+        var payload = "tree " + tree + "\nparent " + before
+            + "\nauthor github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + seconds
+            + " +0000\ncommitter GitHub <noreply@github.com> " + seconds + " +0000\n\n" + message;
+        const string signature = "-----BEGIN PGP SIGNATURE-----\nsynthetic-wire-fixture\n-----END PGP SIGNATURE-----\n";
+        var separator = payload.IndexOf("\n\n", StringComparison.Ordinal);
+        var text = payload[..(separator + 1)] + "gpgsig " + signature.TrimEnd('\n').Replace("\n", "\n ", StringComparison.Ordinal)
+            + "\n" + payload[(separator + 1)..];
+        var oid = ObjectOid("commit", Encoding.UTF8.GetBytes(text));
+        var date = ServerNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+        Commits[oid] = new JsonObject
+        {
+            ["sha"] = oid,
+            ["tree"] = new JsonObject { ["sha"] = tree },
+            ["parents"] = new JsonArray(new JsonObject { ["sha"] = before }),
+            ["message"] = message,
+            ["author"] = new JsonObject { ["name"] = "github-actions[bot]", ["email"] = "41898282+github-actions[bot]@users.noreply.github.com", ["date"] = date },
+            ["committer"] = new JsonObject { ["name"] = "GitHub", ["email"] = "noreply@github.com", ["date"] = date },
+            ["checkpointAuthor"] = new JsonObject { ["__typename"] = "User", ["id"] = "MDM6Qm90NDE4OTgyODI=", ["databaseId"] = 41898282, ["login"] = "github-actions[bot]" },
+            ["checkpointSignature"] = new JsonObject
+            {
+                ["__typename"] = "GpgSignature",
+                ["isValid"] = true,
+                ["state"] = "VALID",
+                ["wasSignedByGitHub"] = true,
+                ["payload"] = payload,
+                ["signature"] = signature,
+            },
+        };
+        Refs[reference] = oid;
+        SuccessfulCas++;
+        return (200, new { data = new { createCommitOnBranch = new { clientMutationId = input["clientMutationId"]!.GetValue<string>() } } });
+    }
+
+    private JsonObject CheckpointSnapshot(JsonObject variables)
+    {
+        Assert.Equal("Owner", variables["owner"]!.GetValue<string>());
+        Assert.Equal("repo", variables["name"]!.GetValue<string>());
+        var historical = variables["anchor"] is not null;
+        var coordination = (variables[historical ? "anchor" : "coord"]!).GetValue<string>();
+        if (!historical) Assert.StartsWith("refs/heads/contract-scribe/coordination/", coordination);
+        var repository = new JsonObject
+        {
+            ["id"] = "REPO_node",
+            ["fullDatabaseId"] = "1",
+            ["name"] = "repo",
+            ["owner"] = new JsonObject { ["login"] = "Owner" },
+            ["base"] = historical ? null : Reference(variables["target"]!.GetValue<string>(), includeContent: false),
+            ["coord"] = Reference(historical ? variables["coord"]!.GetValue<string>() : coordination, includeContent: !historical),
+        };
+        if (historical) repository["document"] = Reference(coordination, includeContent: true)?["target"]!.DeepClone();
+        foreach (var (alias, path) in new[] { ("state", "coordination-state-v1.json"), ("checkpoint", "checkpoint.json"),
+            ("plan", "plan.json"), ("archive", "archive-predecessor.json"), ("event", "publication-event.json") })
+        {
+            if (historical && alias != "state") continue;
+            Assert.Equal(coordination + ":.contract-scribe/" + path, variables[alias]!.GetValue<string>());
+            repository[alias] = File(path);
+        }
+        return new JsonObject { ["data"] = new JsonObject { ["repository"] = repository } };
+
+        JsonObject? Reference(string name, bool includeContent)
+        {
+            var oid = name;
+            if (!historical || !Commits.ContainsKey(name))
+                if (!Refs.TryGetValue(name, out oid)) return null;
+            var target = new JsonObject { ["__typename"] = "Commit", ["oid"] = oid };
+            if (includeContent)
+            {
+                var raw = Commits[oid];
+                var author = raw["author"]!.DeepClone();
+                author["user"] = raw["checkpointAuthor"]?.DeepClone();
+                target["message"] = raw["message"]!.DeepClone();
+                target["author"] = author;
+                target["committer"] = raw["committer"]!.DeepClone();
+                var parents = raw["parents"]!.AsArray();
+                target["parents"] = new JsonObject
+                {
+                    ["totalCount"] = parents.Count,
+                    ["pageInfo"] = new JsonObject { ["hasNextPage"] = parents.Count > 2 },
+                    ["nodes"] = new JsonArray(parents.Take(2).Select(parent => (JsonNode)new JsonObject { ["oid"] = parent!["sha"]!.DeepClone() }).ToArray()),
+                };
+                target["signature"] = raw["checkpointSignature"]?.DeepClone();
+                target["tree"] = Tree(raw["tree"]!["sha"]!.GetValue<string>(), includeChildren: true);
+            }
+            return new JsonObject { ["id"] = "REF_node", ["prefix"] = "refs/heads/", ["name"] = name[11..], ["target"] = target };
+        }
+
+        JsonObject Tree(string oid, bool includeChildren)
+        {
+            var entries = new JsonArray();
+            foreach (var entry in Trees[oid])
+            {
+                var value = new JsonObject { ["name"] = entry.Path, ["mode"] = Convert.ToInt32(entry.Mode, 8), ["oid"] = entry.Oid };
+                if (includeChildren) value["object"] = entry.Mode is "040000" or "40000"
+                    ? Tree(entry.Oid, includeChildren: false) : new JsonObject { ["__typename"] = "Blob" };
+                entries.Add(value);
+            }
+            return new JsonObject { ["__typename"] = "Tree", ["oid"] = oid, ["entries"] = entries };
+        }
+
+        JsonObject? File(string path)
+        {
+            var head = coordination;
+            if (!historical && !Refs.TryGetValue(coordination, out head)) return null;
+            var root = Trees[Commits[head]["tree"]!["sha"]!.GetValue<string>()];
+            var directory = root.SingleOrDefault(entry => entry.Path == ".contract-scribe" && entry.Mode is "040000" or "40000");
+            if (directory is null) return null;
+            var entry = Trees[directory.Oid].SingleOrDefault(item => item.Path == path);
+            if (entry is null || !Blobs.TryGetValue(entry.Oid, out var bytes)) return null;
+            return new JsonObject
+            {
+                ["__typename"] = "Blob",
+                ["oid"] = entry.Oid,
+                ["byteSize"] = bytes.Length,
+                ["isBinary"] = false,
+                ["isTruncated"] = false,
+                ["text"] = Encoding.UTF8.GetString(bytes),
+            };
+        }
     }
 
     private (int, object) Read(string path)

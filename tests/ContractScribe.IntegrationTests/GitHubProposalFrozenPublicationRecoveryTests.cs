@@ -38,7 +38,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var reached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         fixture.GitHub.After = request =>
         {
-            if (request.Method != "POST" || request.Kind != "cas"
+            if (request.Method != "POST" || request.Kind is not ("cas" or "checkpoint-commit")
                 || !fixture.GitHub.Refs.Keys.Any(key => key.Contains("/coordination/", StringComparison.Ordinal))
                 || fixture.GitHub.CoordinationDocument()["publication"] is null
                 || fixture.GitHub.Coordination()["stage"]!.GetValue<string>() != stage) return;

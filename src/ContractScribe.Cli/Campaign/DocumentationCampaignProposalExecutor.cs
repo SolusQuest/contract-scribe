@@ -296,7 +296,7 @@ internal static class DocumentationCampaignProposalExecutor
         }
         var coordinator = new CampaignScribeExecutionCoordinator(invocation, input.InvocationAllowance,
             input.Store, input.SettlementToken, GuardDispatch, executionStartedAt,
-            input.OperationalTimeouts?.Host, input.OperationalTimeouts?.CheckpointAcceptanceMilliseconds ?? 30_000);
+            input.OperationalTimeouts?.Host, input.OperationalTimeouts?.CheckpointAcceptanceMilliseconds ?? 30_000, input.Usage);
         var prepared = await DocumentationScribeComposition.PrepareCampaignAsync(
             manifestSelection, ownedRequestUtf8Json, invocation, input.ConfiguredAgentEntrypoint,
             input.RuntimeOptions, exchange, input.TimeProvider, input.ExecutionToken,

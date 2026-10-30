@@ -104,7 +104,8 @@ public sealed partial class CampaignCliProcessTests
                 new Dictionary<string, string?>
                 {
                     ["DOTNET_STARTUP_HOOKS"] = StartupHookPath,
-                    ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_NAME"] = CampaignProcessBoundaryHooks.ScribeProgressAfterReadback,
+                    ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_NAME"] = CampaignProcessBoundaryHooks.ScribeMemberAfterReadback,
+                    ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_OCCURRENCE"] = "3",
                     ["CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_ACK"] = acknowledgement,
                 });
             try
@@ -252,14 +253,16 @@ public sealed partial class CampaignCliProcessTests
                 foreach (var item in items.Skip(repairScenario == "shared-mixed-repair" ? 1 : 0))
                     item!["result"]!["contentUnits"]![0]!["lines"] = new JsonArray("<summary>Raw documentation is not a logical line.</summary>");
             }
-            var malformedRepair = repairScenario == "shared-malformed-repair" && facts.GetProperty("nextSequence").GetInt32() == 2;
+            var malformedRepair = repairScenario is "shared-malformed-repair" or "shared-malformed-repair-with-usage"
+                && facts.GetProperty("nextSequence").GetInt32() == 2;
             return TerminalResponse(malformedRepair ? "{" : new JsonObject
             {
                 ["kind"] = "submit",
                 ["scribeRequestSha256"] = policy.RootElement.GetProperty("artifactSha256").GetString(),
                 ["sequence"] = facts.GetProperty("nextSequence").GetInt32(),
                 ["items"] = items
-            }.ToJsonString(), includeUsage && !malformedRepair, usageOutputTokens, turn: messages.GetArrayLength());
+            }.ToJsonString(), includeUsage && (!malformedRepair || repairScenario == "shared-malformed-repair-with-usage"),
+                usageOutputTokens, turn: messages.GetArrayLength());
         }
     }
 }

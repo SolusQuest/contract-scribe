@@ -49,6 +49,25 @@ def encode(value):
 
 
 class InvocationUsageTests(unittest.TestCase):
+    def test_checkpoint_parent_observation_has_narrow_context_and_preserves_old_values(self):
+        for source in U.CHECKPOINT_CANCELLATIONS:
+            observation = dict(operationOrdinal=7, operation="Write", attemptedRevision=17,
+                               stage="CheckpointReadback", reason="Cancelled", transportCode="Cancelled",
+                               httpStatus=None, cancellation=source, refComparison=None)
+            value = fixture("partial")
+            value["checkpointFailure"] = observation
+            raw = encode(envelope(value))
+            parsed = invoke.parse_envelope(raw, b"", 6)
+            self.assertEqual(observation, parsed["invocationUsage"]["checkpointFailure"])
+            self.assertLess(len(raw), C.BOUND_ENVELOPE)
+            if source not in ("OperationCheckpointAcceptanceDeadline", "OperationSettlementToken"):
+                continue
+            for key, invalid in (("operation", "Read"), ("operation", "Renew"),
+                                 ("stage", "FinalRef"), ("attemptedRevision", None), ("reason", "Transport")):
+                self.assertFalse(U.checkpoint_failure(dict(observation, **{key: invalid})))
+            self.assertFalse(U.checkpoint_failure(dict(observation, token="private-marker")))
+            self.assertNotIn("private-marker", "\n".join(U.summary_rows(value)))
+
     def test_final_ref_comparison_is_operation_local_closed_and_bounded(self):
         comparison = dict(expectedCommit="a" * 64, predecessorCommit="b" * 64,
                           observedCommit="b" * 64, relation="Predecessor", delivery="NeedsReadback", acknowledged=True)
@@ -165,7 +184,7 @@ class InvocationUsageTests(unittest.TestCase):
 
     def test_physical_diagnostics_cross_outputs_and_summary_with_closed_vocabulary_only(self):
         protocol = (HERE.parent.parent / "docs/20_architecture/validation/m3-provider-evaluation-protocol.md").read_text()
-        allowlist = protocol.split("The complete first-disposition allowlist, in production evaluation order, is:")[1].split(
+        allowlist = protocol.split("The complete first-disposition allowlist is:")[1].split(
             "`codec.response.exceeds-limit` covers")[0]
         self.assertEqual(set(U.CODECS), set(re.findall(r"`(codec\.[a-z0-9.-]+)`", allowlist)))
         value = fixture("partial")
@@ -184,6 +203,20 @@ class InvocationUsageTests(unittest.TestCase):
                 failureCode="model.failure.unsupported", failureOrigin="model.failure-origin.response-codec",
                 httpStatusCode=None, codecDisposition="codec.finish-reason." + finish)
             self.assertTrue(U.valid(classified))
+        for disposition in ("codec.arguments.not-string", "codec.arguments.duplicate-property"):
+            with self.subTest(disposition=disposition), tempfile.TemporaryDirectory() as temp:
+                classified = json.loads(json.dumps(value))
+                classified["providerDiagnostics"]["observations"][0].update(
+                    failureCode="model.failure.malformed-response", failureOrigin="model.failure-origin.response-codec",
+                    httpStatusCode=None, codecDisposition=disposition)
+                self.assertTrue(U.valid(classified))
+                raw = encode(envelope(classified))
+                output = str(Path(temp) / "out.txt")
+                with patch.dict(os.environ, {"GITHUB_OUTPUT": output}):
+                    parsed = invoke.parse_envelope(raw, b"", 0)
+                    invoke.emit_outputs(parsed, raw, 0)
+                self.assertEqual(classified, json.loads(driver.read_outputs(output)["usage-json"]))
+                self.assertIn(disposition, "\n".join(U.summary_rows(classified)))
         invalid = [lambda r: r.update(httpStatusCode=True),
                    lambda r: r.update(failureOrigin=None),
                    lambda r: r.update(failureCode="private-provider-body-marker"),

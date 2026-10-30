@@ -112,8 +112,12 @@ public sealed partial class DocumentationScribeCompositionTests
                 Assert.NotNull(run);
                 Assert.Equal(4, run.Submissions.Length);
             }
-            Assert.Equal(4, store.Current.State.WorkItems.Count(item => item.TrustedProposal is not null));
-            Assert.Equal(4, store.MemberWrites);
+            // A failure before the fourth combined replacement leaves its
+            // member unacknowledged. The first three durable siblings remain;
+            // unknown/incorrect ACK after an applied write retains all four.
+            var persistedMembers = mode is "clean" or "publication-then-cancel" or "readback-then-cancel" ? 4 : 3;
+            Assert.Equal(persistedMembers, store.Current.State.WorkItems.Count(item => item.TrustedProposal is not null));
+            Assert.Equal(persistedMembers, store.MemberWrites);
             Assert.Equal(0, store.DuplicateMemberWrites);
             Assert.Equal(mode == "clean" ? 2 : 1, exchange.Calls);
             Assert.Equal(exchange.Calls, allowance.ProviderRequestCount);
@@ -244,7 +248,11 @@ public sealed partial class DocumentationScribeCompositionTests
                     && MemberWrites == 0) Delay(14000, token);
                 if (added.Length > 0) Delay(14000, token);
             }
-            if (progress && !progressSeen)
+            // Partial member projections now share the member's durable write.
+            // Inject the original after-four-members fault at the completed batch,
+            // preserving earlier durable siblings and the original parent clocks.
+            var failCompletedBatch = progress && !progressSeen && MemberWrites + added.Length == 4;
+            if (failCompletedBatch)
             {
                 progressSeen = true;
                 if (mode is "caller" or "caller-collision") caller.Cancel();
@@ -271,7 +279,7 @@ public sealed partial class DocumentationScribeCompositionTests
                 Current = next;
                 foreach (var item in added) { if (!members.Add(item.WorkItemKey)) DuplicateMemberWrites++; MemberWrites++; }
             }
-            if (progress && mode is "publication-then-cancel" or "readback-then-cancel")
+            if (failCompletedBatch && mode is "publication-then-cancel" or "readback-then-cancel")
             {
                 cancelAfterFailure = true;
                 return mode == "publication-then-cancel" ? new(CampaignCheckpointWriteKind.PublicationFailure)

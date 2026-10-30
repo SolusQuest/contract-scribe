@@ -26,6 +26,41 @@ EXPECTED_AUTH = "Bearer contract-scribe-synthetic-transport-only"
 EXPECTED_VERSION = "2026-03-10"
 MAX_BODY = 32 * 1024 * 1024
 
+# Closed public field selections supported by this independent wire model.
+CURRENT_CHECKPOINT_QUERY = """
+        query($owner:String!,$name:String!,$coord:String!,$target:String!,$state:String!,$checkpoint:String!,$plan:String!,$archive:String!,$event:String!){
+          repository(owner:$owner,name:$name){id fullDatabaseId name owner{login}
+            base:ref(qualifiedName:$target){id name prefix target{__typename oid}}
+            coord:ref(qualifiedName:$coord){id name prefix target{__typename oid ... on Commit{
+              message author{name email date user{__typename id databaseId login}} committer{name email date}
+              parents(first:2){totalCount pageInfo{hasNextPage} nodes{oid}}
+              signature{__typename isValid state payload signature wasSignedByGitHub}
+              tree{oid entries{name mode oid object{__typename ... on Tree{oid entries{name mode oid}}}}}
+            }}}
+            state:object(expression:$state){...CheckpointBlob}
+            checkpoint:object(expression:$checkpoint){...CheckpointBlob}
+            plan:object(expression:$plan){...CheckpointBlob}
+            archive:object(expression:$archive){...CheckpointBlob}
+            event:object(expression:$event){...CheckpointBlob}
+          }
+        }
+        fragment CheckpointBlob on GitObject{__typename oid ... on Blob{byteSize isBinary isTruncated text}}
+"""
+HISTORICAL_CHECKPOINT_QUERY = """
+        query($owner:String!,$name:String!,$coord:String!,$anchor:String!,$state:String!){
+          repository(owner:$owner,name:$name){id fullDatabaseId name owner{login}
+            coord:ref(qualifiedName:$coord){id name prefix target{__typename oid}}
+            document:object(expression:$anchor){__typename oid ... on Commit{
+              message author{name email date user{__typename id databaseId login}} committer{name email date}
+              parents(first:2){totalCount pageInfo{hasNextPage} nodes{oid}}
+              signature{__typename isValid state payload signature wasSignedByGitHub}
+              tree{oid entries{name mode oid object{__typename ... on Tree{oid entries{name mode oid}}}}}
+            }}
+            state:object(expression:$state){__typename oid ... on Blob{byteSize isBinary isTruncated text}}
+          }
+        }
+"""
+
 
 def object_oid(kind, data):
     return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode()
@@ -66,7 +101,7 @@ class State:
             stream += b" " + path.encode() + b"\0"
             stream += bytes.fromhex(oid)
         oid = object_oid("tree", bytes(stream))
-        self.trees[oid] = entries
+        self.trees[oid] = sorted(entries, key=lambda e: e[0] + ("/" if e[1] in ("040000", "40000") else "\0"))
         return oid
 
     def build_tree(self, files):
@@ -116,8 +151,118 @@ class State:
                 "owner": {"id": 1, "node_id": "OWNER_node",
                           "login": "Owner", "type": "Organization"}}
 
+    def checkpoint_snapshot(self, variables):
+        historical = "anchor" in variables
+        files = {"state": "coordination-state-v1.json"} if historical else {
+            "state": "coordination-state-v1.json", "checkpoint": "checkpoint.json",
+            "plan": "plan.json", "archive": "archive-predecessor.json", "event": "publication-event.json"}
+        expected = {"owner", "name", "coord", "anchor" if historical else "target", *files}
+        if set(variables) != expected or variables["owner"] != "Owner" or variables["name"] != "repo":
+            raise ValueError("checkpoint-query-variables")
+        coord = variables["coord"]
+        if not coord.startswith("refs/heads/contract-scribe/coordination/"):
+            raise ValueError("checkpoint-query-ref")
+        if not historical and variables["target"] != "refs/heads/main":
+            raise ValueError("checkpoint-query-target")
+        anchor = variables["anchor"] if historical else coord
+        for alias, path in files.items():
+            if variables[alias] != anchor + ":.contract-scribe/" + path:
+                raise ValueError("checkpoint-query-path")
+        head = anchor if historical else self.refs.get(coord)
+        repository = {"id": "REPO_node", "fullDatabaseId": "1", "name": "repo", "owner": {"login": "Owner"},
+                      "coord": self.checkpoint_ref(coord, not historical)}
+        if historical:
+            repository["document"] = self.checkpoint_commit(head) if head in self.commits else None
+        else:
+            repository["base"] = self.checkpoint_ref(variables["target"], False)
+        entries = {}
+        if head in self.commits:
+            root = self.trees[self.commits[head]["tree"]["sha"]]
+            directory = next((e for e in root if e[0] == ".contract-scribe" and e[1] in ("040000", "40000")), None)
+            if directory:
+                entries = {e[0]: e[2] for e in self.trees[directory[2]]}
+        for alias, path in files.items():
+            oid = entries.get(path)
+            data = self.blobs.get(oid)
+            repository[alias] = None if data is None else {"__typename": "Blob", "oid": oid,
+                "byteSize": len(data), "isBinary": False, "isTruncated": False, "text": data.decode("utf-8")}
+        return {"data": {"repository": repository}}
+
+    def checkpoint_ref(self, name, content):
+        oid = self.refs.get(name)
+        if oid is None:
+            return None
+        target = self.checkpoint_commit(oid) if content else {"__typename": "Commit", "oid": oid}
+        return {"id": "REF_node", "name": name[11:], "prefix": "refs/heads/", "target": target}
+
+    def checkpoint_commit(self, oid):
+        raw = self.commits[oid]
+        author = dict(raw["author"], user=raw.get("checkpointAuthor"))
+        parents = raw["parents"]
+        return {"__typename": "Commit", "oid": oid, "message": raw["message"], "author": author,
+                "committer": raw["committer"], "parents": {"totalCount": len(parents),
+                "pageInfo": {"hasNextPage": len(parents) > 2}, "nodes": [{"oid": p["sha"]} for p in parents[:2]]},
+                "signature": raw.get("checkpointSignature"), "tree": self.checkpoint_tree(raw["tree"]["sha"], True)}
+
+    def checkpoint_tree(self, oid, children):
+        entries = []
+        for path, mode, value in self.trees[oid]:
+            entry = {"name": path, "mode": int(mode, 8), "oid": value}
+            if children:
+                entry["object"] = self.checkpoint_tree(value, False) if mode in ("040000", "40000") else {"__typename": "Blob"}
+            entries.append(entry)
+        return {"__typename": "Tree", "oid": oid, "entries": entries}
+
+    def atomic_checkpoint(self, value):
+        if set(value) != {"branch", "expectedHeadOid", "clientMutationId", "message", "fileChanges"} or value["branch"] != {"id": "REF_node"}:
+            raise ValueError("atomic-checkpoint-input")
+        reference, = [r for r in self.refs if r.startswith("refs/heads/contract-scribe/coordination/")]
+        before = value["expectedHeadOid"]
+        if self.refs[reference] != before:
+            return {"data": None, "errors": [{"message": "conflict", "type": "CONFLICT"}]}
+        if set(value["message"]) != {"headline", "body"} or set(value["fileChanges"]) != {"additions"}:
+            raise ValueError("atomic-checkpoint-shape")
+        root = self.trees[self.commits[before]["tree"]["sha"]]
+        if len(root) != 1 or root[0][:2] != (".contract-scribe", "040000"):
+            raise ValueError("atomic-checkpoint-root")
+        leaf = {p: (p, m, o) for p, m, o in self.trees[root[0][2]]}
+        paths = set()
+        allowed = {"coordination-state-v1.json", "checkpoint.json", "plan.json", "archive-predecessor.json", "publication-event.json"}
+        for file in value["fileChanges"]["additions"]:
+            if set(file) != {"path", "contents"} or not file["path"].startswith(".contract-scribe/"):
+                raise ValueError("atomic-checkpoint-file")
+            path = file["path"][17:]
+            if path not in allowed or path in paths:
+                raise ValueError("atomic-checkpoint-path")
+            paths.add(path)
+            leaf[path] = (path, "100644", self.add_blob(base64.b64decode(file["contents"], validate=True)))
+        if "coordination-state-v1.json" not in paths:
+            raise ValueError("atomic-checkpoint-state")
+        tree = self.add_tree([(".contract-scribe", "040000", self.add_tree(list(leaf.values())))])
+        import datetime
+        date = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        stamp = int(date.timestamp())
+        message = value["message"]["headline"] + "\n\n" + value["message"]["body"]
+        author = {"name": "github-actions[bot]", "email": "41898282+github-actions[bot]@users.noreply.github.com", "date": date.isoformat()}
+        committer = {"name": "GitHub", "email": "noreply@github.com", "date": date.isoformat()}
+        headers = f"tree {tree}\nparent {before}\nauthor {author['name']} <{author['email']}> {stamp} +0000\ncommitter {committer['name']} <{committer['email']}> {stamp} +0000\n"
+        payload = headers + "\n" + message
+        signature = "-----BEGIN PGP SIGNATURE-----\nsynthetic-action-wire-fixture\n-----END PGP SIGNATURE-----\n"
+        raw = headers + "gpgsig " + signature.rstrip("\n").replace("\n", "\n ") + "\n\n" + message
+        oid = object_oid("commit", raw.encode())
+        self.commits[oid] = {"sha": oid, "tree": {"sha": tree}, "parents": [{"sha": before}],
+            "message": message, "author": author, "committer": committer,
+            "checkpointAuthor": {"__typename": "User", "id": "MDM6Qm90NDE4OTgyODI=", "databaseId": 41898282, "login": "github-actions[bot]"},
+            "checkpointSignature": {"__typename": "GpgSignature", "isValid": True, "state": "VALID",
+                "wasSignedByGitHub": True, "payload": payload, "signature": signature},
+            "verification": {"verified": True, "reason": "valid", "payload": payload, "signature": signature}}
+        self.refs[reference] = oid
+        return {"data": {"createCommitOnBranch": {"clientMutationId": value["clientMutationId"]}}}
+
     def commit_response(self, raw):
-        response = dict(raw)
+        response = {key: raw[key] for key in ("sha", "tree", "parents", "message", "author", "committer")}
+        if "verification" in raw:
+            response["verification"] = raw["verification"]
         if response["message"].endswith("\n"):
             response["message"] = response["message"][:-1]
         return response
@@ -250,6 +395,11 @@ def serve(config_path, ready_file, log_file, fail_file):
                 return 201, state.commit_response(state.commits[oid])
             if path == "/graphql":
                 query = body.get("query", "")
+                compact = "".join(query.split())
+                if compact in ("".join(CURRENT_CHECKPOINT_QUERY.split()), "".join(HISTORICAL_CHECKPOINT_QUERY.split())):
+                    return 200, state.checkpoint_snapshot(body["variables"])
+                if query == "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){clientMutationId}}":
+                    return 200, state.atomic_checkpoint(body["variables"]["input"])
                 if query != ("mutation($input:UpdateRefsInput!)"
                              "{updateRefs(input:$input){clientMutationId}}"):
                     fail("graphql-query")

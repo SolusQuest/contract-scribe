@@ -195,14 +195,22 @@ public sealed partial class GitHubProposalCliProcessTests
                     entry => ".contract-scribe/" + entry.Path,
                     entry => entry.Path == GitHubCoordinationObjects.StatePath ? prepared.StateBytes.ToArray() : server.Blobs[entry.Oid]);
                 var tree = server.BuildTree(files);
-                var parent = server.Commits[reference.Value];
+                // Signed parents have different actor/time bytes. This intentionally legacy
+                // negative document must use its own deterministic actor metadata;
+                // AddCommit still independently hashes the actual new Git object.
+                var actor = new JsonObject
+                {
+                    ["name"] = GitHubCoordinationObjects.ActorName,
+                    ["email"] = GitHubCoordinationObjects.ActorEmail,
+                    ["date"] = GitHubCoordinationObjects.ActorDate.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", System.Globalization.CultureInfo.InvariantCulture)
+                };
                 var oid = server.AddCommit(new JsonObject
                 {
                     ["tree"] = tree,
                     ["parents"] = new JsonArray(reference.Value),
                     ["message"] = prepared.Message,
-                    ["author"] = parent["author"]!.DeepClone(),
-                    ["committer"] = parent["committer"]!.DeepClone(),
+                    ["author"] = actor.DeepClone(),
+                    ["committer"] = actor.DeepClone(),
                 });
                 Assert.Equal(prepared.CommitOid, oid);
                 server.Refs[reference.Key] = oid;
@@ -245,12 +253,12 @@ public sealed partial class GitHubProposalCliProcessTests
         var writes = server.PublicationWrites;
         var providerRequests = fixture.Provider.RequestCount;
         var gates = GateCounts(fixture);
-        var allMutations = server.Requests.Count(request => request.Method != "GET");
+        var allMutations = server.Requests.Count(request => request.Mutation > 0);
         AssertResult(await fixture.Run(), exit, outcome);
         Assert.Equal(providerRequests, fixture.Provider.RequestCount);
         Assert.Equal(gates, GateCounts(fixture));
         if (kind is "reset-accepted" or "reset-origin" or "drop-receipts" or "drop-checkpoint" or "remove-publication" or "older-publication")
-            Assert.Equal(allMutations, server.Requests.Count(request => request.Method != "GET"));
+            Assert.Equal(allMutations, server.Requests.Count(request => request.Mutation > 0));
         Assert.Equal(writes, server.PublicationWrites);
         Assert.Equal(1, server.PrAttempts);
         await fixture.AssertSourceUnchanged();

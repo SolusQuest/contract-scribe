@@ -111,7 +111,7 @@ internal sealed class GitHubProposalPullRequestStore
         if (collection.Failure is { } failed) return CoordinationFailureOf(failed);
         if (collection.Items.Any(pr => pr.Open || "refs/heads/" + pr.Head.Ref == reference))
             return new(GitHubCoordinationFailureKind.Conflict);
-        var proposal = await owner.client.GetRefAsync(reference, token).ConfigureAwait(false);
+        var proposal = await coordination.ReadDataRefAsync(reference, token).ConfigureAwait(false);
         if (proposal.Value is null && proposal.Failure?.Code != GitHubFailureCode.NotFound)
             return new(GitHubCoordinationFailureKind.Transport, proposal.Failure, proposal.Delivery, proposal.Context, proposal.RequiredPermissions);
         if (state.Stage == GitHubCoordinationStage.ContentCreated
@@ -150,10 +150,24 @@ internal sealed class GitHubProposalPullRequestStore
     internal async ValueTask<GitHubProposalResult> PreflightAsync(IGitHubCoordinationReadCapability read,
         CancellationToken token = default)
     {
+        if (coordination.Inspect(read) is null) return Conflict();
+        var fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
+        return fresh.Read is null ? ClaimFailure(fresh)
+            : await ReadAbsenceAfterObservedGateAsync(fresh.Read, token).ConfigureAwait(false);
+    }
+
+    internal ValueTask<GitHubProposalResult> PreflightAsync(IGitHubCoordinationGuardCapability guard,
+        CancellationToken token = default)
+    {
+        var observed = coordination.ConsumeGuardRead(guard, token);
+        return observed is null ? ValueTask.FromResult(Conflict()) : ReadAbsenceAfterObservedGateAsync(observed, token);
+    }
+
+    private async ValueTask<GitHubProposalResult> ReadAbsenceAfterObservedGateAsync(IGitHubCoordinationReadCapability read,
+        CancellationToken token)
+    {
         var context = coordination.Inspect(read);
         if (context is null) return Conflict();
-        var fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
-        if (fresh.Read is null) return ClaimFailure(fresh);
         var reference = GitHubPublicationFactory.CreateProposalRef(client.Authority);
         var unrecordedPredecessorRef = context.State is { Stage: GitHubCoordinationStage.Stale, ProposalCommitOid: null } old
             ? coordination.ProposalRefFor(old) : null;
@@ -165,7 +179,9 @@ internal sealed class GitHubProposalPullRequestStore
             var head = "refs/heads/" + item.Head.Ref;
             if (item.Open || head == reference || head == unrecordedPredecessorRef) return Conflict();
         }
-        fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
+        // Enumeration is a real observation window. Recheck its closing target,
+        // owner and exact head physically; no prior guard authorizes a send.
+        var fresh = await coordination.RecheckAsync(read, token).ConfigureAwait(false);
         return fresh.Read is null ? ClaimFailure(fresh) : new(GitHubProposalOutcome.Absent,
             Absence: fresh.State is { } state ? new Absence(this, state) : null);
     }
@@ -288,7 +304,7 @@ internal sealed class GitHubProposalPullRequestStore
         if (final.State.HeadOid != state.HeadOid || final.State.Repository != state.Repository) return Conflict();
         proposal = await VerifyProposalAsync(state, expected, verified, cancellationToken).ConfigureAwait(false);
         if (proposal is not null) return proposal;
-        var finalTarget = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
+        var finalTarget = await coordination.ReadDataRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (finalTarget.Value is null) return Failed(finalTarget);
         if (candidate.Open && finalTarget.Value.Oid != state.TargetCommitOid
             && classified.Outcome != GitHubProposalOutcome.StaleDraft) return new(GitHubProposalOutcome.Conflict,
@@ -327,7 +343,7 @@ internal sealed class GitHubProposalPullRequestStore
     {
         headMismatch = false;
         var source = coordination.CreationSource(state)!;
-        if (pr.Author != publisher || pr.Head.Repository != state.Repository || pr.BaseRepository != state.Repository
+        if (!GitHubPublicationPrincipal.SameActor(pr.Author, publisher) || pr.Head.Repository != state.Repository || pr.BaseRepository != state.Repository
             || "refs/heads/" + pr.Head.Ref != expected.Ref
             || "refs/heads/" + pr.BaseRef != state.TargetRef || pr.Title != metadata.Title || pr.Body != metadata.Body
             || pr.MaintainerCanModify != false || pr.Merged is null
@@ -386,16 +402,21 @@ internal sealed class GitHubProposalPullRequestStore
     private async ValueTask<GitHubProposalResult?> VerifyProposalAsync(IGitHubCoordinationStateCapability state,
         GitHubProposalHead expected, IGitHubInspectedProposal? verified, CancellationToken cancellationToken)
     {
-        var reference = await client.GetRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
+        var reference = await coordination.ReadDataRefAsync(expected.Ref, cancellationToken).ConfigureAwait(false);
         if (reference.Value is null) return Failed(reference);
         if (reference.Value.Oid != expected.CommitOid)
             return await ClassifyHeadMismatchAsync(state, expected, reference.Value.Oid, verified, cancellationToken).ConfigureAwait(false);
-        var commit = await client.GetCommitAsync(expected.CommitOid, cancellationToken).ConfigureAwait(false);
+        var source = coordination.CreationSource(state);
+        var deterministic = source is null ? null : ContractScribe.GitHub.GitData.GitHubProposalObjects.Commit(
+            expected.TreeOid, source.TargetCommitOid, source.OperationCommitmentSha256, expected.Ref.Split('/')[^1]);
+        var commit = deterministic?.ExpectedOid == expected.CommitOid
+            ? await coordination.ReadVerifiedProposalCommitAsync(deterministic, cancellationToken).ConfigureAwait(false)
+            : await client.GetCommitAsync(expected.CommitOid, cancellationToken).ConfigureAwait(false);
         if (commit.Value is null) return Failed(commit);
         if (commit.Value.TreeOid != expected.TreeOid) return Conflict();
-        var tree = await client.GetTreeAsync(expected.TreeOid, cancellationToken).ConfigureAwait(false);
+        var tree = await coordination.ReadVerifiedProposalTreeAsync(expected.TreeOid, cancellationToken).ConfigureAwait(false);
         if (tree.Value is null) return Failed(tree);
-        var target = await client.GetRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
+        var target = await coordination.ReadDataRefAsync(state.TargetRef, cancellationToken).ConfigureAwait(false);
         if (target.Value is null) return Failed(target);
         // A merged PR may legitimately advance the target. Eligibility is checked after classification.
         return null;
@@ -416,7 +437,7 @@ internal sealed class GitHubProposalPullRequestStore
         list.Id == detail.Id && list.NodeId == detail.NodeId && list.Number == detail.Number
         && list.Open == detail.Open && list.Draft == detail.Draft && list.MergedAt == detail.MergedAt
         && list.ClosedAt == detail.ClosedAt && list.CreatedAt == detail.CreatedAt
-        && list.Title == detail.Title && list.Body == detail.Body && list.Author == detail.Author
+        && list.Title == detail.Title && list.Body == detail.Body && GitHubPublicationPrincipal.SameActor(list.Author, detail.Author)
         && list.Head == detail.Head && list.BaseRepository == detail.BaseRepository
         && list.BaseRef == detail.BaseRef && list.BaseOid == detail.BaseOid
         && (list.Merged is null || list.Merged == detail.Merged)

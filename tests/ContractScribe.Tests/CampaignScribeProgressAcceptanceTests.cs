@@ -20,23 +20,31 @@ public sealed partial class CampaignStateContractTests
     }
 
     [Theory]
-    [InlineData(false, false, false, null, null)]
-    [InlineData(true, false, false, null, null)]
-    [InlineData(false, true, false, null, null)]
-    [InlineData(true, true, false, null, null)]
-    [InlineData(false, false, true, null, null)]
-    [InlineData(false, false, true, "ProposalInvalid", null)]
-    [InlineData(false, false, true, "BudgetExhausted", null)]
-    [InlineData(false, false, true, "Timeout", null)]
-    [InlineData(false, false, true, "HostFailure", null)]
-    [InlineData(false, false, true, "CallerCancelled", null)]
-    [InlineData(false, false, true, "ShutdownCancelled", null)]
-    [InlineData(false, false, false, null, "equality")]
-    [InlineData(false, false, false, null, "overrun")]
-    [InlineData(false, false, false, null, "elapsed")]
-    [InlineData(false, false, false, null, "finished-subset")]
-    [InlineData(false, false, true, "TimeoutNoSibling", null)]
-    public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, string? hostRejection, string? pauseBoundary)
+    [InlineData(false, false, false, null, null, false)]
+    [InlineData(true, false, false, null, null, false)]
+    [InlineData(false, true, false, null, null, false)]
+    [InlineData(true, true, false, null, null, false)]
+    [InlineData(false, false, true, null, null, false)]
+    [InlineData(false, false, true, "ProposalInvalid", null, false)]
+    [InlineData(false, false, true, "BudgetExhausted", null, false)]
+    [InlineData(false, false, true, "Timeout", null, false)]
+    [InlineData(false, false, true, "HostFailure", null, false)]
+    [InlineData(false, false, true, "CallerCancelled", null, false)]
+    [InlineData(false, false, true, "ShutdownCancelled", null, false)]
+    [InlineData(false, false, false, null, "equality", false)]
+    [InlineData(false, false, false, null, "overrun", false)]
+    [InlineData(false, false, false, null, "elapsed", false)]
+    [InlineData(false, false, false, null, "finished-subset", false)]
+    [InlineData(false, false, true, "TimeoutNoSibling", null, false)]
+    [InlineData(false, false, false, null, null, true)]
+    [InlineData(true, false, false, null, null, true)]
+    [InlineData(false, true, false, null, null, true)]
+    [InlineData(true, true, false, null, null, true)]
+    [InlineData(false, false, false, null, "equality", true)]
+    [InlineData(false, false, false, null, "overrun", true)]
+    [InlineData(false, false, false, null, "elapsed", true)]
+    [InlineData(false, false, false, null, "finished-subset", true)]
+    public async Task One_shared_session_durably_accepts_a_non_anchor_member_and_preserves_the_live_grant(bool skipSecond, bool freshResume, bool unconfirmedHost, string? hostRejection, string? pauseBoundary, bool composedProgress)
     {
         var noSibling = hostRejection == "TimeoutNoSibling";
         var subset = pauseBoundary == "finished-subset";
@@ -178,9 +186,30 @@ public sealed partial class CampaignStateContractTests
                 Assert.Null(completed.Artifact.State.ActiveReservation);
                 return;
             }
-            var transition = CampaignStateReducer.AcceptScribeSubmission(invocation, validation.Submission);
+            var beforeMember = invocation.AcceptedCheckpoint.Artifact;
+            var prospectiveReceipt = DocumentationScribeValidation.AcknowledgeSubmission(validation.Submission,
+                new(request.ArtifactSha256, members[index].TargetId, validation.Submission.ContentSha256,
+                    DocumentationScribeAcknowledgementStage.DurablyRecorded));
+            var prospectiveProgress = DocumentationScribeValidation.CreateProgressNotification(request, attempt,
+                beforeMember.State.ScribeProgress!.RepairCount, beforeMember.State.ScribeProgress.NextSequence,
+                request.ExecutableTargetIds, receipts.Append(prospectiveReceipt), [], false);
+            if (composedProgress)
+            {
+                var missingMember = DocumentationScribeValidation.CreateProgressNotification(request, attempt,
+                    beforeMember.State.ScribeProgress.RepairCount, beforeMember.State.ScribeProgress.NextSequence,
+                    request.ExecutableTargetIds, receipts, [], false);
+                Assert.Equal(CampaignTransitionFailure.InvalidCorrelation,
+                    CampaignStateReducer.AcceptScribeSubmissionWithProgress(invocation, validation.Submission, missingMember).Failure);
+                Assert.Equal(beforeMember.Sha256, invocation.AcceptedCheckpoint.Artifact.Sha256);
+            }
+            var transition = composedProgress
+                ? CampaignStateReducer.AcceptScribeSubmissionWithProgress(invocation, validation.Submission, prospectiveProgress)
+                : CampaignStateReducer.AcceptScribeSubmission(invocation, validation.Submission);
             Assert.Equal(CampaignTransitionKind.Applied, transition.Kind);
+            Assert.Equal(beforeMember.CheckpointRevision + 1, transition.Artifact.CheckpointRevision);
             Assert.True(await coordinator.AcceptHostProgressAsync(transition, default));
+            if (composedProgress)
+                Assert.Equal(prospectiveProgress.ProgressSha256, invocation.AcceptedCheckpoint.Artifact.State.ScribeProgress!.LastProgressSha256);
             var state = invocation.AcceptedCheckpoint.Artifact.State;
             if (pauseBoundary is "equality" or "overrun" or "elapsed")
             {
@@ -267,8 +296,9 @@ public sealed partial class CampaignStateContractTests
         }
         var progress = DocumentationScribeValidation.CreateProgressNotification(request, attempt, 1, 2,
             request.ExecutableTargetIds, receipts, [], false);
+        var alreadyRecorded = invocation.AcceptedCheckpoint.Artifact.State.ScribeProgress!.LastProgressSha256 == progress.ProgressSha256;
         var recorded = CampaignStateReducer.AcceptScribeProgress(invocation, progress);
-        Assert.Equal(CampaignTransitionKind.Applied, recorded.Kind);
+        Assert.Equal(alreadyRecorded ? CampaignTransitionKind.Unchanged : CampaignTransitionKind.Applied, recorded.Kind);
         Assert.True(await coordinator.AcceptHostProgressAsync(recorded, default));
         Assert.True(await coordinator.Scope.CompleteHostAsync(permit, default));
         if (subset)

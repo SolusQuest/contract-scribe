@@ -41,53 +41,53 @@ public sealed partial class GitHubCoordinationRefTests
         var before = PublicationCheckpointFixture("campaign-1");
         var next = CampaignStateReducer.Stop(before, CampaignTerminalKind.Cancelled).Artifact;
         var writes = remote.RefMutationAttempts;
-        var blobPosts = 0;
-        var treePosts = 0;
-        string? objectPath = null;
+        var mutationObserved = false;
         var observations = 0;
         handler.AfterResponse = async (request, response) =>
         {
-            var path = request.RequestUri!.AbsolutePath;
-            if (request.Method == HttpMethod.Post && path.StartsWith("/repos/Owner/repo/git/", StringComparison.Ordinal))
+            if (IsRefMutation(request))
             {
-                var selected = path.EndsWith("/blobs", StringComparison.Ordinal) ? ++blobPosts == 2 && component == "document"
-                    : path.EndsWith("/trees", StringComparison.Ordinal) ? (++treePosts == 1 ? component == "leaf" : component == "root")
-                    : path.EndsWith("/commits", StringComparison.Ordinal) && component == "commit";
-                if (selected)
-                {
-                    var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
-                    objectPath = path + "/" + body["sha"]!.GetValue<string>();
-                    if (fault == "lost-ack")
-                    {
-                        response.Dispose();
-                        return new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
-                    }
-                }
-            }
-            if (request.Method == HttpMethod.Get && path == objectPath)
-            {
-                observations++;
-                if (fault == "missing")
+                mutationObserved = true;
+                if (fault == "lost-ack")
                 {
                     response.Dispose();
-                    return new HttpResponseMessage(System.Net.HttpStatusCode.NotFound);
+                    return new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError);
                 }
-                if (fault == "mismatch")
+            }
+            if (mutationObserved && IsCheckpointQuery(request, currentOnly: true))
+            {
+                observations++;
+                var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
+                var repository = body["data"]!["repository"]!;
+                var commit = repository["coord"]!["target"]!;
+                var root = commit["tree"]!;
+                var leaf = root["entries"]![0]!["object"]!;
+                Assert.NotNull(component == "document" ? repository["state"] : component == "leaf" ? leaf : component == "root" ? root : commit);
+                if (fault == "missing")
                 {
-                    var body = System.Text.Json.Nodes.JsonNode.Parse(await response.Content.ReadAsStringAsync())!;
-                    body["sha"] = new string('f', 40);
-                    response.Content.Dispose();
-                    response.Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
+                    if (component == "document") repository["state"] = null;
+                    else if (component == "leaf") root["entries"]![0]!["object"] = null;
+                    else if (component == "root") commit["tree"] = null;
+                    else repository["coord"]!["target"] = null;
                 }
+                else if (fault == "mismatch")
+                {
+                    if (component == "document") repository["state"]!["oid"] = new string('f', 40);
+                    else if (component == "leaf") leaf["oid"] = new string('f', 40);
+                    else if (component == "root") root["oid"] = new string('f', 40);
+                    else commit["message"] = "synthetic signed-metadata substitution";
+                }
+                response.Content.Dispose();
+                response.Content = new StringContent(body.ToJsonString(), System.Text.Encoding.UTF8, "application/json");
             }
             return response;
         };
         var result = await store.ReplaceIfCurrentAsync(before.CheckpointRevision, before.Sha256,
             next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default);
-        Assert.NotNull(objectPath);
+        Assert.True(mutationObserved);
         Assert.True(observations > 0);
         Assert.Equal(fault == "lost-ack", result.Kind == CampaignCheckpointWriteKind.Written);
-        Assert.Equal(writes + (fault == "lost-ack" ? 1 : 0), remote.RefMutationAttempts);
+        Assert.Equal(writes + 1, remote.RefMutationAttempts); // Atomic effect may exist; invalid readback still grants no Writer.
         if (fault == "lost-ack") Assert.Equal(next.Sha256, result.Readback!.Sha256);
         else Assert.Null(result.Readback);
     }
@@ -106,12 +106,12 @@ public sealed partial class GitHubCoordinationRefTests
         var before = PublicationCheckpointFixture("campaign-1");
         var next = CampaignStateReducer.Stop(before, CampaignTerminalKind.Cancelled).Artifact;
         var writes = remote.RefMutationAttempts;
-        remote.LoseResponse = LostMutation.Blob;
+        remote.LoseResponse = LostMutation.Ref;
         remote.LostBlobReadback = readback;
         var result = await store.ReplaceIfCurrentAsync(before.CheckpointRevision, before.Sha256,
             next.ExactUtf8Json.AsMemory(), next.CheckpointRevision, next.Sha256, default);
         Assert.Equal(readback == LostReadback.Exact, result.Kind == CampaignCheckpointWriteKind.Written);
-        Assert.Equal(writes + (readback == LostReadback.Exact ? 1 : 0), remote.RefMutationAttempts);
+        Assert.Equal(writes + 1, remote.RefMutationAttempts);
         if (readback == LostReadback.Exact) Assert.Equal(next.Sha256, result.Readback!.Sha256);
         else Assert.Null(result.Readback);
     }
@@ -136,7 +136,7 @@ public sealed partial class GitHubCoordinationRefTests
             if (!changed && (afterCas
                 ? message.Method == HttpMethod.Get && remote.RefMutationAttempts > writes
                     && message.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/")
-                : message.Method == HttpMethod.Post && message.RequestUri!.AbsolutePath == "/graphql"))
+                : IsRefMutation(message)))
             {
                 changed = true;
                 remote.AppendDocument(document => document with
@@ -179,6 +179,14 @@ public sealed partial class GitHubCoordinationRefTests
         handler.BeforeRequest = request =>
         {
             var path = request.RequestUri!.AbsolutePath;
+            if (IsCheckpointQuery(request, currentOnly: true) && remote.RefMutationAttempts > priorWrites)
+            {
+                observedBlobs++;
+                if (fault == "blob") remote.CorruptBlob(nextBlob);
+                if (fault == "target") remote.TargetHead = Oid('2');
+                if (fault == "ref") remote.ForceCoordinationHead(Oid('9'));
+                if (fault == "expiry") remote.ServerNow = remote.ServerNow.AddSeconds(301);
+            }
             if (request.Method != HttpMethod.Get) return Task.CompletedTask;
             if (path.Contains("/git/commits/", StringComparison.Ordinal))
                 commitGets[path] = commitGets.GetValueOrDefault(path) + 1;
@@ -208,16 +216,18 @@ public sealed partial class GitHubCoordinationRefTests
         Assert.Equal(next.Artifact.CheckpointRevision, readback.CheckpointRevision);
         Assert.True(readback.ExactUtf8Json.AsSpan().SequenceEqual(next.Artifact.ExactUtf8Json.AsSpan()));
         // The predecessor and actual successor are each authenticated once in this
-        // conditional transaction. A later independent read starts a fresh proof.
-        Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(priorHead, StringComparison.Ordinal)).Value);
+        // conditional transaction. A later proof refreshes mutable state while
+        // retaining this owner's authenticated immutable object data.
+        Assert.DoesNotContain(commitGets, pair => pair.Key.EndsWith(priorHead, StringComparison.Ordinal));
         Assert.All(commitGets.Where(pair => !pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)),
             pair => Assert.Equal(1, pair.Value));
-        // The actual creation GET authenticates the immutable new document
-        // inside this conditional proof; mutable refs and checkpoint remain fresh.
-        Assert.Equal(1, commitGets.Single(pair => pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal)).Value);
+        // The physical query independently authenticates GitHub's actual signed
+        // commit; the mutation response carries no OID or content proof.
+        Assert.DoesNotContain(commitGets, pair => pair.Key.EndsWith(remote.CoordinationHead!, StringComparison.Ordinal));
         var first = commitGets.ToDictionary();
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
-        Assert.Contains(first, pair => commitGets[pair.Key] > pair.Value);
+        Assert.All(first, pair => Assert.Equal(pair.Value, commitGets[pair.Key]));
+        Assert.Equal(2, observedBlobs);
     }
 
     [Fact]
@@ -235,8 +245,7 @@ public sealed partial class GitHubCoordinationRefTests
         var priorWrites = remote.RefMutationAttempts;
         handler.BeforeRequest = request =>
         {
-            if (remote.RefMutationAttempts > priorWrites && request.Method == HttpMethod.Get
-                && request.RequestUri!.AbsolutePath.EndsWith(blob, StringComparison.Ordinal))
+            if (remote.RefMutationAttempts > priorWrites && IsCheckpointQuery(request, currentOnly: true))
                 remote.ServerNow = remote.ServerNow.AddSeconds(297);
             return Task.CompletedTask;
         };
@@ -255,7 +264,7 @@ public sealed partial class GitHubCoordinationRefTests
     }
 
     [Fact]
-    public async Task Checkpoint_proof_reuses_authenticated_blobs_only_until_the_next_read_gate()
+    public async Task Checkpoint_read_gate_refreshes_current_state_and_checkpoint_but_can_reuse_immutable_predecessors()
     {
         var remote = new CoordinationRemote();
         using var handler = new CheckpointInterceptHandler(remote);
@@ -263,22 +272,20 @@ public sealed partial class GitHubCoordinationRefTests
         await using var store = GitHubCoordinationStore.Create(client);
         Assert.Equal(CampaignCheckpointReadKind.Found, await store.AcquireCheckpointAsync(default));
         var checkpoint = SeedPublicationCheckpoint(remote);
-        var blobReads = new Dictionary<string, int>(StringComparer.Ordinal);
+        var currentQueries = 0;
+        var historicalQueries = 0;
         handler.BeforeRequest = request =>
         {
-            if (request.Method == HttpMethod.Get && request.RequestUri!.AbsolutePath.Contains("/git/blobs/", StringComparison.Ordinal))
-            {
-                var path = request.RequestUri.AbsolutePath;
-                blobReads[path] = blobReads.GetValueOrDefault(path) + 1;
-            }
+            if (IsCheckpointQuery(request, currentOnly: true)) currentQueries++;
+            else if (IsCheckpointQuery(request)) historicalQueries++;
             return Task.CompletedTask;
         };
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
-        Assert.Equal(1, blobReads.Single(pair => pair.Key.EndsWith(checkpoint.Oid, StringComparison.Ordinal)).Value);
-        Assert.All(blobReads.Values, count => Assert.Equal(1, count));
-        var first = blobReads.ToDictionary();
+        Assert.Equal(1, currentQueries); // Actual packet includes current claim and checkpoint bytes.
+        var firstHistory = historicalQueries;
         Assert.Equal(CampaignCheckpointReadKind.Found, (await store.ReadAsync(default)).Kind);
-        Assert.All(first, pair => Assert.Equal(pair.Value + 1, blobReads[pair.Key]));
+        Assert.Equal(2, currentQueries);
+        Assert.Equal(firstHistory, historicalQueries); // Positive historical payloads are reused, with semantics rechecked.
         var mutations = remote.RefMutationAttempts;
         remote.Tamper(ObjectTamper.Blob);
         Assert.Equal(CampaignCheckpointReadKind.Invalid, (await store.ReadAsync(default)).Kind);
@@ -340,7 +347,7 @@ public sealed partial class GitHubCoordinationRefTests
             handler.BeforeRequest = async request =>
             {
                 if (request.RequestUri!.AbsolutePath.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)
-                    && ++reads == 2)
+                    && ++reads == 1)
                 {
                     release = first.DisposeAsync().AsTask();
                     await release;

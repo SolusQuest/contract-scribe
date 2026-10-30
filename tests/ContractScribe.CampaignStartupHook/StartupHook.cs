@@ -63,6 +63,10 @@ internal static class StartupHook
             {
                 return;
             }
+            var requestedOccurrence = Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_CAMPAIGN_HOOK_OCCURRENCE");
+            var occurrence = 1;
+            if (requestedOccurrence is not null && (!int.TryParse(requestedOccurrence, out occurrence) || occurrence is < 1 or > 4096)) return;
+            var reachedCount = 0;
             var register = type.GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!;
             Action<string> observer = reached =>
             {
@@ -70,6 +74,7 @@ internal static class StartupHook
                 {
                     return;
                 }
+                if (requestedOccurrence is not null && Interlocked.Increment(ref reachedCount) != occurrence) return;
                 var temporaryPath = acknowledgementPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 try
                 {
@@ -124,6 +129,9 @@ internal static class StartupHook
                 ? int.Parse(value, System.Globalization.CultureInfo.InvariantCulture) : null;
             _ = hook.GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
                 .Invoke(null, [new Uri(endpoint), null, milliseconds]);
+            if (Environment.GetEnvironmentVariable("CONTRACTSCRIBE_TEST_GITHUB_GIT_ENDPOINT") is { } gitEndpoint)
+                hook.GetMethod("RegisterGitOrigin", BindingFlags.Static | BindingFlags.NonPublic)!
+                    .Invoke(null, [new Uri(gitEndpoint)]);
         }
         var boundaries = cli.GetType("ContractScribe.Cli.GitHubProposalProcessHooks", true)!;
         var deadlineBoundary = fault switch

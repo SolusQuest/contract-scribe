@@ -6,6 +6,10 @@ using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.GitHub.GitData;
 
+internal sealed record GitHubProposalObjectGraph(string RootOid,
+    Dictionary<string, ImmutableArray<GitHubTreeEntry>> Trees,
+    Dictionary<string, GitHubTreeEntry> Files);
+
 internal static class GitHubProposalObjects
 {
     internal static readonly UTF8Encoding Utf8 = new(false, true);

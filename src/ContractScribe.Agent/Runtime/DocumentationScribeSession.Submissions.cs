@@ -81,6 +81,8 @@ internal sealed partial class DocumentationScribeSession
             using var deadline = new CancellationTokenSource(TimeSpan.FromMilliseconds(Math.Max(1, permit.RemainingMilliseconds)), State.Scope.Allowance.Clock);
             using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, State.CallerCancellation, deadline.Token);
             permit.ObserveCancellation(deadline.Token, token, State.CallerCancellation, linked.Token);
+            string? acknowledgedProgressSha256 = null;
+            var progressAcknowledgementFailed = false;
             try
             {
                 _ = new UTF8Encoding(false, true).GetString(frame.Bytes.Span);
@@ -114,8 +116,11 @@ internal sealed partial class DocumentationScribeSession
                 var acknowledgements = new List<object>();
                 var rejected = false;
                 var seen = new HashSet<string>(StringComparer.Ordinal);
+                var itemOrdinal = 0;
+                var itemCount = root.GetProperty("items").GetArrayLength();
                 foreach (var item in root.GetProperty("items").EnumerateArray())
                 {
+                    var lastItem = ++itemOrdinal == itemCount;
                     if (linked.IsCancellationRequested) break;
                     string? targetId = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("targetId", out var id)
                         && id.ValueKind == JsonValueKind.String ? id.GetString() : null;
@@ -155,12 +160,25 @@ internal sealed partial class DocumentationScribeSession
                     State.Submissions = State.Submissions.SetItem(targetId, received);
                     State.TargetFailures = State.TargetFailures.Remove(targetId);
                     DocumentationScribeSubmissionAcknowledgement? acknowledgement;
+                    string? expectedProgressSha256 = null;
                     if (submissionHost is null)
                         acknowledgement = new(State.Request.ArtifactSha256, targetId,
                             validation.ContentSha256, DocumentationScribeAcknowledgementStage.Validated);
                     else
                     {
-                        var pending = submissionHost.AcknowledgeAsync(validation, linked.Token).AsTask();
+                        // This is a proposed complete snapshot, not a durable
+                        // receipt. Only the Host's matching physical acceptance
+                        // below can promote Received and confirm its progress.
+                        var proposed = DocumentationScribeValidation.AcknowledgeSubmission(validation,
+                            new(State.Request.ArtifactSha256, targetId, validation.ContentSha256,
+                                DocumentationScribeAcknowledgementStage.DurablyRecorded));
+                        var progress = DocumentationScribeValidation.CreateProgressNotification(State.Request, State.AttemptId,
+                            Math.Min(DocumentationScribeValidation.MaximumInvalidSubmissions, State.RepairCount + (rejected ? 1 : 0)),
+                            lastItem && State.NextSequence < int.MaxValue ? State.NextSequence + 1 : State.NextSequence,
+                            State.AttemptedTargets, State.Submissions.SetItem(targetId, proposed).Values,
+                            State.TargetFailures.Values, stopped: false);
+                        var pending = submissionHost.AcknowledgeAsync(validation, progress, linked.Token).AsTask();
+                        expectedProgressSha256 = progress.ProgressSha256;
                         try { acknowledgement = await pending.WaitAsync(linked.Token).ConfigureAwait(false); }
                         catch (OperationCanceledException)
                         {
@@ -179,6 +197,18 @@ internal sealed partial class DocumentationScribeSession
                     // A correlated completed receipt remains a fact even if observation was just cancelled.
                     var accepted = DocumentationScribeValidation.AcknowledgeSubmission(validation, acknowledgement);
                     State.Submissions = State.Submissions.SetItem(targetId, accepted);
+                    if (expectedProgressSha256 is not null)
+                    {
+                        // A separately correlated member receipt remains a
+                        // fact even when its progress acknowledgement is bad.
+                        if (acknowledgement.ProgressSha256 != expectedProgressSha256)
+                        {
+                            progressAcknowledgementFailed = true;
+                            linked.Token.ThrowIfCancellationRequested();
+                            throw new InvalidOperationException("scribe.submission.progress-unconfirmed");
+                        }
+                        acknowledgedProgressSha256 = expectedProgressSha256;
+                    }
                     acknowledgements.Add(Ack(accepted, "acknowledged"));
                     if (accepted.Stage == DocumentationScribeAcknowledgementStage.Received)
                     { Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token); break; }
@@ -228,32 +258,35 @@ internal sealed partial class DocumentationScribeSession
             {
                 // A completed snapshot is reported within the existing TerminalSubmission permit.
                 // No second permit, renewed deadline, transcript or Host capability enters the Agent.
-                if (submissionHost is not null && !linked.IsCancellationRequested)
+                if (submissionHost is not null && !linked.IsCancellationRequested && !progressAcknowledgementFailed)
                 {
                     var progress = DocumentationScribeValidation.CreateProgressNotification(State.Request, State.AttemptId,
                         State.RepairCount, State.NextSequence, State.AttemptedTargets, State.Submissions.Values,
                         State.TargetFailures.Values, Result is not null, finished: Result?.Stop is DocumentationScribeFinishedTerminal);
-                    Task<DocumentationScribeProgressAcknowledgement?>? pending = null;
-                    try
+                    if (acknowledgedProgressSha256 != progress.ProgressSha256)
                     {
-                        pending = submissionHost.ObserveProgressAsync(progress, linked.Token).AsTask();
-                        var acknowledgement = await pending.WaitAsync(linked.Token).ConfigureAwait(false);
-                        if (acknowledgement?.ProgressSha256 != progress.ProgressSha256)
+                        Task<DocumentationScribeProgressAcknowledgement?>? pending = null;
+                        try
                         {
-                            linked.Token.ThrowIfCancellationRequested();
+                            pending = submissionHost.ObserveProgressAsync(progress, linked.Token).AsTask();
+                            var acknowledgement = await pending.WaitAsync(linked.Token).ConfigureAwait(false);
+                            if (acknowledgement?.ProgressSha256 != progress.ProgressSha256)
+                            {
+                                linked.Token.ThrowIfCancellationRequested();
+                                Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
+                            }
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            if (pending is not null) _ = DocumentationScribeTaskObservation.ObserveLateAsync(pending);
+                            if (!token.IsCancellationRequested && !State.CallerCancellation.IsCancellationRequested)
+                                State.Scope.ObserveDeadline(permit);
+                            Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
+                        }
+                        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+                        {
                             Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
                         }
-                    }
-                    catch (OperationCanceledException)
-                    {
-                        if (pending is not null) _ = DocumentationScribeTaskObservation.ObserveLateAsync(pending);
-                        if (!token.IsCancellationRequested && !State.CallerCancellation.IsCancellationRequested)
-                            State.Scope.ObserveDeadline(permit);
-                        Result = new DocumentationScribeTerminalReducer().CommitFailure(State, token, DocumentationScribeFailureCode.Timeout);
-                    }
-                    catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
-                    {
-                        Result = new DocumentationScribeTerminalReducer().CommitInternal(State, token);
                     }
                 }
             }

@@ -8,6 +8,11 @@ using System.Text.Json;
 using ContractScribe.Core;
 using ContractScribe.Roslyn;
 
+if (args.Length is 1 or 2 && args[0] == "toolchain-snapshot")
+{
+    return await ToolchainSnapshotDriver.RunAsync(args.Length == 2 ? args[1] : null);
+}
+
 if (args is ["native-directory-budget", var budgetRoot])
 {
     return NativeDirectoryBudgetProbe.Run(budgetRoot);

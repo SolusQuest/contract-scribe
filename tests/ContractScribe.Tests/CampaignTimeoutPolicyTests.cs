@@ -7,6 +7,38 @@ namespace ContractScribe.Tests;
 
 public sealed partial class CampaignStateContractTests
 {
+    [Fact]
+    public async Task Host_closure_must_cover_request_preparation_before_the_next_physical_reservation()
+    {
+        var clock = new SolusDeadlineClock();
+        var trial = await SolusTrialAsync(clock: clock, targetMilliseconds: 1000,
+            invocationMilliseconds: 1000, hostMilliseconds: 900,
+            hostTimeouts: DocumentationScribeHostTimeouts.Create(terminalSubmissionMilliseconds: 20));
+        var scope = trial.Coordinator.Scope;
+        scope.BindRuntimeWindow(trial.Request, clock, clock.GetTimestamp());
+        var permit = Assert.IsType<DocumentationScribeHostPermit>(
+            await scope.BeginHostAsync(DocumentationScribeHostOperation.TerminalSubmission, default));
+        Assert.True(permit.TryBeginOperation());
+        var beforeClosure = await CampaignCheckpointAcceptance.AcceptCurrentAsync(trial.Store);
+        Assert.Equal(20, Assert.IsType<CampaignProviderReservation>(beforeClosure.Artifact!.State.ActiveReservation).Exposure.ElapsedMilliseconds);
+        clock.Advance(10);
+        Assert.True(await scope.CompleteHostAsync(permit, default));
+        // The terminal permit is finished, but building the next committed
+        // request can still run before its physical reservation exists.
+        clock.Advance(50);
+        var confirmed = await CampaignCheckpointAcceptance.AcceptCurrentAsync(trial.Store);
+        var recovered = CampaignStateReducer.RetireInterruptedProviderAttempt(confirmed.AcceptedCheckpoint!);
+        Assert.Equal(CampaignTransitionKind.Applied, recovered.Kind);
+        Assert.Equal(0, trial.Store.Dispatches);
+        Assert.True(recovered.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged >= 60);
+        // Simply omitting CompleteHost's write leaves only the old 20ms
+        // exposure, so recovery would undercharge this actual 60ms interval.
+        var omitted = CampaignStateReducer.RetireInterruptedProviderAttempt(beforeClosure.AcceptedCheckpoint!);
+        Assert.Equal(CampaignTransitionKind.Applied, omitted.Kind);
+        Assert.Equal(20, omitted.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved);
+        Assert.True(omitted.Artifact.State.LineageCharges.ActiveElapsedMilliseconds.TotalCharged < 60);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -19,7 +51,7 @@ public sealed partial class CampaignStateContractTests
             checkpointAcceptanceMilliseconds: 1000);
         trial.Coordinator.Scope.BindRuntimeWindow(trial.Request, clock, clock.GetTimestamp());
         var predecessor = trial.Store.Current.ExactUtf8Json.ToArray();
-        trial.Store.BeforeNextRead = () =>
+        trial.Store.BeforeNextComparison = () =>
         {
             if (caller) cancellation.Cancel();
             else clock.Advance(200);

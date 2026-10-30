@@ -1,4 +1,6 @@
 using System.Text;
+using System.Collections.Immutable;
+using ContractScribe.GitHub.GitData;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.GitHub.Coordination;
@@ -6,15 +8,144 @@ namespace ContractScribe.GitHub.Coordination;
 internal sealed partial class GitHubCoordinationStore
 {
     private PublicationPayloadPool? publicationPayloads;
+    private PublicationPayloadPool? checkpointPayloads;
 
-    private ReadProof PublicationProof(GitHubRepositoryIdentity repository, string head, bool effect = false)
+    private ReadProof PublicationProof(GitHubRepositoryIdentity repository, string? head, bool effect = false)
     {
         var pool = publicationPayloads;
+        if (pool is null && invocationOwner is not null && !checkpointStopped
+            && !checkpointLifetime.IsCancellationRequested && !client.HasMutationAuthority)
+        {
+            pool = checkpointPayloads;
+            if (pool is null)
+            {
+                var created = new PublicationPayloadPool(this, repository, checkpointLifetime.Token) { CheckpointScope = true };
+                pool = Interlocked.CompareExchange(ref checkpointPayloads, created, null) ?? created;
+                if (!ReferenceEquals(pool, created)) created.Dispose();
+            }
+        }
         return new(pool?.Matches(repository) == true ? pool : null, head, effect);
     }
 
     private void StopPublicationPayloads() => Interlocked.Exchange(ref publicationPayloads, null)?.Dispose();
+    private void StopCheckpointPayloads() => Interlocked.Exchange(ref checkpointPayloads, null)?.Dispose();
 
+    internal async ValueTask<bool> VerifyObservedProposalIntegrityAsync(GitHubCampaignGeneration generation, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        var verified = await GitHubObservedProposalIntegrity.VerifyAsync(generation, token,
+            (oid, cancellation) => Read(oid, cancellation, client.GetCommitAsync),
+            (oid, cancellation) => Read<GitHubTree>(oid, cancellation,
+                (tree, ct) => client.GetTreeAsync(tree, ct)),
+            (oid, cancellation) => Read(oid, cancellation, client.GetBlobAsync)).ConfigureAwait(false);
+        // This is only a complete immutable content proof. The observer still
+        // physically rechecks PR ownership/lifecycle, pagination and ref fences.
+        // No partial, failed or cancelled content proof warms a later gate.
+        if (verified) proof.Promote(token);
+        return verified;
+
+        async ValueTask<T?> Read<T>(string oid, CancellationToken cancellation,
+            Func<string, CancellationToken, ValueTask<GitHubApiResult<T>>> fetch) where T : GitHubValue
+        {
+            var value = proof.Pool?.Read<T>(oid, cancellation)
+                ?? GitHubObservedProposalIntegrity.Read(await fetch(oid, cancellation).ConfigureAwait(false));
+            if (value is not null) proof.Stage(value, cancellation);
+            return value;
+        }
+    }
+
+    internal async ValueTask<GitHubProposalFailureKind?> VerifyExpectedProposalIntegrityAsync(
+        GitHubCreateCommit expected, ImmutableArray<GitHubCoordinationChangedFile> files,
+        GitHubCommit? actualCommit, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        if (actualCommit is not null) proof.Stage(actualCommit, token);
+        var failure = await GitHubObservedProposalIntegrity.VerifyExpectedAsync(expected, files, token,
+            (oid, ct) => actualCommit is not null && actualCommit.Oid == oid
+                ? ValueTask.FromResult<GitHubCommit?>(actualCommit) : Read(oid, ct, client.GetCommitAsync),
+            (oid, ct) => Read<GitHubTree>(oid, ct, (tree, cancellation) => client.GetTreeAsync(tree, cancellation)),
+            (oid, ct) => Read(oid, ct, client.GetBlobAsync)).ConfigureAwait(false);
+        // Promote only this complete role proof. Actual mutation readback calls
+        // bypass this pool, and an incomplete/cancelled prefix is discarded.
+        if (failure is null) proof.Promote(token);
+        return failure;
+
+        async ValueTask<T?> Read<T>(string oid, CancellationToken cancellation,
+            Func<string, CancellationToken, ValueTask<GitHubApiResult<T>>> fetch) where T : GitHubValue
+        {
+            var value = proof.Pool?.Read<T>(oid, cancellation);
+            if (value is null)
+            {
+                var result = await fetch(oid, cancellation).ConfigureAwait(false);
+                cancellation.ThrowIfCancellationRequested();
+                value = result.Value ?? throw new GitHubCoordinationException(failure:
+                    new(GitHubCoordinationFailureKind.Transport, result.Failure ?? new(GitHubFailureCode.InvalidResponse),
+                        result.Delivery, result.Context, result.RequiredPermissions));
+            }
+            proof.Stage(value, cancellation);
+            return value;
+        }
+    }
+
+    internal async ValueTask<(GitHubProposalObjectGraph? Graph, GitHubProposalFailureKind? Failure)> ReadVerifiedProposalBasisAsync(
+        string rootOid, ImmutableArray<GitHubCoordinationChangedFile> files, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        var result = await GitHubObservedProposalIntegrity.ReadExpectedTreeAsync(rootOid, files, token,
+            (oid, ct) => Read<GitHubTree>(oid, ct, (tree, cancellation) => client.GetTreeAsync(tree, cancellation)),
+            (oid, ct) => Read(oid, ct, client.GetBlobAsync)).ConfigureAwait(false);
+        if (result.Failure is null) proof.Promote(token);
+        return result;
+
+        async ValueTask<T?> Read<T>(string oid, CancellationToken cancellation,
+            Func<string, CancellationToken, ValueTask<GitHubApiResult<T>>> fetch) where T : GitHubValue
+        {
+            var value = proof.Pool?.Read<T>(oid, cancellation);
+            if (value is null)
+            {
+                var observed = await fetch(oid, cancellation).ConfigureAwait(false);
+                cancellation.ThrowIfCancellationRequested();
+                value = observed.Value ?? throw new GitHubCoordinationException(failure:
+                    new(GitHubCoordinationFailureKind.Transport, observed.Failure ?? new(GitHubFailureCode.InvalidResponse),
+                        observed.Delivery, observed.Context, observed.RequiredPermissions));
+            }
+            proof.Stage(value, cancellation);
+            return value;
+        }
+    }
+
+    // R4/R5 may consume only raw objects admitted by a complete content proof.
+    // Cold single-object observations are not promoted here. Principal metadata
+    // outside Git bytes is never carried into the proposal content role.
+    internal async ValueTask<GitHubApiResult<GitHubCommit>> ReadVerifiedProposalCommitAsync(
+        GitHubCreateCommit expected, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        if (GitHubProposalObjects.ObjectOid("commit", GitHubProposalObjects.CommitBytes(expected)) == expected.ExpectedOid
+            && proof.Pool?.Read<GitHubCommit>(expected.ExpectedOid, token) is { } prior
+            && GitHubProposalObjects.ExactCommit(prior, expected))
+            return new(prior with { CheckpointSignature = null }, null, GitHubDelivery.Read);
+        return await client.GetCommitAsync(expected.ExpectedOid, token).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<GitHubApiResult<GitHubTree>> ReadVerifiedProposalTreeAsync(string oid, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        if (proof.Pool?.Read<GitHubTree>(oid, token) is { } prior) return new(prior, null, GitHubDelivery.Read);
+        return await client.GetTreeAsync(oid, token).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<GitHubApiResult<GitHubBlob>> ReadVerifiedProposalBlobAsync(string oid, CancellationToken token)
+    {
+        using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
+        if (proof.Pool?.Read<GitHubBlob>(oid, token) is { } prior) return new(prior, null, GitHubDelivery.Read);
+        return await client.GetBlobAsync(oid, token).ConfigureAwait(false);
+    }
+
+    // Checkpoint acceptance repeatedly authenticates retained publication history.
+    // Reuse its immutable payloads for one confirmed owner, never its mutable
+    // claim/checkpoint bodies or any mutation/readback entitlement. Confirmed
+    // same-owner publication entry may retain these raw positive payloads.
     // The owner binds the exact store/client, whose origin, credential lifetime
     // and read authority cannot be exchanged. Numeric repository identity is
     // checked again for each proof. This pool contains payloads, never rights.
@@ -32,9 +163,32 @@ internal sealed partial class GitHubCoordinationStore
         private long bytes, reservedBytes;
         private int reservedEntries;
         private bool stopped;
+        internal bool CheckpointScope { get; set; }
 
-        private bool Active => !stopped && !execution.IsCancellationRequested && owner.publicationActive && !owner.checkpointStopped
-            && ReferenceEquals(owner.publicationPayloads, this) && owner.client.HasMutationAuthority
+        internal bool EnterPublication(CancellationToken token)
+        {
+            lock (gate)
+            {
+                // The checkpoint gate is held across this handoff. No parsed
+                // proof or partial staging crosses the phase boundary, and a
+                // fresh confirmed owner/ref observation still owns execution.
+                if (!CheckpointScope || stopped || execution.IsCancellationRequested || token.IsCancellationRequested
+                    || staging.Count != 0 || owner.checkpointStopped || !owner.publicationActive
+                    || owner.client.AuthenticatedRepository != repository
+                    || owner.lastWrittenCheckpointReadback is not { } current || !owner.Owns(current.Document)
+                    || current.Reference?.NodeId != owner.client.CheckpointRefNodeId)
+                { Clear(); return false; }
+                execution = token;
+                CheckpointScope = false;
+                return true;
+            }
+        }
+
+        private bool Active => !stopped && !execution.IsCancellationRequested && !owner.checkpointStopped
+            && (CheckpointScope
+                ? owner.invocationOwner is not null && !owner.publicationActive && !owner.client.HasMutationAuthority
+                    && ReferenceEquals(owner.checkpointPayloads, this) && owner.client.CheckpointAuthority is not null
+                : owner.publicationActive && ReferenceEquals(owner.publicationPayloads, this) && owner.client.HasMutationAuthority)
             && owner.client.AuthenticatedRepository == repository;
 
         internal bool Matches(GitHubRepositoryIdentity current)
@@ -125,14 +279,21 @@ internal sealed partial class GitHubCoordinationStore
         };
 
         // Encoded payload plus a conservative per-entry metadata allowance.
-        // Only canonical R3 documents/trees/actors pass admission, so strings,
-        // entry counts and actor projections retain their existing fixed bounds.
+        // R3 canonical documents and fully verified proposal-content objects
+        // retain their transport/tree/actor bounds before positive admission.
         private static long Size(GitHubValue value) => 1024 + (value switch
         {
             GitHubBlob blob => (long)blob.Bytes.Length,
             GitHubTree tree => tree.Entries.Sum(entry => 32L + Encoding.UTF8.GetByteCount(entry.Path)),
             GitHubCommit commit => 512L + Encoding.UTF8.GetByteCount(commit.Message)
-                + commit.Parents.Length * 41L,
+                + commit.Parents.Length * 41L
+                + Encoding.UTF8.GetByteCount(commit.Author.Name) + Encoding.UTF8.GetByteCount(commit.Author.Email)
+                + Encoding.UTF8.GetByteCount(commit.Committer.Name) + Encoding.UTF8.GetByteCount(commit.Committer.Email)
+                + (commit.CheckpointSignature is { } signature
+                    ? Encoding.UTF8.GetByteCount(signature.Repository.NodeId) + Encoding.UTF8.GetByteCount(signature.Repository.Owner)
+                        + Encoding.UTF8.GetByteCount(signature.Repository.Name) + Encoding.UTF8.GetByteCount(signature.RefNodeId)
+                        + Encoding.UTF8.GetByteCount(signature.Author.NodeId) + Encoding.UTF8.GetByteCount(signature.Author.Login)
+                    : 0),
             _ => throw new InvalidOperationException(),
         });
 

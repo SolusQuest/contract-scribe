@@ -32,7 +32,8 @@ internal static partial class DocumentationScribeComposition
         }
 
         public async ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
-            DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken)
+            DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification progress,
+            CancellationToken cancellationToken)
         {
             var member = invocation.Request.Manifest.Single(item => item.TargetId == submission.TargetId);
             var audit = selection.Members.Single(item => item.Audit.Target.SymbolRef == member.Target.SymbolRef).Audit;
@@ -113,12 +114,15 @@ internal static partial class DocumentationScribeComposition
             }
             catch (OperationCanceledException) { return Cancelled(); }
             catch (ArgumentException) { return Rejected(CampaignProviderCompletionKind.ProposalInvalid); }
+            transition = CampaignStateReducer.AcceptScribeSubmissionWithProgress(invocation, submission, progress);
             using var replacement = CampaignProcessBoundaryHooks.EnterReplacementScope(
-                CampaignProcessBoundaryHooks.ScribeMemberReplacementScope);
+                CampaignProcessBoundaryHooks.ScribeMemberProgressReplacementScope);
             if (!await coordinator.AcceptHostProgressAsync(transition, cancellationToken).ConfigureAwait(false)) return null;
             CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ScribeMemberAfterReadback);
+            CampaignProcessBoundaryHooks.Reach(CampaignProcessBoundaryHooks.ScribeProgressAfterReadback);
             return new(submission.ScribeRequestSha256, submission.TargetId, submission.ContentSha256,
-                DocumentationScribeAcknowledgementStage.DurablyRecorded);
+                DocumentationScribeAcknowledgementStage.DurablyRecorded)
+            { ProgressSha256 = progress.ProgressSha256 };
 
             DocumentationScribeSubmissionAcknowledgement? Rejected(CampaignProviderCompletionKind kind)
             {

@@ -111,6 +111,7 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             throw Malformed(OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit);
         }
 
+        UsageObservations observations = default;
         try
         {
             using var document = JsonDocument.Parse(utf8Json, new JsonDocumentOptions
@@ -125,6 +126,9 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             var root = RequireObject(
                 document.RootElement,
                 OpenAiCompatibleResponseCodecDisposition.RootInvalid);
+            OpenAiCompatibleProtocolException? usageFailure = null;
+            try { observations = ParseUsage(root); }
+            catch (OpenAiCompatibleProtocolException exception) { usageFailure = exception; }
             var choices = RequireProperty(
                 root,
                 "choices",
@@ -285,11 +289,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                     var argumentsText = RequireString(
                         function,
                         "arguments",
-                        OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid);
+                        OpenAiCompatibleResponseCodecDisposition.ArgumentsNotString);
                     var arguments = StrictUtf8.GetBytes(argumentsText);
-                    ValidateArguments(
-                        arguments,
-                        OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid);
                     calls.Add(new ParsedCall(index, callId, alias, arguments));
                 }
             }
@@ -300,7 +301,20 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 throw Malformed(OpenAiCompatibleResponseCodecDisposition.TerminalMixed);
             }
 
-            var observations = ParseUsage(root);
+            // Validate the wire envelope first, then honor a known incomplete
+            // finish before inspecting possibly cut-off argument JSON.
+            if (choice.TryGetProperty("finish_reason", out var knownFinish)
+                && knownFinish.ValueKind == JsonValueKind.String)
+            {
+                if (knownFinish.GetString() == "length")
+                    throw Unsupported(OpenAiCompatibleResponseCodecDisposition.FinishReasonLength);
+                if (knownFinish.GetString() == "stop")
+                    throw Unsupported(OpenAiCompatibleResponseCodecDisposition.FinishReasonStop);
+            }
+            foreach (var call in calls)
+                ValidateArguments(call.Arguments, OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid);
+
+            if (usageFailure is not null) throw usageFailure;
             var finishReason = RequireString(
                 choice,
                 "finish_reason",
@@ -376,13 +390,14 @@ internal static class OpenAiCompatibleChatCompletionsCodec
                 continuation,
                 Observation(request, reasoningContentPresent && reasoningContentText is not null));
         }
-        catch (OpenAiCompatibleProtocolException)
+        catch (OpenAiCompatibleProtocolException exception)
         {
-            throw;
+            throw exception.WithObservations(observations.Usage, observations.Cache);
         }
         catch (JsonException)
         {
-            throw Malformed(OpenAiCompatibleResponseCodecDisposition.JsonInvalid);
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.JsonInvalid)
+                .WithObservations(observations.Usage, observations.Cache);
         }
         catch (Exception exception) when (exception is InvalidOperationException
             or DecoderFallbackException
@@ -390,7 +405,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             or ArgumentException
             or OverflowException)
         {
-            throw Malformed(OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit);
+            throw Malformed(OpenAiCompatibleResponseCodecDisposition.ResponseExceedsLimit)
+                .WithObservations(observations.Usage, observations.Cache);
         }
     }
 
@@ -742,7 +758,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             return null;
         }
 
-        if (!value.TryGetInt32(out var result) || result < 0 || result > maximum)
+        if (value.ValueKind != JsonValueKind.Number
+            || !value.TryGetInt32(out var result) || result < 0 || result > maximum)
         {
             throw Malformed(OpenAiCompatibleResponseCodecDisposition.UsageInvalid);
         }
@@ -825,7 +842,8 @@ internal static class OpenAiCompatibleChatCompletionsCodec
             {
                 MaxDepth = DocumentationScribeContract.MaximumJsonDepth,
             });
-            RejectDuplicateProperties(document.RootElement, disposition);
+            RejectDuplicateProperties(document.RootElement,
+                OpenAiCompatibleResponseCodecDisposition.ArgumentsDuplicateProperty);
         }
         catch (OpenAiCompatibleProtocolException)
         {
@@ -992,12 +1010,16 @@ internal sealed class OpenAiCompatibleProtocolException : Exception
         DocumentationScribeModelFailureCode code,
         DocumentationScribeContinuationObservation continuationObservation =
             DocumentationScribeContinuationObservation.None,
-        OpenAiCompatibleResponseCodecDisposition? disposition = null)
+        OpenAiCompatibleResponseCodecDisposition? disposition = null,
+        DocumentationScribeModelUsage? observedUsage = null,
+        DocumentationScribeCacheObservation? observedCache = null)
         : base("The selected provider protocol rejected an exchange.")
     {
         Code = code;
         ContinuationObservation = continuationObservation;
         Disposition = disposition;
+        ObservedUsage = observedUsage;
+        ObservedCache = observedCache;
     }
 
     internal DocumentationScribeModelFailureCode Code { get; }
@@ -1005,4 +1027,12 @@ internal sealed class OpenAiCompatibleProtocolException : Exception
     internal DocumentationScribeContinuationObservation ContinuationObservation { get; }
 
     internal OpenAiCompatibleResponseCodecDisposition? Disposition { get; }
+
+    internal DocumentationScribeModelUsage? ObservedUsage { get; }
+
+    internal DocumentationScribeCacheObservation? ObservedCache { get; }
+
+    internal OpenAiCompatibleProtocolException WithObservations(
+        DocumentationScribeModelUsage? usage, DocumentationScribeCacheObservation? cache) =>
+        new(Code, ContinuationObservation, Disposition, usage, cache);
 }

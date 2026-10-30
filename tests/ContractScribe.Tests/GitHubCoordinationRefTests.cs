@@ -17,6 +17,24 @@ namespace ContractScribe.Tests;
 
 public sealed partial class GitHubCoordinationRefTests
 {
+    internal static bool IsCheckpointQuery(HttpRequestMessage request, bool currentOnly = false)
+    {
+        if (request.Method != HttpMethod.Post || request.RequestUri!.AbsolutePath != "/graphql") return false;
+        using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+        return body.RootElement.GetProperty("query").GetString()!.TrimStart().StartsWith("query", StringComparison.Ordinal)
+            && (!currentOnly || !body.RootElement.GetProperty("variables").TryGetProperty("anchor", out _));
+    }
+
+    internal static bool IsRefMutation(HttpRequestMessage request) => request.Method == HttpMethod.Post
+        && request.RequestUri!.AbsolutePath == "/graphql" && !IsCheckpointQuery(request);
+
+    internal static bool ReadsCanonicalDocument(HttpRequestMessage request, string oid)
+    {
+        if (!IsCheckpointQuery(request)) return false;
+        using var body = JsonDocument.Parse(request.Content!.ReadAsStringAsync().GetAwaiter().GetResult());
+        return body.RootElement.GetProperty("variables").TryGetProperty("anchor", out var anchor) && anchor.GetString() == oid;
+    }
+
     [Fact]
     public async Task G1_first_run_observes_actual_HEAD_without_candidate_or_expected_base()
     {
@@ -721,6 +739,15 @@ public sealed partial class GitHubCoordinationRefTests
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken token)
         {
+            if (request.Method == HttpMethod.Post)
+            {
+                using var body = JsonDocument.Parse(await request.Content!.ReadAsStringAsync(token));
+                Assert.Equal("/graphql", request.RequestUri!.AbsolutePath);
+                Assert.StartsWith("query", body.RootElement.GetProperty("query").GetString()!.TrimStart());
+                Requests.Add(request.RequestUri.PathAndQuery);
+                token.ThrowIfCancellationRequested();
+                return await Coordination.Reply(request);
+            }
             Assert.Equal(HttpMethod.Get, request.Method);
             var path = request.RequestUri!.AbsolutePath;
             Requests.Add(request.RequestUri.PathAndQuery);
@@ -2850,7 +2877,9 @@ public sealed partial class GitHubCoordinationRefTests
         string Parent,
         string Message,
         GitHubCommitActor Author,
-        GitHubCommitActor Committer);
+        GitHubCommitActor Committer,
+        JsonObject? Signature = null,
+        JsonObject? Principal = null);
 
     private sealed class SyntheticGuard(IGitHubCoordinationStateCapability state)
         : IGitHubCoordinationGuardCapability
@@ -2947,6 +2976,19 @@ public sealed partial class GitHubCoordinationRefTests
         internal void CorruptBlob(string oid)
         {
             lock (gate) blobs[oid] = [.. blobs[oid], (byte)' '];
+        }
+
+        // Server-side content fixture only. Clients must still independently
+        // fetch and authenticate all objects before any positive-pool admission.
+        internal void SeedProposalContent(GitHubCreateCommit value, byte[] bytes, ImmutableArray<GitHubTreeEntry> entries)
+        {
+            lock (gate)
+            {
+                blobs[GitHubCoordinationObjects.ObjectOid("blob", bytes)] = bytes;
+                trees[value.TreeOid] = new(value.TreeOid, entries);
+                commits[value.ExpectedOid] = new(value.ExpectedOid, value.TreeOid, value.ParentOid,
+                    value.Message, value.Author, value.Committer);
+            }
         }
 
         internal string SeedBlob(byte[] bytes)
@@ -3052,6 +3094,9 @@ public sealed partial class GitHubCoordinationRefTests
         internal void RemoveCommit(GitHubCoordinationState state)
         { lock (gate) commits.Remove(PrepareFixture(state).CommitOid); }
 
+        internal void RemoveCommit(string actualOid)
+        { lock (gate) commits.Remove(actualOid); }
+
         internal async Task<HttpResponseMessage> Reply(HttpRequestMessage request)
         {
             var path = request.RequestUri!.AbsolutePath;
@@ -3063,7 +3108,14 @@ public sealed partial class GitHubCoordinationRefTests
                 return MutateTree(document.RootElement);
             if (path.EndsWith("/git/commits", StringComparison.Ordinal))
                 return MutateCommit(document.RootElement);
-            if (path == "/graphql") return await MutateRef(document.RootElement);
+            if (path == "/graphql")
+            {
+                if (document.RootElement.GetProperty("query").GetString()!.TrimStart().StartsWith("query", StringComparison.Ordinal))
+                    return CheckpointSnapshot(document.RootElement.GetProperty("variables"));
+                if (document.RootElement.GetProperty("query").GetString()!.Contains("createCommitOnBranch", StringComparison.Ordinal))
+                    return MutateCheckpoint(document.RootElement.GetProperty("variables").GetProperty("input"));
+                return await MutateRef(document.RootElement);
+            }
             return Json(HttpStatusCode.NotFound, new { message = "Not Found" });
         }
 
@@ -3073,6 +3125,8 @@ public sealed partial class GitHubCoordinationRefTests
             {
                 if (path.Equals("/repos/Owner/repo", StringComparison.OrdinalIgnoreCase))
                     return Json(HttpStatusCode.OK, Repository());
+                if (path == "/repos/Owner/repo/pulls")
+                    return Json(HttpStatusCode.OK, Array.Empty<object>());
                 if (path.EndsWith("/git/ref/heads/main", StringComparison.Ordinal))
                     return Ref("refs/heads/main", TargetHead);
                 if (path.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal))
@@ -3112,6 +3166,181 @@ public sealed partial class GitHubCoordinationRefTests
                     if (commits.TryGetValue(oid, out var commit)) return Commit(commit);
                 }
                 return Json(HttpStatusCode.NotFound, new { message = "Not Found" });
+            }
+        }
+
+        private HttpResponseMessage CheckpointSnapshot(JsonElement variables)
+        {
+            lock (gate)
+            {
+                var historical = variables.TryGetProperty("anchor", out var anchor);
+                var coordination = historical ? anchor.GetString()! : variables.GetProperty("coord").GetString()!;
+                if (!historical && MoveCoordinationHeadBeforeRefRead is { } moved && ObjectMutationAttempts >= MoveCoordinationHeadAfterObjectMutationCount)
+                {
+                    CoordinationHead = moved;
+                    MoveCoordinationHeadBeforeRefRead = null;
+                }
+                var head = historical ? coordination : CoordinationHead;
+                var repository = new JsonObject
+                {
+                    ["id"] = "R_42",
+                    ["fullDatabaseId"] = "42",
+                    ["name"] = "repo",
+                    ["owner"] = new JsonObject { ["login"] = "Owner" },
+                    ["base"] = Reference("refs/heads/main", TargetHead, content: false),
+                    ["coord"] = historical
+                        ? CoordinationHead is null ? null : Reference(variables.GetProperty("coord").GetString()!, CoordinationHead, content: false)
+                        : head is null ? null : Reference(coordination, head, content: true),
+                };
+                if (historical) repository["document"] = Reference(coordination, head!, content: true)["target"]!.DeepClone();
+                foreach (var (alias, path) in new[] { ("state", "coordination-state-v1.json"), ("checkpoint", "checkpoint.json"),
+                    ("plan", "plan.json"), ("archive", "archive-predecessor.json"), ("event", "publication-event.json") })
+                {
+                    if (historical && alias != "state") continue;
+                    Assert.Equal(coordination + ":.contract-scribe/" + path, variables.GetProperty(alias).GetString());
+                    repository[alias] = File(path);
+                }
+                return Json(HttpStatusCode.OK, new JsonObject { ["data"] = new JsonObject { ["repository"] = repository } });
+
+                JsonObject Reference(string name, string oid, bool content)
+                {
+                    var target = new JsonObject { ["__typename"] = "Commit", ["oid"] = oid };
+                    if (content && commits.TryGetValue(oid, out var commit))
+                    {
+                        if (MoveCoordinationHeadBeforeCommitRead == oid)
+                        {
+                            CoordinationHead = MoveCoordinationHeadBeforeCommitReadTo ?? oid;
+                            MoveCoordinationHeadBeforeCommitRead = MoveCoordinationHeadBeforeCommitReadTo = null;
+                        }
+                        var author = JsonSerializer.SerializeToNode(Actor(commit.Author))!;
+                        author["user"] = commit.Principal?.DeepClone();
+                        target["message"] = commit.Message;
+                        target["author"] = author;
+                        target["committer"] = JsonSerializer.SerializeToNode(Actor(commit.Committer));
+                        target["signature"] = commit.Signature?.DeepClone();
+                        target["parents"] = new JsonObject
+                        {
+                            ["totalCount"] = 1,
+                            ["pageInfo"] = new JsonObject { ["hasNextPage"] = false },
+                            ["nodes"] = new JsonArray(new JsonObject { ["oid"] = commit.Parent }),
+                        };
+                        target["tree"] = Tree(commit.Tree, children: true);
+                    }
+                    return new JsonObject
+                    {
+                        ["id"] = "REF_" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(name)))[..12],
+                        ["prefix"] = "refs/heads/",
+                        ["name"] = name[11..],
+                        ["target"] = target,
+                    };
+                }
+
+                JsonObject Tree(string oid, bool children)
+                {
+                    var entries = new JsonArray();
+                    foreach (var entry in trees[oid].Entries)
+                    {
+                        var value = new JsonObject { ["name"] = entry.Path, ["mode"] = entry.Mode == GitHubTreeMode.Directory ? 16384 : 33188, ["oid"] = entry.Oid };
+                        if (children) value["object"] = entry.Mode == GitHubTreeMode.Directory
+                            ? Tree(entry.Oid, children: false) : new JsonObject { ["__typename"] = "Blob" };
+                        entries.Add(value);
+                    }
+                    return new JsonObject { ["__typename"] = "Tree", ["oid"] = oid, ["entries"] = entries };
+                }
+
+                JsonObject? File(string path)
+                {
+                    if (head is null || !commits.TryGetValue(head, out var commit) || !trees.TryGetValue(commit.Tree, out var root)) return null;
+                    var directory = root.Entries.SingleOrDefault(entry => entry.Path == ".contract-scribe" && entry.Mode == GitHubTreeMode.Directory);
+                    if (directory is null || !trees.TryGetValue(directory.Oid, out var leaf)) return null;
+                    var entry = leaf.Entries.SingleOrDefault(item => item.Path == path);
+                    if (entry is null || !blobs.TryGetValue(entry.Oid, out var bytes)) return null;
+                    BlobReadAttempts++;
+                    return new JsonObject
+                    {
+                        ["__typename"] = "Blob",
+                        ["oid"] = entry.Oid,
+                        ["byteSize"] = bytes.Length,
+                        ["isBinary"] = false,
+                        ["isTruncated"] = false,
+                        ["text"] = Encoding.UTF8.GetString(bytes),
+                    };
+                }
+            }
+        }
+
+        private HttpResponseMessage MutateCheckpoint(JsonElement input)
+        {
+            lock (gate)
+            {
+                RefMutationAttempts++;
+                var before = input.GetProperty("expectedHeadOid").GetString()!;
+                var reference = "refs/heads/contract-scribe/coordination/" + GitHubPublicationFactory.CreateCoordinationRef(
+                    GitHubPublicationFactory.CreateCampaignReadAuthority("Owner", "repo", "refs/heads/main", FixtureDocuments[before].CampaignLineage)).Split('/')[^1];
+                Assert.Equal("REF_" + Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(reference)))[..12],
+                    input.GetProperty("branch").GetProperty("id").GetString());
+                if (MoveCoordinationHeadBeforeRefMutation is { } moved)
+                { CoordinationHead = moved; MoveCoordinationHeadBeforeRefMutation = null; }
+                if (CoordinationHead != before)
+                    return Json(HttpStatusCode.OK, new { data = (object?)null, errors = new[] { new { type = "CONFLICT", message = "synthetic conflict" } } });
+                var parent = commits[before];
+                var priorRoot = trees[parent.Tree];
+                var leaf = trees[priorRoot.Entries.Single().Oid].Entries.ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+                foreach (var file in input.GetProperty("fileChanges").GetProperty("additions").EnumerateArray())
+                {
+                    var path = file.GetProperty("path").GetString()!;
+                    Assert.StartsWith(".contract-scribe/", path);
+                    var bytes = Convert.FromBase64String(file.GetProperty("contents").GetString()!);
+                    var blob = GitHubCoordinationObjects.ObjectOid("blob", bytes);
+                    blobs[blob] = bytes;
+                    leaf[path[17..]] = new(path[17..], GitHubTreeMode.File, blob, null);
+                }
+                var entries = leaf.Values.OrderBy(entry => entry.Path, StringComparer.Ordinal).ToImmutableArray();
+                var leafOid = GitHubCoordinationObjects.TreeOid(entries);
+                trees[leafOid] = new(leafOid, entries);
+                ImmutableArray<GitHubTreeEntry> roots = [new(".contract-scribe", GitHubTreeMode.Directory, leafOid, null)];
+                var rootOid = GitHubCoordinationObjects.TreeOid(roots);
+                trees[rootOid] = new(rootOid, roots);
+                var message = input.GetProperty("message");
+                var text = message.GetProperty("headline").GetString() + "\n\n" + message.GetProperty("body").GetString();
+                var seconds = ServerNow.ToUnixTimeSeconds().ToString(System.Globalization.CultureInfo.InvariantCulture);
+                var payload = "tree " + rootOid + "\nparent " + before
+                    + "\nauthor github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com> " + seconds
+                    + " +0000\ncommitter GitHub <noreply@github.com> " + seconds + " +0000\n\n" + text;
+                const string signature = "-----BEGIN PGP SIGNATURE-----\nsynthetic-unit-fixture\n-----END PGP SIGNATURE-----\n";
+                var separator = payload.IndexOf("\n\n", StringComparison.Ordinal);
+                var raw = payload[..(separator + 1)] + "gpgsig " + signature.TrimEnd('\n').Replace("\n", "\n ", StringComparison.Ordinal)
+                    + "\n" + payload[(separator + 1)..];
+                var oid = GitHubCoordinationObjects.ObjectOid("commit", Encoding.UTF8.GetBytes(raw));
+                commits[oid] = new(oid, rootOid, before, text,
+                    new("github-actions[bot]", "41898282+github-actions[bot]@users.noreply.github.com", ServerNow),
+                    new("GitHub", "noreply@github.com", ServerNow),
+                    new JsonObject
+                    {
+                        ["__typename"] = "GpgSignature",
+                        ["isValid"] = true,
+                        ["state"] = "VALID",
+                        ["wasSignedByGitHub"] = true,
+                        ["payload"] = payload,
+                        ["signature"] = signature
+                    },
+                    new JsonObject { ["__typename"] = "User", ["id"] = "MDM6Qm90NDE4OTgyODI=", ["databaseId"] = 41898282, ["login"] = "github-actions[bot]" });
+                FixtureDocuments[oid] = GitHubCoordinationDocument.Decode(blobs[leaf[GitHubCoordinationObjects.StatePath].Oid]);
+                if (LoseResponse == LostMutation.Ref && LostBlobReadback != LostReadback.Exact)
+                {
+                    var checkpoint = leaf.GetValueOrDefault(GitHubCoordinationObjects.CheckpointPath);
+                    if (checkpoint is not null)
+                    {
+                        if (LostBlobReadback == LostReadback.Missing) blobs.Remove(checkpoint.Oid);
+                        else blobs[checkpoint.Oid] = [.. blobs[checkpoint.Oid], (byte)' '];
+                    }
+                }
+                RefUpdates.Add((before, oid));
+                CoordinationHead = oid;
+                SuccessfulRefMutations++;
+                if (TargetAfterSuccessfulRef is { } target) { TargetHead = target; TargetAfterSuccessfulRef = null; }
+                return MutationResponse(LostMutation.Ref,
+                    new { data = new { createCommitOnBranch = new { clientMutationId = input.GetProperty("clientMutationId").GetString() } } }, HttpStatusCode.OK);
             }
         }
 

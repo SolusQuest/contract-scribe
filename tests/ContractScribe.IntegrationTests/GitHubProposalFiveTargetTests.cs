@@ -133,11 +133,12 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("shared-repair")]
     [InlineData("shared-mixed-repair")]
     [InlineData("shared-malformed-repair")]
+    [InlineData("shared-malformed-repair-with-usage")]
     public async Task Invalid_logical_lines_repair_or_stop_through_publication_and_Action(string scenario)
     {
         await using var fixture = await FiveTargetFixture(scenario);
         var result = await fixture.Run();
-        var failed = scenario == "shared-malformed-repair";
+        var failed = scenario is "shared-malformed-repair" or "shared-malformed-repair-with-usage";
         AssertResult(result, failed ? 5 : 0, failed ? "host-failure" : "published");
         var progress = fixture.Checkpoint().State.ScribeProgress!;
         Assert.Equal(1, progress.RepairCount);
@@ -175,7 +176,21 @@ public sealed partial class GitHubProposalCliProcessTests
         {
             Assert.All(progress.Members, member => { Assert.Null(member.ContentSha256); Assert.Null(member.Skip); });
             Assert.Equal(5, usage.GetProperty("work").GetProperty("failedTargets").GetInt32());
+            var retainedUsage = scenario == "shared-malformed-repair-with-usage";
+            // This fixture never reports reasoning tokens; retaining the other
+            // independently observed counters must not fabricate that field.
             Assert.Equal("partial", usage.GetProperty("completeness").GetString());
+            if (retainedUsage)
+            {
+                foreach (var name in new[] { "input", "cachedInput", "uncachedInput", "output" })
+                {
+                    Assert.Equal(0, usage.GetProperty("tokens").GetProperty(name).GetProperty("missingDispatches").GetInt32());
+                    var charge = usage.GetProperty("accounting").GetProperty(name);
+                    Assert.Equal(0, charge.GetProperty("conservativeUnobserved").GetInt64());
+                    Assert.Equal(charge.GetProperty("observed").GetInt64(), charge.GetProperty("totalCharged").GetInt64());
+                }
+                Assert.True(usage.GetProperty("tokens").GetProperty("reasoning").GetProperty("missingDispatches").GetInt32() > 0);
+            }
             Assert.Equal("codec.arguments.invalid", usage.GetProperty("providerDiagnostics").GetProperty("observations").EnumerateArray().Last().GetProperty("codecDisposition").GetString());
             Assert.Null(fixture.Checkpoint().State.CandidateObservation);
             Assert.Equal(0, fixture.Checkpoint().State.LineageCharges.PatchValidationInvocations);
@@ -290,16 +305,12 @@ public sealed partial class GitHubProposalCliProcessTests
         CampaignCheckpointArtifact? retained = null;
         fixture.GitHub.BeforeBody = (request, body) =>
         {
-            if (failureIndex >= 0 || request.Method != "POST" || request.Path != "/repos/Owner/repo/git/commits") return;
-            var next = JsonNode.Parse(body)!;
-            var root = fixture.GitHub.Trees[next["tree"]!.GetValue<string>()];
-            var directory = root.SingleOrDefault(entry => entry.Path == ".contract-scribe");
-            if (directory is null) return;
-            var blob = fixture.GitHub.Trees[directory.Oid].SingleOrDefault(entry => entry.Path == "checkpoint.json");
-            if (blob is null || fixture.GitHub.CoordinationDocument()["checkpoint"] is null) return;
+            if (failureIndex >= 0 || request.Kind != "checkpoint-commit") return;
+            var bytes = GitHubProposalLoopbackServer.WrittenCanonicalBytes(request, "checkpoint.json");
+            if (bytes is null || fixture.GitHub.CoordinationDocument()["checkpoint"] is null) return;
             var current = fixture.Checkpoint();
             var members = current.State.ScribeProgress?.Members ?? [];
-            var successor = CampaignStateJson.Parse(fixture.GitHub.Blobs[blob.Oid]).Artifact!;
+            var successor = CampaignStateJson.Parse(bytes).Artifact!;
             if (members.Length != 5 || members.Count(member => member.Skip is not null) != 4
                 || members.Any(member => member.Skip is null && member.ContentSha256 is not null)
                 || successor.State.ScribeProgress?.Members.Any(member => member.Skip is null && member.ContentSha256 is not null) != true) return;
@@ -323,7 +334,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.Equal(8, envelope.RootElement.GetProperty("checkpointRevision").GetInt64());
         var failure = envelope.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
         Assert.Equal(9, failure.GetProperty("attemptedRevision").GetInt64());
-        Assert.Equal("CreateObjects", failure.GetProperty("stage").GetString());
+        Assert.Equal("RefMutation", failure.GetProperty("stage").GetString());
         Assert.Equal("Validation", failure.GetProperty("transportCode").GetString());
         Assert.Equal(422, failure.GetProperty("httpStatus").GetInt32());
         AssertNoPublicationAfterFault(fixture, failureIndex);
@@ -340,12 +351,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var failureIndex = -1;
         fixture.GitHub.Before = request =>
         {
-            if (failureIndex >= 0 || fixture.Provider.RequestCount == 0 || request.Method != "GET") return;
-            var head = fixture.GitHub.Refs.Single(pair => pair.Key.Contains("/coordination/", StringComparison.Ordinal)).Value;
-            var root = fixture.GitHub.Trees[fixture.GitHub.Commits[head]["tree"]!["sha"]!.GetValue<string>()];
-            var leaf = fixture.GitHub.Trees[root.Single(entry => entry.Path == ".contract-scribe").Oid];
-            var state = leaf.Single(entry => entry.Path == "coordination-state-v1.json").Oid;
-            if (!request.Path.EndsWith("/git/blobs/" + state, StringComparison.Ordinal)) return;
+            if (failureIndex >= 0 || fixture.Provider.RequestCount == 0 || !request.CurrentCheckpointQuery) return;
             failureIndex = fixture.GitHub.Requests.Count;
             fixture.GitHub.RejectPath = request.Path;
             fixture.GitHub.RejectionStatus = status;
@@ -366,7 +372,7 @@ public sealed partial class GitHubProposalCliProcessTests
     private static void AssertNoPublicationAfterFault(Fixture fixture, int failureIndex)
     {
         Assert.True(failureIndex > 0);
-        Assert.DoesNotContain(fixture.GitHub.Requests.Skip(failureIndex), request => request.Method == "POST" && request.Path == "/graphql");
+        Assert.DoesNotContain(fixture.GitHub.Requests.Skip(failureIndex), request => request.Mutation > 0);
         Assert.Empty(fixture.GitHub.PullRequests);
         Assert.Equal(0, fixture.GitHub.PrAttempts);
         Assert.Equal(0, fixture.Checkpoint().State.LineageCharges.PatchValidationInvocations);

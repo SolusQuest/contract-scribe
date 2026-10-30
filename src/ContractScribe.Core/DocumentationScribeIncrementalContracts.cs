@@ -44,6 +44,7 @@ public sealed record DocumentationScribeSubmissionAcknowledgement(
     string ScribeRequestSha256, string TargetId, string ContentSha256,
     DocumentationScribeAcknowledgementStage Stage)
 {
+    public string? ProgressSha256 { get; init; }
     public override string ToString() => nameof(DocumentationScribeSubmissionAcknowledgement);
 }
 
@@ -51,8 +52,11 @@ public sealed record DocumentationScribeSubmissionAcknowledgement(
 /// <remarks>An interrupted call may have effects. The runtime never retries an uncertain callback.</remarks>
 public interface IDocumentationScribeSubmissionHost
 {
+    /// <summary>Confirms a member and its exact scalar progress in one complete physical acceptance.</summary>
+    /// <remarks>The returned ProgressSha256 must match; neither acknowledgement is a new execution grant.</remarks>
     ValueTask<DocumentationScribeSubmissionAcknowledgement?> AcknowledgeAsync(
-        DocumentationScribeValidatedSubmission submission, CancellationToken cancellationToken);
+        DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification progress,
+        CancellationToken cancellationToken);
 
     /// <summary>Confirms completed batch, rejection or finish progress before another model request.</summary>
     /// <remarks>The original Host permit and its deadline also bound this call. Uncertain effects require readback.</remarks>

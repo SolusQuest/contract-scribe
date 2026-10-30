@@ -81,6 +81,28 @@ public sealed partial class GitHubPublicationReconcilerTests
             Assert.Equal(1, remote.PrAttempts);
             Assert.Equal(1, remote.Git.ProposalWrites);
             remote.SecondsPerRequest = 0;
+            // A later checkpoint's observation must authenticate the complete
+            // event graph without fetching its immutable payloads every time.
+            var calls = new List<string>();
+            remote.BeforeRequest = (request, _) =>
+            {
+                calls.Add(request.Method + " " + request.RequestUri!.AbsolutePath);
+                return Task.CompletedTask;
+            };
+            var target = (await client.GetRefAsync(authority.TargetRef, default)).Value!;
+            var publishedHead = remote.Git.Refs[GitHubPublicationFactory.CreateCoordinationRef(authority)];
+            calls.Clear();
+            var first = await store.ReadObservedStateAsync(client.AuthenticatedRepository!, target, publishedHead, default);
+            Assert.NotNull(first.State);
+            var coldRequests = calls.Count;
+            calls.Clear();
+            var second = await store.ReadObservedStateAsync(client.AuthenticatedRepository!, target, publishedHead, default);
+            Assert.NotNull(second.State);
+            Assert.True(calls.Count < coldRequests, $"cold={coldRequests}; warm={calls.Count}");
+            var publishedDocument = CurrentCheckpointDocument(remote, authority);
+            var statePath = "/git/blobs/" + GitHubCoordinationObjects.Prepare(publishedDocument).BlobOid;
+            Assert.Contains(calls, call => call.EndsWith(statePath, StringComparison.Ordinal));
+            remote.BeforeRequest = null;
             var retained = await store.ReadAsync(default);
             Assert.Equal(CampaignCheckpointReadKind.Found, retained.Kind);
             Assert.Equal(artifact.Sha256, retained.Sha256);

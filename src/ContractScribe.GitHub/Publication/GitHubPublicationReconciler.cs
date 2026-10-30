@@ -24,14 +24,13 @@ internal sealed class GitHubPublicationReconciler : IGitHubPublicationPort
     private GitHubPublicationReconciler(GitHubApiClient client, GitHubActor publisher, GitHubCoordinationStore? checkpoint = null)
     {
         this.client = client;
-        coordination = checkpoint ?? GitHubCoordinationStore.Create(client);
+        coordination = checkpoint ?? GitHubCoordinationStore.Create(client, publisher);
         prs = GitHubProposalPullRequestStore.Create(client, coordination, publisher);
-        git = GitHubProposalStore.Create(client, coordination, async (state, token) =>
+        git = GitHubProposalStore.Create(client, coordination, async (guard, token) =>
         {
-            var read = await coordination.ReadCurrentAsync(token).ConfigureAwait(false);
-            if (read.Read is null) return GateFailure(read.Failure ?? new(GitHubCoordinationFailureKind.Conflict));
-            if (read.State?.HeadOid != state.HeadOid) return new GitHubProposalFailure(GitHubProposalFailureKind.Conflict);
-            var absent = await prs.PreflightAsync(read.Read, token).ConfigureAwait(false);
+            var state = coordination.ValidateGuard(guard);
+            if (state is null) return new GitHubProposalFailure(GitHubProposalFailureKind.Conflict);
+            var absent = await prs.PreflightAsync(guard, token).ConfigureAwait(false);
             if (absent.Absence is null) return GateFailure(GitHubProposalPullRequestStore.CoordinationFailureOf(absent));
             return GitHubProposalPullRequestStore.AuthenticatesAbsence(absent.Absence, coordination, state)
                 ? null : new GitHubProposalFailure(GitHubProposalFailureKind.Conflict);

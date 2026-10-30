@@ -15,7 +15,7 @@ namespace ContractScribe.Tests;
 public sealed class GitHubTransportCollection;
 
 [Collection("GitHub transport hook")]
-public sealed class GitHubApiClientTests
+public sealed partial class GitHubApiClientTests
 {
     [Fact]
     public async Task Campaign_read_client_rejects_every_mutation_before_dispatch_or_payload_use()

@@ -5,9 +5,12 @@ namespace ContractScribe.Core;
 public static partial class CampaignStateReducer
 {
     internal static CampaignTransitionResult AcceptScribeSubmission(CampaignProviderInvocationAuthority invocation,
-        DocumentationScribeValidatedSubmission submission)
+        DocumentationScribeValidatedSubmission submission) =>
+        AcceptScribeSubmissionAt(invocation, submission, invocation.AcceptedCheckpoint.Artifact);
+
+    private static CampaignTransitionResult AcceptScribeSubmissionAt(CampaignProviderInvocationAuthority invocation,
+        DocumentationScribeValidatedSubmission submission, CampaignCheckpointArtifact predecessor)
     {
-        var predecessor = invocation.AcceptedCheckpoint.Artifact;
         try
         {
             var claim = CurrentClaim(invocation);
@@ -113,9 +116,12 @@ public static partial class CampaignStateReducer
     }
 
     internal static CampaignTransitionResult AcceptScribeProgress(CampaignProviderInvocationAuthority invocation,
-        DocumentationScribeProgressNotification notification)
+        DocumentationScribeProgressNotification notification) =>
+        AcceptScribeProgressAt(invocation, notification, invocation.AcceptedCheckpoint.Artifact);
+
+    private static CampaignTransitionResult AcceptScribeProgressAt(CampaignProviderInvocationAuthority invocation,
+        DocumentationScribeProgressNotification notification, CampaignCheckpointArtifact predecessor)
     {
-        var predecessor = invocation.AcceptedCheckpoint.Artifact;
         try
         {
             var state = predecessor.State;
@@ -172,6 +178,30 @@ public static partial class CampaignStateReducer
         { return Reject(predecessor, CampaignTransitionFailure.CheckpointCapacity); }
         catch (Exception exception) when (IsBoundedContractFailure(exception) || exception is OverflowException)
         { return Reject(predecessor, CampaignTransitionFailure.InvalidAuthority); }
+    }
+
+    internal static CampaignTransitionResult AcceptScribeSubmissionWithProgress(CampaignProviderInvocationAuthority invocation,
+        DocumentationScribeValidatedSubmission submission, DocumentationScribeProgressNotification notification)
+    {
+        var predecessor = invocation.AcceptedCheckpoint.Artifact;
+        if (notification.ScribeRequestSha256 != submission.ScribeRequestSha256
+            || notification.Receipts.Count(receipt => receipt.TargetId == submission.TargetId
+                && receipt.ContentSha256 == submission.ContentSha256
+                && receipt.Stage == DocumentationScribeAcknowledgementStage.DurablyRecorded) != 1)
+            return Reject(predecessor, CampaignTransitionFailure.InvalidCorrelation);
+        var member = AcceptScribeSubmissionAt(invocation, submission, predecessor);
+        if (member.Kind == CampaignTransitionKind.Rejected) return member;
+        var progress = AcceptScribeProgressAt(invocation, notification, member.Artifact);
+        if (progress.Kind == CampaignTransitionKind.Rejected) return Reject(predecessor, progress.Failure);
+        if (member.Kind == CampaignTransitionKind.Unchanged && progress.Kind == CampaignTransitionKind.Unchanged)
+            return new(CampaignTransitionKind.Unchanged, predecessor, predecessor, CampaignTransitionFailure.None, member.AttemptId);
+        // Both pure validations use the same original invocation/claim. Only
+        // this final complete state is eligible for one physical acceptance.
+        var state = progress.Artifact.State;
+        return Applied(predecessor, CreateState(state, NextRevision(predecessor.CheckpointRevision), state.LineageCharges,
+            state.WorkItems, state.ActiveReservation, state.CandidateObservation, state.CumulativeOutcome,
+            state.TerminalOutcome, state.Predecessor, state.KnownCompletedOperations, state.DispatchObservations,
+            state.ScribeProgress), member.AttemptId);
     }
 
     private static (ImmutableArray<CampaignWorkItemState> Items, CampaignScribeProgress Progress) StartScribeMember(

@@ -1,4 +1,5 @@
 using ContractScribe.Cli;
+using System.Reflection;
 using ContractScribe.GitHub.Transport;
 
 namespace ContractScribe.Tests;
@@ -13,7 +14,8 @@ public sealed class GitHubPublicationFinalizationTests
         using var caller = new CancellationTokenSource();
         using var host = new GitHubPublicationFinalization(caller.Token, clock);
         host.Begin(default);
-        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("deadline", '5'), "synthetic");
+        using var transport = RegisterClockTransport();
+        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("deadline", '5'), GitHubTransportTestHook.Placeholder);
         client.BindFinalizationDeadline(host.DeadlineToken, () => host.TimedOut);
         clock.Expire();
         var first = client.CancellationFailure;
@@ -86,7 +88,8 @@ public sealed class GitHubPublicationFinalizationTests
         using var caller = new CancellationTokenSource();
         using var host = new GitHubPublicationFinalization(caller.Token, clock: clock);
         var execution = host.Begin(default);
-        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("deadline", '5'), "synthetic");
+        using var transport = RegisterClockTransport();
+        using var client = GitHubApiClient.Create(GitHubCoordinationRefTests.InitialAuthority("deadline", '5'), GitHubTransportTestHook.Placeholder);
         client.BindFinalizationDeadline(host.DeadlineToken);
         caller.Cancel();
         Assert.True(execution.IsCancellationRequested);
@@ -99,6 +102,10 @@ public sealed class GitHubPublicationFinalizationTests
         using var later = client.CreateRecoveryScope(TimeSpan.FromSeconds(90));
         Assert.True(later.IsCancellationRequested);
     }
+
+    internal static IDisposable RegisterClockTransport() =>
+        (IDisposable)typeof(GitHubTransportTestHook).GetMethod("Register", BindingFlags.Static | BindingFlags.NonPublic)!
+            .Invoke(null, [new Uri("http://127.0.0.1:18765/"), new HttpClientHandler(), null])!;
 
     internal sealed class DeadlineClock : TimeProvider
     {

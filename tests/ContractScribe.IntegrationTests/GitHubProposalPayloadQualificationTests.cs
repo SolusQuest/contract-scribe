@@ -37,14 +37,15 @@ public sealed partial class GitHubProposalCliProcessTests
             var root = fixture.GitHub.Trees[fixture.GitHub.Commits[head]["tree"]!["sha"]!.GetValue<string>()];
             var leaf = fixture.GitHub.Trees[root.Single(entry => entry.Path == ".contract-scribe").Oid];
             var stateOid = leaf.Single(entry => entry.Path == "coordination-state-v1.json").Oid;
-            var kind = request.Method == "POST" ? "mutation"
+            var kind = request.Kind == "checkpoint-read" ? "query" : request.Mutation > 0 ? "mutation"
                 : request.Path.Contains("/git/commits/", StringComparison.Ordinal) ? "commit"
                 : request.Path.Contains("/git/trees/", StringComparison.Ordinal) ? "tree"
                 : request.Path.Contains("/git/blobs/", StringComparison.Ordinal) ? "blob" : "mutable";
             bool Blob(string? oid) => oid is not null && request.Method == "GET"
                 && request.Path.EndsWith("/git/blobs/" + oid, StringComparison.Ordinal);
-            calls.Add((request.Method, request.Path, kind, Blob(stateOid),
-                Blob(document["checkpoint"]?["oid"]?.GetValue<string>()), Blob(document["plan"]?["oid"]?.GetValue<string>())));
+            calls.Add((request.Method, request.Path, kind, Blob(stateOid) || request.CurrentCheckpointQuery,
+                Blob(document["checkpoint"]?["oid"]?.GetValue<string>()) || request.CurrentCheckpointQuery && document["checkpoint"] is not null,
+                Blob(document["plan"]?["oid"]?.GetValue<string>()) || request.CurrentCheckpointQuery && document["plan"] is not null));
             if (document["claim"]?["expiresUnixSeconds"] is { } expires)
             {
                 var expiry = expires.GetValue<long>();
@@ -58,7 +59,7 @@ public sealed partial class GitHubProposalCliProcessTests
             {
                 var stage = fixture.GitHub.Coordination()["stage"]!.GetValue<string>();
                 if (stage == "published") publishedTail ??= Stopwatch.GetTimestamp();
-                if (request.Method == "GET")
+                if (request.Method == "GET" || request.CurrentCheckpointQuery)
                 {
                     if (!stages.TryGetValue(stage, out var paths)) stages[stage] = paths = new(StringComparer.Ordinal);
                     paths.Add(request.Path);
@@ -90,9 +91,9 @@ public sealed partial class GitHubProposalCliProcessTests
             publishedTailIncludingCleanupMilliseconds = publishedTail is { } tail ? Stopwatch.GetElapsedTime(tail, end).TotalMilliseconds : (double?)null,
             physicalCallsInsideHost = calls.Count,
             callsByKind = calls.GroupBy(call => call.Kind).ToDictionary(group => group.Key, group => group.Count()),
-            actualCurrentClaimBodyGets = calls.Count(call => call.Claim),
-            actualCheckpointBodyGets = calls.Count(call => call.Checkpoint),
-            actualPlanBodyGets = calls.Count(call => call.Plan),
+            actualCurrentClaimPhysicalReads = calls.Count(call => call.Claim),
+            actualCheckpointPhysicalReads = calls.Count(call => call.Checkpoint),
+            actualPlanPhysicalReads = calls.Count(call => call.Plan),
             distinctConfirmedClaimExpirations = claimExpirations.Count,
             confirmedRenewalsInsideHost = renewals,
             proposalRefAdvances = proposalAdvances,

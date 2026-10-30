@@ -23,6 +23,7 @@ public static class DocumentationScribeRepositoryToolOperationIds
 public static class DocumentationScribeRepositoryToolFailureCodes
 {
     public const string InvalidRequest = "repository.invalid-request";
+    public const string RangePastEndOfFile = "repository.range-past-eof";
     public const string ScopeDenied = "repository.scope-denied";
     public const string UnsafeObject = "repository.unsafe-object";
     public const string Stale = "repository.stale";
@@ -36,6 +37,7 @@ public static class DocumentationScribeRepositoryToolFailureCodes
     internal static DocumentationScribeToolFailureReason Category(string? code) => code switch
     {
         InvalidRequest => DocumentationScribeToolFailureReason.InvalidRequest,
+        RangePastEndOfFile => DocumentationScribeToolFailureReason.InvalidRequestEndOfFile,
         InvalidCursor => DocumentationScribeToolFailureReason.InvalidCursor,
         ScopeDenied => DocumentationScribeToolFailureReason.ScopeDenied,
         Stale => DocumentationScribeToolFailureReason.Stale,
@@ -346,8 +348,14 @@ public sealed record DocumentationScribeRepositoryReadExcerptResult(
     DocumentationScribeInstructionRouteFact? Route,
     ImmutableArray<DocumentationScribeDynamicEvidenceInput> DynamicEvidence) : IDocumentationScribeToolResult
 {
+    // Local diagnostic metadata only; excluded from the model-visible result.
+    internal DocumentationScribeToolFailureReason RequestFailureReason { get; init; } =
+        DocumentationScribeToolFailureReason.InvalidRequest;
+
     DocumentationScribeToolFailureReason IDocumentationScribeToolResult.FailureReasonCategory =>
-        DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
+        FailureCode == DocumentationScribeRepositoryToolFailureCodes.InvalidRequest
+            ? RequestFailureReason
+            : DocumentationScribeRepositoryToolFailureCodes.Category(FailureCode);
 
     public override string ToString() =>
         $"{nameof(DocumentationScribeRepositoryReadExcerptResult)} {{ Outcome = {Outcome.Id}, FailureCode = {FailureCode ?? "none"}, HasContent = {Excerpt is not null} }}";
@@ -392,7 +400,7 @@ public sealed class DocumentationScribeRepositoryToolDescriptor<TRequest, TResul
 
 public static class DocumentationScribeRepositoryToolSchemas
 {
-    public const string ReadExcerptDescription = "Read one bounded UTF-8 excerpt inside an authorized repository scope.";
+    public const string ReadExcerptDescription = "Read one bounded UTF-8 excerpt inside an authorized repository scope. A first repository.range-past-eof refusal returns no content: omit both line bounds for the authorized whole file. Repeating an out-of-file range stops this attempt; all existing limits still apply.";
     public const string ListFilesDescription = "List bounded repository-relative regular files inside an authorized scope.";
     public const string SearchTextDescription = "Search for one ordinal literal inside an authorized repository scope.";
 

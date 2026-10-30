@@ -4,6 +4,59 @@ namespace ContractScribe.Tests;
 
 public sealed class CampaignCheckpointStorePortTests
 {
+    [Theory]
+    [InlineData("unsafe", CampaignCheckpointAcceptanceKind.Unsafe)]
+    [InlineData("unreadable", CampaignCheckpointAcceptanceKind.Unreadable)]
+    [InlineData("unsupported", CampaignCheckpointAcceptanceKind.UnsupportedRevision)]
+    [InlineData("invalid", CampaignCheckpointAcceptanceKind.InvalidRead)]
+    [InlineData("lease-conflict", CampaignCheckpointAcceptanceKind.LeaseConflict)]
+    [InlineData("lease-unverifiable", CampaignCheckpointAcceptanceKind.LeaseUnverifiable)]
+    public async Task Conditional_failure_keeps_the_actual_current_read_diagnosis(string fault, CampaignCheckpointAcceptanceKind expected)
+    {
+        var predecessor = CreateOpenArtifact();
+        var transition = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        var store = new MemoryStore(predecessor)
+        {
+            ReplaceResult = CampaignCheckpointWriteKind.PublicationFailure,
+            ReadFailure = fault switch
+            {
+                "unsafe" => CampaignCheckpointReadResult.Unsafe(),
+                "unreadable" => CampaignCheckpointReadResult.Unreadable(),
+                "unsupported" => CampaignCheckpointReadResult.Invalid(CampaignStateValidationCode.UnsupportedVersion),
+                "invalid" => CampaignCheckpointReadResult.Invalid(),
+                "lease-conflict" => CampaignCheckpointReadResult.LeaseConflict(),
+                _ => CampaignCheckpointReadResult.LeaseUnverifiable(),
+            },
+        };
+        var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition);
+        Assert.Equal(expected, result.Kind);
+        Assert.Null(result.AcceptedCheckpoint);
+        Assert.Same(predecessor, store.Artifact);
+        Assert.Equal(1, store.ReplaceCalls);
+        Assert.Equal(0, store.ReadCalls); // The conditional owner returned its actual failed comparison.
+        Assert.Equal(0, store.WriteReadbacks);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Original_caller_or_mutation_cancellation_stops_before_conditional_effects(bool cancelCaller)
+    {
+        var predecessor = CreateOpenArtifact();
+        var transition = CampaignStateReducer.Stop(predecessor, CampaignTerminalKind.Cancelled);
+        var store = new MemoryStore(predecessor);
+        using var caller = new CancellationTokenSource();
+        using var mutation = new CancellationTokenSource();
+        if (cancelCaller) caller.Cancel(); else mutation.Cancel();
+        var result = await CampaignCheckpointAcceptance.AcceptAsync(store, transition, caller.Token, mutation.Token);
+        Assert.Equal(CampaignCheckpointAcceptanceKind.Cancelled, result.Kind);
+        Assert.Null(result.AcceptedCheckpoint);
+        Assert.Same(predecessor, store.Artifact);
+        Assert.Equal(0, store.ReplaceCalls);
+        Assert.Equal(0, store.ReadCalls);
+        Assert.Equal(0, store.WriteReadbacks);
+    }
+
     [Fact]
     public async Task Exact_replace_and_readback_are_required_for_acceptance()
     {
@@ -21,7 +74,7 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.Equal(0, store.CreateCalls);
         Assert.True(store.Artifact!.ExactUtf8Json.AsSpan().SequenceEqual(
             transition.Artifact.ExactUtf8Json.AsSpan()));
-        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(0, store.ReadCalls);
         Assert.Equal(1, store.WriteReadbacks);
     }
 
@@ -44,8 +97,11 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, unchanged.Kind);
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, lostAck.Kind);
         Assert.Equal(0, store.CreateCalls);
-        Assert.Equal(0, store.ReplaceCalls);
+        Assert.Equal(1, store.ReplaceCalls); // Rejected conditional comparison, no second publication.
         Assert.Equal(4, store.ReadCalls);
+        Assert.Equal(0, store.WriteReadbacks);
+        Assert.False(unchanged.AcceptedCheckpoint!.TryIssueInvocation());
+        Assert.False(lostAck.AcceptedCheckpoint!.TryIssueInvocation());
     }
 
     [Fact]
@@ -62,7 +118,8 @@ public sealed class CampaignCheckpointStorePortTests
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, stale.Kind);
         Assert.Equal(0, staleStore.CreateCalls);
-        Assert.Equal(0, staleStore.ReplaceCalls);
+        Assert.Equal(1, staleStore.ReplaceCalls);
+        Assert.Same(competing.Artifact, staleStore.Artifact);
 
         var badReadbackStore = new MemoryStore(predecessor) { CorruptAfterWrite = true };
         var badReadback = await CampaignCheckpointAcceptance.AcceptAsync(
@@ -97,7 +154,8 @@ public sealed class CampaignCheckpointStorePortTests
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, result.Kind);
         Assert.Equal(0, store.CreateCalls);
-        Assert.Equal(0, store.ReplaceCalls);
+        Assert.Equal(1, store.ReplaceCalls);
+        Assert.Null(store.Artifact);
     }
 
     [Fact]
@@ -113,7 +171,7 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.NotNull(result.AcceptedCheckpoint);
         Assert.Equal(1, store.CreateCalls);
         Assert.Equal(0, store.ReplaceCalls);
-        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(0, store.ReadCalls);
         Assert.Equal(1, store.WriteReadbacks);
     }
 
@@ -137,7 +195,8 @@ public sealed class CampaignCheckpointStorePortTests
             authority);
 
         Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, observedBeforeCreate.Kind);
-        Assert.Equal(0, alreadyPresent.CreateCalls);
+        Assert.Equal(1, alreadyPresent.CreateCalls); // Atomic absence comparison, not a write.
+        Assert.Equal(0, alreadyPresent.WriteReadbacks);
         Assert.Equal(CampaignCheckpointAcceptanceKind.Conflict, lostCreate.Kind);
         Assert.Equal(1, concurrentWinner.CreateCalls);
         Assert.Null(lostCreate.AcceptedCheckpoint);
@@ -159,6 +218,7 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.Equal(CampaignCheckpointAcceptanceKind.Accepted, result.Kind);
         Assert.Equal(1, store.ReplaceCalls);
         Assert.Equal(2, store.ReadCalls);
+        Assert.False(result.AcceptedCheckpoint!.TryIssueInvocation());
     }
 
     [Fact]
@@ -196,7 +256,7 @@ public sealed class CampaignCheckpointStorePortTests
         Assert.Equal(CampaignCheckpointAcceptanceKind.ReadbackMismatch, result.Kind);
         Assert.Null(result.AcceptedCheckpoint);
         Assert.Equal(1, store.ReplaceCalls);
-        Assert.Equal(1, store.ReadCalls);
+        Assert.Equal(0, store.ReadCalls);
         Assert.Equal(1, store.WriteReadbacks);
     }
 
@@ -242,6 +302,7 @@ public sealed class CampaignCheckpointStorePortTests
         public int ReadCalls { get; private set; }
         public int WriteReadbacks { get; private set; }
         public string? ReadbackFault { get; init; }
+        public CampaignCheckpointReadResult? ReadFailure { get; init; }
         private CampaignCheckpointArtifact? predecessor;
         public int CreateCalls { get; private set; }
         public int ReplaceCalls { get; private set; }
@@ -255,6 +316,7 @@ public sealed class CampaignCheckpointStorePortTests
 
         private ValueTask<CampaignCheckpointReadResult> Observe()
         {
+            if (ReadFailure is not null) return ValueTask.FromResult(ReadFailure);
             if (Artifact is null)
             {
                 return ValueTask.FromResult(CampaignCheckpointReadResult.NotFound());
@@ -309,7 +371,9 @@ public sealed class CampaignCheckpointStorePortTests
             if (ReplaceResult != CampaignCheckpointWriteKind.Written)
             {
                 Artifact = WinnerOnRejectedWrite ?? Artifact;
-                return ValueTask.FromResult(new CampaignCheckpointWriteResult(ReplaceResult));
+                return ValueTask.FromResult(ReadFailure is { } current
+                    ? CampaignCheckpointWriteResult.Rejected(ReplaceResult, current)
+                    : new CampaignCheckpointWriteResult(ReplaceResult));
             }
 
             if (Artifact is null)

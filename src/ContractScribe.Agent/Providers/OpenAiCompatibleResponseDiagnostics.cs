@@ -34,6 +34,8 @@ public enum OpenAiCompatibleResponseCodecDisposition
     ContinuationMissing,
     ToolCallsExceedsLimit,
     ToolCallArgumentsExceedsLimit,
+    ArgumentsNotString,
+    ArgumentsDuplicateProperty,
 }
 
 public sealed class OpenAiCompatibleResponseDiagnostic
@@ -260,6 +262,8 @@ internal static class OpenAiCompatibleResponseDiagnosticVocabulary
         OpenAiCompatibleResponseCodecDisposition.ToolCallEnvelopeInvalid => "codec.tool-call.envelope.invalid",
         OpenAiCompatibleResponseCodecDisposition.ToolCallAliasInvalid => "codec.tool-call.alias.invalid",
         OpenAiCompatibleResponseCodecDisposition.ArgumentsInvalid => "codec.arguments.invalid",
+        OpenAiCompatibleResponseCodecDisposition.ArgumentsNotString => "codec.arguments.not-string",
+        OpenAiCompatibleResponseCodecDisposition.ArgumentsDuplicateProperty => "codec.arguments.duplicate-property",
         OpenAiCompatibleResponseCodecDisposition.TerminalMixed => "codec.terminal.mixed",
         OpenAiCompatibleResponseCodecDisposition.UsageInvalid => "codec.usage.invalid",
         OpenAiCompatibleResponseCodecDisposition.FinishReasonLength => "codec.finish-reason.length",

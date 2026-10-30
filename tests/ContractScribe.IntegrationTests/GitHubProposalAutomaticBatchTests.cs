@@ -1,5 +1,6 @@
 using System.Text.Json.Nodes;
 using System.Text.Json;
+using System.Text;
 using ContractScribe.Core;
 using ContractScribe.Core.Hosting;
 using ContractScribe.Cli;
@@ -285,34 +286,107 @@ public sealed partial class GitHubProposalCliProcessTests
     }
 
     [Fact]
-    public async Task Automatic_operator_merges_reaudit_actual_twelve_to_seven_to_two_to_zero_targets()
+    public Task Automatic_operator_merges_reaudit_actual_twelve_to_seven_to_two_to_zero_targets() =>
+        VerifyOperatorBatches([5, 5, 5], preparatoryClosure: false);
+
+    [Fact]
+    public Task Automatic_operator_merges_reaudit_with_closed_history_and_a_partial_sized_batch() =>
+        VerifyOperatorBatches([2, 2, 2], preparatoryClosure: true);
+
+    private static async Task VerifyOperatorBatches(int[] quotas, bool preparatoryClosure)
     {
         if (!OperatingSystem.IsLinux() && !ContractScribe.Roslyn.DarwinFileSystem.IsSupported) return;
         await using var fixture = await Fixture.CreateAsync(targetCount: 12);
         // Four generations of authenticated reads share one service/database.
         // Retain the ordinary per-scenario guard elsewhere and all request history.
-        fixture.GitHub.MaximumRequests = 4 * 20_000;
-        await SetAutomaticQuota(fixture, 5);
+        fixture.GitHub.MaximumRequests = (quotas.Length + 2) * 20_000;
+        if (preparatoryClosure)
+        {
+            // The real remaining-work fixture already has six reviewed XML
+            // blocks. They are baseline input, never new model completions.
+            var path = Path.Join(fixture.Repository.Root, "App/App.cs");
+            var source = await File.ReadAllTextAsync(path);
+            for (var index = 0; index < 6; index++)
+                source = source.Replace($"    public static void Method{index:D2}() {{ }}",
+                    $"    /// <summary>Performs no operation.</summary>\n    public static void Method{index:D2}() {{ }}", StringComparison.Ordinal);
+            await File.WriteAllTextAsync(path, source);
+            fixture.Source = Encoding.UTF8.GetBytes(source);
+            fixture.GovernedFiles["App/App.cs"] = (fixture.Source, fixture.GovernedFiles["App/App.cs"].Mode);
+            AdvanceTarget(fixture, fixture.GovernedFiles.ToDictionary(pair => pair.Key, pair => pair.Value.Bytes),
+                "Synthetic baseline with six existing documentation blocks\n");
+            await SetAutomaticQuota(fixture, 2);
+            AssertResult(await fixture.Run(), 0, "published");
+            fixture.GitHub.Lifecycle("closed");
+            AdvanceReadme(fixture);
+            var readmePath = Path.Join(fixture.Repository.Root, "README.md");
+            var readme = "A new documentation-only base.\n"u8.ToArray();
+            await File.WriteAllBytesAsync(readmePath, readme);
+            fixture.GovernedFiles["README.md"] = (readme,
+                (OperatingSystem.IsLinux() || ContractScribe.Roslyn.DarwinFileSystem.IsSupported)
+                    ? File.GetUnixFileMode(readmePath) : null);
+        }
         var bases = new HashSet<string>(StringComparer.Ordinal);
         var batches = new HashSet<string>(StringComparer.Ordinal);
         var invocations = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var remaining in new[] { 12, 7, 2 })
+        var remaining = preparatoryClosure ? 6 : 12;
+        foreach (var quota in quotas)
         {
+            await SetAutomaticQuota(fixture, quota);
+            var historicalHeads = fixture.GitHub.PullRequests
+                .Select(pr => pr["head"]!["sha"]!.GetValue<string>()).ToArray();
+            var requestStart = fixture.GitHub.Requests.Count;
+            var planUploads = 0;
+            fixture.GitHub.BeforeBody = (request, body) =>
+            {
+                if (request.Method != "POST" || !request.Path.EndsWith("/git/blobs", StringComparison.Ordinal)) return;
+                using var envelope = JsonDocument.Parse(body);
+                var content = Convert.FromBase64String(envelope.RootElement.GetProperty("content").GetString()!);
+                if (content.Length == 0 || content[0] != (byte)'{') return;
+                using var value = JsonDocument.Parse(content);
+                if (value.RootElement.TryGetProperty("AuditDocumentSha256", out _)) planUploads++;
+            };
             var posts = fixture.GitHub.PrAttempts;
             var received = fixture.Provider.RequestCount;
             Assert.True(bases.Add(fixture.GitHub.Refs["refs/heads/main"]));
             var published = await fixture.Run();
             AssertResult(published, 0, "published");
+            fixture.GitHub.BeforeBody = null;
+            Assert.InRange(planUploads, 0, 1);
+            var invocationRequests = fixture.GitHub.Requests.Skip(requestStart).ToArray();
+            var distinctPayloads = invocationRequests.Where(request => request.Method == "GET"
+                && (request.Path.Contains("/git/commits/", StringComparison.Ordinal)
+                    || request.Path.Contains("/git/trees/", StringComparison.Ordinal)
+                    || request.Path.Contains("/git/blobs/", StringComparison.Ordinal)))
+                .Select(request => request.Path).Distinct(StringComparer.Ordinal).Count();
+            Console.WriteLine($"remaining={remaining}; HTTP={invocationRequests.Length}; GET={invocationRequests.Count(request => request.Method == "GET")}; "
+                + $"readonlyPOST={invocationRequests.Count(request => request.Method == "POST" && request.Mutation == 0)}; effects={invocationRequests.Count(request => request.Mutation > 0)}; distinctGitPayloads={distinctPayloads}; "
+                + string.Join(';', invocationRequests.GroupBy(request => request.Path.Contains("/git/", StringComparison.Ordinal)
+                    ? request.Path.Split("/git/", StringSplitOptions.None)[1].Split('/')[0]
+                    : request.Kind)
+                    .Select(group => $"{group.Key}={group.Count()}")));
+            foreach (var historicalHead in historicalHeads)
+            {
+                // Preflight and publication have independent cold scopes. A
+                // confirmed checkpoint owner must not reload this immutable
+                // proposal for every progress/dispatch/tool checkpoint.
+                var reads = invocationRequests.Count(request => request.Method == "GET"
+                    && request.Path.EndsWith("/git/commits/" + historicalHead, StringComparison.Ordinal));
+                Assert.InRange(reads, 1, 8);
+            }
+            // Ratchet the measured remaining-six regression independently of
+            // the larger five-target history fixture. This is an intermediate
+            // bound, not evidence that the <=100 optimization goal is met.
+            Assert.InRange(invocationRequests.Length, 1, preparatoryClosure ? 2600 : 4500);
             var checkpoint = fixture.Checkpoint();
             Assert.True(batches.Add(checkpoint.State.Batch.Identity));
             Assert.Equal(remaining, checkpoint.State.Batch.CompleteTargets.Length);
-            Assert.Equal(Math.Min(5, remaining), checkpoint.State.WorkItems.Count(work => work.Status == CampaignWorkStatus.Accepted));
+            Assert.Equal(Math.Min(quota, remaining), checkpoint.State.WorkItems.Count(work => work.Status == CampaignWorkStatus.Accepted));
             var usage = EvidenceUsage(published);
             Assert.True(invocations.Add(usage.GetProperty("invocationId").GetString()!));
-            Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("selectedTargets").GetInt32());
-            Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
-            Assert.Equal(Math.Min(5, remaining), usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
-            Assert.Equal(remaining - Math.Min(5, remaining), usage.GetProperty("work").GetProperty("deferredTargets").GetInt32());
+            Assert.Equal(Math.Min(quota, remaining), usage.GetProperty("work").GetProperty("selectedTargets").GetInt32());
+            Assert.Equal(Math.Min(quota, remaining), usage.GetProperty("work").GetProperty("startedTargets").GetInt32());
+            Assert.Equal(Math.Min(quota, remaining), usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
+            Assert.Equal(remaining - Math.Min(quota, remaining), usage.GetProperty("work").GetProperty("deferredTargets").GetInt32());
             Assert.Equal(fixture.Provider.RequestCount - received, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
             var diagnostics = usage.GetProperty("providerDiagnostics");
             Assert.Equal(0, diagnostics.GetProperty("missingDispatches").GetInt32());
@@ -339,7 +413,9 @@ public sealed partial class GitHubProposalCliProcessTests
             Assert.Equal(counts, GateCounts(fixture));
             Assert.Equal(requests, fixture.Provider.RequestCount);
             await OperatorMergeLatest(fixture);
+            remaining -= Math.Min(quota, remaining);
         }
+        Assert.Equal(0, remaining);
         var noOp = await fixture.Run();
         AssertResult(noOp, 0, "no-op");
         AssertZeroInvocationWork(noOp);
@@ -348,7 +424,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var finalRequests = fixture.Provider.RequestCount;
         AssertResult(await fixture.Run(), 0, "no-op");
         Assert.Equal(finalRequests, fixture.Provider.RequestCount);
-        Assert.Equal(3, fixture.GitHub.PrAttempts);
+        Assert.Equal(quotas.Length + (preparatoryClosure ? 1 : 0), fixture.GitHub.PrAttempts);
         Assert.InRange(fixture.GitHub.Requests.Count, 1, fixture.GitHub.MaximumRequests);
         Assert.Equal(finalCounts.Created, GateCounts(fixture).Created);
         await fixture.AssertSourceUnchanged();

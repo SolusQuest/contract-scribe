@@ -11,6 +11,41 @@ namespace ContractScribe.Tests;
 
 public sealed partial class GitHubCoordinationRefTests
 {
+    [Theory]
+    [InlineData("OperationCheckpointAcceptanceDeadline")]
+    [InlineData("OperationSettlementToken")]
+    public void Specific_cancellation_observations_are_private_operation_local_and_closed(string name)
+    {
+        var source = Enum.Parse<GitHubCheckpointCancellation>(name);
+        using var owned = new CancellationTokenSource();
+        using var other = new CancellationTokenSource();
+        owned.Cancel();
+        var opaque = new GitHubCheckpointDiagnostic(7, GitHubCheckpointOperation.Write, 17,
+            GitHubCheckpointStage.CheckpointReadback, GitHubCheckpointReason.Cancelled,
+            Cancellation: GitHubCheckpointCancellation.OperationToken);
+        var bound = opaque.WithOperationCancellation(owned.Token);
+        Assert.False(opaque.MatchesOperationCancellation(owned.Token));
+        Assert.True(bound.MatchesOperationCancellation(owned.Token));
+        Assert.False(bound.MatchesOperationCancellation(other.Token));
+        Assert.False(bound.MatchesOperationCancellation(default));
+        var valid = bound with { Cancellation = source };
+        Assert.True(valid.IsValid);
+        foreach (var invalid in new[] { valid with { Operation = GitHubCheckpointOperation.Read },
+            valid with { Stage = GitHubCheckpointStage.FinalRef }, valid with { AttemptedRevision = null },
+            valid with { Reason = GitHubCheckpointReason.Transport } }) Assert.False(invalid.IsValid);
+        Assert.DoesNotContain("observedOperationCancellation", bound.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("CancellationToken", JsonSerializer.Serialize(bound), StringComparison.Ordinal);
+        var usage = new InvocationUsage();
+        usage.ObserveCheckpoint(valid);
+        var terminal = GitHubProposalPresentation.Campaign(CliBuildIdentity.Current,
+            new("execution", CampaignOperation.Resume, "campaign.cancelled", 16));
+        using var json = JsonDocument.Parse(GitHubProposalPresentation.WithUsage(terminal, usage).StandardOutput);
+        var projected = json.RootElement.GetProperty("invocationUsage").GetProperty("checkpointFailure");
+        Assert.Equal(9, projected.EnumerateObject().Count());
+        Assert.Equal(source.ToString(), projected.GetProperty("cancellation").GetString());
+        Assert.DoesNotContain("CancellationToken", projected.GetRawText(), StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Invalid_checkpoint_observations_cannot_replace_execution_or_escape_the_closed_report()
     {
@@ -82,7 +117,7 @@ public sealed partial class GitHubCoordinationRefTests
         var injected = false;
         handler.AfterResponse = (request, response) =>
         {
-            if (!injected && request.Method == HttpMethod.Post && request.RequestUri!.AbsolutePath == "/graphql")
+            if (!injected && IsRefMutation(request))
             {
                 injected = true;
                 if (fault == "lost-ack") throw new HttpRequestException("private-transport-sentinel");
@@ -106,6 +141,13 @@ public sealed partial class GitHubCoordinationRefTests
         else
         {
             Assert.Null(accepted.AcceptedCheckpoint);
+            if (fault == "caller-pre")
+            {
+                // Core rejected the original cancelled token before any port
+                // operation; there is no remote attempt to manufacture.
+                Assert.Null(store.CheckpointDiagnostic);
+                return;
+            }
             var observation = Assert.IsType<GitHubCheckpointDiagnostic>(store.CheckpointDiagnostic);
             Assert.True(observation.IsValid);
             Assert.Equal(cancellation, observation.Cancellation?.ToString());
@@ -139,10 +181,10 @@ public sealed partial class GitHubCoordinationRefTests
         handler.AfterResponse = (request, response) =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            if (request.Method == HttpMethod.Post && path == "/graphql") cas = true;
+            if (IsRefMutation(request)) cas = true;
             if (cas && (!injected || fault == "ref") && (fault == "ref"
                 ? path.Contains("/git/ref/heads/contract-scribe/", StringComparison.Ordinal)
-                : path.EndsWith("/git/blobs/" + blob, StringComparison.Ordinal)))
+                : IsCheckpointQuery(request, currentOnly: true)))
             {
                 injected = true;
                 if (fault == "exception") throw new InvalidOperationException("private-error-body-key-sentinel");
@@ -155,7 +197,7 @@ public sealed partial class GitHubCoordinationRefTests
                 // Under B a single predecessor is pending, so the negative
                 // first-closed-failure control must exhaust all three reads.
                 if (fault == "ref") { node["object"]!["sha"] = oldHead; predecessorObservations++; }
-                else node["content"] = Convert.ToBase64String("{}"u8);
+                else node["data"]!["repository"]!["checkpoint"]!["text"] = "{}";
                 response.Content.Dispose();
                 response.Content = new StringContent(node.ToJsonString(), Encoding.UTF8, "application/json");
             }

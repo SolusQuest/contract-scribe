@@ -44,21 +44,21 @@ public sealed partial class CampaignStateContractTests
         var mutationSeen = false;
         var recoverySeen = false;
         var recoveryCancelled = false;
-        remote.LoseResponse = loss;
+        // Both labels retain their original readback roles after the one atomic mutation.
+        remote.LoseResponse = GitHubCoordinationRefTests.LostMutation.Ref;
         handler.BeforeRequestWithCancellation = (request, token) =>
         {
             var path = request.RequestUri!.AbsolutePath;
-            var selectedMutation = request.Method == HttpMethod.Post && (loss == GitHubCoordinationRefTests.LostMutation.Blob
-                ? path.EndsWith("/git/blobs", StringComparison.Ordinal) : path.EndsWith("/graphql", StringComparison.Ordinal));
+            var selectedMutation = GitHubCoordinationRefTests.IsRefMutation(request);
             if (!mutationSeen && selectedMutation)
             {
                 mutationSeen = true;
                 clock.Advance(29999);
             }
-            else if (mutationSeen && !recoverySeen && request.Method == HttpMethod.Get &&
+            else if (mutationSeen && !recoverySeen &&
                 (loss == GitHubCoordinationRefTests.LostMutation.Blob
-                    ? path.Contains("/git/blobs/", StringComparison.Ordinal)
-                    : path.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)))
+                    ? GitHubCoordinationRefTests.IsCheckpointQuery(request, currentOnly: true)
+                    : request.Method == HttpMethod.Get && path.Contains("/git/ref/heads/contract-scribe/coordination/", StringComparison.Ordinal)))
             {
                 recoverySeen = true;
                 clock.Advance(30001);
@@ -80,13 +80,9 @@ public sealed partial class CampaignStateContractTests
         Assert.False(coordinator.Scope.SemanticAuthorizationClosed);
         Assert.Equal(0, allowance.ToolCallCount);
         Assert.Equal(accepted.Artifact!.Sha256, invocation.AcceptedCheckpoint.Artifact.Sha256);
-        Assert.Equal(refs + (loss == GitHubCoordinationRefTests.LostMutation.Ref ? 1 : 0), remote.RefMutationAttempts);
-        if (loss == GitHubCoordinationRefTests.LostMutation.Blob)
-        {
-            Assert.Equal(objects + 1, remote.ObjectMutationAttempts);
-            Assert.Equal(head, remote.CoordinationHead);
-        }
-        else Assert.NotEqual(head, remote.CoordinationHead);
+        Assert.Equal(refs + 1, remote.RefMutationAttempts);
+        Assert.Equal(objects, remote.ObjectMutationAttempts);
+        Assert.NotEqual(head, remote.CoordinationHead);
         await coordinator.LateObservation.WaitAsync(TimeSpan.FromSeconds(10));
     }
 }

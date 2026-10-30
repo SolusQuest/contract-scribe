@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """fake_github_state.py — A3-owned wire-level GitHub substitute for the
-action-workflows CI jobs (tests/action-workflows). NOT the A2 fake: it adds
-what the fresh-runner handoff proof needs and keeps ownership inside #186's
-declared paths.
+action-workflows CI jobs (tests/action-workflows). It extends the shared
+closed GitHub wire model with real-checkout seeding and persisted state
+for the fresh-runner handoff proof.
 
 Same publication wire contract as tests/action/fake_github_api.py:
   Authorization: Bearer contract-scribe-synthetic-transport-only and
@@ -33,7 +33,6 @@ Writes <ready-file> JSON {endpoint, baseOid}; appends "METHOD path" lines to
 """
 
 import base64
-import hashlib
 import json
 import os
 import socket
@@ -41,6 +40,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+from pathlib import Path
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 EXPECTED_AUTH = "Bearer contract-scribe-synthetic-transport-only"
@@ -48,9 +48,11 @@ EXPECTED_VERSION = "2026-03-10"
 MAX_BODY = 32 * 1024 * 1024
 
 
-def object_oid(kind, data):
-    return hashlib.sha1(kind.encode() + b" " + str(len(data)).encode()
-                        + b"\0" + data).hexdigest()
+# Both Action paths exercise one current closed query/signed-commit model.
+# This adapter adds only real-checkout import and cross-runner persistence.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "action"))
+from fake_github_api import (CURRENT_CHECKPOINT_QUERY, HISTORICAL_CHECKPOINT_QUERY,
+                             State as ProtocolState)
 
 
 def _actor_parts(line):
@@ -64,7 +66,7 @@ def _actor_parts(line):
     return {"name": name, "email": email, "date": date}
 
 
-class State:
+class State(ProtocolState):
     def __init__(self):
         self.blobs = {}          # oid -> bytes
         self.trees = {}          # oid -> [(path, mode, oid)]
@@ -74,11 +76,6 @@ class State:
         self.base_oid = None
         self.lock = threading.Lock()
         self.failures = []
-
-    @staticmethod
-    def actor():
-        return {"name": "Synthetic", "email": "synthetic@example.invalid",
-                "date": "2000-01-01T00:00:00Z"}
 
     # -- git-object import -------------------------------------------------
     def seed_from_repo(self, repo):
@@ -165,41 +162,6 @@ class State:
         self.pull_requests = snapshot["pull_requests"]
         self.base_oid = snapshot["base_oid"]
 
-    # -- object model (same wire shapes as the A2 fake) --------------------
-    def add_blob(self, data):
-        oid = object_oid("blob", data)
-        self.blobs[oid] = data
-        return oid
-
-    def add_tree(self, entries):
-        stream = bytearray()
-        for path, mode, oid in sorted(
-                entries, key=lambda e: e[0] + ("/" if e[1] in
-                                             ("040000", "40000") else "\0")):
-            stream += (b"40000" if mode == "040000" else mode.encode())
-            stream += b" " + path.encode() + b"\0"
-            stream += bytes.fromhex(oid)
-        oid = object_oid("tree", bytes(stream))
-        self.trees[oid] = entries
-        return oid
-
-    def add_commit(self, tree, parents, message, author, committer):
-        def actor_line(role, actor):
-            import datetime
-            ts = int(datetime.datetime.fromisoformat(
-                actor["date"].replace("Z", "+00:00")).timestamp())
-            return (f"{role} {actor['name']} <{actor['email']}> {ts} +0000\n")
-        text = "tree " + tree + "\n"
-        text += "".join(f"parent {p}\n" for p in parents)
-        text += actor_line("author", author) + actor_line("committer", committer)
-        text += "\n" + message
-        oid = object_oid("commit", text.encode())
-        self.commits[oid] = {
-            "sha": oid, "tree": {"sha": tree},
-            "parents": [{"sha": p} for p in parents],
-            "message": message, "author": author, "committer": committer}
-        return oid
-
     def tree_response(self, oid):
         # Git objects store the directory mode unpadded (40000); the REST
         # API surface pads to six chars (040000), which the CLI requires.
@@ -209,19 +171,6 @@ class State:
              else "commit" if m == "160000" else "blob"}
             for p, m, o in self.trees[oid]]}
 
-    @staticmethod
-    def repository():
-        return {"id": 1, "node_id": "REPO_node", "name": "repo",
-                "full_name": "Owner/repo", "private": False,
-                "archived": False, "disabled": False,
-                "owner": {"id": 1, "node_id": "OWNER_node",
-                          "login": "Owner", "type": "Organization"}}
-
-    def commit_response(self, raw):
-        response = dict(raw)
-        if response["message"].endswith("\n"):
-            response["message"] = response["message"][:-1]
-        return response
 
 
 def serve(config_path, ready_file, log_file, fail_file):
@@ -360,6 +309,11 @@ def serve(config_path, ready_file, log_file, fail_file):
                 return 201, state.commit_response(state.commits[oid])
             if path == "/graphql":
                 query = body.get("query", "")
+                compact = "".join(query.split())
+                if compact in ("".join(CURRENT_CHECKPOINT_QUERY.split()), "".join(HISTORICAL_CHECKPOINT_QUERY.split())):
+                    return 200, state.checkpoint_snapshot(body["variables"])
+                if query == "mutation($input:CreateCommitOnBranchInput!){createCommitOnBranch(input:$input){clientMutationId}}":
+                    return 200, state.atomic_checkpoint(body["variables"]["input"])
                 if query != ("mutation($input:UpdateRefsInput!)"
                              "{updateRefs(input:$input){clientMutationId}}"):
                     fail("graphql-query")

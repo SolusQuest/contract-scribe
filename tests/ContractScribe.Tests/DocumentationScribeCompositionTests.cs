@@ -199,17 +199,15 @@ public sealed partial class DocumentationScribeCompositionTests
             campaign.Input(fixture, trace, exchange, RuntimeOptions(), executionToken: actual.CheckpointToken, timeProvider: clock));
         Assert.Equal(reachesSemantic, exchange.SawSemanticEvidence);
         Assert.Equal(expectedRequests, exchange.RequestCount);
-        // Four fewer GETs per conditional transaction now allow the finish send
-        // even with13s extra authorization delay. No request or time cap changed.
-        // Every HTTP exchange keeps consuming the existing invocation clock.
-        // The real semantic query progresses; later terminal persistence reaches
-        // this fixture's original 120s invocation cap rather than gaining time.
+        // Reusing authenticated immutable predecessors also leaves enough of the
+        // original 120s invocation for terminal persistence. All real exchanges
+        // still consume that clock, including the extra authorization delay.
         Assert.Equal(reachesSemantic, outcome.TrustedProposal is not null);
         if (reachesSemantic)
-            Assert.Equal(DocumentationCampaignProposalOutcomeKind.InvocationBudgetExhausted, outcome.Kind);
+            Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Single(trace.SemanticWrites);
         var observed = trace.SemanticWrites[0];
-        Assert.Equal(duplicateReadback ? 3 : 2, observed.PredecessorCommitReads);
+        Assert.Equal(1, observed.PredecessorCommitReads);
         Assert.True(reachesSemantic ? observed.ElapsedMilliseconds < 30000 : observed.ElapsedMilliseconds >= 30000,
             $"duplicate={duplicateReadback}; requests={observed.Requests}; elapsed={observed.ElapsedMilliseconds}");
         if (!reachesSemantic) Assert.Equal("campaign.timed-out", outcome.Code);
@@ -446,7 +444,9 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.NotNull(outcome.TrustedProposal);
         Assert.Equal(2, observing.RequestCount);
         Assert.True(observing.SawPersistedReservation);
-        Assert.Equal(13, store.SuccessfulReplaceCount);
+        // Conditional local Host closure depends on elapsed time; every
+        // mandatory durable effect still occurs exactly once.
+        Assert.Equal(10, store.SuccessfulReplaceCount - store.HostClosureCount);
         Assert.Equal(outcome.Artifact!.Sha256, store.Current!.Sha256);
         Assert.True(outcome.Artifact.ExactUtf8Json.AsSpan().SequenceEqual(
             store.Current.ExactUtf8Json.AsSpan()));
@@ -458,7 +458,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, replay.Kind);
         Assert.Equal("campaign.proposal.replay", replay.Code);
         Assert.Equal(0, replayExchange.RequestCount);
-        Assert.Equal(13, store.SuccessfulReplaceCount);
+        Assert.Equal(10, store.SuccessfulReplaceCount - store.HostClosureCount);
     }
 
     [Fact]
@@ -533,7 +533,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(1, binds);
-        Assert.Equal(13, store.SuccessfulReplaceCount);
+        Assert.Equal(10, store.SuccessfulReplaceCount - store.HostClosureCount);
     }
 
     [Fact]
@@ -688,7 +688,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, outcome.Kind);
         Assert.Equal(2, exchange.RequestCount);
-        Assert.Equal(13, store.SuccessfulReplaceCount);
+        Assert.Equal(10, store.SuccessfulReplaceCount - store.HostClosureCount);
     }
 
     [Fact]
@@ -806,7 +806,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.ProposalReady, invalid.Kind);
         Assert.Equal(2, invalidExchange.RequestCount);
-        Assert.Equal(13, invalidStore.SuccessfulReplaceCount);
+        Assert.Equal(10, invalidStore.SuccessfulReplaceCount);
         Assert.Null(invalidStore.Current!.State.ActiveReservation);
         Assert.Equal(0, invalidStore.Current.State.LineageCharges.ActiveElapsedMilliseconds.Observed);
 
@@ -823,7 +823,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignProposalOutcomeKind.StateConflict, conflict.Kind);
         Assert.Equal("campaign.settlement.conflict", conflict.Code);
         Assert.Equal(2, conflictExchange.RequestCount);
-        Assert.Equal(12, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(9, conflictStore.SuccessfulReplaceCount - conflictStore.HostClosureCount);
         Assert.IsType<CampaignProviderReservation>(conflictStore.Current!.State.ActiveReservation);
     }
 
@@ -934,7 +934,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(0, store.Current.State.LineageCharges.ProviderRequests.ConservativeUnobserved);
         Assert.True(store.Current.State.LineageCharges.ActiveElapsedMilliseconds.ConservativeUnobserved > 0);
         Assert.True(store.Current.State.LineageCharges.ProviderRequests.Observed > 0);
-        Assert.Equal(15, store.SuccessfulReplaceCount);
+        Assert.Equal(12, store.SuccessfulReplaceCount - store.HostClosureCount);
     }
 
     [Fact]
@@ -2149,6 +2149,16 @@ public sealed partial class DocumentationScribeCompositionTests
         }
 
         internal int SuccessfulReplaceCount { get; private set; }
+        internal int HostClosureCount { get; private set; }
+
+        private void CountReplacement(CampaignCheckpointArtifact before, CampaignCheckpointArtifact after)
+        {
+            if (before.State.ActiveReservation is CampaignProviderReservation
+                { HostPhase: CampaignProviderHostPhase.TerminalSubmission or CampaignProviderHostPhase.RegisteredTool }
+                && after.State.ActiveReservation is CampaignProviderReservation
+                { HostPhase: CampaignProviderHostPhase.Continuation }) HostClosureCount++;
+        }
+
         internal CampaignCheckpointWriteKind? NextReportedReplaceKind { get; init; }
         internal bool ApplyNextReplaceBeforeReporting { get; init; }
         internal Func<CampaignCheckpointArtifact, CampaignCheckpointArtifact, bool>? RejectedTransition { get; init; }
@@ -2235,14 +2245,16 @@ public sealed partial class DocumentationScribeCompositionTests
                 {
                     if (ApplyNextReplaceBeforeReporting)
                     {
-                        current = Parse(exactUtf8Json);
+                        CountReplacement(current, successor);
+                        current = successor;
                         SuccessfulReplaceCount++;
                         AfterSuccessfulReplace?.Invoke(SuccessfulReplaceCount);
                     }
                     return ValueTask.FromResult(new CampaignCheckpointWriteResult(reported));
                 }
 
-                current = Parse(exactUtf8Json);
+                CountReplacement(current, successor);
+                current = successor;
                 SuccessfulReplaceCount++;
                 AfterSuccessfulReplace?.Invoke(SuccessfulReplaceCount);
                 return ValueTask.FromResult(CampaignCheckpointWriteResult.Written(ReadAsync(cancellationToken).Result));

@@ -351,7 +351,7 @@ public sealed partial class DocumentationScribeCompositionTests
 
         Assert.Equal(DocumentationCampaignOutcomeKind.StateConflict, conflict.Kind);
         Assert.Equal(0, conflictDispatches);
-        Assert.Equal(13, conflictStore.SuccessfulReplaceCount);
+        Assert.Equal(10, conflictStore.SuccessfulReplaceCount - conflictStore.HostClosureCount);
         Assert.Null(conflict.AcceptedCandidate);
     }
 
@@ -374,7 +374,7 @@ public sealed partial class DocumentationScribeCompositionTests
         Assert.Equal(DocumentationCampaignOutcomeKind.AmbiguousDispatch, outcome.Kind);
         Assert.Equal("campaign.patch.dispatch-unconfirmed", outcome.Code);
         Assert.IsType<CampaignPatchReservation>(store.Current!.State.ActiveReservation);
-        Assert.Equal(14, store.SuccessfulReplaceCount);
+        Assert.Equal(11, store.SuccessfulReplaceCount - store.HostClosureCount);
         Assert.Null(outcome.AcceptedCandidate);
     }
 
