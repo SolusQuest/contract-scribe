@@ -12,6 +12,7 @@ public sealed partial class GitHubProposalCliProcessTests
     [InlineData("tool-diagnostic-cursor", "campaign.tool-failure.search-text.invalid-cursor", 2, 7, 20)]
     [InlineData("tool-diagnostic-semantic", "campaign.tool-failure.get-target-evidence.invalid-request", 1, 1, 6)]
     [InlineData("tool-diagnostic-positive", null, 4, 11, 41)]
+    [InlineData("tool-diagnostic-eof-corrected", null, 6, 13, 49)]
     public async Task Tool_failures_preserve_the_original_bounded_reason_through_CLI_and_Action(
         string scenario, string? expectedCode, int sends, int tools, int revision)
     {
@@ -19,6 +20,7 @@ public sealed partial class GitHubProposalCliProcessTests
         var configuration = JsonNode.Parse(await File.ReadAllTextAsync(fixture.Configuration!))!;
         configuration["budgets"]!["invocation"]!["maximumTargets"] = 5;
         configuration["budgets"]!["invocation"]!["maximumProviderRequests"] = 8;
+        if (scenario == "tool-diagnostic-eof-corrected") configuration["budgets"]!["invocation"]!["maximumProviderRequests"] = 6;
         await File.WriteAllTextAsync(fixture.Configuration!, configuration.ToJsonString());
         var result = await fixture.Run();
         var failed = expectedCode is not null;
@@ -27,15 +29,19 @@ public sealed partial class GitHubProposalCliProcessTests
         var progress = state.ScribeProgress!;
         using var parsed = JsonDocument.Parse(result.Stdout);
         var root = parsed.RootElement; var usage = root.GetProperty("invocationUsage");
-        Assert.Equal(sends, fixture.Provider.RequestCount);
-        Assert.Equal(sends, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
-        Assert.Equal(sends, usage.GetProperty("calls").GetProperty("logicalProviderCalls").GetInt32());
+        // Keep the old range row's identity; it now exercises the second EOF
+        // after the first refusal, rather than terminating on the first one.
+        var currentSends = sends + (scenario == "tool-diagnostic-range" ? 1 : 0);
+        var currentTools = tools + (scenario == "tool-diagnostic-range" ? 1 : 0);
+        Assert.Equal(currentSends, fixture.Provider.RequestCount);
+        Assert.Equal(currentSends, usage.GetProperty("calls").GetProperty("physicalProviderDispatches").GetInt32());
+        Assert.Equal(currentSends, usage.GetProperty("calls").GetProperty("logicalProviderCalls").GetInt32());
         Assert.Equal(0, usage.GetProperty("calls").GetProperty("retryDispatches").GetInt32());
-        Assert.Equal(tools, usage.GetProperty("calls").GetProperty("toolCalls").GetInt32());
+        Assert.Equal(currentTools, usage.GetProperty("calls").GetProperty("toolCalls").GetInt32());
         // Keep the original Theory row/identity as the pre-composition workload
         // reference. A successful batch now combines its last member/progress
         // projection instead of persisting one duplicate final scalar save.
-        var currentRevision = failed ? revision : revision - 1;
+        var currentRevision = failed ? revision + (scenario == "tool-diagnostic-range" ? 4 : 0) : revision - 1;
         Assert.Equal(currentRevision, checkpoint.CheckpointRevision);
         Assert.Equal(currentRevision, usage.GetProperty("checkpointRevision").GetInt64());
         Assert.Equal("complete", usage.GetProperty("completeness").GetString());
@@ -45,6 +51,7 @@ public sealed partial class GitHubProposalCliProcessTests
         Assert.True(progress.Session.Ended); Assert.Null(state.ActiveReservation);
         Assert.Equal(7, state.TargetProgress.Count(item => item.Kind == CampaignTargetProgressKind.Deferred));
         Assert.Equal(failed ? 0 : 5, usage.GetProperty("work").GetProperty("acceptedTargets").GetInt32());
+        Assert.Equal(0, usage.GetProperty("work").GetProperty("skippedTargets").GetInt32());
         Assert.Equal(failed ? 1 : 0, usage.GetProperty("work").GetProperty("failedTargets").GetInt32());
         Assert.Equal(failed ? 5 : 0, usage.GetProperty("work").GetProperty("remainingTargets").GetInt32());
         Assert.Equal(failed ? 0 : 1, state.LineageCharges.PatchValidationInvocations);
@@ -126,22 +133,34 @@ public sealed partial class CampaignCliProcessTests
                         Assert.Empty(returned["evidenceReferences"]!.AsArray());
                     }
                 }
-                if (scenario == "tool-diagnostic-positive")
+                var rangeScenario = scenario is "tool-diagnostic-range" or "tool-diagnostic-eof-corrected";
+                if (scenario == "tool-diagnostic-positive" || scenario == "tool-diagnostic-eof-corrected" && count >= 4)
                 {
-                    Assert.InRange(count, 2, 4);
+                    Assert.InRange(count, 2, scenario == "tool-diagnostic-positive" ? 4 : 6);
                     response = JsonNode.Parse(CreateSharedResponse(body))!;
                 }
                 else
                 {
-                    Assert.Equal(2, count);
+                    Assert.True(count == 2 || rangeScenario && count == 3);
                     var facts = JsonNode.Parse(messages[4]!["content"]!.GetValue<string>())!;
                     var targets = facts["executableTargetIds"]!.AsArray(); Assert.Equal(5, targets.Count);
                     JsonNode Tool(string key) => wire["tools"]!.AsArray().Single(tool =>
                         tool!["function"]!["parameters"]!["properties"] is JsonObject properties && properties.ContainsKey(key))!["function"]!;
-                    var read = Tool("startLine"); var second = scenario == "tool-diagnostic-range" ? read : Tool("literal");
+                    var read = Tool("startLine"); var second = rangeScenario ? read : Tool("literal");
                     var firstArgs = new JsonObject { ["scopeId"] = targets[0]!.GetValue<string>() };
                     var secondArgs = new JsonObject { ["scopeId"] = targets[1]!.GetValue<string>() };
-                    if (scenario == "tool-diagnostic-range") { secondArgs["startLine"] = 999999; secondArgs["endLine"] = 999999; }
+                    if (rangeScenario)
+                    {
+                        if (count == 2 || scenario == "tool-diagnostic-range") { secondArgs["startLine"] = 999999; secondArgs["endLine"] = 999999; }
+                        if (count == 3)
+                        {
+                            var refusal = JsonNode.Parse(messages.Last(message => message!["role"]!.GetValue<string>() == "tool")!["content"]!.GetValue<string>())!;
+                            Assert.Equal("tool.outcome.unavailable", refusal["outcome"]!.GetValue<string>());
+                            Assert.Equal("repository.range-past-eof", refusal["result"]!["failureCode"]!.GetValue<string>());
+                            Assert.Null(refusal["result"]!["excerpt"]); Assert.Null(refusal["result"]!["route"]);
+                            Assert.Empty(refusal["evidenceReferences"]!.AsArray());
+                        }
+                    }
                     else { secondArgs["literal"] = "public"; secondArgs["cursor"] = "not-a-returned-cursor"; }
                     object Call(JsonNode tool, string id, JsonObject args)
                     {
@@ -149,12 +168,15 @@ public sealed partial class CampaignCliProcessTests
                         Assert.True(JsonSchema.FromText(tool["parameters"]!.ToJsonString()).Evaluate(value.RootElement).IsValid);
                         return new { id, type = "function", function = new { name = tool["name"]!.GetValue<string>(), arguments = args.ToJsonString() } };
                     }
+                    var toolCalls = count == 2
+                        ? new[] { Call(read, "call.diagnostic.first", firstArgs), Call(second, "call.diagnostic.second", secondArgs) }
+                        : new[] { Call(read, "call.diagnostic.correction", secondArgs) };
                     response = JsonSerializer.SerializeToNode(new
                     {
                         choices = new[] { new { index = 0, message = new
                         {
                             role = "assistant", content = (string?)null, reasoning_content = "synthetic-tool-diagnostic",
-                            tool_calls = new[] { Call(read, "call.diagnostic.first", firstArgs), Call(second, "call.diagnostic.second", secondArgs) },
+                            tool_calls = toolCalls,
                         }, finish_reason = "tool_calls" } },
                         usage = new { prompt_tokens = 31, prompt_cache_hit_tokens = 29, prompt_cache_miss_tokens = 2, completion_tokens = 7, total_tokens = 38 },
                     })!;

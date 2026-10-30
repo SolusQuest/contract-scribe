@@ -30,7 +30,15 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             "zero-range" => new("context.instructions", "docs/guide.md", 0, 1),
             _ => new("context.instructions", "docs/guide.md", 999999, 999999),
         };
-        var result = await fixture.Bundle().ReadExcerpt.InvokeAsync(request, default);
+        var bundle = fixture.Bundle();
+        if (scenario == "past-eof")
+        {
+            var refused = await bundle.ReadExcerpt.InvokeAsync(request, default);
+            Assert.Same(DocumentationScribeToolOutcome.Unavailable, refused.Outcome);
+            Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.RangePastEndOfFile, refused.FailureCode);
+            Assert.Null(refused.Excerpt); Assert.Empty(refused.DynamicEvidence);
+        }
+        var result = await bundle.ReadExcerpt.InvokeAsync(request, default);
         Assert.Same(DocumentationScribeToolOutcome.Failure, result.Outcome);
         Assert.Equal(DocumentationScribeRepositoryToolFailureCodes.InvalidRequest, result.FailureCode);
         Assert.Null(result.Excerpt); Assert.Null(result.Route); Assert.Empty(result.DynamicEvidence);

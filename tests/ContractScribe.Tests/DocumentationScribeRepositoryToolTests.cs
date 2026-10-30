@@ -1632,7 +1632,8 @@ public sealed partial class DocumentationScribeRepositoryToolTests
         }
 
         internal static RepositoryToolFixture Create(
-            Action<DocumentationScribeContextObservationEvent>? freshnessObserver = null)
+            Action<DocumentationScribeContextObservationEvent>? freshnessObserver = null,
+            Action<JsonObject>? requestMutation = null)
         {
             var root = Path.Join(Path.GetTempPath(), "contract-scribe-x2-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Join(root, "docs"));
@@ -1640,7 +1641,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             File.WriteAllText(Path.Join(root, "docs", "guide.md"), "Guide\r\nbounded evidence.\r\n", new UTF8Encoding(false));
             File.WriteAllText(Path.Join(root, "docs", "other.md"), "Other\n", new UTF8Encoding(false));
 
-            var request = ParseRequest();
+            var request = ParseRequest(requestMutation);
             var repository = new LoadedRepositorySession(
                 request.Context.RepositoryContextRef,
                 root,
@@ -1750,7 +1751,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             Directory.Delete(Root, recursive: true);
         }
 
-        internal static DocumentationScribeRequest ParseRequest()
+        internal static DocumentationScribeRequest ParseRequest(Action<JsonObject>? mutate = null)
         {
             var path = Path.Join(
                 FindRepositoryRoot(), "tests", "fixtures", "documentation-scribe", "v1", "valid", "request.json");
@@ -1761,6 +1762,7 @@ public sealed partial class DocumentationScribeRepositoryToolTests
             reference["contentSha256"] = Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
             reference["originalUtf8ByteCount"] = bytes.Length;
             reference["includedUtf8ByteCount"] = bytes.Length;
+            mutate?.Invoke(request);
             var parsed = DocumentationScribeValidation.ParseRequest(
                 Encoding.UTF8.GetBytes(request.ToJsonString()));
             Assert.True(parsed.IsValid, parsed.Failure?.Code);

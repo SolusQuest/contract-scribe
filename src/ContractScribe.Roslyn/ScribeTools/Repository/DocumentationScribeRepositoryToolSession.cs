@@ -39,6 +39,7 @@ internal sealed class DocumentationScribeRepositoryToolSession
     private int filesInspected;
     private int matchesDiscovered;
     private int activeChains;
+    private bool endOfFileCorrectionOffered;
 
     internal DocumentationScribeRepositoryToolSession(
         DocumentationScribeRequest request,
@@ -108,7 +109,22 @@ internal sealed class DocumentationScribeRepositoryToolSession
                 var scope = GetScope(toolRequest.ScopeId, DocumentationScribeRepositoryToolOperations.ReadExcerpt);
                 var path = ResolveFile(scope, toolRequest.RepositoryPath);
                 var file = ReadFile(path, scope.Scope.Required, call, cancellationToken);
-                var range = SelectLines(file.Text, toolRequest.StartLine, toolRequest.EndLine);
+                (int Start, int End, bool IsWholeFile) range;
+                try
+                {
+                    range = SelectLines(file.Text, toolRequest.StartLine, toolRequest.EndLine);
+                }
+                catch (ToolFailure failure) when (!endOfFileCorrectionOffered
+                    && failure.RequestFailureReason == DocumentationScribeToolFailureReason.InvalidRequestEndOfFile)
+                {
+                    var refusal = new DocumentationScribeRepositoryReadExcerptResult(
+                        DocumentationScribeToolOutcome.Unavailable,
+                        DocumentationScribeRepositoryToolFailureCodes.RangePastEndOfFile, null, null, []);
+                    Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeEvidencePublication, cancellationToken);
+                    CommitPublication(MeasurePublication(refusal), 0, call, cancellationToken);
+                    endOfFileCorrectionOffered = true;
+                    return refusal;
+                }
                 var excerpt = CreateExcerpt(file, range.Start, range.End);
                 Checkpoint(DocumentationScribeRepositoryToolCheckpoint.BeforeEvidencePublication, cancellationToken);
                 var route = CreateRoute(scope, file, cancellationToken);
