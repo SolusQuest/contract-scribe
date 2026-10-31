@@ -49,7 +49,11 @@ public sealed class GitHubArchitectureTests
             .Where(method => method.IsAssembly && !method.IsSpecialName).Select(method => method.Name).Order(StringComparer.Ordinal);
         Assert.Equal(new[] { "BindCheckpointWrite", "BindFinalizationDeadline", "BindObservedCheckpointBaseAsync", "BindPublication", "CommitCheckpointAsync", "CreateBlobAsync", "CreateCommitAsync", "CreatePullRequestAsync", "CreateRecoveryScope", "CreateTreeAsync", "EnterSemanticRecovery",
             "GetAuthenticatedUserAsync", "GetBlobAsync", "GetCommitAsync", "GetPullRequestAsync", "GetRefAsync",
-            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "MatchesRefAcknowledgement", "ReadCampaignSnapshotAsync", "ReadCheckpointBundleAsync", "ReadCheckpointDocumentAsync", "ReadCheckpointSnapshotAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+            "GetRepositoryAsync", "GetTreeAsync", "ListPullRequestsAsync", "MatchesRefAcknowledgement", "ReadCampaignSnapshotAsync", "ReadCheckpointBundleAsync", "ReadCheckpointDocumentAsync", "ReadCheckpointSnapshotAsync", "ReadPublicationGateAsync", "ReadPublicationRefsAsync", "UnbindPublication", "UpdatePublicationRefsAsync", "UpdateRefAsync" }.Order(StringComparer.Ordinal), operations);
+        var publicationGate = client.GetMethod("ReadPublicationGateAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(new[] { typeof(CancellationToken) }, publicationGate.GetParameters().Select(parameter => parameter.ParameterType));
+        var publicationRefs = client.GetMethod("ReadPublicationRefsAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
+        Assert.Equal(new[] { typeof(CancellationToken) }, publicationRefs.GetParameters().Select(parameter => parameter.ParameterType));
         var atomic = client.GetMethod("CommitCheckpointAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
         Assert.Equal(new[] { typeof(GitHubAtomicCheckpointCommit), typeof(CancellationToken) },
             atomic.GetParameters().Select(parameter => parameter.ParameterType));

@@ -11,7 +11,7 @@ namespace ContractScribe.Cli;
 // A run-local comparison, not a persisted manifest or an authority to update the checkout.
 internal static class GitHubCheckoutBinding
 {
-    internal static async Task<string?> ValidateAsync(GitHubApiClient client, string targetOid,
+    internal static async Task<string?> ValidateAsync(GitHubApiClient client, GitHubCoordinationStore coordination, string targetOid,
         CampaignPreflightResult preflight, ProductionRepositorySessionBundle bundle, CancellationToken token)
     {
         try
@@ -44,9 +44,7 @@ internal static class GitHubCheckoutBinding
                 return name is "Directory.Build.props" or "Directory.Build.targets" or "Directory.Packages.props"
                     or ".editorconfig" or "global.json" or "NuGet.Config" or "nuget.config" or "AGENTS.md";
             }
-            var commit = GitHubObservedProposalIntegrity.Read(await client.GetCommitAsync(targetOid, token).ConfigureAwait(false));
-            if (commit?.Oid != targetOid) return "checkout-mismatch";
-            var allFiles = await GitHubObservedProposalIntegrity.ReadTreeAsync(client, commit.TreeOid, token).ConfigureAwait(false);
+            var allFiles = await coordination.ReadSourceFilesAsync(targetOid, token).ConfigureAwait(false);
             if (allFiles is null) return "checkout-mismatch";
             // SDK outputs are reconstructed from the bound projects, not Git source.
             // A tracked input masquerading as such an output is not admitted.
@@ -71,7 +69,7 @@ internal static class GitHubCheckoutBinding
                     || GitHubProposalObjects.ObjectOid("blob", original.Bytes.AsSpan()) != pair.Value.Oid)
                     return "checkout-mismatch";
             }
-            var target = GitHubObservedProposalIntegrity.Read(await client.GetRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
+            var target = GitHubObservedProposalIntegrity.Read(await coordination.ReadDataRefAsync(client.ReadAuthority.TargetRef, token).ConfigureAwait(false));
             return target?.Oid == targetOid
                 && baseline.Rebind(token).Status == DocumentationPatchRepositoryRebindStatus.Unchanged ? null : "checkout-mismatch";
         }

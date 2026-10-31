@@ -311,15 +311,28 @@ internal sealed class GitHubProposalPullRequestStore
                 Cause: GitHubCoordinationFailureKind.TargetMoved);
         var confirmed = await client.GetPullRequestAsync(candidate.Number, cancellationToken).ConfigureAwait(false);
         if (confirmed.Value is null) return Failed(confirmed);
-        if (confirmed.Value != candidate) return Conflict();
+        if (!GitHubPublicationPrincipal.SameActor(confirmed.Value.Author, candidate.Author)
+            || confirmed.Value with { Author = candidate.Author } != candidate) return Conflict();
         return classified;
     }
 
     private async ValueTask<(List<GitHubPullRequest> Items, GitHubProposalResult? Failure)> ReadCampaign(
         string reference, string campaign, string? creation, int?[] known, CancellationToken token)
     {
-        var collection = await client.ListPullRequestsAsync(token).ConfigureAwait(false);
-        if (collection.Value is not { Exhausted: true } set) return ([], Failed(collection));
+        GitHubPullRequestSet set;
+        var full = coordination.UsesNativeData;
+        if (full)
+        {
+            var collection = await client.ReadCampaignSnapshotAsync(false, token).ConfigureAwait(false);
+            if (collection.Value is not { } snapshot) return ([], Failed(collection));
+            set = snapshot.PullRequests;
+        }
+        else
+        {
+            var collection = await client.ListPullRequestsAsync(token).ConfigureAwait(false);
+            if (collection.Value is not { Exhausted: true } listed) return ([], Failed(collection));
+            set = listed;
+        }
         var prefix = reference[..(reference.LastIndexOf('/') + 1)];
         var items = new List<GitHubPullRequest>();
         // Complete detail acquisition has a stable order before lifecycle/uniqueness selection.
@@ -330,6 +343,7 @@ internal sealed class GitHubProposalPullRequestStore
                 && item.Body?.Contains("campaign=sha256:" + campaign, StringComparison.Ordinal) != true
                 && !(creation is not null && item.Body?.Contains(creation, StringComparison.Ordinal) == true)
                 && !known.Contains(item.Number)) continue;
+            if (full) { items.Add(item); continue; }
             var detail = await client.GetPullRequestAsync(item.Number, token).ConfigureAwait(false);
             if (detail.Value is null) return ([], Failed(detail));
             if (!Stable(item, detail.Value)) return ([], Conflict());

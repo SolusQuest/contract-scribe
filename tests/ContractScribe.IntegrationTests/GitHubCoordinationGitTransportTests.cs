@@ -231,17 +231,47 @@ public sealed partial class GitHubCoordinationGitTransportTests
         return (await output).TrimEnd('\n');
     }
 
+    [ContractScribe.TestSupport.NativeFileSystemTheory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Native_server_shutdown_joins_pending_accepts_before_and_after_a_response(bool afterResponse)
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var directory = Directory.CreateTempSubdirectory("contract-scribe-native-shutdown-").FullName;
+        try
+        {
+            using var handler = new HttpClientHandler { UseProxy = false };
+            using var client = new HttpClient(handler);
+            for (var attempt = 0; attempt < 32; attempt++)
+            {
+                await using var server = new NativeServer(directory, deadline.Token) { DenyReads = true };
+                if (afterResponse)
+                {
+                    using var response = await client.GetAsync(new Uri(server.Endpoint.AbsoluteUri + "/info/refs"), deadline.Token);
+                    Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+                    Assert.Equal(1, server.RequestCount);
+                }
+            }
+        }
+        finally { Directory.Delete(directory, recursive: true); }
+    }
+
     internal sealed class NativeServer : IAsyncDisposable
     {
         private readonly HttpListener listener = new();
         private readonly Task loop;
         private readonly string directory;
         private readonly CancellationToken token;
+        private int stopping;
         internal Uri Endpoint { get; }
         internal bool DropNextMutationReply { get; set; }
         internal bool DenyReads { get; set; }
+        internal string? DeniedObjectOid { get; set; }
+        internal int DeniedObjectRequests { get; private set; }
+        internal int? MutationsAtObjectDenial { get; private set; }
         internal int ReceivePackRequests { get; private set; }
         internal int RequestCount { get; private set; }
+        internal int Advertisements { get; private set; }
         internal int MutationCompletions { get; private set; }
         internal int NonGitRequests { get; private set; }
         internal bool AllowFilter { get; set; } = true;
@@ -261,11 +291,12 @@ public sealed partial class GitHubCoordinationGitTransportTests
         {
             try
             {
-                while (listener.IsListening)
+                while (Volatile.Read(ref stopping) == 0)
                 {
                     var context = await listener.GetContextAsync().WaitAsync(token);
                     var request = context.Request;
                     RequestCount++;
+                    if (request.HttpMethod == "GET" && request.Url!.AbsolutePath.EndsWith("/info/refs", StringComparison.Ordinal)) Advertisements++;
                     if (!request.Url!.AbsolutePath.StartsWith("/remote.git/", StringComparison.Ordinal))
                     { NonGitRequests++; context.Response.StatusCode = 404; context.Response.Close(); continue; }
                     if (DenyReads) { context.Response.StatusCode = 403; context.Response.Close(); continue; }
@@ -277,6 +308,13 @@ public sealed partial class GitHubCoordinationGitTransportTests
                         : null;
                     if (gzip is not null) GzipRequests++;
                     await (gzip is null ? request.InputStream : gzip).CopyToAsync(body, token);
+                    if (DeniedObjectOid is { } denied && request.Url.AbsolutePath.EndsWith("/git-upload-pack", StringComparison.Ordinal)
+                        && Encoding.ASCII.GetString(body.ToArray()).Contains("want " + denied, StringComparison.Ordinal))
+                    {
+                        DeniedObjectRequests++;
+                        MutationsAtObjectDenial ??= ReceivePackRequests;
+                        context.Response.StatusCode = 403; context.Response.Close(); continue;
+                    }
                     var mutation = request.Url.AbsolutePath.EndsWith("/git-receive-pack", StringComparison.Ordinal);
                     if (mutation) ReceivePackRequests++;
                     var start = new ProcessStartInfo("/usr/bin/git")
@@ -325,10 +363,21 @@ public sealed partial class GitHubCoordinationGitTransportTests
                     context.Response.Close();
                 }
             }
-            catch (Exception error) when (!listener.IsListening && error is HttpListenerException or ObjectDisposedException) { }
+            catch (Exception error) when (Volatile.Read(ref stopping) != 0
+                && error is HttpListenerException or ObjectDisposedException)
+            {
+                // A pending accept interrupted by our own Close is normal
+                // completion. Other exceptions still fault the awaited loop.
+                return;
+            }
         }
 
         public async ValueTask DisposeAsync()
-        { listener.Close(); await loop; }
+        {
+            // Close can wake a pending accept before HttpListener publishes its
+            // stopped state. Our own lifetime must precede that callback.
+            if (Interlocked.Exchange(ref stopping, 1) == 0) listener.Close();
+            await loop;
+        }
     }
 }

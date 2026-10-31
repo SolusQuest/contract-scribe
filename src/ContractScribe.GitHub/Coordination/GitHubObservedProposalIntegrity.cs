@@ -9,16 +9,15 @@ namespace ContractScribe.GitHub.Coordination;
 internal static class GitHubObservedProposalIntegrity
 {
     internal static async ValueTask<bool> VerifyAsync(GitHubCampaignGeneration generation, CancellationToken token,
-        Func<string, CancellationToken, ValueTask<GitHubCommit?>> readCommit,
+        Func<string, CancellationToken, ValueTask<string?>> readCommitTree,
         Func<string, CancellationToken, ValueTask<GitHubTree?>> readTree,
         Func<string, CancellationToken, ValueTask<GitHubBlob?>> readBlob)
     {
-        var original = await readCommit(generation.OriginalBaseOid, token).ConfigureAwait(false);
-        var published = await readCommit(generation.HeadOid, token).ConfigureAwait(false);
-        if (original is null || published is null || original.Oid != generation.OriginalBaseOid || published.Oid != generation.HeadOid
-            || published.TreeOid != generation.TreeOid) return false;
-        var basis = await ReadTreeAsync(original.TreeOid, token, readTree).ConfigureAwait(false);
-        var proposal = await ReadTreeAsync(published.TreeOid, token, readTree).ConfigureAwait(false);
+        var original = await readCommitTree(generation.OriginalBaseOid, token).ConfigureAwait(false);
+        var published = await readCommitTree(generation.HeadOid, token).ConfigureAwait(false);
+        if (original is null || published != generation.TreeOid) return false;
+        var basis = await ReadTreeAsync(original, token, readTree).ConfigureAwait(false);
+        var proposal = await ReadTreeAsync(published, token, readTree).ConfigureAwait(false);
         if (basis is null || proposal is null) return false;
         foreach (var file in generation.ChangedFiles)
         {
@@ -89,13 +88,7 @@ internal static class GitHubObservedProposalIntegrity
             : throw new GitHubCoordinationException(transportFailure:
                 result.Failure ?? new(GitHubFailureCode.InvalidResponse)));
 
-    // Current checkout binding always reads its actual target tree physically.
-    internal static ValueTask<Dictionary<string, GitHubTreeEntry>?> ReadTreeAsync(
-        GitHubApiClient client, string rootOid, CancellationToken token) =>
-        ReadTreeAsync(rootOid, token, async (oid, cancellation) =>
-            Read(await client.GetTreeAsync(oid, cancellation).ConfigureAwait(false)));
-
-    private static async ValueTask<Dictionary<string, GitHubTreeEntry>?> ReadTreeAsync(
+    internal static async ValueTask<Dictionary<string, GitHubTreeEntry>?> ReadTreeAsync(
         string rootOid, CancellationToken token,
         Func<string, CancellationToken, ValueTask<GitHubTree?>> readTree)
     {

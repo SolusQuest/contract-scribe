@@ -1209,7 +1209,10 @@ public sealed class GitHubProposalBranchTests
                         && LateFailure is "content" or "content-target" or "timeout")
                     {
                         lateCommit = value.ExpectedOid;
-                        verificationTree = value.TreeOid;
+                        // New trees already have independent mutation readbacks.
+                        // This inherited subtree is still read by the complete
+                        // graph proof in this cold, non-checkpoint session.
+                        verificationTree = BaseRoot.Single(entry => entry.Path == "keep").Oid;
                         commitReadbackConfirmed = false;
                     }
                 }

@@ -23,7 +23,7 @@ internal sealed partial class GitHubCoordinationStore
             if (nativeCoordination is not null || client.NativeCoordinationFactory is not null)
                 _ = RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false));
             var remote = await ReadRemoteCheckpointAsync(token, attempt: attempt).ConfigureAwait(false);
-            var target = await client.GetRefAsync(authority.ReadAuthority.TargetRef, token).ConfigureAwait(false);
+            var target = await ReadDataRefAsync(authority.ReadAuthority.TargetRef, token).ConfigureAwait(false);
             if (target.Value?.Oid != authority.ExpectedBaseOid) return CampaignCheckpointReadKind.Unsafe;
             if (client.ServerTime is not { } now) return CampaignCheckpointReadKind.LeaseUnverifiable;
             if (remote?.Document.Claim is { } prior && now.ToUnixTimeSeconds() < prior.ExpiresUnixSeconds)

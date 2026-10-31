@@ -92,8 +92,8 @@ internal sealed class GitHubProposalStore
         }
         // Prospective local candidate validation precedes admission, but grants no write capability.
         var bytes = PayloadBytes(payload);
-        var baseCommit = Value(await client.GetCommitAsync(authority.ExpectedBaseCommitOid, token));
-        var basis = await ReadBasis(baseCommit.TreeOid, token);
+        var baseTree = Value(await coordination.ReadBaseTreeAsync(token));
+        var basis = await ReadBasis(baseTree.Oid, token);
         var before = Zero;
         Require(before is not null);
         var oids = bytes.ToDictionary(p => p.Key, p => ObjectOid("blob", p.Value.AsSpan()), StringComparer.Ordinal);
@@ -117,7 +117,7 @@ internal sealed class GitHubProposalStore
         var source = current;
         Require(source is not null && coordination.Owns(source));
         var reference = coordination.ProposalRefFor(source!)!;
-        var head = await client.GetRefAsync(reference, token);
+        var head = await coordination.ReadDataRefAsync(reference, token);
         var observed = head.Value?.Oid;
         if (observed is null && head.Failure?.Code != GitHubFailureCode.NotFound) Throw(head);
         observed ??= Zero;
@@ -243,6 +243,9 @@ internal sealed class GitHubProposalStore
         }
         if (existing.Failure?.Code != GitHubFailureCode.NotFound) Throw(existing);
         Require(state.Stage == GitHubCoordinationStage.Claimed && state.ContentCommitOid is null);
+        // Only actual remote object observations from this lexical upload stage.
+        // Prepared bytes cannot satisfy the subsequent complete graph proof.
+        var observedObjects = new Dictionary<string, GitHubValue>(StringComparer.Ordinal);
         // This lexical stage owns only content for an authenticated prepared
         // plan whose commit was just physically absent. It grants no ref/PR
         // right. Initial and final full visibility gates remain above/below.
@@ -268,12 +271,13 @@ internal sealed class GitHubProposalStore
             if (observed.Value is not null)
             {
                 Require(ExactBlob(observed.Value, oid, file.Value));
+                observedObjects[oid] = observed.Value;
                 continue;
             }
             if (observed.Failure?.Code != GitHubFailureCode.NotFound) Throw(observed);
             await GuardOrphanUpload(cancellationToken);
             var mutation = await client.CreateBlobAsync(oid, file.Value.AsMemory(), cancellationToken);
-            await Readback(mutation, token => client.GetBlobAsync(oid, token),
+            observedObjects[oid] = await Readback(mutation, token => client.GetBlobAsync(oid, token),
                 value => ExactBlob(value, oid, file.Value));
         }
         foreach (var tree in plan.Graph.Trees.OrderByDescending(p => Depth(p.Key)))
@@ -289,12 +293,13 @@ internal sealed class GitHubProposalStore
             if (observed.Value is not null)
             {
                 Require(ExactTree(observed.Value, oid, tree.Value));
+                observedObjects[oid] = observed.Value;
                 continue;
             }
             if (observed.Failure?.Code != GitHubFailureCode.NotFound) Throw(observed);
             await GuardOrphanUpload(cancellationToken);
             var mutation = await client.CreateTreeAsync(oid, tree.Value, cancellationToken);
-            await Readback(mutation, token => client.GetTreeAsync(oid, token), value => ExactTree(value, oid, tree.Value));
+            observedObjects[oid] = await Readback(mutation, token => client.GetTreeAsync(oid, token), value => ExactTree(value, oid, tree.Value));
         }
         await GuardOrphanUpload(cancellationToken);
         var created = await client.CreateCommitAsync(plan.Commit, cancellationToken);
@@ -302,7 +307,7 @@ internal sealed class GitHubProposalStore
         IGitHubProposalContent? verified = null;
         await FinalVerification(created, async token =>
         {
-            await VerifyContent(plan, token, actualCommit);
+            await VerifyContent(plan, token, actualCommit, observedObjects);
             verified = new ContentCapability(plan);
             await CheckGate(plan, state, allowSuccessor: true, token);
         }, () => verified);
@@ -390,13 +395,14 @@ internal sealed class GitHubProposalStore
         return Zero;
     }
 
-    private async ValueTask VerifyContent(PreparedCapability plan, CancellationToken token, GitHubCommit? actualCommit = null)
+    private async ValueTask VerifyContent(PreparedCapability plan, CancellationToken token, GitHubCommit? actualCommit = null,
+        IReadOnlyDictionary<string, GitHubValue>? observedObjects = null)
     {
         try
         {
             var failure = await coordination.VerifyExpectedProposalIntegrityAsync(plan.Commit,
                 authority.ChangedFiles.Select(file => new GitHubCoordinationChangedFile(file.Path, file.CandidateFileSha256)).ToImmutableArray(),
-                actualCommit, token);
+                actualCommit, token, observedObjects);
             if (failure is { } kind) throw new FailureException(new(kind));
         }
         catch (GitHubCoordinationException exception) when (exception.Failure is { } failure)

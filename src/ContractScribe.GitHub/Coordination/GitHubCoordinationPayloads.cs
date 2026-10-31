@@ -32,12 +32,17 @@ internal sealed partial class GitHubCoordinationStore
 
     internal async ValueTask<bool> VerifyObservedProposalIntegrityAsync(GitHubCampaignGeneration generation, CancellationToken token)
     {
+        // Initial read-only observation precedes checkpoint acquisition. It may
+        // acquire immutable Git bytes, without acquiring a claim or write right.
+        if (nativeCoordination is null && client.NativeCoordinationFactory is { } nativeFactory)
+            nativeCoordination = await nativeFactory(token).ConfigureAwait(false);
         using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
         var verified = await GitHubObservedProposalIntegrity.VerifyAsync(generation, token,
-            (oid, cancellation) => Read(oid, cancellation, client.GetCommitAsync),
-            (oid, cancellation) => Read<GitHubTree>(oid, cancellation,
-                (tree, ct) => client.GetTreeAsync(tree, ct)),
-            (oid, cancellation) => Read(oid, cancellation, client.GetBlobAsync)).ConfigureAwait(false);
+            async (oid, cancellation) => nativeCoordination is not null
+                ? RequireRemote(await ReadNativeSourceTreeIdentityAsync(oid, cancellation).ConfigureAwait(false)).Oid
+                : (await Read(oid, cancellation, client.GetCommitAsync).ConfigureAwait(false))?.TreeOid,
+            (oid, cancellation) => Read(oid, cancellation, ReadSourceTreeAsync),
+            (oid, cancellation) => Read(oid, cancellation, ReadSourceBlobAsync)).ConfigureAwait(false);
         // This is only a complete immutable content proof. The observer still
         // physically rechecks PR ownership/lifecycle, pagination and ref fences.
         // No partial, failed or cancelled content proof warms a later gate.
@@ -56,7 +61,8 @@ internal sealed partial class GitHubCoordinationStore
 
     internal async ValueTask<GitHubProposalFailureKind?> VerifyExpectedProposalIntegrityAsync(
         GitHubCreateCommit expected, ImmutableArray<GitHubCoordinationChangedFile> files,
-        GitHubCommit? actualCommit, CancellationToken token)
+        GitHubCommit? actualCommit, CancellationToken token,
+        IReadOnlyDictionary<string, GitHubValue>? observedObjects = null)
     {
         using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
         if (actualCommit is not null) proof.Stage(actualCommit, token);
@@ -73,7 +79,8 @@ internal sealed partial class GitHubCoordinationStore
         async ValueTask<T?> Read<T>(string oid, CancellationToken cancellation,
             Func<string, CancellationToken, ValueTask<GitHubApiResult<T>>> fetch) where T : GitHubValue
         {
-            var value = proof.Pool?.Read<T>(oid, cancellation);
+            cancellation.ThrowIfCancellationRequested();
+            var value = observedObjects?.GetValueOrDefault(oid) as T ?? proof.Pool?.Read<T>(oid, cancellation);
             if (value is null)
             {
                 var result = await fetch(oid, cancellation).ConfigureAwait(false);
@@ -92,8 +99,8 @@ internal sealed partial class GitHubCoordinationStore
     {
         using var proof = PublicationProof(client.AuthenticatedRepository ?? throw new GitHubCoordinationException(), null);
         var result = await GitHubObservedProposalIntegrity.ReadExpectedTreeAsync(rootOid, files, token,
-            (oid, ct) => Read<GitHubTree>(oid, ct, (tree, cancellation) => client.GetTreeAsync(tree, cancellation)),
-            (oid, ct) => Read(oid, ct, client.GetBlobAsync)).ConfigureAwait(false);
+            (oid, ct) => Read(oid, ct, ReadSourceTreeAsync),
+            (oid, ct) => Read(oid, ct, ReadSourceBlobAsync)).ConfigureAwait(false);
         if (result.Failure is null) proof.Promote(token);
         return result;
 
@@ -112,6 +119,34 @@ internal sealed partial class GitHubCoordinationStore
             proof.Stage(value, cancellation);
             return value;
         }
+    }
+
+    private async ValueTask<GitHubApiResult<GitHubTree>> ReadSourceTreeAsync(string oid, CancellationToken token) =>
+        nativeCoordination is null ? await client.GetTreeAsync(oid, token).ConfigureAwait(false)
+            : await ReadNativeSourceAsync(() => nativeCoordination.ReadSourceTreeAsync(oid, token), token).ConfigureAwait(false);
+
+    private async ValueTask<GitHubApiResult<GitHubBlob>> ReadSourceBlobAsync(string oid, CancellationToken token) =>
+        nativeCoordination is null ? await client.GetBlobAsync(oid, token).ConfigureAwait(false)
+            : await ReadNativeSourceAsync(() => nativeCoordination.ReadSourceBlobAsync(oid, token), token).ConfigureAwait(false);
+
+    private ValueTask<GitHubApiResult<GitHubObjectIdentity>> ReadNativeSourceTreeIdentityAsync(string oid, CancellationToken token) =>
+        ReadNativeSourceAsync<GitHubObjectIdentity>(async () =>
+            new(await nativeCoordination!.AcquireObservedBaseTreeAsync(oid, token).ConfigureAwait(false)), token);
+
+    // Match the API reader boundary: failed acquisition is transport evidence,
+    // never a validated checkout/content mismatch. This performs no retry or
+    // fallback, and semantic integrity checks still run only on successful data.
+    private async ValueTask<GitHubApiResult<T>> ReadNativeSourceAsync<T>(Func<ValueTask<T>> read, CancellationToken token)
+        where T : GitHubValue
+    {
+        try { return new(await read().ConfigureAwait(false), null, GitHubDelivery.Read); }
+        catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+        catch (GitHubProtocolException exception) { return GitHubApiResult<T>.Failed(exception.Code, dispatched: true); }
+        catch (OperationCanceledException) { return GitHubApiResult<T>.Failed(client.CancellationFailure.Code, dispatched: true); }
+        catch (Exception exception) when (exception is DecoderFallbackException or FormatException or OverflowException)
+        { return GitHubApiResult<T>.Failed(GitHubFailureCode.InvalidResponse, dispatched: true); }
+        catch (Exception exception) when (exception is not (OutOfMemoryException or StackOverflowException))
+        { return GitHubApiResult<T>.Failed(GitHubFailureCode.HostFailure, dispatched: true); }
     }
 
     // R4/R5 may consume only raw objects admitted by a complete content proof.

@@ -10,6 +10,21 @@ internal sealed partial class GitHubCoordinationStore
     private GitHubRef? nativePublicationTargetIdentity;
     internal bool UsesNativeData => nativeCoordination is not null;
 
+    internal async ValueTask<Dictionary<string, GitHubTreeEntry>?> ReadSourceFilesAsync(string commitOid, CancellationToken token)
+    {
+        string tree;
+        if (nativeCoordination is not null)
+            tree = RequireRemote(await ReadNativeSourceTreeIdentityAsync(commitOid, token).ConfigureAwait(false)).Oid;
+        else
+        {
+            var commit = GitHubObservedProposalIntegrity.Read(await client.GetCommitAsync(commitOid, token).ConfigureAwait(false));
+            if (commit is null || commit.Oid != commitOid) return null;
+            tree = commit.TreeOid;
+        }
+        return await GitHubObservedProposalIntegrity.ReadTreeAsync(tree, token, async (oid, ct) =>
+            GitHubObservedProposalIntegrity.Read(await ReadSourceTreeAsync(oid, ct).ConfigureAwait(false))).ConfigureAwait(false);
+    }
+
     internal async ValueTask<GitHubApiResult<GitHubDataRef>> ReadDataRefAsync(string name, CancellationToken token)
     {
         if (nativeCoordination is null)
@@ -31,9 +46,8 @@ internal sealed partial class GitHubCoordinationStore
     internal async ValueTask<GitHubApiResult<GitHubObjectIdentity>> ReadBaseTreeAsync(CancellationToken token)
     {
         var oid = authority.ExpectedBaseCommitOid;
-        if (nativeCoordination is not null
-            && await nativeCoordination.AcquireObservedBaseTreeAsync(oid, token).ConfigureAwait(false) is { } tree)
-            return new(new(tree), null, GitHubDelivery.Read);
+        if (nativeCoordination is not null)
+            return await ReadNativeSourceTreeIdentityAsync(oid, token).ConfigureAwait(false);
         var read = await client.GetCommitAsync(oid, token).ConfigureAwait(false);
         return new(read.Value is { } value ? new(value.TreeOid) : null, read.Failure, read.Delivery, read.Context, read.RequiredPermissions);
     }
@@ -74,12 +88,12 @@ internal sealed partial class GitHubCoordinationStore
             return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         if (prepared.State.Stage == GitHubCoordinationStage.PullRequestCreateStarted)
         {
-            if (RequireRemote(await client.GetRepositoryAsync(token).ConfigureAwait(false)).Identity != repository)
+            var gate = RequireRemote(await client.ReadPublicationGateAsync(token).ConfigureAwait(false));
+            if (gate.Repository != repository)
                 return DomainFailure(GitHubCoordinationFailureKind.HumanChange);
             // The non-idempotent send fence retains real platform identities.
-            var reference = RequireRemote(await client.GetRefAsync(coordinationRef, token).ConfigureAwait(false));
-            var currentTarget = RequireRemote(await client.GetRefAsync(authority.TargetRef, token).ConfigureAwait(false));
-            if (reference.Oid != beforeOid || reference.NodeId != client.CheckpointRefNodeId || currentTarget != target)
+            if (gate.Coordination is not { } reference || reference.Oid != beforeOid
+                || reference.NodeId != client.CheckpointRefNodeId || gate.Target != target)
                 return DomainFailure(GitHubCoordinationFailureKind.Conflict);
         }
         if (await nativeCoordination!.ReadHeadAsync(true, token).ConfigureAwait(false) != target.Oid)
