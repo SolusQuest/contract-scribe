@@ -1,0 +1,86 @@
+name: L1 exact telemetry registry proof
+on:
+  workflow_dispatch:
+    inputs:
+      expected-head:
+        description: Exact separately reviewed and authorized proof workflow commit
+        type: string
+        required: true
+permissions:
+  contents: read
+  packages: read
+jobs:
+  prove:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Bind actual consuming repository and exact authorized workflow
+        env:
+          EXPECTED: ${{ inputs.expected-head }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_EVENT_NAME" = workflow_dispatch
+          test "$GITHUB_REF" = refs/heads/main
+          [[ "$EXPECTED" =~ ^[a-f0-9]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED"
+          test "$WORKFLOW_SHA" = "$EXPECTED"
+          case "$GITHUB_REPOSITORY:$GITHUB_REPOSITORY_ID" in
+            SolusQuest/contract-scribe:1297409952|SolusQuest/agentic-pr-review:1263978368) ;;
+            *) exit 1 ;;
+          esac
+          test "$(uname -m)" = x86_64
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          repository: SolusQuest/solus-agent
+          ref: c96a1b5cf9746a7fa569a339c583e07e3e103ee6
+          path: solus-source
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify exact candidate source and historical Api prerequisite
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C solus-source rev-parse HEAD)" = c96a1b5cf9746a7fa569a339c583e07e3e103ee6
+          git -C solus-source cat-file -e cb5f5ef8fc39a24f888065052078d40722e7680b^{commit}
+      - uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1
+        with:
+          global-json-file: solus-source/global.json
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38
+        with:
+          node-version: 24.21.0
+          architecture: x64
+      - name: Install existing local verifier dependencies
+        run: npm ci --prefix solus-source/scripts/logging
+      - name: Obtain finite CLI pull bearer and prove with this repository token
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          SOLUS_SOURCE_ROOT: ${{ github.workspace }}/solus-source
+          SOLUS_MANIFEST_PATH: ${{ github.workspace }}/scripts/solus-logging-proof/logging-release.json
+          SOLUS_PROOF_REPORT: ${{ runner.temp }}/solus-logging-registry-proof.json
+        run: |
+          set -euo pipefail
+          set +x
+          # Existing runtime GITHUB_TOKEN only. No credential or registry login file.
+          SOLUS_CLI_READ_BEARER=$(curl --silent --show-error --fail --max-time 30 --config - 'https://ghcr.io/token?service=ghcr.io&scope=repository%3Asolusquest%2Fsolus-logging-cli%3Apull' <<EOF | python3 -c 'import json,sys; d=json.load(sys.stdin); t=d.get("token") or d.get("access_token"); assert isinstance(t,str) and t and not any(c.isspace() for c in t); print(t,end="")'
+          user = "$GITHUB_ACTOR:$GITHUB_TOKEN"
+          EOF
+          )
+          echo "::add-mask::$SOLUS_CLI_READ_BEARER"
+          export SOLUS_CLI_READ_BEARER
+          node scripts/solus-logging-proof/consumer-proof.mjs --execute "$GITHUB_REPOSITORY"
+          unset SOLUS_CLI_READ_BEARER GITHUB_TOKEN
+      - name: Retain bounded metadata only
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: solus-logging-registry-proof
+          path: ${{ runner.temp }}/solus-logging-registry-proof.json
+          if-no-files-found: error
+          retention-days: 3
