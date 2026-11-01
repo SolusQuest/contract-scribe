@@ -1,0 +1,24 @@
+{
+  "schemaVersion": 2,
+  "mediaType": "application/vnd.oci.image.manifest.v1+json",
+  "artifactType": "application/vnd.solus.logging.cli.v1",
+  "config": {
+    "mediaType": "application/vnd.oci.empty.v1+json",
+    "digest": "sha256:ca3d163bab055381827226140568f3bef7eaac187cebd76878e0b63e9e442356",
+    "size": 3
+  },
+  "layers": [
+    {
+      "mediaType": "application/vnd.solus.logging.cli.payload.v1+gzip",
+      "digest": "sha256:656957224f9e81ad16ba882c103eeaef51989deb77a2541ae0cab93d5f653339",
+      "size": 36409125,
+      "annotations": {
+        "org.opencontainers.image.title": "solus-logging-cli-0.1.0-internal.1-linux-x64.tar.gz"
+      }
+    }
+  ],
+  "annotations": {
+    "org.opencontainers.image.version": "0.1.0-internal.1",
+    "org.opencontainers.image.revision": "c96a1b5cf9746a7fa569a339c583e07e3e103ee6"
+  }
+}
